@@ -1,0 +1,2 @@
+.card { background: var(--bg-surface); border-radius: var(--radius-lg); box-shadow: var(--shadow-card); padding: var(--space-5); border: 1px solid var(--border-light); }
+.ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

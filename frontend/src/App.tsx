@@ -1,0 +1,1 @@
+export { ControlPage } from '@/pages/ControlPage';

@@ -1,0 +1,51 @@
+@keyframes page-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(40px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes toast-out {
+  from { opacity: 1; transform: translateX(0); }
+  to { opacity: 0; transform: translateX(40px); }
+}
+
+@keyframes modal-overlay-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes modal-overlay-out { from { opacity: 1; } to { opacity: 0; } }
+
+@keyframes modal-content-in {
+  from { opacity: 0; transform: scale(0.95) translateY(10px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes modal-content-out {
+  from { opacity: 1; transform: scale(1) translateY(0); }
+  to { opacity: 0; transform: scale(0.95) translateY(10px); }
+}
+
+@keyframes status-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(1.4); }
+}
+
+.animate-page-enter { animation: page-enter 200ms var(--easing-enter) both; }
+.animate-toast-in { animation: toast-in 300ms var(--easing-enter) both; }
+.animate-toast-out { animation: toast-out 250ms var(--easing-exit) both; }
+.animate-modal-overlay-in { animation: modal-overlay-in 200ms var(--easing-enter) both; }
+.animate-modal-content-in { animation: modal-content-in 250ms var(--easing-enter) both; }
+.animate-modal-overlay-out { animation: modal-overlay-out 150ms var(--easing-exit) both; }
+.animate-modal-content-out { animation: modal-content-out 150ms var(--easing-exit) both; }
+.animate-status-pulse { animation: status-pulse 2s ease-in-out infinite; }
+
+.btn-press { transition: transform 80ms ease, box-shadow 150ms ease; }
+.btn-press:active:not(:disabled) { transform: scale(0.96); }
+
+.card-interactive { transition: transform 200ms var(--easing-default), box-shadow 200ms var(--easing-default); }
+.card-interactive:hover { transform: translateY(-2px); box-shadow: 0 20px 52px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.04); }
+
+.btn-primary-glow:hover { box-shadow: 0 0 20px rgba(47,129,247,0.35), 0 0 6px rgba(47,129,247,0.2); }
+
+.focus-ring:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }

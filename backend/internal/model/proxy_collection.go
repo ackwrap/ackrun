@@ -1,0 +1,37 @@
+package model
+
+// ProxyCollection 代理集合
+type ProxyCollection struct {
+	ID                 int    `json:"id"`
+	Name               string `json:"name"`
+	Type               string `json:"type"`                 // selector, urltest, fallback
+	SourceType         string `json:"source_type"`          // 'node_groups', 'manual'
+	ReferencedGroupIDs string `json:"referenced_group_ids"` // JSON: [1,2,3]
+	NodeUIDs           string `json:"node_uids"`            // JSON: ["uid1","uid2"]
+	TestURL            string `json:"test_url"`
+	TestInterval       int    `json:"test_interval"` // 秒
+	Tolerance          int    `json:"tolerance"`     // 毫秒
+	Enabled            bool   `json:"enabled"`
+	CreatedAt          int64  `json:"created_at"`
+	UpdatedAt          int64  `json:"updated_at"`
+}
+
+// ProxyCollectionWithNodes 代理集合及其包含的节点 UID 列表
+type ProxyCollectionWithNodes struct {
+	ProxyCollection
+	NodeUIDs         []string    `json:"node_uids"`
+	ReferencedGroups []NodeGroup `json:"referenced_groups"`
+}
+
+// ProxyCollectionRequest 创建/更新代理集合的请求
+type ProxyCollectionRequest struct {
+	Name               string   `json:"name"`
+	Type               string   `json:"type"`
+	SourceType         string   `json:"source_type"`
+	ReferencedGroupIDs []int64  `json:"referenced_group_ids"`
+	NodeUIDs           []string `json:"node_uids"`
+	TestURL            string   `json:"test_url"`
+	TestInterval       int      `json:"test_interval"`
+	Tolerance          int      `json:"tolerance"`
+	Enabled            bool     `json:"enabled"`
+}

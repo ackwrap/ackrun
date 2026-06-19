@@ -1,0 +1,40 @@
+# Backend
+backend/backend.exe
+backend/backend
+backend/ackwrap.db
+backend/ui/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+.codegraph
+.omo
+img
+docs
+zashboard-main
+sing-box
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data
+*.tmp
+ackwrap.db

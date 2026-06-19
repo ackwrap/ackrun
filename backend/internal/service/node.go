@@ -1,0 +1,370 @@
+package service
+
+import (
+	"fmt"
+	"net"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/ackwrap/ackwrap/internal/logging"
+	"github.com/ackwrap/ackwrap/internal/model"
+	"github.com/ackwrap/ackwrap/internal/parser"
+	"github.com/ackwrap/ackwrap/internal/store"
+)
+
+type NodeService struct {
+	store *store.Store
+}
+
+func NewNodeService(s *store.Store) *NodeService {
+	return &NodeService{store: s}
+}
+
+func (svc *NodeService) List(req model.NodeListRequest) (*model.NodeListResponse, error) {
+	req.Keyword = strings.TrimSpace(req.Keyword)
+	req.Type = strings.TrimSpace(req.Type)
+	req.Status = strings.TrimSpace(req.Status)
+	logging.Info("node.list", "listing nodes subscription_id=%d keyword=%s type=%s status=%s", req.SubscriptionID, req.Keyword, req.Type, req.Status)
+	return svc.store.ListNodes(req)
+}
+
+func (svc *NodeService) Facets() (*model.NodeFacetsResponse, error) {
+	logging.Info("node.facets", "loading node facets")
+	return svc.store.NodeFacets()
+}
+
+func (svc *NodeService) Import(req model.NodeImportRequest) (*model.NodeImportResponse, error) {
+	nodes, err := svc.parseImportNodes(req.Content)
+	if err != nil {
+		return nil, err
+	}
+	manual, err := svc.store.EnsureManualSubscription()
+	if err != nil {
+		return nil, err
+	}
+	if err := svc.store.UpsertSubscriptionNodes(manual.ID, nodes); err != nil {
+		return nil, err
+	}
+	logging.Info("node.import", "imported %d nodes into manual subscription %d", len(nodes), manual.ID)
+	return &model.NodeImportResponse{Imported: len(nodes), SubscriptionID: manual.ID}, nil
+}
+
+func (svc *NodeService) ImportPreview(req model.NodeImportRequest) (*model.NodeImportPreviewResponse, error) {
+	nodes, err := svc.parseImportNodes(req.Content)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]model.NodeImportPreviewItem, 0, len(nodes))
+	for _, node := range nodes {
+		uid := node.UID
+		if uid == "" {
+			uid = store.StableNodeUID(node)
+		}
+		items = append(items, model.NodeImportPreviewItem{Name: node.Name, Type: node.Type, Server: node.Server, ServerPort: node.ServerPort, UID: uid, RawJSON: node.RawJSON})
+	}
+	return &model.NodeImportPreviewResponse{Count: len(items), Items: items}, nil
+}
+
+func (svc *NodeService) parseImportNodes(content string) ([]model.ParsedNode, error) {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return nil, fmt.Errorf("import content is required")
+	}
+	nodes, err := parser.ParseSubscriptionNodes([]byte(content))
+	if err != nil {
+		return nil, err
+	}
+	if len(nodes) == 0 {
+		return nil, fmt.Errorf("import content contains no supported nodes")
+	}
+
+	// 过滤不支持的协议
+	unsupportedTypes := map[string]bool{"ssr": true, "snell": true, "mieru": true}
+	supportedNodes := make([]model.ParsedNode, 0, len(nodes))
+	unsupportedCount := 0
+
+	for _, node := range nodes {
+		if unsupportedTypes[node.Type] {
+			unsupportedCount++
+		} else {
+			supportedNodes = append(supportedNodes, node)
+		}
+	}
+
+	if unsupportedCount > 0 {
+		logging.Info("node.import", "filtered %d unsupported nodes", unsupportedCount)
+	}
+
+	if len(supportedNodes) == 0 {
+		return nil, fmt.Errorf("all nodes are unsupported protocols (ssr/snell/mieru)")
+	}
+
+	return svc.applyNodeFilters(supportedNodes)
+}
+
+func (svc *NodeService) applyNodeFilters(nodes []model.ParsedNode) ([]model.ParsedNode, error) {
+	filters, err := svc.store.ListEnabledNodeFilters()
+	if err != nil {
+		return nil, err
+	}
+	if len(filters) == 0 {
+		return nodes, nil
+	}
+	compiled := make([]compiledImportNodeFilter, 0, len(filters))
+	for _, filter := range filters {
+		re, err := regexp.Compile(filter.Pattern)
+		if err != nil {
+			return nil, fmt.Errorf("invalid node filter %s: %w", filter.Name, err)
+		}
+		compiled = append(compiled, compiledImportNodeFilter{filter: filter, regex: re})
+	}
+	kept := make([]model.ParsedNode, 0, len(nodes))
+	for _, node := range nodes {
+		if importNodeFiltered(node, compiled) {
+			continue
+		}
+		kept = append(kept, node)
+	}
+	if len(kept) == 0 {
+		return nil, fmt.Errorf("all imported nodes were filtered by rules")
+	}
+	return kept, nil
+}
+
+type compiledImportNodeFilter struct {
+	filter model.NodeFilter
+	regex  *regexp.Regexp
+}
+
+func importNodeFiltered(node model.ParsedNode, filters []compiledImportNodeFilter) bool {
+	for _, filter := range filters {
+		if filter.regex.MatchString(importNodeFilterValue(node, filter.filter.Target)) {
+			return true
+		}
+	}
+	return false
+}
+
+func importNodeFilterValue(node model.ParsedNode, target string) string {
+	switch target {
+	case "name":
+		return node.Name
+	case "type":
+		return node.Type
+	case "server":
+		return node.Server
+	case "raw":
+		return node.Raw
+	case "raw_json":
+		return node.RawJSON
+	case "all":
+		fallthrough
+	default:
+		return strings.Join([]string{node.Name, node.Type, node.Server, node.Raw, node.RawJSON}, "\n")
+	}
+}
+
+func (svc *NodeService) SetEnabled(uid string, enabled bool) (*model.ActionResponse, error) {
+	logging.Info("node.enabled", "setting node %s enabled=%v", uid, enabled)
+	if err := svc.store.SetNodeEnabled(uid, enabled); err != nil {
+		return nil, err
+	}
+	return &model.ActionResponse{Success: true, Message: "node enabled updated"}, nil
+}
+
+func (svc *NodeService) SetPreferred(uid string, preferred bool) (*model.ActionResponse, error) {
+	logging.Info("node.preferred", "setting node %s preferred=%v", uid, preferred)
+	if err := svc.store.SetNodePreferred(uid, preferred); err != nil {
+		return nil, err
+	}
+	return &model.ActionResponse{Success: true, Message: "node preferred updated"}, nil
+}
+
+func (svc *NodeService) TCPing(uids []string) ([]model.NodeTCPingResult, error) {
+	nodes, err := svc.store.ListNodesByUIDs(uids)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]model.NodeTCPingResult, 0, len(nodes))
+	for _, node := range nodes {
+		result := svc.tcpingNode(node)
+		results = append(results, result)
+		status := "unavailable"
+		latency := 0
+		if result.Success {
+			status = "available"
+			latency = result.LatencyMS
+		}
+		if err := svc.store.UpdateNodeTCPing(node.UID, latency, status); err != nil {
+			logging.Error("node.tcping", "update tcping result failed for %s: %v", node.UID, err)
+		}
+	}
+	return results, nil
+}
+
+func (svc *NodeService) tcpingNode(node model.Node) model.NodeTCPingResult {
+	start := time.Now()
+	dialer := net.Dialer{Timeout: 5 * time.Second}
+	conn, err := dialer.Dial("tcp", net.JoinHostPort(node.Server, fmt.Sprintf("%d", node.ServerPort)))
+	if err != nil {
+		return model.NodeTCPingResult{UID: node.UID, Success: false, Error: err.Error()}
+	}
+	_ = conn.Close()
+	return model.NodeTCPingResult{UID: node.UID, Success: true, LatencyMS: int(time.Since(start).Milliseconds())}
+}
+
+func (svc *NodeService) AddEmoji(uids []string) (*model.NodeBatchResult, error) {
+	nodes, err := svc.store.ListNodesByUIDs(uids)
+	if err != nil {
+		return nil, err
+	}
+	result := &model.NodeBatchResult{}
+	for _, node := range nodes {
+		emoji := inferNodeEmoji(node)
+		if emoji == "" || strings.HasPrefix(node.Name, emoji) {
+			result.Failed++
+			continue
+		}
+		if err := svc.store.UpdateNodeName(node.UID, emoji+" "+node.Name); err != nil {
+			result.Failed++
+			continue
+		}
+		result.Success++
+	}
+	return result, nil
+}
+
+func (svc *NodeService) InferFlag(req model.NodeFlagRequest) model.NodeFlagResponse {
+	flag := inferNodeEmoji(model.Node{Name: req.Name, Server: req.Server})
+	if flag == "" {
+		flag = "🇺🇳"
+	}
+	return model.NodeFlagResponse{Flag: flag}
+}
+
+func (svc *NodeService) InferFlags(req model.NodeFlagBatchRequest) model.NodeFlagBatchResponse {
+	items := make([]model.NodeFlagBatchResult, 0, len(req.Items))
+	for _, item := range req.Items {
+		flag := inferNodeEmoji(model.Node{Name: item.Name, Server: item.Server})
+		if flag == "" {
+			flag = "🇺🇳"
+		}
+		items = append(items, model.NodeFlagBatchResult{Key: item.Key, Flag: flag})
+	}
+	return model.NodeFlagBatchResponse{Items: items}
+}
+
+func (svc *NodeService) BatchRename(req model.NodeBatchRenameRequest) (*model.NodeBatchResult, error) {
+	nodes, err := svc.store.ListNodesByUIDs(req.UIDs)
+	if err != nil {
+		return nil, err
+	}
+	result := &model.NodeBatchResult{}
+	for i, node := range nodes {
+		name, ok := nextNodeName(node.Name, i, req)
+		if !ok || strings.TrimSpace(name) == "" {
+			result.Failed++
+			continue
+		}
+		if err := svc.store.UpdateNodeName(node.UID, strings.TrimSpace(name)); err != nil {
+			result.Failed++
+			continue
+		}
+		result.Success++
+	}
+	return result, nil
+}
+
+func (svc *NodeService) BatchDelete(uids []string) (*model.NodeBatchResult, error) {
+	logging.Info("node.delete", "deleting %d nodes", len(uids))
+	result := &model.NodeBatchResult{}
+	for _, uid := range uids {
+		if err := svc.store.DeleteNode(uid); err != nil {
+			logging.Error("node.delete", "failed to delete node uid=%s: %v", uid, err)
+			result.Failed++
+		} else {
+			result.Success++
+		}
+	}
+	return result, nil
+}
+
+func nextNodeName(current string, index int, req model.NodeBatchRenameRequest) (string, bool) {
+	switch req.Mode {
+	case "lines":
+		if index >= len(req.Names) {
+			return "", false
+		}
+		return req.Names[index], true
+	case "replace":
+		return strings.ReplaceAll(current, req.Find, req.Replace), req.Find != ""
+	case "prefix":
+		return req.Prefix + current, req.Prefix != ""
+	case "suffix":
+		return current + req.Suffix, req.Suffix != ""
+	default:
+		return "", false
+	}
+}
+
+func inferNodeEmoji(node model.Node) string {
+	text := strings.ToLower(node.Name + " " + node.Server)
+	rules := []struct {
+		keys  []string
+		emoji string
+	}{
+		{[]string{"hongkong", "hong kong", "hk", "香港", "港"}, "🇭🇰"},
+		{[]string{"taiwan", "taipei", "tw", "台湾", "台灣", "台北"}, "🇹🇼"},
+		{[]string{"japan", "jp", "tokyo", "osaka", "日本", "东京", "東京", "大阪"}, "🇯🇵"},
+		{[]string{"singapore", "sg", "新加坡", "狮城", "獅城"}, "🇸🇬"},
+		{[]string{"united states", "usa", "us", "america", "los angeles", "san jose", "seattle", "美国", "美國", "洛杉矶", "洛杉磯", "圣何塞", "聖何塞", "西雅图", "西雅圖"}, "🇺🇸"},
+		{[]string{"korea", "kr", "seoul", "韩国", "韓國", "首尔", "首爾"}, "🇰🇷"},
+		{[]string{"uk", "gb", "united kingdom", "britain", "london", "英国", "英國", "伦敦", "倫敦"}, "🇬🇧"},
+		{[]string{"germany", "de", "frankfurt", "德国", "德國", "法兰克福", "法蘭克福"}, "🇩🇪"},
+		{[]string{"france", "fr", "paris", "法国", "法國", "巴黎"}, "🇫🇷"},
+		{[]string{"netherlands", "nl", "amsterdam", "荷兰", "荷蘭", "阿姆斯特丹"}, "🇳🇱"},
+		{[]string{"canada", "ca", "toronto", "vancouver", "加拿大", "多伦多", "多倫多", "温哥华", "溫哥華"}, "🇨🇦"},
+		{[]string{"australia", "au", "sydney", "澳大利亚", "澳大利亞", "澳洲", "悉尼"}, "🇦🇺"},
+		{[]string{"india", "in", "mumbai", "印度", "孟买", "孟買"}, "🇮🇳"},
+		{[]string{"thailand", "th", "bangkok", "泰国", "泰國", "曼谷"}, "🇹🇭"},
+		{[]string{"vietnam", "vn", "hochiminh", "ho chi minh", "越南", "胡志明"}, "🇻🇳"},
+		{[]string{"philippines", "ph", "manila", "菲律宾", "菲律賓", "马尼拉", "馬尼拉"}, "🇵🇭"},
+		{[]string{"malaysia", "my", "kuala lumpur", "马来西亚", "馬來西亞", "吉隆坡"}, "🇲🇾"},
+		{[]string{"indonesia", "id", "jakarta", "印度尼西亚", "印度尼西亞", "印尼", "雅加达", "雅加達"}, "🇮🇩"},
+		{[]string{"russia", "ru", "moscow", "俄罗斯", "俄羅斯", "莫斯科"}, "🇷🇺"},
+		{[]string{"turkey", "tr", "istanbul", "土耳其", "伊斯坦布尔", "伊斯坦堡"}, "🇹🇷"},
+		{[]string{"brazil", "br", "sao paulo", "巴西", "圣保罗", "聖保羅"}, "🇧🇷"},
+		{[]string{"argentina", "ar", "阿根廷"}, "🇦🇷"},
+		{[]string{"mexico", "mx", "墨西哥"}, "🇲🇽"},
+		{[]string{"switzerland", "ch", "瑞士"}, "🇨🇭"},
+		{[]string{"sweden", "se", "瑞典"}, "🇸🇪"},
+		{[]string{"norway", "no", "挪威"}, "🇳🇴"},
+		{[]string{"finland", "fi", "芬兰", "芬蘭"}, "🇫🇮"},
+		{[]string{"denmark", "dk", "丹麦", "丹麥"}, "🇩🇰"},
+		{[]string{"italy", "it", "意大利", "義大利"}, "🇮🇹"},
+		{[]string{"spain", "es", "西班牙"}, "🇪🇸"},
+		{[]string{"portugal", "pt", "葡萄牙"}, "🇵🇹"},
+		{[]string{"poland", "pl", "波兰", "波蘭"}, "🇵🇱"},
+		{[]string{"new zealand", "nz", "新西兰", "紐西蘭"}, "🇳🇿"},
+		{[]string{"south africa", "za", "南非"}, "🇿🇦"},
+		{[]string{"uae", "ae", "dubai", "阿联酋", "阿聯酋", "迪拜"}, "🇦🇪"},
+		{[]string{"israel", "il", "以色列"}, "🇮🇱"},
+	}
+	for _, rule := range rules {
+		for _, key := range rule.keys {
+			if regionKeyMatches(text, key) {
+				return rule.emoji
+			}
+		}
+	}
+	return ""
+}
+
+func regionKeyMatches(text, key string) bool {
+	if len(key) == 2 || len(key) == 3 {
+		matched, _ := regexp.MatchString(`(^|[^a-z0-9])`+regexp.QuoteMeta(key)+`([^a-z0-9]|$)`, text)
+		return matched
+	}
+	return strings.Contains(text, key)
+}

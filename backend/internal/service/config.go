@@ -1,0 +1,266 @@
+package service
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"time"
+
+	"github.com/ackwrap/ackwrap/internal/logging"
+	"github.com/ackwrap/ackwrap/internal/model"
+	"github.com/ackwrap/ackwrap/internal/paths"
+	"github.com/ackwrap/ackwrap/internal/store"
+)
+
+type ConfigService struct {
+	paths    *paths.Paths
+	store    *store.Store
+	realtime *RealtimeService
+}
+
+func NewConfigService(p *paths.Paths, s *store.Store, rt *RealtimeService) *ConfigService {
+	return &ConfigService{paths: p, store: s, realtime: rt}
+}
+
+type MinimalConfig struct {
+	Log       MinimalLog        `json:"log"`
+	Inbounds  []MinimalInbound  `json:"inbounds"`
+	Outbounds []MinimalOutbound `json:"outbounds"`
+}
+
+type MinimalLog struct {
+	Level string `json:"level"`
+}
+
+type MinimalInbound struct {
+	Type       string `json:"type"`
+	Tag        string `json:"tag"`
+	Listen     string `json:"listen"`
+	ListenPort int    `json:"listen_port"`
+}
+
+type MinimalOutbound struct {
+	Type string `json:"type"`
+	Tag  string `json:"tag"`
+}
+
+func (svc *ConfigService) HasConfig() (bool, error) {
+	_, ok, err := svc.paths.ActiveConfigPath()
+	return ok, err
+}
+
+func (svc *ConfigService) GetConfigStatus() (*model.ConfigStatusResponse, error) {
+	configPath, ok, err := svc.paths.ActiveConfigPath()
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return &model.ConfigStatusResponse{HasConfig: false}, nil
+	}
+
+	info, err := os.Stat(configPath)
+	if err != nil {
+		return nil, err
+	}
+
+	status := &model.ConfigStatusResponse{
+		HasConfig: true,
+		FileName:  filepath.Base(configPath),
+		UpdatedAt: info.ModTime().UnixMilli(),
+	}
+
+	if err := svc.validateFile(configPath); err != nil {
+		status.Valid = false
+		return status, nil
+	}
+	status.Valid = true
+	return status, nil
+}
+
+func (svc *ConfigService) GenerateDefault() error {
+	logging.Info("config.generate", "generating minimal config")
+	if err := os.MkdirAll(svc.paths.ConfigDir, 0755); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+
+	cfg := MinimalConfig{
+		Log: MinimalLog{Level: "info"},
+		Inbounds: []MinimalInbound{
+			{
+				Type:       "mixed",
+				Tag:        "mixed-in",
+				Listen:     "127.0.0.1",
+				ListenPort: 2080,
+			},
+		},
+		Outbounds: []MinimalOutbound{
+			{Type: "direct", Tag: "direct"},
+		},
+	}
+
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+
+	tmpPath := svc.paths.ConfigPath + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return fmt.Errorf("write temp config: %w", err)
+	}
+	defer os.Remove(tmpPath)
+
+	if err := svc.validateFile(tmpPath); err != nil {
+		return fmt.Errorf("config validation failed: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, svc.paths.ConfigPath); err != nil {
+		return fmt.Errorf("rename config: %w", err)
+	}
+
+	logging.Info("config.generate", "config generated successfully")
+
+	svc.realtime.Broadcast("config.status", model.ConfigStatusResponse{
+		HasConfig: true,
+		Valid:     true,
+		FileName:  filepath.Base(svc.paths.ConfigPath),
+		UpdatedAt: time.Now().UnixMilli(),
+	})
+	version := ""
+	if st, err := svc.store.GetInstallState(); err == nil {
+		version = st.Version
+	}
+	svc.realtime.Broadcast("runtime.status", model.RuntimeResponse{Status: model.RuntimeStopped, Version: version})
+
+	return nil
+}
+
+func (svc *ConfigService) Validate() error {
+	status, err := svc.GetConfigStatus()
+	if err != nil {
+		return err
+	}
+	if !status.HasConfig {
+		return fmt.Errorf("no config file found")
+	}
+	configPath, ok, err := svc.paths.ActiveConfigPath()
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("no config file found")
+	}
+	return svc.validateFile(configPath)
+}
+
+func (svc *ConfigService) UpdateRules() (*model.ActionResponse, error) {
+	logging.Info("config.rules_update", "rule update requested")
+	status, err := svc.GetConfigStatus()
+	if err != nil {
+		return nil, err
+	}
+	if !status.HasConfig {
+		return nil, fmt.Errorf("no config file found")
+	}
+	return &model.ActionResponse{Success: true, Message: "no rule sets configured"}, nil
+}
+
+func (svc *ConfigService) Backup() (*model.ActionResponse, error) {
+	logging.Info("config.backup", "backing up config")
+	configPath, ok, err := svc.paths.ActiveConfigPath()
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("no config file found")
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("read config: %w", err)
+	}
+
+	backupDir := filepath.Join(svc.paths.ConfigDir, "backup")
+	if err := os.MkdirAll(backupDir, 0755); err != nil {
+		return nil, fmt.Errorf("create backup dir: %w", err)
+	}
+
+	name := fmt.Sprintf("%s.%s.bak.json", filepath.Base(configPath), time.Now().Format("20060102150405"))
+	backupPath := filepath.Join(backupDir, name)
+	if err := os.WriteFile(backupPath, data, 0644); err != nil {
+		return nil, fmt.Errorf("write backup: %w", err)
+	}
+	return &model.ActionResponse{Success: true, Message: "config backed up"}, nil
+}
+
+func (svc *ConfigService) RestoreLatestBackup() (*model.ActionResponse, error) {
+	logging.Info("config.restore", "restoring latest config backup")
+	backupDir := filepath.Join(svc.paths.ConfigDir, "backup")
+	entries, err := os.ReadDir(backupDir)
+	if os.IsNotExist(err) {
+		return nil, fmt.Errorf("no config backup found")
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	backups := make([]string, 0)
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		backups = append(backups, filepath.Join(backupDir, entry.Name()))
+	}
+	if len(backups) == 0 {
+		return nil, fmt.Errorf("no config backup found")
+	}
+	sort.Strings(backups)
+	backupPath := backups[len(backups)-1]
+
+	data, err := os.ReadFile(backupPath)
+	if err != nil {
+		return nil, fmt.Errorf("read backup: %w", err)
+	}
+	if err := os.MkdirAll(svc.paths.ConfigDir, 0755); err != nil {
+		return nil, fmt.Errorf("create config dir: %w", err)
+	}
+	tmpPath := svc.paths.ConfigPath + ".restore.tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return nil, fmt.Errorf("write temp config: %w", err)
+	}
+	defer os.Remove(tmpPath)
+	if err := svc.validateFile(tmpPath); err != nil {
+		return nil, fmt.Errorf("backup config invalid: %w", err)
+	}
+	if err := os.Rename(tmpPath, svc.paths.ConfigPath); err != nil {
+		return nil, fmt.Errorf("restore config: %w", err)
+	}
+
+	status, _ := svc.GetConfigStatus()
+	if status != nil {
+		svc.realtime.Broadcast("config.status", status)
+	}
+	return &model.ActionResponse{Success: true, Message: "config restored"}, nil
+}
+
+func (svc *ConfigService) validateFile(path string) error {
+	binPath := svc.paths.BinaryPath
+	if _, err := os.Stat(binPath); os.IsNotExist(err) {
+		return fmt.Errorf("sing-box binary not found")
+	}
+
+	cmd := exec.Command(binPath, "check", "-c", path)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("sing-box check failed: %s: %w", string(output), err)
+	}
+
+	logging.Info("config.validate", "config validated: %s", path)
+	return nil
+}
+
+func getConfigDir(p *paths.Paths) string {
+	return p.ConfigDir
+}

@@ -1,0 +1,55 @@
+package service
+
+import (
+	"path/filepath"
+	"testing"
+
+	"github.com/ackwrap/ackwrap/internal/model"
+	"github.com/ackwrap/ackwrap/internal/store"
+)
+
+func TestImportManualNodes(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+
+	svc := NewNodeService(db)
+	resp, err := svc.Import(model.NodeImportRequest{Content: "ss://aes-128-gcm:pass@example.com:8388#Manual-SS"})
+	if err != nil {
+		t.Fatalf("import nodes: %v", err)
+	}
+	if resp.Imported != 1 || resp.SubscriptionID == 0 {
+		t.Fatalf("unexpected import response: %+v", resp)
+	}
+	nodes, err := db.ListNodesBySubscription(resp.SubscriptionID)
+	if err != nil {
+		t.Fatalf("list imported nodes: %v", err)
+	}
+	if len(nodes) != 1 || nodes[0].Name != "Manual-SS" || nodes[0].UID == "" {
+		t.Fatalf("unexpected imported nodes: %+v", nodes)
+	}
+	manual, err := db.GetSubscription(resp.SubscriptionID)
+	if err != nil {
+		t.Fatalf("get manual subscription: %v", err)
+	}
+	if manual == nil || manual.NodeCount != 1 {
+		t.Fatalf("expected manual subscription node_count=1, got %+v", manual)
+	}
+
+	resp, err = svc.Import(model.NodeImportRequest{Content: "ss://aes-128-gcm:pass@example.com:8388#Manual-SS-Updated"})
+	if err != nil {
+		t.Fatalf("import duplicate node: %v", err)
+	}
+	if resp.Imported != 1 {
+		t.Fatalf("unexpected duplicate import response: %+v", resp)
+	}
+	nodes, err = db.ListNodesBySubscription(resp.SubscriptionID)
+	if err != nil {
+		t.Fatalf("list duplicate imported nodes: %v", err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected upsert to keep 1 node, got %+v", nodes)
+	}
+}
