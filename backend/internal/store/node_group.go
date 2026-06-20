@@ -12,7 +12,7 @@ import (
 // NodeGroup CRUD
 
 func (s *Store) ListNodeGroups() ([]model.NodeGroupWithStats, error) {
-	rows, err := s.db.Query(`SELECT id, name, type, filter_protocols, filter_subscriptions, filter_include, filter_exclude, test_url, test_interval, tolerance, enabled, priority, created_at, updated_at FROM node_groups ORDER BY priority ASC, id ASC`)
+	rows, err := s.db.Query(`SELECT id, name, type, filter_protocols, filter_subscriptions, filter_include, filter_exclude, node_uids, test_url, test_interval, tolerance, enabled, priority, created_at, updated_at FROM node_groups ORDER BY priority ASC, id ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -22,13 +22,13 @@ func (s *Store) ListNodeGroups() ([]model.NodeGroupWithStats, error) {
 	for rows.Next() {
 		var g model.NodeGroup
 		var enabled int
-		if err := rows.Scan(&g.ID, &g.Name, &g.Type, &g.FilterProtocols, &g.FilterSubscriptions, &g.FilterInclude, &g.FilterExclude, &g.TestURL, &g.TestInterval, &g.Tolerance, &enabled, &g.Priority, &g.CreatedAt, &g.UpdatedAt); err != nil {
+		if err := rows.Scan(&g.ID, &g.Name, &g.Type, &g.FilterProtocols, &g.FilterSubscriptions, &g.FilterInclude, &g.FilterExclude, &g.NodeUIDs, &g.TestURL, &g.TestInterval, &g.Tolerance, &enabled, &g.Priority, &g.CreatedAt, &g.UpdatedAt); err != nil {
 			return nil, err
 		}
 		g.Enabled = enabled == 1
 
 		// 计算匹配节点数
-		matchedCount := s.countMatchedNodes(g.FilterProtocols, g.FilterSubscriptions, g.FilterInclude, g.FilterExclude)
+		matchedCount := s.countMatchedNodes(g.NodeUIDs, g.FilterProtocols, g.FilterSubscriptions, g.FilterInclude, g.FilterExclude)
 
 		groups = append(groups, model.NodeGroupWithStats{
 			NodeGroup:        g,
@@ -41,8 +41,8 @@ func (s *Store) ListNodeGroups() ([]model.NodeGroupWithStats, error) {
 func (s *Store) GetNodeGroup(id int64) (*model.NodeGroup, error) {
 	var g model.NodeGroup
 	var enabled int
-	err := s.db.QueryRow(`SELECT id, name, type, filter_protocols, filter_subscriptions, filter_include, filter_exclude, test_url, test_interval, tolerance, enabled, priority, created_at, updated_at FROM node_groups WHERE id = ?`, id).
-		Scan(&g.ID, &g.Name, &g.Type, &g.FilterProtocols, &g.FilterSubscriptions, &g.FilterInclude, &g.FilterExclude, &g.TestURL, &g.TestInterval, &g.Tolerance, &enabled, &g.Priority, &g.CreatedAt, &g.UpdatedAt)
+	err := s.db.QueryRow(`SELECT id, name, type, filter_protocols, filter_subscriptions, filter_include, filter_exclude, node_uids, test_url, test_interval, tolerance, enabled, priority, created_at, updated_at FROM node_groups WHERE id = ?`, id).
+		Scan(&g.ID, &g.Name, &g.Type, &g.FilterProtocols, &g.FilterSubscriptions, &g.FilterInclude, &g.FilterExclude, &g.NodeUIDs, &g.TestURL, &g.TestInterval, &g.Tolerance, &enabled, &g.Priority, &g.CreatedAt, &g.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -65,8 +65,9 @@ func (s *Store) CreateNodeGroup(req *model.NodeGroupRequest) (*model.NodeGroup, 
 		tolerance = 100
 	}
 
-	result, err := s.db.Exec(`INSERT INTO node_groups (name, type, filter_protocols, filter_subscriptions, filter_include, filter_exclude, test_url, test_interval, tolerance, enabled, priority, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		req.Name, req.Type, req.FilterProtocols, req.FilterSubscriptions, req.FilterInclude, req.FilterExclude, testURL, testInterval, tolerance, req.Enabled, req.Priority, now, now)
+	nodeUIDsJSON := marshalNodeUIDs(req.NodeUIDs)
+	result, err := s.db.Exec(`INSERT INTO node_groups (name, type, filter_protocols, filter_subscriptions, filter_include, filter_exclude, node_uids, test_url, test_interval, tolerance, enabled, priority, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		req.Name, req.Type, req.FilterProtocols, req.FilterSubscriptions, req.FilterInclude, req.FilterExclude, nodeUIDsJSON, testURL, testInterval, tolerance, req.Enabled, req.Priority, now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -90,14 +91,17 @@ func (s *Store) UpdateNodeGroup(id int64, req *model.NodeGroupRequest) error {
 		tolerance = 100
 	}
 
-	_, err := s.db.Exec(`UPDATE node_groups SET name = ?, type = ?, filter_protocols = ?, filter_subscriptions = ?, filter_include = ?, filter_exclude = ?, test_url = ?, test_interval = ?, tolerance = ?, enabled = ?, priority = ?, updated_at = ? WHERE id = ?`,
-		req.Name, req.Type, req.FilterProtocols, req.FilterSubscriptions, req.FilterInclude, req.FilterExclude, testURL, testInterval, tolerance, req.Enabled, req.Priority, now, id)
+	nodeUIDsJSON := marshalNodeUIDs(req.NodeUIDs)
+	_, err := s.db.Exec(`UPDATE node_groups SET name = ?, type = ?, filter_protocols = ?, filter_subscriptions = ?, filter_include = ?, filter_exclude = ?, node_uids = ?, test_url = ?, test_interval = ?, tolerance = ?, enabled = ?, priority = ?, updated_at = ? WHERE id = ?`,
+		req.Name, req.Type, req.FilterProtocols, req.FilterSubscriptions, req.FilterInclude, req.FilterExclude, nodeUIDsJSON, testURL, testInterval, tolerance, req.Enabled, req.Priority, now, id)
 	return err
 }
 
 func (s *Store) DeleteNodeGroup(id int64) error {
-	_, err := s.db.Exec(`DELETE FROM node_groups WHERE id = ?`, id)
-	return err
+	if _, err := s.db.Exec(`DELETE FROM node_groups WHERE id = ?`, id); err != nil {
+		return err
+	}
+	return s.removeNodeGroupRefsFromProxyCollections([]int64{id})
 }
 
 func (s *Store) DeleteNodeGroups(ids []int64) error {
@@ -113,7 +117,10 @@ func (s *Store) DeleteNodeGroups(ids []int64) error {
 		}
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return s.removeNodeGroupRefsFromProxyCollections(ids)
 }
 
 func (s *Store) ReorderNodeGroups(ids []int64) error {
@@ -142,13 +149,65 @@ func (s *Store) PreviewNodeGroupMatches(filterProtocols, filterSubscriptions, fi
 	return s.filterNodes(nodes, filterProtocols, filterSubscriptions, filterInclude, filterExclude), nil
 }
 
+func (s *Store) PreviewNodeGroupManualMatches(nodeUIDs string) ([]model.Node, error) {
+	nodes, err := s.listEnabledNodesForNodeGroup()
+	if err != nil {
+		return nil, err
+	}
+	return filterNodesByUIDs(nodes, nodeUIDs)
+}
+
 // countMatchedNodes 计算匹配节点数
-func (s *Store) countMatchedNodes(filterProtocols, filterSubscriptions, filterInclude, filterExclude string) int {
+func (s *Store) countMatchedNodes(nodeUIDs, filterProtocols, filterSubscriptions, filterInclude, filterExclude string) int {
 	nodes, err := s.listEnabledNodesForNodeGroup()
 	if err != nil {
 		return 0
 	}
+	if hasManualNodeUIDs(nodeUIDs) {
+		matched, err := filterNodesByUIDs(nodes, nodeUIDs)
+		if err != nil {
+			return 0
+		}
+		return len(matched)
+	}
 	return len(s.filterNodes(nodes, filterProtocols, filterSubscriptions, filterInclude, filterExclude))
+}
+
+func hasManualNodeUIDs(nodeUIDs string) bool {
+	value := strings.TrimSpace(nodeUIDs)
+	return value != "" && value != "[]" && value != "null"
+}
+
+func marshalNodeUIDs(uids []string) string {
+	if len(uids) == 0 {
+		return "[]"
+	}
+	data, err := json.Marshal(uids)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
+}
+
+func filterNodesByUIDs(nodes []model.Node, nodeUIDs string) ([]model.Node, error) {
+	var uids []string
+	if err := json.Unmarshal([]byte(nodeUIDs), &uids); err != nil {
+		return nil, err
+	}
+	selected := make(map[string]bool, len(uids))
+	for _, uid := range uids {
+		uid = strings.TrimSpace(uid)
+		if uid != "" {
+			selected[uid] = true
+		}
+	}
+	result := make([]model.Node, 0, len(selected))
+	for _, node := range nodes {
+		if selected[node.UID] {
+			result = append(result, node)
+		}
+	}
+	return result, nil
 }
 
 func (s *Store) listEnabledNodesForNodeGroup() ([]model.Node, error) {
@@ -402,8 +461,8 @@ func (s *Store) CreateProxyCollectionWithGroups(req *model.ProxyCollectionReques
 func (s *Store) GetProxyCollectionWithNodes(id int) (*model.ProxyCollectionWithNodes, error) {
 	var c model.ProxyCollection
 	var enabled int
-	err := s.db.QueryRow(`SELECT id, name, type, source_type, referenced_group_ids, node_uids, test_url, test_interval, tolerance, enabled, created_at, updated_at FROM proxy_collections WHERE id = ?`, id).
-		Scan(&c.ID, &c.Name, &c.Type, &c.SourceType, &c.ReferencedGroupIDs, &c.NodeUIDs, &c.TestURL, &c.TestInterval, &c.Tolerance, &enabled, &c.CreatedAt, &c.UpdatedAt)
+	err := s.db.QueryRow(`SELECT id, name, type, source_type, referenced_group_ids, route_rule_ids, node_uids, test_url, test_interval, tolerance, enabled, created_at, updated_at FROM proxy_collections WHERE id = ?`, id).
+		Scan(&c.ID, &c.Name, &c.Type, &c.SourceType, &c.ReferencedGroupIDs, &c.RouteRuleIDs, &c.NodeUIDs, &c.TestURL, &c.TestInterval, &c.Tolerance, &enabled, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -411,6 +470,9 @@ func (s *Store) GetProxyCollectionWithNodes(id int) (*model.ProxyCollectionWithN
 
 	result := &model.ProxyCollectionWithNodes{
 		ProxyCollection: c,
+	}
+	if c.RouteRuleIDs != "" && c.RouteRuleIDs != "[]" {
+		json.Unmarshal([]byte(c.RouteRuleIDs), &result.RouteRuleIDs)
 	}
 
 	// 如果是 node_groups 模式，加载引用的节点组

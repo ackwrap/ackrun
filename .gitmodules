@@ -1,0 +1,3 @@
+[submodule "sing-box-wrap"]
+	path = sing-box-wrap
+	url = https://github.com/ackwrap/sing-box-wrap.git

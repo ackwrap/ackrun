@@ -7,6 +7,7 @@ type ProxyCollection struct {
 	Type               string `json:"type"`                 // selector, urltest, fallback
 	SourceType         string `json:"source_type"`          // 'node_groups', 'manual'
 	ReferencedGroupIDs string `json:"referenced_group_ids"` // JSON: [1,2,3]
+	RouteRuleIDs       string `json:"route_rule_ids"`       // JSON: [1,2,3]
 	NodeUIDs           string `json:"node_uids"`            // JSON: ["uid1","uid2"]
 	TestURL            string `json:"test_url"`
 	TestInterval       int    `json:"test_interval"` // 秒
@@ -21,6 +22,7 @@ type ProxyCollectionWithNodes struct {
 	ProxyCollection
 	NodeUIDs         []string    `json:"node_uids"`
 	ReferencedGroups []NodeGroup `json:"referenced_groups"`
+	RouteRuleIDs     []int64     `json:"route_rule_ids"`
 }
 
 // ProxyCollectionRequest 创建/更新代理集合的请求
@@ -29,6 +31,7 @@ type ProxyCollectionRequest struct {
 	Type               string   `json:"type"`
 	SourceType         string   `json:"source_type"`
 	ReferencedGroupIDs []int64  `json:"referenced_group_ids"`
+	RouteRuleIDs       []int64  `json:"route_rule_ids"`
 	NodeUIDs           []string `json:"node_uids"`
 	TestURL            string   `json:"test_url"`
 	TestInterval       int      `json:"test_interval"`

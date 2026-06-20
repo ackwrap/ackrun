@@ -4,7 +4,9 @@
       "Bash(go build *)",
       "Bash(go test *)",
       "Bash(go vet *)",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "mcp__codegraph__codegraph_files",
+      "Bash(npx tsc *)"
     ]
   }
 }

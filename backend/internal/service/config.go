@@ -80,6 +80,52 @@ func (svc *ConfigService) GetConfigStatus() (*model.ConfigStatusResponse, error)
 	return status, nil
 }
 
+func (svc *ConfigService) ListConfigFiles() ([]model.ConfigFileItem, error) {
+	logging.Info("config.list", "listing config files")
+	if err := os.MkdirAll(svc.paths.ConfigDir, 0755); err != nil {
+		return nil, fmt.Errorf("create config dir: %w", err)
+	}
+	activePath, hasActive, err := svc.paths.ActiveConfigPath()
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(svc.paths.ConfigDir)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]model.ConfigFileItem, 0)
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		path := filepath.Join(svc.paths.ConfigDir, entry.Name())
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		item := model.ConfigFileItem{
+			Name:      entry.Name(),
+			Path:      path,
+			Active:    hasActive && filepath.Clean(path) == filepath.Clean(activePath),
+			SizeBytes: info.Size(),
+			UpdatedAt: info.ModTime().UnixMilli(),
+			Valid:     true,
+		}
+		if err := svc.validateFile(path); err != nil {
+			item.Valid = false
+			item.Error = err.Error()
+		}
+		items = append(items, item)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Active != items[j].Active {
+			return items[i].Active
+		}
+		return items[i].UpdatedAt > items[j].UpdatedAt
+	})
+	return items, nil
+}
+
 func (svc *ConfigService) GenerateDefault() error {
 	logging.Info("config.generate", "generating minimal config")
 	if err := os.MkdirAll(svc.paths.ConfigDir, 0755); err != nil {

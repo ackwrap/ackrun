@@ -51,7 +51,7 @@ func main() {
 	nodeSvc := service.NewNodeService(db)
 	routeRuleSvc := service.NewRouteRuleService(db, p, realtimeSvc)
 	proxyCollectionSvc := service.NewProxyCollectionService(db)
-	configGenSvc := service.NewConfigGeneratorService(db, p)
+	configGenSvc := service.NewConfigGeneratorService(db, p, singboxSvc)
 	dnsSvc := service.NewDNSService(db)
 	nodeGroupSvc := service.NewNodeGroupService(db)
 

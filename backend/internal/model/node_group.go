@@ -9,6 +9,7 @@ type NodeGroup struct {
 	FilterSubscriptions string `json:"filter_subscriptions"` // 逗号分隔: 1,2,3
 	FilterInclude       string `json:"filter_include"`
 	FilterExclude       string `json:"filter_exclude"`
+	NodeUIDs            string `json:"node_uids"`
 	TestURL             string `json:"test_url"`
 	TestInterval        int    `json:"test_interval"`
 	Tolerance           int    `json:"tolerance"`
@@ -26,17 +27,18 @@ type NodeGroupWithStats struct {
 
 // NodeGroupRequest 创建/更新节点组请求
 type NodeGroupRequest struct {
-	Name                string `json:"name" binding:"required"`
-	Type                string `json:"type" binding:"required"`
-	FilterProtocols     string `json:"filter_protocols"`
-	FilterSubscriptions string `json:"filter_subscriptions"`
-	FilterInclude       string `json:"filter_include" binding:"required"`
-	FilterExclude       string `json:"filter_exclude"`
-	TestURL             string `json:"test_url"`
-	TestInterval        int    `json:"test_interval"`
-	Tolerance           int    `json:"tolerance"`
-	Enabled             bool   `json:"enabled"`
-	Priority            int    `json:"priority"`
+	Name                string   `json:"name" binding:"required"`
+	Type                string   `json:"type" binding:"required"`
+	FilterProtocols     string   `json:"filter_protocols"`
+	FilterSubscriptions string   `json:"filter_subscriptions"`
+	FilterInclude       string   `json:"filter_include" binding:"required"`
+	FilterExclude       string   `json:"filter_exclude"`
+	NodeUIDs            []string `json:"node_uids"`
+	TestURL             string   `json:"test_url"`
+	TestInterval        int      `json:"test_interval"`
+	Tolerance           int      `json:"tolerance"`
+	Enabled             bool     `json:"enabled"`
+	Priority            int      `json:"priority"`
 }
 
 type NodeGroupIDsRequest struct {

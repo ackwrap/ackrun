@@ -250,7 +250,7 @@ export function RulesPage() {
     toastTimerRef.current = window.setTimeout(() => {
       setMessage('');
       toastTimerRef.current = null;
-    }, type === 'success' ? 2600 : 4200);
+    }, type === 'success' ? 3000 : 5000);
   };
 
   React.useEffect(() => () => {
@@ -259,7 +259,6 @@ export function RulesPage() {
 
   const load = React.useCallback(async () => {
     try {
-      setLoading(true);
       const [ruleItems, subscriptionItems, geoItems] = await Promise.all([
         api.getRouteRules(),
         api.getRouteRuleSubscriptions(),

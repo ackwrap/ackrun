@@ -67,5 +67,9 @@ type DNSGlobalSettings struct {
 	DisableExpire    bool   `json:"disable_expire"`
 	IndependentCache bool   `json:"independent_cache"`
 	ReverseMapping   bool   `json:"reverse_mapping"`
+	CacheCapacity    int    `json:"cache_capacity"`
 	ClientSubnet     string `json:"client_subnet"`
+	FakeIPEnabled    bool   `json:"fakeip_enabled"`
+	FakeIPInet4Range string `json:"fakeip_inet4_range"`
+	FakeIPInet6Range string `json:"fakeip_inet6_range"`
 }

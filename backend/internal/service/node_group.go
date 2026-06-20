@@ -1,6 +1,8 @@
 package service
 
 import (
+	"strings"
+
 	"github.com/ackwrap/ackwrap/internal/logging"
 	"github.com/ackwrap/ackwrap/internal/model"
 	"github.com/ackwrap/ackwrap/internal/store"
@@ -135,6 +137,10 @@ func (svc *NodeGroupService) QuickSetup(req model.NodeGroupQuickSetupRequest) er
 		}
 
 		if _, err := svc.store.CreateNodeGroup(&tmpl); err != nil {
+			if isNodeGroupDuplicateName(err) {
+				skippedExistingCount++
+				continue
+			}
 			return err
 		}
 		createdCount++
@@ -142,4 +148,12 @@ func (svc *NodeGroupService) QuickSetup(req model.NodeGroupQuickSetupRequest) er
 
 	logging.Info("node_group.quick_setup", "智能快速配置完成，创建节点组数: %d，已存在跳过: %d，参与匹配的启用节点数: %d，订阅筛选: %s，协议筛选: %s", createdCount, skippedExistingCount, len(allNodes), req.FilterSubscriptions, req.FilterProtocols)
 	return nil
+}
+
+func isNodeGroupDuplicateName(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unique") && strings.Contains(msg, "node_groups") && strings.Contains(msg, "name")
 }

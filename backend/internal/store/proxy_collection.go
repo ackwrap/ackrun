@@ -15,9 +15,9 @@ func (s *Store) CreateProxyCollection(pc *model.ProxyCollection) error {
 	pc.UpdatedAt = now
 
 	result, err := s.db.Exec(
-		`INSERT INTO proxy_collections (name, type, source_type, referenced_group_ids, node_uids, test_url, test_interval, tolerance, enabled, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		pc.Name, pc.Type, pc.SourceType, pc.ReferencedGroupIDs, pc.NodeUIDs, pc.TestURL, pc.TestInterval, pc.Tolerance, boolToInt(pc.Enabled), pc.CreatedAt, pc.UpdatedAt,
+		`INSERT INTO proxy_collections (name, type, source_type, referenced_group_ids, route_rule_ids, node_uids, test_url, test_interval, tolerance, enabled, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		pc.Name, pc.Type, pc.SourceType, pc.ReferencedGroupIDs, pc.RouteRuleIDs, pc.NodeUIDs, pc.TestURL, pc.TestInterval, pc.Tolerance, boolToInt(pc.Enabled), pc.CreatedAt, pc.UpdatedAt,
 	)
 	if err != nil {
 		return err
@@ -34,9 +34,9 @@ func (s *Store) GetProxyCollection(id int) (*model.ProxyCollection, error) {
 	var enabled int
 
 	err := s.db.QueryRow(
-		`SELECT id, name, type, source_type, referenced_group_ids, node_uids, test_url, test_interval, tolerance, enabled, created_at, updated_at
-		FROM proxy_collections WHERE id = ?`, id,
-	).Scan(&pc.ID, &pc.Name, &pc.Type, &pc.SourceType, &pc.ReferencedGroupIDs, &pc.NodeUIDs, &pc.TestURL, &pc.TestInterval, &pc.Tolerance, &enabled, &pc.CreatedAt, &pc.UpdatedAt)
+		`SELECT id, name, type, source_type, referenced_group_ids, route_rule_ids, node_uids, test_url, test_interval, tolerance, enabled, created_at, updated_at
+			FROM proxy_collections WHERE id = ?`, id,
+	).Scan(&pc.ID, &pc.Name, &pc.Type, &pc.SourceType, &pc.ReferencedGroupIDs, &pc.RouteRuleIDs, &pc.NodeUIDs, &pc.TestURL, &pc.TestInterval, &pc.Tolerance, &enabled, &pc.CreatedAt, &pc.UpdatedAt)
 
 	if err != nil {
 		return nil, err
@@ -49,8 +49,8 @@ func (s *Store) GetProxyCollection(id int) (*model.ProxyCollection, error) {
 // ListProxyCollections 列出所有代理集合
 func (s *Store) ListProxyCollections() ([]*model.ProxyCollection, error) {
 	rows, err := s.db.Query(
-		`SELECT id, name, type, source_type, referenced_group_ids, node_uids, test_url, test_interval, tolerance, enabled, created_at, updated_at
-		FROM proxy_collections ORDER BY created_at DESC`,
+		`SELECT id, name, type, source_type, referenced_group_ids, route_rule_ids, node_uids, test_url, test_interval, tolerance, enabled, created_at, updated_at
+			FROM proxy_collections ORDER BY created_at DESC`,
 	)
 	if err != nil {
 		return nil, err
@@ -62,7 +62,7 @@ func (s *Store) ListProxyCollections() ([]*model.ProxyCollection, error) {
 		var pc model.ProxyCollection
 		var enabled int
 
-		if err := rows.Scan(&pc.ID, &pc.Name, &pc.Type, &pc.SourceType, &pc.ReferencedGroupIDs, &pc.NodeUIDs, &pc.TestURL, &pc.TestInterval, &pc.Tolerance, &enabled, &pc.CreatedAt, &pc.UpdatedAt); err != nil {
+		if err := rows.Scan(&pc.ID, &pc.Name, &pc.Type, &pc.SourceType, &pc.ReferencedGroupIDs, &pc.RouteRuleIDs, &pc.NodeUIDs, &pc.TestURL, &pc.TestInterval, &pc.Tolerance, &enabled, &pc.CreatedAt, &pc.UpdatedAt); err != nil {
 			return nil, err
 		}
 
@@ -78,9 +78,9 @@ func (s *Store) UpdateProxyCollection(id int, pc *model.ProxyCollection) error {
 	pc.UpdatedAt = time.Now().UnixMilli()
 
 	_, err := s.db.Exec(
-		`UPDATE proxy_collections SET name = ?, type = ?, source_type = ?, referenced_group_ids = ?, node_uids = ?, test_url = ?, test_interval = ?, tolerance = ?, enabled = ?, updated_at = ?
-		WHERE id = ?`,
-		pc.Name, pc.Type, pc.SourceType, pc.ReferencedGroupIDs, pc.NodeUIDs, pc.TestURL, pc.TestInterval, pc.Tolerance, boolToInt(pc.Enabled), pc.UpdatedAt, id,
+		`UPDATE proxy_collections SET name = ?, type = ?, source_type = ?, referenced_group_ids = ?, route_rule_ids = ?, node_uids = ?, test_url = ?, test_interval = ?, tolerance = ?, enabled = ?, updated_at = ?
+			WHERE id = ?`,
+		pc.Name, pc.Type, pc.SourceType, pc.ReferencedGroupIDs, pc.RouteRuleIDs, pc.NodeUIDs, pc.TestURL, pc.TestInterval, pc.Tolerance, boolToInt(pc.Enabled), pc.UpdatedAt, id,
 	)
 
 	return err
@@ -131,6 +131,13 @@ func (s *Store) ListProxyCollectionsWithNodes() ([]*model.ProxyCollectionWithNod
 			}
 		}
 
+		var routeRuleIDs []int64
+		if pc.RouteRuleIDs != "" && pc.RouteRuleIDs != "[]" {
+			if err := json.Unmarshal([]byte(pc.RouteRuleIDs), &routeRuleIDs); err != nil {
+				return nil, err
+			}
+		}
+
 		var referencedGroups []model.NodeGroup
 		for _, gid := range referencedGroupIDs {
 			group, err := s.GetNodeGroup(gid)
@@ -143,6 +150,7 @@ func (s *Store) ListProxyCollectionsWithNodes() ([]*model.ProxyCollectionWithNod
 			ProxyCollection:  *pc,
 			NodeUIDs:         nodeUIDs,
 			ReferencedGroups: referencedGroups,
+			RouteRuleIDs:     routeRuleIDs,
 		})
 	}
 

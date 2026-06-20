@@ -57,6 +57,7 @@ func RegisterRoutes(
 		v1.POST("/installer/sing-box/install", installerH.Install)
 
 		v1.GET("/config/status", configH.GetStatus)
+		v1.GET("/config/files", configH.ListFiles)
 		v1.POST("/config/default", configH.GenerateDefault)
 		v1.POST("/config/validate", configH.Validate)
 		v1.POST("/config/rules/update", configH.UpdateRules)

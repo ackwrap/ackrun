@@ -199,7 +199,10 @@ func (s *Store) migrate() error {
 		)`,
 		`ALTER TABLE proxy_collections ADD COLUMN source_type TEXT NOT NULL DEFAULT 'manual'`,
 		`ALTER TABLE proxy_collections ADD COLUMN referenced_group_ids TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE proxy_collections ADD COLUMN route_rule_ids TEXT NOT NULL DEFAULT '[]'`,
 		`ALTER TABLE proxy_collections ADD COLUMN node_uids TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE node_groups ADD COLUMN node_uids TEXT NOT NULL DEFAULT '[]'`,
+		`UPDATE node_groups SET node_uids = '[]' WHERE node_uids = '' OR node_uids = 'null'`,
 		`UPDATE node_groups SET filter_exclude = '' WHERE name = '全部节点' AND filter_include = '.*' AND filter_exclude = '免费|过期|流量|官网|到期|剩余'`,
 	}
 
@@ -349,7 +352,9 @@ func isDuplicateColumnMigration(m string) bool {
 		`ALTER TABLE route_rule_subscriptions ADD COLUMN cached_updated_at INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE proxy_collections ADD COLUMN source_type TEXT NOT NULL DEFAULT 'manual'`,
 		`ALTER TABLE proxy_collections ADD COLUMN referenced_group_ids TEXT NOT NULL DEFAULT '[]'`,
-		`ALTER TABLE proxy_collections ADD COLUMN node_uids TEXT NOT NULL DEFAULT '[]'`:
+		`ALTER TABLE proxy_collections ADD COLUMN route_rule_ids TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE proxy_collections ADD COLUMN node_uids TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE node_groups ADD COLUMN node_uids TEXT NOT NULL DEFAULT '[]'`:
 		return true
 	default:
 		return false

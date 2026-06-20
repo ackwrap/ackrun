@@ -6,7 +6,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/ackwrap/ackwrap/internal/logging"
@@ -15,17 +17,25 @@ import (
 	"github.com/ackwrap/ackwrap/internal/store"
 )
 
+var outboundTagUnsafePattern = regexp.MustCompile(`[^A-Za-z0-9_.\-\p{Han}]+`)
+
 // ConfigGeneratorService 配置生成服务
 type ConfigGeneratorService struct {
-	store *store.Store
-	paths *paths.Paths
+	store   *store.Store
+	paths   *paths.Paths
+	singbox *SingboxService
 }
 
 // NewConfigGeneratorService 创建配置生成服务
-func NewConfigGeneratorService(store *store.Store, paths *paths.Paths) *ConfigGeneratorService {
+func NewConfigGeneratorService(store *store.Store, paths *paths.Paths, singbox ...*SingboxService) *ConfigGeneratorService {
+	var sb *SingboxService
+	if len(singbox) > 0 {
+		sb = singbox[0]
+	}
 	return &ConfigGeneratorService{
-		store: store,
-		paths: paths,
+		store:   store,
+		paths:   paths,
+		singbox: sb,
 	}
 }
 
@@ -167,11 +177,7 @@ func (s *ConfigGeneratorService) Generate(req *model.ConfigGenerateRequest) (*mo
 func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, error) {
 	outbounds := []interface{}{}
 
-	// 1. 添加 DNS、direct 和 block 出站
-	outbounds = append(outbounds, map[string]interface{}{
-		"type": "dns",
-		"tag":  "dns-out",
-	})
+	// 1. 添加基础 direct 和 block 出站。sing-box 1.13 已移除 dns outbound，DNS 通过 route action=hijack-dns 处理。
 	outbounds = append(outbounds, map[string]interface{}{
 		"type": "direct",
 		"tag":  "direct",
@@ -199,7 +205,12 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, error) {
 			continue
 		}
 
-		matchedNodes, err := s.store.PreviewNodeGroupMatches(group.FilterProtocols, group.FilterSubscriptions, group.FilterInclude, group.FilterExclude)
+		var matchedNodes []model.Node
+		if group.NodeUIDs != "" && group.NodeUIDs != "[]" && group.NodeUIDs != "null" {
+			matchedNodes, err = s.store.PreviewNodeGroupManualMatches(group.NodeUIDs)
+		} else {
+			matchedNodes, err = s.store.PreviewNodeGroupMatches(group.FilterProtocols, group.FilterSubscriptions, group.FilterInclude, group.FilterExclude)
+		}
 		if err != nil {
 			logging.Info("config_generator.outbound", "节点组 %s 匹配节点失败: %v", group.Name, err)
 			continue
@@ -240,6 +251,7 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
+	nodeTags := buildNodeOutboundTags(nodeResp.Items)
 
 	for _, node := range nodeResp.Items {
 		// 只生成集合中使用的节点
@@ -247,7 +259,7 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, error) {
 			continue
 		}
 
-		nodeOutbound, err := s.generateNodeOutbound(&node)
+		nodeOutbound, err := s.generateNodeOutbound(&node, nodeTags[node.UID])
 		if err != nil {
 			logging.Info("config_generator.outbound", "节点 %s 生成失败: %v", node.Name, err)
 			continue
@@ -261,11 +273,16 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, error) {
 		if len(uids) == 0 {
 			continue
 		}
+		groupOutbounds := nodeUIDsToOutboundTags(uids, nodeTags)
+		if len(groupOutbounds) == 0 {
+			logging.Info("config_generator.outbound", "节点组 %s 没有可用 outbound tag，跳过生成", group.Name)
+			continue
+		}
 
 		outbound := map[string]interface{}{
 			"tag":       group.Name,
 			"type":      group.Type,
-			"outbounds": uids,
+			"outbounds": groupOutbounds,
 		}
 
 		// urltest 特有字段
@@ -286,7 +303,7 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, error) {
 			continue
 		}
 
-		outbound, err := s.generateCollectionOutbound(col, validGroupTags)
+		outbound, err := s.generateCollectionOutbound(col, validGroupTags, nodeTags)
 		if err != nil {
 			logging.Info("config_generator.outbound", "集合 %s 生成失败: %v", col.Name, err)
 			continue
@@ -316,7 +333,7 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, error) {
 }
 
 // generateCollectionOutbound 为代理集合生成 outbound
-func (s *ConfigGeneratorService) generateCollectionOutbound(col *model.ProxyCollectionWithNodes, validGroupTags map[string]bool) (map[string]interface{}, error) {
+func (s *ConfigGeneratorService) generateCollectionOutbound(col *model.ProxyCollectionWithNodes, validGroupTags map[string]bool, nodeTags map[string]string) (map[string]interface{}, error) {
 	outbound := map[string]interface{}{
 		"type": col.Type,
 		"tag":  col.Name,
@@ -342,7 +359,11 @@ func (s *ConfigGeneratorService) generateCollectionOutbound(col *model.ProxyColl
 		if len(col.NodeUIDs) == 0 {
 			return nil, fmt.Errorf("策略组没有可用节点")
 		}
-		outbound["outbounds"] = col.NodeUIDs
+		outboundTags := nodeUIDsToOutboundTags(col.NodeUIDs, nodeTags)
+		if len(outboundTags) == 0 {
+			return nil, fmt.Errorf("策略组没有可用节点 outbound")
+		}
+		outbound["outbounds"] = outboundTags
 	}
 
 	// urltest 和 fallback 需要测试配置
@@ -359,7 +380,7 @@ func (s *ConfigGeneratorService) generateCollectionOutbound(col *model.ProxyColl
 }
 
 // generateNodeOutbound 为节点生成 outbound
-func (s *ConfigGeneratorService) generateNodeOutbound(node *model.Node) (map[string]interface{}, error) {
+func (s *ConfigGeneratorService) generateNodeOutbound(node *model.Node, tag string) (map[string]interface{}, error) {
 	// 过滤 sing-box 不支持的协议
 	unsupportedTypes := map[string]bool{
 		"ssr":    true, // ShadowsocksR
@@ -378,13 +399,64 @@ func (s *ConfigGeneratorService) generateNodeOutbound(node *model.Node) (map[str
 		return nil, fmt.Errorf("解析节点 JSON 失败: %w", err)
 	}
 
-	// 设置 tag 为节点 UID（稳定标识，集合和路由规则引用）
-	nodeData["tag"] = node.UID
+	// 使用可读且稳定的 tag，便于在生成配置和 Clash API 中识别节点。
+	nodeData["tag"] = tag
 
 	// 移除可能存在的非 sing-box 字段
 	delete(nodeData, "name")
+	delete(nodeData, "udp")
 
 	return nodeData, nil
+}
+
+func buildNodeOutboundTags(nodes []model.Node) map[string]string {
+	result := make(map[string]string, len(nodes))
+	used := make(map[string]bool)
+	for _, node := range nodes {
+		base := sanitizeOutboundTag(node.Name)
+		if base == "" {
+			base = sanitizeOutboundTag(node.Type)
+		}
+		if base == "" {
+			base = "node"
+		}
+		shortUID := node.UID
+		if len(shortUID) > 8 {
+			shortUID = shortUID[:8]
+		}
+		tag := fmt.Sprintf("%s-%s", base, shortUID)
+		if used[tag] {
+			tag = fmt.Sprintf("%s-%s", tag, node.UID)
+		}
+		used[tag] = true
+		result[node.UID] = tag
+	}
+	return result
+}
+
+func sanitizeOutboundTag(value string) string {
+	value = strings.TrimSpace(value)
+	value = outboundTagUnsafePattern.ReplaceAllString(value, "-")
+	value = strings.Trim(value, "-_. ")
+	if len([]rune(value)) > 48 {
+		runes := []rune(value)
+		value = string(runes[:48])
+	}
+	return value
+}
+
+func nodeUIDsToOutboundTags(uids []string, nodeTags map[string]string) []string {
+	tags := make([]string, 0, len(uids))
+	seen := make(map[string]bool)
+	for _, uid := range uids {
+		tag := nodeTags[uid]
+		if tag == "" || seen[tag] {
+			continue
+		}
+		seen[tag] = true
+		tags = append(tags, tag)
+	}
+	return tags
 }
 
 // generateRoute 生成路由配置
@@ -400,11 +472,16 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 	var ruleSets []map[string]interface{}
 	ruleSetTags := make(map[string]bool)
 
-	// DNS 查询交给 dns-out 处理，放在所有路由规则之前。
+	// sing-box 1.13 已移除 inbound sniff 字段，嗅探和 DNS 劫持必须使用 rule action。
+	routeRules = append(routeRules, map[string]interface{}{
+		"action": "sniff",
+	})
+
+	// DNS 查询交给 DNS rule action 处理，放在所有路由规则之前。
 	if dnsSettings, _ := s.store.GetDNSSettings(); dnsSettings != nil && dnsSettings.Enabled {
 		routeRules = append(routeRules, map[string]interface{}{
 			"protocol": "dns",
-			"outbound": "dns-out",
+			"action":   "hijack-dns",
 		})
 	}
 
@@ -427,9 +504,14 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 			}
 		}
 
+		ruleOutboundOverrides := s.routeRuleOutboundOverrides()
+
 		for _, rule := range rules {
 			if !rule.Enabled {
 				continue
+			}
+			if outbound, ok := ruleOutboundOverrides[rule.ID]; ok {
+				rule.Outbound = outbound
 			}
 
 			ruleMaps, err := s.generateRouteRules(&rule)
@@ -512,44 +594,46 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase() map[string]interface{
 			DisableExpire:    false,
 			IndependentCache: false,
 			ReverseMapping:   false,
+			CacheCapacity:    4096,
 			ClientSubnet:     "",
+			FakeIPEnabled:    false,
+			FakeIPInet4Range: "198.19.0.0/16",
+			FakeIPInet6Range: "fdfe:dcba:9876::/48",
 		}
 	}
 
 	// 2. 读取所有启用的 DNS servers
 	dnsServers, _ := s.store.ListDNSServers()
 	servers := []map[string]interface{}{}
+	hasFakeIPServer := false
 	for _, srv := range dnsServers {
 		if !srv.Enabled {
 			continue
 		}
-		server := map[string]interface{}{
-			"tag": srv.Tag,
+		if srv.Tag == "fakeip" {
+			hasFakeIPServer = true
 		}
-		// 根据 server_type 设置不同字段
-		switch srv.ServerType {
-		case "local", "fakeip", "rcode":
-			server["address"] = srv.Address
-		default:
-			// udp/tcp/https/tls/quic 等需要地址
-			if srv.Address != "" {
-				server["address"] = srv.Address
-			}
-			if srv.AddressResolver != "" {
-				server["address_resolver"] = srv.AddressResolver
-			}
-			if srv.AddressStrategy != "" {
-				server["address_strategy"] = srv.AddressStrategy
-			}
-			if srv.Strategy != "" {
-				server["strategy"] = srv.Strategy
-			}
-			if srv.Detour != "" {
-				server["detour"] = srv.Detour
-			}
-			if srv.ClientSubnet != "" {
-				server["client_subnet"] = srv.ClientSubnet
-			}
+		server := map[string]interface{}{
+			"tag":  srv.Tag,
+			"type": srv.ServerType,
+		}
+		if srv.Address != "" {
+			server["server"] = srv.Address
+		}
+		if srv.AddressResolver != "" {
+			server["address_resolver"] = srv.AddressResolver
+		}
+		if srv.AddressStrategy != "" {
+			server["address_strategy"] = srv.AddressStrategy
+		}
+		if srv.Strategy != "" {
+			server["strategy"] = srv.Strategy
+		}
+		if srv.Detour != "" {
+			server["detour"] = srv.Detour
+		}
+		if srv.ClientSubnet != "" {
+			server["client_subnet"] = srv.ClientSubnet
 		}
 		// 合并 options_json 中的额外选项
 		if srv.OptionsJSON != "" && srv.OptionsJSON != "{}" {
@@ -561,6 +645,19 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase() map[string]interface{
 			}
 		}
 		servers = append(servers, server)
+	}
+	if globalSettings.FakeIPEnabled && !hasFakeIPServer {
+		fakeIP := map[string]interface{}{
+			"tag":  "fakeip",
+			"type": "fakeip",
+		}
+		if globalSettings.FakeIPInet4Range != "" {
+			fakeIP["inet4_range"] = globalSettings.FakeIPInet4Range
+		}
+		if globalSettings.FakeIPInet6Range != "" {
+			fakeIP["inet6_range"] = globalSettings.FakeIPInet6Range
+		}
+		servers = append(servers, fakeIP)
 	}
 
 	// 3. 读取所有启用的 DNS rules
@@ -593,6 +690,12 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase() map[string]interface{
 		}
 		rules = append(rules, ruleMap)
 	}
+	if globalSettings.FakeIPEnabled {
+		rules = append([]map[string]interface{}{{
+			"query_type": []string{"A", "AAAA"},
+			"server":     "fakeip",
+		}}, rules...)
+	}
 
 	// 4. 组装完整 DNS 配置
 	dns := map[string]interface{}{
@@ -604,6 +707,9 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase() map[string]interface{
 		"disable_expire":    globalSettings.DisableExpire,
 		"independent_cache": globalSettings.IndependentCache,
 		"reverse_mapping":   globalSettings.ReverseMapping,
+	}
+	if globalSettings.CacheCapacity > 0 {
+		dns["cache_capacity"] = globalSettings.CacheCapacity
 	}
 	if globalSettings.ClientSubnet != "" {
 		dns["client_subnet"] = globalSettings.ClientSubnet
@@ -625,6 +731,31 @@ func (s *ConfigGeneratorService) enabledRouteRuleSubscriptionTags() map[string]b
 		}
 	}
 	return tags
+}
+
+func (s *ConfigGeneratorService) routeRuleOutboundOverrides() map[int64]string {
+	overrides := make(map[int64]string)
+	collections, err := s.store.ListProxyCollectionsWithNodes()
+	if err != nil {
+		logging.Info("config_generator.route", "读取策略组规则绑定失败: %v", err)
+		return overrides
+	}
+	for _, collection := range collections {
+		if !collection.Enabled {
+			continue
+		}
+		for _, ruleID := range collection.RouteRuleIDs {
+			if ruleID <= 0 {
+				continue
+			}
+			if _, exists := overrides[ruleID]; exists {
+				logging.Info("config_generator.route", "规则 %d 绑定多个策略组，保留第一个策略组", ruleID)
+				continue
+			}
+			overrides[ruleID] = collection.Name
+		}
+	}
+	return overrides
 }
 
 // generateRouteRule 生成单条路由规则
@@ -698,6 +829,12 @@ func (s *ConfigGeneratorService) Apply(restartCore bool) error {
 	// 4. 删除临时配置
 	os.Remove(tmpPath)
 
+	if restartCore && s.singbox != nil {
+		if _, err := s.singbox.ReloadConfig(); err != nil {
+			return fmt.Errorf("配置已应用，但重载核心失败: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -727,7 +864,6 @@ func (s *ConfigGeneratorService) generateInbounds(listen string, port int) []int
 				"auto_route":     true,
 				"strict_route":   true,
 				"stack":          "system",
-				"sniff":          true,
 			},
 		}
 	case "mixed":
@@ -738,7 +874,6 @@ func (s *ConfigGeneratorService) generateInbounds(listen string, port int) []int
 				"tag":         "mixed-in",
 				"listen":      listen,
 				"listen_port": port,
-				"sniff":       true,
 			},
 		}
 	case "tun_mixed":
@@ -754,14 +889,12 @@ func (s *ConfigGeneratorService) generateInbounds(listen string, port int) []int
 				"auto_route":     true,
 				"strict_route":   true,
 				"stack":          "system",
-				"sniff":          true,
 			},
 			map[string]interface{}{
 				"type":        "mixed",
 				"tag":         "mixed-in",
 				"listen":      listen,
 				"listen_port": port,
-				"sniff":       true,
 			},
 		}
 	}

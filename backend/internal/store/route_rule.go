@@ -74,8 +74,10 @@ func (s *Store) UpdateRouteRule(id int64, req *model.RouteRuleRequest) (*model.R
 }
 
 func (s *Store) DeleteRouteRule(id int64) error {
-	_, err := s.db.Exec(`DELETE FROM route_rules WHERE id = ?`, id)
-	return err
+	if _, err := s.db.Exec(`DELETE FROM route_rules WHERE id = ?`, id); err != nil {
+		return err
+	}
+	return s.removeRouteRuleRefsFromProxyCollections(id)
 }
 
 func (s *Store) ReorderRouteRules(ids []int64) error {

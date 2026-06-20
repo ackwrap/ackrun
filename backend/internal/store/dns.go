@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/ackwrap/ackwrap/internal/model"
@@ -172,7 +173,11 @@ func (s *Store) GetDNSGlobalSettings() (*model.DNSGlobalSettings, error) {
 		DisableExpire:    false,
 		IndependentCache: false,
 		ReverseMapping:   false,
+		CacheCapacity:    4096,
 		ClientSubnet:     "",
+		FakeIPEnabled:    false,
+		FakeIPInet4Range: "198.19.0.0/16",
+		FakeIPInet6Range: "fdfe:dcba:9876::/48",
 	}
 
 	rows, err := s.db.Query(`SELECT key, value FROM app_settings WHERE key LIKE 'dns_global.%'`)
@@ -208,8 +213,22 @@ func (s *Store) GetDNSGlobalSettings() (*model.DNSGlobalSettings, error) {
 			r.IndependentCache = value == "true"
 		case "dns_global.reverse_mapping":
 			r.ReverseMapping = value == "true"
+		case "dns_global.cache_capacity":
+			if n, err := strconv.Atoi(value); err == nil && n > 0 {
+				r.CacheCapacity = n
+			}
 		case "dns_global.client_subnet":
 			r.ClientSubnet = value
+		case "dns_global.fakeip_enabled":
+			r.FakeIPEnabled = value == "true"
+		case "dns_global.fakeip_inet4_range":
+			if value != "" {
+				r.FakeIPInet4Range = value
+			}
+		case "dns_global.fakeip_inet6_range":
+			if value != "" {
+				r.FakeIPInet6Range = value
+			}
 		}
 	}
 	return r, nil
@@ -218,14 +237,18 @@ func (s *Store) GetDNSGlobalSettings() (*model.DNSGlobalSettings, error) {
 func (s *Store) SetDNSGlobalSettings(req *model.DNSGlobalSettings) error {
 	now := time.Now().Unix()
 	settings := map[string]string{
-		"dns_global.enabled":           fmt.Sprintf("%t", req.Enabled),
-		"dns_global.final":             req.Final,
-		"dns_global.strategy":          req.Strategy,
-		"dns_global.disable_cache":     fmt.Sprintf("%t", req.DisableCache),
-		"dns_global.disable_expire":    fmt.Sprintf("%t", req.DisableExpire),
-		"dns_global.independent_cache": fmt.Sprintf("%t", req.IndependentCache),
-		"dns_global.reverse_mapping":   fmt.Sprintf("%t", req.ReverseMapping),
-		"dns_global.client_subnet":     req.ClientSubnet,
+		"dns_global.enabled":            fmt.Sprintf("%t", req.Enabled),
+		"dns_global.final":              req.Final,
+		"dns_global.strategy":           req.Strategy,
+		"dns_global.disable_cache":      fmt.Sprintf("%t", req.DisableCache),
+		"dns_global.disable_expire":     fmt.Sprintf("%t", req.DisableExpire),
+		"dns_global.independent_cache":  fmt.Sprintf("%t", req.IndependentCache),
+		"dns_global.reverse_mapping":    fmt.Sprintf("%t", req.ReverseMapping),
+		"dns_global.cache_capacity":     fmt.Sprintf("%d", req.CacheCapacity),
+		"dns_global.client_subnet":      req.ClientSubnet,
+		"dns_global.fakeip_enabled":     fmt.Sprintf("%t", req.FakeIPEnabled),
+		"dns_global.fakeip_inet4_range": req.FakeIPInet4Range,
+		"dns_global.fakeip_inet6_range": req.FakeIPInet6Range,
 	}
 
 	for key, value := range settings {

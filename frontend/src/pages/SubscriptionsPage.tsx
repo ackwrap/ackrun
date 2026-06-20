@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { SyncScheduleControls } from '@/components/ui/SyncScheduleControls';
+import { Toast } from '@/components/ui/Toast';
 import { api } from '@/services/api';
 import { useRealtimeSocket } from '@/hooks/useRealtimeSocket';
 import type { NodeImportPreviewItem, Subscription, UserAgentOption, WSEvent, NodeFilter } from '@/services/types';
@@ -127,6 +128,7 @@ export function SubscriptionsPage() {
   const [subscriptions, setSubscriptions] = React.useState<Subscription[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [message, setMessage] = React.useState('');
+  const toastType = message.includes('失败') || message.includes('错误') ? 'error' : 'success';
   const [editing, setEditing] = React.useState<Subscription | null>(null);
   const [formOpen, setFormOpen] = React.useState(false);
   const [name, setName] = React.useState('');
@@ -203,6 +205,12 @@ export function SubscriptionsPage() {
     load();
     loadFilters();
   }, [load, loadFilters]);
+
+  React.useEffect(() => {
+    if (!message) return;
+    const timer = window.setTimeout(() => setMessage(''), toastType === 'error' ? 5000 : 3000);
+    return () => window.clearTimeout(timer);
+  }, [message, toastType]);
 
   React.useEffect(() => {
     api.getSubscriptionUserAgents()
@@ -366,7 +374,7 @@ export function SubscriptionsPage() {
           </div>
         </div>
 
-        {message && <div className="mb-3 rounded-md bg-white/[0.04] px-3 py-2 text-xs text-[var(--text-secondary)]">{message}</div>}
+        <Toast message={message} type={toastType} />
 
         <div className="overflow-hidden rounded-none border border-[var(--border-default)]">
           <table className="w-full border-collapse text-left text-sm">

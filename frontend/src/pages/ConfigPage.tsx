@@ -1,41 +1,84 @@
-import { useState, useEffect } from 'react';
-import { Play, Save } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { CheckCircle2, FileJson, Play, RefreshCw, Save, XCircle } from 'lucide-react';
+
 import { PageHeader } from '@/components/layout/PageHeader';
 import { JsonPreview } from '@/components/JsonPreview';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
+import { Toast } from '@/components/ui/Toast';
 import { api } from '@/services/api';
-import type { ConfigGenerateRequest } from '@/services/types';
+import type { ConfigFileItem, ConfigGenerateRequest } from '@/services/types';
+
+const defaultRequest: ConfigGenerateRequest = {
+  default_outbound: 'proxy',
+  inbound_listen: '127.0.0.1',
+  inbound_port: 7890,
+  log_level: 'info',
+};
+
+function formatTime(value?: number) {
+  if (!value) return '-';
+  return new Date(value).toLocaleString();
+}
+
+function formatSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
 
 export function ConfigPage() {
-  const [config, setConfig] = useState<ConfigGenerateRequest>({
-    default_outbound: 'proxy',
-    inbound_listen: '127.0.0.1',
-    inbound_port: 7890,
-    log_level: 'info',
-  });
-
+  const [request, setRequest] = useState<ConfigGenerateRequest>(defaultRequest);
+  const [files, setFiles] = useState<ConfigFileItem[]>([]);
   const [generated, setGenerated] = useState<any>(null);
+  const [loadingFiles, setLoadingFiles] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [applying, setApplying] = useState(false);
+  const [confirmApply, setConfirmApply] = useState(false);
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState<'success' | 'error'>('error');
+
+  const config = generated?.config;
+  const moduleItems = useMemo(() => {
+    const route = config?.route || {};
+    return [
+      { name: '日志', count: config?.log ? 1 : 0, detail: config?.log?.level ? `level=${config.log.level}` : '未生成' },
+      { name: '入站', count: config?.inbounds?.length || 0, detail: '来自运行模式与本地监听设置' },
+      { name: '出站/策略组', count: config?.outbounds?.length || 0, detail: '来自节点、节点组、策略组' },
+      { name: '路由规则', count: route?.rules?.length || 0, detail: '来自规则管理和策略组绑定' },
+      { name: '规则集', count: route?.rule_set?.length || 0, detail: '来自 Geo/规则订阅自动生成' },
+      { name: 'DNS', count: config?.dns ? (config.dns.servers?.length || 0) : 0, detail: config?.dns ? `${config.dns.rules?.length || 0} 条 DNS 规则` : '未启用' },
+      { name: 'NTP', count: config?.ntp ? 1 : 0, detail: config?.ntp ? config.ntp.server : '未启用' },
+      { name: '实验功能', count: config?.experimental ? Object.keys(config.experimental).length : 0, detail: 'Clash API / Cache File' },
+    ];
+  }, [config]);
 
   const showMessage = (msg: string, type: 'success' | 'error' = 'error') => {
     setMessage(msg);
     setMessageType(type);
-    if (type === 'success') setTimeout(() => setMessage(''), 3000);
+  };
+
+  useEffect(() => {
+    if (!message) return;
+    const timer = window.setTimeout(() => setMessage(''), messageType === 'error' ? 5000 : 3000);
+    return () => window.clearTimeout(timer);
+  }, [message, messageType]);
+
+  const loadFiles = async () => {
+    try {
+      setFiles(await api.getConfigFiles());
+    } catch (e: any) {
+      showMessage(`配置列表加载失败: ${e.message}`, 'error');
+    } finally {
+      setLoadingFiles(false);
+    }
   };
 
   const handleGenerate = async () => {
     try {
       setGenerating(true);
-      const result = await api.generateConfig(config);
+      const result = await api.generateConfig(request);
       setGenerated(result);
-
-      if (result.valid) {
-        showMessage('配置生成成功', 'success');
-      } else {
-        showMessage(`配置校验失败: ${result.error}`, 'error');
-      }
+      showMessage(result.valid ? '完整配置已生成并校验通过' : `配置校验失败: ${result.error}`, result.valid ? 'success' : 'error');
     } catch (e: any) {
       showMessage(`生成失败: ${e.message}`, 'error');
     } finally {
@@ -44,17 +87,16 @@ export function ConfigPage() {
   };
 
   const handleApply = async () => {
-    if (!generated || !generated.valid) {
-      showMessage('请先生成有效配置', 'error');
+    if (!generated?.valid) {
+      showMessage('请先生成并校验通过配置', 'error');
       return;
     }
-
-    if (!confirm('确定要应用配置并重启核心吗？')) return;
-
     try {
       setApplying(true);
       await api.applyConfig({ restart_core: true });
-      showMessage('配置已应用，核心正在重启', 'success');
+      setConfirmApply(false);
+      showMessage('配置已应用', 'success');
+      await loadFiles();
     } catch (e: any) {
       showMessage(`应用失败: ${e.message}`, 'error');
     } finally {
@@ -62,162 +104,132 @@ export function ConfigPage() {
     }
   };
 
-  // 自动生成预览
   useEffect(() => {
+    loadFiles();
     handleGenerate();
-  }, [config]);
+  }, []);
 
   return (
-    <div className="flex h-screen flex-col">
-      <div className="shrink-0 border-b border-[var(--border-default)] bg-[var(--bg-primary)] px-6 py-4">
-        <div className="flex items-center justify-between">
-          <PageHeader
-            title="配置生成"
-            description="自动生成 sing-box 配置"
-          />
-          <div className="flex gap-2">
-            <button
-              onClick={handleGenerate}
-              disabled={generating}
-              className="inline-flex h-9 items-center gap-2 rounded-md bg-blue-600 px-4 text-sm font-medium text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <Play size={16} />
-              {generating ? '生成中...' : '重新生成'}
-            </button>
-            {generated && generated.valid && (
-              <button
-                onClick={handleApply}
-                disabled={applying}
-                className="inline-flex h-9 items-center gap-2 rounded-md bg-emerald-600 px-4 text-sm font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <Save size={16} />
-                {applying ? '应用中...' : '应用配置'}
-              </button>
-            )}
-          </div>
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <PageHeader title="配置生成" description="从当前订阅、节点、策略组、路由规则、DNS、Geo 和运行设置生成完整 sing-box 配置" />
+        <div className="flex flex-wrap gap-2">
+          <button onClick={loadFiles} className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border-default)] bg-[var(--bg-surface)] px-3 text-sm text-[var(--text-primary)] hover:bg-[var(--bg-sidebar-hover)]">
+            <RefreshCw size={15} />刷新列表
+          </button>
+          <button onClick={handleGenerate} disabled={generating} className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--button-primary-border)] bg-[var(--button-primary-bg)] px-3 text-sm font-medium text-[var(--button-primary-text)] hover:bg-[var(--button-primary-hover)] disabled:opacity-50">
+            <Play size={15} />{generating ? '生成中...' : '生成完整配置'}
+          </button>
+          <button onClick={() => setConfirmApply(true)} disabled={!generated?.valid || applying} className="inline-flex h-9 items-center gap-2 rounded-md bg-emerald-600 px-3 text-sm font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50">
+            <Save size={15} />{applying ? '应用中...' : '应用当前生成结果'}
+          </button>
         </div>
-
-        {message && (
-          <div className={`mt-3 rounded-md border px-3 py-2 text-sm ${
-            messageType === 'success'
-              ? 'border-emerald-400/20 bg-emerald-500/10 text-emerald-300'
-              : 'border-red-400/20 bg-red-500/10 text-red-300'
-          }`}>
-            {message}
-          </div>
-        )}
       </div>
+      <Toast message={message} type={messageType} />
 
-      <div className="flex min-h-0 flex-1">
-        {/* 左侧表单 */}
-        <div className="w-[400px] border-r border-[var(--border-default)] bg-[var(--bg-secondary)] p-6 overflow-y-auto">
-          <h3 className="mb-4 text-sm font-semibold text-white">配置参数</h3>
-          
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">
-                默认出站
-              </label>
-              <select
-                value={config.default_outbound}
-                onChange={(e) => setConfig({ ...config, default_outbound: e.target.value })}
-                className="w-full rounded border border-[var(--border-default)] bg-[var(--bg-primary)] px-3 py-2 text-sm text-white"
-              >
-                <option value="proxy">代理</option>
-                <option value="direct">直连</option>
-                <option value="block">拦截</option>
-              </select>
-              <p className="mt-1 text-xs text-[var(--text-secondary)] opacity-70">
-                未匹配规则的流量走向
-              </p>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">
-                入站监听地址
-              </label>
-              <input
-                type="text"
-                value={config.inbound_listen}
-                onChange={(e) => setConfig({ ...config, inbound_listen: e.target.value })}
-                className="w-full rounded border border-[var(--border-default)] bg-[var(--bg-primary)] px-3 py-2 text-sm text-white"
-              />
-              <p className="mt-1 text-xs text-[var(--text-secondary)] opacity-70">
-                本地代理监听地址，通常为 127.0.0.1
-              </p>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">
-                入站端口
-              </label>
-              <input
-                type="number"
-                value={config.inbound_port}
-                onChange={(e) => setConfig({ ...config, inbound_port: parseInt(e.target.value) || 7890 })}
-                className="w-full rounded border border-[var(--border-default)] bg-[var(--bg-primary)] px-3 py-2 text-sm text-white"
-              />
-              <p className="mt-1 text-xs text-[var(--text-secondary)] opacity-70">
-                本地代理端口，建议 7890
-              </p>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">
-                日志级别
-              </label>
-              <select
-                value={config.log_level}
-                onChange={(e) => setConfig({ ...config, log_level: e.target.value })}
-                className="w-full rounded border border-[var(--border-default)] bg-[var(--bg-primary)] px-3 py-2 text-sm text-white"
-              >
-                <option value="trace">Trace</option>
-                <option value="debug">Debug</option>
-                <option value="info">Info</option>
-                <option value="warn">Warn</option>
-                <option value="error">Error</option>
-              </select>
-              <p className="mt-1 text-xs text-[var(--text-secondary)] opacity-70">
-                日志详细程度，生产环境建议 info 或 warn
-              </p>
-            </div>
-
-            {generated && !generated.valid && (
-              <div className="rounded-md border border-red-400/20 bg-red-500/10 p-3 text-sm text-red-300">
-                <div className="font-medium mb-1">配置校验失败</div>
-                <div className="text-xs opacity-80">{generated.error}</div>
-              </div>
-            )}
-
-            {generated && generated.valid && (
-              <div className="rounded-md border border-emerald-400/20 bg-emerald-500/10 p-3 text-sm text-emerald-300">
-                <div className="font-medium">✓ 配置有效</div>
-                <div className="mt-2 text-xs opacity-80 space-y-1">
-                  <div>入站: {generated.config?.inbounds?.length || 0} 个</div>
-                  <div>出站: {generated.config?.outbounds?.length || 0} 个</div>
-                  <div>路由规则: {generated.config?.route?.rules?.length || 0} 条</div>
+      <div className="grid gap-4 xl:grid-cols-[420px_1fr]">
+        <div className="space-y-4">
+          <section className="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-card)]">
+            <h3 className="text-sm font-semibold text-[var(--text-primary)]">配置列表</h3>
+            <p className="mt-1 text-xs text-[var(--text-tertiary)]">当前配置目录中的 JSON 配置文件。</p>
+            <div className="mt-4 space-y-2">
+              {loadingFiles ? (
+                <div className="rounded-lg border border-[var(--border-default)] p-4 text-sm text-[var(--text-secondary)]">加载中...</div>
+              ) : files.length === 0 ? (
+                <div className="rounded-lg border border-[var(--border-default)] p-4 text-sm text-[var(--text-secondary)]">暂无配置文件，先生成并应用配置。</div>
+              ) : files.map(file => (
+                <div key={file.path} className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-base)] p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 text-sm font-medium text-[var(--text-primary)]">
+                        <FileJson size={15} className="shrink-0" />
+                        <span className="truncate">{file.name}</span>
+                      </div>
+                      <div className="mt-1 text-xs text-[var(--text-tertiary)]">{formatSize(file.size_bytes)} · {formatTime(file.updated_at)}</div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      {file.active && <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-xs text-blue-300">当前</span>}
+                      <span className={`rounded-full px-2 py-0.5 text-xs ${file.valid ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'}`}>{file.valid ? '有效' : '无效'}</span>
+                    </div>
+                  </div>
+                  {file.error && <div className="mt-2 line-clamp-2 text-xs text-red-300">{file.error}</div>}
                 </div>
-              </div>
-            )}
-          </div>
+              ))}
+            </div>
+          </section>
+
+          <section className="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-card)]">
+            <h3 className="text-sm font-semibold text-[var(--text-primary)]">生成参数</h3>
+            <div className="mt-4 grid gap-3">
+              <label className="block">
+                <span className="text-xs text-[var(--text-tertiary)]">默认出站</span>
+                <select value={request.default_outbound} onChange={e => setRequest(prev => ({ ...prev, default_outbound: e.target.value }))} className="mt-1 w-full rounded-md border border-[var(--border-default)] bg-[var(--bg-base)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-blue-400">
+                  <option value="proxy">proxy（策略）</option>
+                  <option value="direct">direct（直连）</option>
+                  <option value="block">block（阻断）</option>
+                </select>
+              </label>
+              <label className="block">
+                <span className="text-xs text-[var(--text-tertiary)]">Mixed 监听地址</span>
+                <input value={request.inbound_listen} onChange={e => setRequest(prev => ({ ...prev, inbound_listen: e.target.value }))} className="mt-1 w-full rounded-md border border-[var(--border-default)] bg-[var(--bg-base)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-blue-400" />
+              </label>
+              <label className="block">
+                <span className="text-xs text-[var(--text-tertiary)]">Mixed 监听端口</span>
+                <input type="number" value={request.inbound_port} onChange={e => setRequest(prev => ({ ...prev, inbound_port: parseInt(e.target.value) || 7890 }))} className="mt-1 w-full rounded-md border border-[var(--border-default)] bg-[var(--bg-base)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-blue-400" />
+              </label>
+              <label className="block">
+                <span className="text-xs text-[var(--text-tertiary)]">日志级别</span>
+                <select value={request.log_level} onChange={e => setRequest(prev => ({ ...prev, log_level: e.target.value }))} className="mt-1 w-full rounded-md border border-[var(--border-default)] bg-[var(--bg-base)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-blue-400">
+                  {['trace', 'debug', 'info', 'warn', 'error'].map(level => <option key={level} value={level}>{level}</option>)}
+                </select>
+              </label>
+            </div>
+          </section>
+
+          <section className="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-card)]">
+            <h3 className="text-sm font-semibold text-[var(--text-primary)]">生成模块清单</h3>
+            <div className="mt-4 space-y-2">
+              {moduleItems.map(item => (
+                <div key={item.name} className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border-default)] bg-[var(--bg-base)] px-3 py-2">
+                  <div>
+                    <div className="text-sm text-[var(--text-primary)]">{item.name}</div>
+                    <div className="text-xs text-[var(--text-tertiary)]">{item.detail}</div>
+                  </div>
+                  <span className="rounded-full bg-white/5 px-2 py-1 text-xs text-[var(--text-secondary)]">{item.count}</span>
+                </div>
+              ))}
+            </div>
+          </section>
         </div>
 
-        {/* 右侧 JSON 预览 */}
-        <div className="flex-1 bg-[var(--bg-primary)] overflow-auto">
-          <div className="sticky top-0 border-b border-[var(--border-default)] bg-[var(--bg-secondary)] px-6 py-3 z-10">
-            <h3 className="text-sm font-semibold text-white">配置预览</h3>
-          </div>
-          <div className="p-6">
-            {generated && generated.config ? (
-              <JsonPreview data={generated.config} maxHeight="none" />
-            ) : (
-              <div className="flex items-center justify-center h-64 text-[var(--text-secondary)]">
-                {generating ? '生成中...' : '暂无配置'}
+        <section className="min-h-[720px] rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] shadow-[var(--shadow-card)]">
+          <div className="flex items-center justify-between border-b border-[var(--border-default)] px-5 py-4">
+            <div>
+              <h3 className="text-sm font-semibold text-[var(--text-primary)]">完整配置预览</h3>
+              <p className="mt-1 text-xs text-[var(--text-tertiary)]">生成结果会先写入临时文件并执行 sing-box check，应用后才覆盖正式配置。</p>
+            </div>
+            {generated && (
+              <div className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs ${generated.valid ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'}`}>
+                {generated.valid ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
+                {generated.valid ? '校验通过' : '校验失败'}
               </div>
             )}
           </div>
-        </div>
+          <div className="p-5">
+            {generated?.error && <div className="mb-4 rounded-lg border border-red-400/20 bg-red-500/10 p-3 text-sm text-red-300">{generated.error}</div>}
+            {config ? <JsonPreview data={config} maxHeight="none" /> : <div className="flex h-64 items-center justify-center text-sm text-[var(--text-secondary)]">{generating ? '生成中...' : '暂无配置预览'}</div>}
+          </div>
+        </section>
       </div>
+
+      <ConfirmDialog
+        open={confirmApply}
+        title="应用当前生成结果"
+        message="将把已校验通过的临时配置覆盖为正式配置。应用前会备份当前配置。"
+        confirmText="应用配置"
+        onConfirm={handleApply}
+        onCancel={() => setConfirmApply(false)}
+      />
     </div>
   );
 }

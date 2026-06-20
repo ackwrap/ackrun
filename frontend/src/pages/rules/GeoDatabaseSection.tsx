@@ -3,6 +3,7 @@ import React from 'react';
 
 import { api } from '@/services/api';
 import { SyncScheduleControls } from '@/components/ui/SyncScheduleControls';
+import { Toast } from '@/components/ui/Toast';
 import type { GeoAsset } from '@/services/types';
 import type { GeoDomainsResponse } from '@/services/types';
 import type { GeoLookupResponse } from '@/services/types';
@@ -25,6 +26,14 @@ function dnsServerLabel(value: string) {
     case 'system': return '系统 DNS';
     default: return value || '系统 DNS';
   }
+}
+
+function syncScheduleLabel(syncModes: Array<{ value: string; label: string }>, weekdays: string[], mode: string, time: string, weekday: number) {
+  const label = syncModes.find(item => item.value === mode)?.label || mode;
+  if (mode === 'off') return label;
+  if (mode === 'weekly') return `${label} ${weekdays[weekday] || ''} ${time || '--'}`;
+  if (mode === 'monthly') return `${label} ${weekday || 1}号 ${time || '--'}`;
+  return `${label} ${time || '--'}`;
 }
 
 interface GeoDatabaseSectionProps {
@@ -66,9 +75,11 @@ export function GeoDatabaseSection({
   const [tagResult, setTagResult] = React.useState<GeoDomainsResponse | null>(null);
   const [tagError, setTagError] = React.useState('');
   const [geoDrafts, setGeoDrafts] = React.useState<Record<number, GeoAssetRequest>>({});
+  const [editingScheduleId, setEditingScheduleId] = React.useState<number | null>(null);
   const tagPageSize = 100;
   const tagPage = tagResult ? Math.floor(tagResult.offset / tagResult.limit) + 1 : 1;
   const tagTotalPages = tagResult ? Math.max(1, Math.ceil(tagResult.total / tagResult.limit)) : 1;
+  const editingScheduleAsset = editingScheduleId ? geoAssets.find(item => item.id === editingScheduleId) : null;
 
   React.useEffect(() => {
     setGeoDrafts(current => {
@@ -107,6 +118,7 @@ export function GeoDatabaseSection({
       sync_time: draft.sync_mode === 'off' ? '' : draft.sync_time,
       sync_weekday: draft.sync_mode === 'weekly' || draft.sync_mode === 'monthly' ? draft.sync_weekday : 0,
     });
+    setEditingScheduleId(null);
   };
   const resolvedIPs = (lookupResult?.resolved_ips ?? []).map(normalizeDisplayIP);
   const geoIPMatches = (lookupResult?.geoip_matches ?? []).map(normalizeGeoIPMatch);
@@ -181,19 +193,13 @@ export function GeoDatabaseSection({
         <button disabled={syncing} onClick={onSyncAll} className={`h-8 rounded-md border px-3 text-xs ${syncing ? 'cursor-not-allowed border-blue-400/10 bg-blue-500/5 text-blue-100/45' : 'border-blue-400/25 bg-blue-500/10 text-blue-100 hover:bg-blue-500/20'}`}>更新全部 Geo</button>
       </div>
 
-      {message && (
-        <div className={`mb-4 rounded-md border px-3 py-2 text-xs ${messageType === 'success' ? 'border-emerald-400/20 bg-emerald-500/10 text-emerald-300' : 'border-red-400/20 bg-red-500/10 text-red-300'}`}>
-          {message}
-        </div>
-      )}
+      <Toast message={message} type={messageType} />
 
       {geoAssets.length === 0 ? (
         <div className="rounded-xl border border-[var(--border-default)] bg-white/[0.03] px-4 py-10 text-center text-sm text-[var(--text-secondary)]">暂无 Geo 数据库状态</div>
       ) : (
         <div className="grid gap-3 lg:grid-cols-2">
-          {geoAssets.map(item => {
-            const draft = geoDrafts[item.id] || { url: item.url, use_proxy: item.use_proxy, sync_mode: item.sync_mode || 'off', sync_time: item.sync_time || '03:30:00', sync_weekday: item.sync_weekday || 0 };
-            return (
+          {geoAssets.map(item => (
             <div key={item.id} className="rounded-xl border border-[var(--border-default)] bg-white/[0.03] p-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex flex-wrap items-center gap-2">
@@ -201,6 +207,13 @@ export function GeoDatabaseSection({
                   <span className="rounded bg-white/[0.05] px-2 py-0.5 font-mono text-xs text-[var(--text-secondary)]">{item.type}.db</span>
                   <span className={`rounded px-2 py-0.5 text-xs ${syncStatusClass(item.sync_status)}`}>{syncStatusLabel(item.sync_status)}</span>
                   <span className={`rounded px-2 py-0.5 text-xs ${item.use_proxy ? 'bg-blue-500/10 text-blue-200' : 'bg-emerald-500/10 text-emerald-300'}`}>{item.use_proxy ? '代理下载' : '直连下载'}</span>
+                  <button
+                    type="button"
+                    onClick={() => setEditingScheduleId(item.id)}
+                    className="rounded border border-blue-400/25 bg-blue-500/10 px-2 py-0.5 text-xs text-blue-100 hover:bg-blue-500/20"
+                  >
+                    同步周期：{syncScheduleLabel(syncModes, weekdays, item.sync_mode || 'off', item.sync_time, item.sync_weekday)}
+                  </button>
                 </div>
                 <button disabled={syncing} onClick={() => onSyncOne(item)} className={`rounded-md border px-3 py-1 text-xs ${syncing ? 'cursor-not-allowed border-blue-400/10 bg-blue-500/5 text-blue-100/45' : 'border-blue-400/25 bg-blue-500/10 text-blue-100 hover:bg-blue-500/20'}`}>更新</button>
               </div>
@@ -209,22 +222,11 @@ export function GeoDatabaseSection({
                 <div>最后同步：{formatTime(item.last_sync_at)}</div>
                 <div>本地缓存：{formatTime(item.cached_updated_at)}</div>
                 <div className="truncate" title={item.local_path}>路径：{item.local_path || '--'}</div>
-              </div>
-              <div className="mt-4 rounded-lg border border-[var(--border-default)] bg-black/10 p-3">
-                <div className="mb-2 text-xs font-semibold text-white">自动更新</div>
-                <SyncScheduleControls
-                  value={draft}
-                  syncModes={syncModes}
-                  weekdays={weekdays}
-                  disabled={syncing}
-                  showProxy
-                  onChange={patch => updateGeoDraft(item.id, patch)}
-                  onSave={() => void saveGeoDraft(item)}
-                />
+                <div>同步周期：{syncScheduleLabel(syncModes, weekdays, item.sync_mode || 'off', item.sync_time, item.sync_weekday)}</div>
               </div>
               {item.sync_error && <div className="mt-3 rounded border border-red-400/20 bg-red-500/10 px-2 py-1 text-xs text-red-300">{item.sync_error}</div>}
             </div>
-          );})}
+          ))}
         </div>
       )}
 
@@ -347,6 +349,31 @@ export function GeoDatabaseSection({
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {editingScheduleAsset && (
+        <div className="aw-modal-backdrop">
+          <div className="aw-modal-panel max-w-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-[var(--border-default)] px-5 py-4">
+              <div>
+                <h3 className="text-base font-semibold text-white">自动更新</h3>
+                <p className="mt-1 text-xs text-[var(--text-tertiary)]">{editingScheduleAsset.name} · {editingScheduleAsset.type}.db</p>
+              </div>
+              <button onClick={() => setEditingScheduleId(null)} className="aw-modal-close" title="关闭">×</button>
+            </div>
+            <div className="p-5">
+              <SyncScheduleControls
+                value={geoDrafts[editingScheduleAsset.id] || { url: editingScheduleAsset.url, use_proxy: editingScheduleAsset.use_proxy, sync_mode: editingScheduleAsset.sync_mode || 'off', sync_time: editingScheduleAsset.sync_time || '03:30:00', sync_weekday: editingScheduleAsset.sync_weekday || 0 }}
+                syncModes={syncModes}
+                weekdays={weekdays}
+                disabled={syncing}
+                showProxy
+                onChange={patch => updateGeoDraft(editingScheduleAsset.id, patch)}
+                onSave={() => void saveGeoDraft(editingScheduleAsset)}
+              />
+            </div>
           </div>
         </div>
       )}

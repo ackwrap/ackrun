@@ -31,6 +31,16 @@ export interface ConfigStatus {
   error?: string;
 }
 
+export interface ConfigFileItem {
+  name: string;
+  path: string;
+  active: boolean;
+  size_bytes: number;
+  updated_at: number;
+  valid: boolean;
+  error?: string;
+}
+
 export interface CoreStatus {
   status: 'starting' | 'running' | 'stopping' | 'stopped' | 'error';
   pid: number;
@@ -450,6 +460,7 @@ export interface ProxyCollection {
 
 export interface ProxyCollectionWithNodes extends ProxyCollection {
   node_uids: string[];
+  route_rule_ids: number[];
 }
 
 export interface ProxyCollectionRequest {
@@ -459,6 +470,7 @@ export interface ProxyCollectionRequest {
   test_interval: number;
   tolerance: number;
   enabled: boolean;
+  route_rule_ids: number[];
   node_uids: string[];
 }
 

@@ -28,6 +28,17 @@ func (h *ConfigHandler) GetStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, status)
 }
 
+func (h *ConfigHandler) ListFiles(c *gin.Context) {
+	items, err := h.svc.ListConfigFiles()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
+			Error: model.APIError{Code: "CONFIG_LIST_FAILED", Message: err.Error()},
+		})
+		return
+	}
+	c.JSON(http.StatusOK, items)
+}
+
 func (h *ConfigHandler) GenerateDefault(c *gin.Context) {
 	if err := h.svc.GenerateDefault(); err != nil {
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{

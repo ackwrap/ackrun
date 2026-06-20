@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { Edit3, Eye, RefreshCw, Smile, Star, Tags, Trash2, Zap } from 'lucide-react';
 
 import { PageHeader } from '@/components/layout/PageHeader';
+import { Toast } from '@/components/ui/Toast';
 import { api } from '@/services/api';
 import type { NodeFacetItem, NodeItem, Subscription } from '@/services/types';
 import { defaultFlag, getFlagImageURL } from '@/utils/nodeFlags';
@@ -52,6 +53,7 @@ export function NodesPage() {
   const [pageSize, setPageSize] = React.useState(50);
   const [loading, setLoading] = React.useState(false);
   const [message, setMessage] = React.useState('');
+  const toastType = message.includes('失败') || message.includes('错误') ? 'error' : 'success';
   const [keyword, setKeyword] = React.useState('');
   const [subscriptionID, setSubscriptionID] = React.useState(initialSubscriptionID);
   const [typeFilter, setTypeFilter] = React.useState('');
@@ -122,6 +124,11 @@ export function NodesPage() {
   React.useEffect(() => { loadSubscriptions(); }, [loadSubscriptions]);
   React.useEffect(() => { loadFacetNodes(); }, [loadFacetNodes]);
   React.useEffect(() => { loadNodes(); }, [loadNodes]);
+  React.useEffect(() => {
+    if (!message) return;
+    const timer = window.setTimeout(() => setMessage(''), toastType === 'error' ? 5000 : 3000);
+    return () => window.clearTimeout(timer);
+  }, [message, toastType]);
   React.useEffect(() => {
     const nextTotalPages = Math.max(1, Math.ceil(total / pageSize));
     if (page > nextTotalPages) setPage(nextTotalPages);
@@ -319,7 +326,7 @@ export function NodesPage() {
           </div>
         </div>
 
-        {message && <div className="mb-3 rounded-md bg-white/[0.04] px-3 py-2 text-xs text-[var(--text-secondary)]">{message}</div>}
+        <Toast message={message} type={toastType} />
 
         <div className="mb-4 space-y-3 rounded-md border border-[var(--border-default)] bg-white/[0.025] p-3">
           <div>

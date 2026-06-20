@@ -44,6 +44,7 @@ func (s *ProxyCollectionService) Create(req model.ProxyCollectionRequest) (*mode
 	}
 
 	referencedGroupIDsJSON, _ := json.Marshal(req.ReferencedGroupIDs)
+	routeRuleIDsJSON, _ := json.Marshal(req.RouteRuleIDs)
 	nodeUIDsJSON, _ := json.Marshal(req.NodeUIDs)
 
 	// 创建集合
@@ -52,6 +53,7 @@ func (s *ProxyCollectionService) Create(req model.ProxyCollectionRequest) (*mode
 		Type:               req.Type,
 		SourceType:         sourceType,
 		ReferencedGroupIDs: string(referencedGroupIDsJSON),
+		RouteRuleIDs:       string(routeRuleIDsJSON),
 		NodeUIDs:           string(nodeUIDsJSON),
 		TestURL:            req.TestURL,
 		TestInterval:       req.TestInterval,
@@ -101,6 +103,7 @@ func (s *ProxyCollectionService) Update(id int, req model.ProxyCollectionRequest
 	}
 
 	referencedGroupIDsJSON, _ := json.Marshal(req.ReferencedGroupIDs)
+	routeRuleIDsJSON, _ := json.Marshal(req.RouteRuleIDs)
 	nodeUIDsJSON, _ := json.Marshal(req.NodeUIDs)
 
 	// 更新集合
@@ -109,6 +112,7 @@ func (s *ProxyCollectionService) Update(id int, req model.ProxyCollectionRequest
 		Type:               req.Type,
 		SourceType:         sourceType,
 		ReferencedGroupIDs: string(referencedGroupIDsJSON),
+		RouteRuleIDs:       string(routeRuleIDsJSON),
 		NodeUIDs:           string(nodeUIDsJSON),
 		TestURL:            req.TestURL,
 		TestInterval:       req.TestInterval,

@@ -304,7 +304,10 @@ func (s *Store) DeleteNode(uid string) error {
 	if affected == 0 {
 		return fmt.Errorf("node not found: %s", uid)
 	}
-	return nil
+	if err := s.removeNodeUIDFromProxyCollections(uid); err != nil {
+		return err
+	}
+	return s.removeNodeUIDFromNodeGroups(uid)
 }
 
 func (s *Store) NodeFacets() (*model.NodeFacetsResponse, error) {

@@ -2,6 +2,7 @@ import type {
   RuntimeResponse,
   InstallStateResponse,
   ConfigStatus,
+  ConfigFileItem,
   ActionResponse,
 	UpdateSettings,
 	UpdateSettingsResponse,
@@ -68,7 +69,8 @@ export const api = {
   getInstallerStatus: () => request<InstallStateResponse>('/installer/sing-box'),
   install: () => request<ActionResponse>('/installer/sing-box/install', { method: 'POST' }),
 
-  getConfigStatus: () => request<ConfigStatus>('/config/status'),
+	  getConfigStatus: () => request<ConfigStatus>('/config/status'),
+	  getConfigFiles: () => request<ConfigFileItem[]>('/config/files'),
   generateDefaultConfig: () => request<ActionResponse>('/config/default', { method: 'POST' }),
   validateConfig: () => request<ConfigStatus>('/config/validate', { method: 'POST' }),
   updateRules: () => request<ActionResponse>('/config/rules/update', { method: 'POST' }),
