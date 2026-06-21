@@ -85,7 +85,7 @@ func TestParseMigratedProxyURIs(t *testing.T) {
 		server string
 		port   int
 	}{
-		{name: "ss", uri: "ss://aes-128-gcm:pass@example.com:8388#SS-01", typ: "ss", server: "example.com", port: 8388},
+		{name: "ss", uri: "ss://aes-128-gcm:pass@example.com:8388#SS-01", typ: "shadowsocks", server: "example.com", port: 8388},
 		{name: "trojan", uri: "trojan://password@trojan.example.com:443?sni=sni.example.com#Trojan-01", typ: "trojan", server: "trojan.example.com", port: 443},
 		{name: "vless", uri: "vless://uuid@vless.example.com:443?security=tls&type=ws&sni=sni.example.com#VLESS-01", typ: "vless", server: "vless.example.com", port: 443},
 	}
@@ -97,6 +97,13 @@ func TestParseMigratedProxyURIs(t *testing.T) {
 			}
 			if node.Type != tc.typ || node.Server != tc.server || node.ServerPort != tc.port {
 				t.Fatalf("unexpected node: %+v", node)
+			}
+			var cfg map[string]any
+			if err := json.Unmarshal([]byte(node.RawJSON), &cfg); err != nil {
+				t.Fatalf("unmarshal raw json: %v", err)
+			}
+			if cfg["type"] != tc.typ {
+				t.Fatalf("expected raw json type %s, got %+v", tc.typ, cfg)
 			}
 		})
 	}
@@ -111,9 +118,10 @@ func TestParseAdvancedTransportFields(t *testing.T) {
 	if err := json.Unmarshal([]byte(node.RawJSON), &cfg); err != nil {
 		t.Fatalf("unmarshal raw json: %v", err)
 	}
-	if cfg["network"] != "grpc" || cfg["client-fingerprint"] != "chrome" {
+	if cfg["network"] != "grpc" {
 		t.Fatalf("missing advanced fields: %+v", cfg)
 	}
+	assertUTLSFingerprint(t, cfg, "chrome")
 	if _, ok := cfg["grpc-opts"].(map[string]any); !ok {
 		t.Fatalf("missing grpc opts: %+v", cfg)
 	}
@@ -192,9 +200,7 @@ func TestHysteria2AdvancedFields(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	assertTLSEnabled(t, cfg)
-	if cfg["client-fingerprint"] != "chrome" {
-		t.Fatalf("expected client-fingerprint=chrome, got %v", cfg["client-fingerprint"])
-	}
+	assertUTLSFingerprint(t, cfg, "chrome")
 	if cfg["obfs-password"] != "obfspass" {
 		t.Fatalf("expected obfs-password, got %v", cfg["obfs-password"])
 	}
@@ -219,9 +225,7 @@ func TestTuicAdvancedFields(t *testing.T) {
 	if cfg["reduce-rtt"] != true {
 		t.Fatalf("expected reduce-rtt=true, got %v", cfg["reduce-rtt"])
 	}
-	if cfg["client-fingerprint"] != "safari" {
-		t.Fatalf("expected client-fingerprint=safari, got %v", cfg["client-fingerprint"])
-	}
+	assertUTLSFingerprint(t, cfg, "safari")
 }
 
 func TestNaiveTLSFields(t *testing.T) {
@@ -257,9 +261,7 @@ func TestAnytlsTLSFields(t *testing.T) {
 	if tlsMap["server_name"] != "anytls.example.com" {
 		t.Fatalf("expected tls.server_name=anytls.example.com, got %v", tlsMap)
 	}
-	if cfg["client-fingerprint"] != "chrome" {
-		t.Fatalf("expected client-fingerprint=chrome, got %v", cfg["client-fingerprint"])
-	}
+	assertUTLSFingerprint(t, cfg, "chrome")
 }
 
 func TestSocksTLSAndVersion(t *testing.T) {
@@ -295,8 +297,44 @@ func TestHTTPProxyTLS(t *testing.T) {
 	if tlsMap["server_name"] != "http.example.com" {
 		t.Fatalf("expected tls.server_name=http.example.com, got %v", tlsMap)
 	}
-	if cfg["client-fingerprint"] != "chrome" {
-		t.Fatalf("expected client-fingerprint=chrome")
+	assertUTLSFingerprint(t, cfg, "chrome")
+}
+
+func TestTLSCertificateFingerprintIsNotUTLS(t *testing.T) {
+	const fingerprint = "dd9dd03d942400ad4c1400879bda98f4fa097183aa9a91a1423cdd42a3e183d7"
+	node, err := ParseProxyURI("vless://uuid@vless.example.com:443?security=tls&sni=example.com&fingerprint=" + fingerprint + "#VLESS-Pin")
+	if err != nil {
+		t.Fatalf("parse vless with certificate fingerprint: %v", err)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal([]byte(node.RawJSON), &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	tlsMap, ok := cfg["tls"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected tls map, got %+v", cfg)
+	}
+	if _, exists := tlsMap["utls"]; exists {
+		t.Fatalf("certificate fingerprint must not be mapped to uTLS: %+v", tlsMap)
+	}
+	pins, ok := tlsMap["certificate_public_key_sha256"].([]any)
+	if !ok || len(pins) != 1 || pins[0] != fingerprint {
+		t.Fatalf("expected certificate_public_key_sha256 pin, got %+v", tlsMap["certificate_public_key_sha256"])
+	}
+}
+
+func assertUTLSFingerprint(t *testing.T, cfg map[string]any, want string) {
+	t.Helper()
+	tlsMap, ok := cfg["tls"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected tls map, got %+v", cfg["tls"])
+	}
+	utls, ok := tlsMap["utls"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected tls.utls, got %+v", tlsMap)
+	}
+	if utls["fingerprint"] != want {
+		t.Fatalf("expected tls.utls.fingerprint=%s, got %+v", want, utls)
 	}
 }
 
@@ -351,7 +389,7 @@ func TestSnellObfsOpts(t *testing.T) {
 	}
 }
 
-func TestWireguardMTUAndLocalAddress(t *testing.T) {
+func TestWireguardMTUAndAddress(t *testing.T) {
 	node, err := ParseProxyURI("wireguard://wg.example.com:51820?private-key=priv&public-key=pub&address=10.0.0.2/32,fd00::2/128&mtu=1280#WG-Adv")
 	if err != nil {
 		t.Fatalf("parse wireguard: %v", err)
@@ -363,9 +401,9 @@ func TestWireguardMTUAndLocalAddress(t *testing.T) {
 	if mtu, ok := cfg["mtu"].(float64); !ok || int(mtu) != 1280 {
 		t.Fatalf("expected mtu=1280, got %v", cfg["mtu"])
 	}
-	localAddr, ok := cfg["local-address"].([]any)
+	localAddr, ok := cfg["address"].([]any)
 	if !ok || len(localAddr) != 2 {
-		t.Fatalf("expected local-address with 2 entries, got %v", cfg["local-address"])
+		t.Fatalf("expected address with 2 entries, got %v", cfg["address"])
 	}
 }
 
@@ -442,13 +480,28 @@ func TestClashNormalized(t *testing.T) {
     password: trojan-pass
     sni: trojan.example.com
     skip-cert-verify: true
+  - name: Clash-SOCKS5
+    type: socks5
+    server: socks.example.com
+    port: 1080
+    username: user
+    password: pass
+  - name: Clash-TUIC
+    type: tuic
+    server: tuic.example.com
+    port: 443
+    uuid: 33333333-3333-4333-8333-333333333333
+    password: tuic-pass
+    alpn:
+      - h3
+    sni: tuic.example.com
 `)
 	nodes, err := ParseSubscriptionNodes(body)
 	if err != nil {
 		t.Fatalf("parse clash yaml: %v", err)
 	}
-	if len(nodes) != 2 {
-		t.Fatalf("expected 2 nodes, got %d", len(nodes))
+	if len(nodes) != 4 {
+		t.Fatalf("expected 4 nodes, got %d", len(nodes))
 	}
 	var cfg map[string]any
 	if err := json.Unmarshal([]byte(nodes[0].RawJSON), &cfg); err != nil {
@@ -482,6 +535,25 @@ func TestClashNormalized(t *testing.T) {
 	}
 	if cfg["security"] != "auto" {
 		t.Fatalf("expected security=auto, got %v", cfg["security"])
+	}
+	if nodes[2].Type != "socks" {
+		t.Fatalf("expected socks5 alias normalized to socks, got %+v", nodes[2])
+	}
+	if err := json.Unmarshal([]byte(nodes[2].RawJSON), &cfg); err != nil {
+		t.Fatalf("unmarshal socks: %v", err)
+	}
+	if cfg["type"] != "socks" {
+		t.Fatalf("expected raw json type=socks, got %+v", cfg)
+	}
+	if nodes[3].Type != "tuic" {
+		t.Fatalf("expected tuic node, got %+v", nodes[3])
+	}
+	if err := json.Unmarshal([]byte(nodes[3].RawJSON), &cfg); err != nil {
+		t.Fatalf("unmarshal tuic: %v", err)
+	}
+	tlsMap, ok = cfg["tls"].(map[string]any)
+	if !ok || tlsMap["enabled"] != true || tlsMap["server_name"] != "tuic.example.com" {
+		t.Fatalf("expected TUIC tls enabled with server_name, got %+v", cfg["tls"])
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -46,8 +47,8 @@ func (s *ConfigGeneratorService) Generate(req *model.ConfigGenerateRequest) (*mo
 	// 1. 生成 inbounds
 	inbounds := s.generateInbounds(req.InboundListen, req.InboundPort)
 
-	// 2. 生成 outbounds
-	outbounds, err := s.generateOutbounds()
+	// 2. 生成 outbounds / endpoints
+	outbounds, endpoints, err := s.generateOutbounds()
 	if err != nil {
 		return nil, fmt.Errorf("生成 outbounds 失败: %w", err)
 	}
@@ -82,6 +83,9 @@ func (s *ConfigGeneratorService) Generate(req *model.ConfigGenerateRequest) (*mo
 		"inbounds":  inbounds,
 		"outbounds": outbounds,
 		"route":     route,
+	}
+	if len(endpoints) > 0 {
+		config["endpoints"] = endpoints
 	}
 
 	dnsGlobalSettings, _ := s.store.GetDNSGlobalSettings()
@@ -173,15 +177,20 @@ func (s *ConfigGeneratorService) Generate(req *model.ConfigGenerateRequest) (*mo
 	}, nil
 }
 
-// generateOutbounds 生成所有 outbounds
-func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, error) {
+// generateOutbounds 生成所有 outbounds 和 endpoints。WireGuard 在 sing-box 1.13 起是 endpoint，
+// 不再是 outbound，但 endpoint tag 与 outbound 共享引用命名空间。
+func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface{}, error) {
 	outbounds := []interface{}{}
+	endpoints := []interface{}{}
+	domainResolverBindings := s.dnsOutboundResolverBindings()
 
 	// 1. 添加基础 direct 和 block 出站。sing-box 1.13 已移除 dns outbound，DNS 通过 route action=hijack-dns 处理。
-	outbounds = append(outbounds, map[string]interface{}{
+	directOutbound := map[string]interface{}{
 		"type": "direct",
 		"tag":  "direct",
-	})
+	}
+	applyDomainResolverBinding(directOutbound, domainResolverBindings["direct"])
+	outbounds = append(outbounds, directOutbound)
 	outbounds = append(outbounds, map[string]interface{}{
 		"type": "block",
 		"tag":  "block",
@@ -190,13 +199,13 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, error) {
 	// 2. 获取所有启用的代理集合
 	collections, err := s.store.ListProxyCollectionsWithNodes()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// 3. 获取节点组匹配的节点 UID。sing-box group 不支持 Ackwrap 的筛选字段，必须在生成配置前完成匹配。
 	nodeGroups, err := s.store.ListNodeGroups()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	groupNodeUIDs := make(map[int64][]string)
 	validGroupTags := make(map[string]bool)
@@ -244,12 +253,13 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, error) {
 			usedNodeUIDs[uid] = true
 		}
 	}
+	nodeDomainResolvers := collectionNodeDomainResolverBindings(collections, groupNodeUIDs, usedNodeUIDs, domainResolverBindings)
 
 	// 5. 为集合和节点组使用的节点生成 outbound
 	nodeReq := model.NodeListRequest{Enabled: boolPtr(true)}
 	nodeResp, err := s.store.ListNodes(nodeReq)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	nodeTags := buildNodeOutboundTags(nodeResp.Items)
 
@@ -259,7 +269,16 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, error) {
 			continue
 		}
 
-		nodeOutbound, err := s.generateNodeOutbound(&node, nodeTags[node.UID])
+		if node.Type == "wireguard" {
+			endpoint, err := s.generateWireGuardEndpoint(&node, nodeTags[node.UID], nodeDomainResolvers[node.UID])
+			if err != nil {
+				logging.Info("config_generator.node", "跳过节点 %s: %v", node.Name, err)
+				continue
+			}
+			endpoints = append(endpoints, endpoint)
+			continue
+		}
+		nodeOutbound, err := s.generateNodeOutbound(&node, nodeTags[node.UID], nodeDomainResolvers[node.UID])
 		if err != nil {
 			logging.Info("config_generator.outbound", "节点 %s 生成失败: %v", node.Name, err)
 			continue
@@ -329,7 +348,7 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, error) {
 		})
 	}
 
-	return outbounds, nil
+	return outbounds, endpoints, nil
 }
 
 // generateCollectionOutbound 为代理集合生成 outbound
@@ -380,7 +399,7 @@ func (s *ConfigGeneratorService) generateCollectionOutbound(col *model.ProxyColl
 }
 
 // generateNodeOutbound 为节点生成 outbound
-func (s *ConfigGeneratorService) generateNodeOutbound(node *model.Node, tag string) (map[string]interface{}, error) {
+func (s *ConfigGeneratorService) generateNodeOutbound(node *model.Node, tag string, domainResolver map[string]interface{}) (map[string]interface{}, error) {
 	// 过滤 sing-box 不支持的协议
 	unsupportedTypes := map[string]bool{
 		"ssr":    true, // ShadowsocksR
@@ -404,9 +423,319 @@ func (s *ConfigGeneratorService) generateNodeOutbound(node *model.Node, tag stri
 
 	// 移除可能存在的非 sing-box 字段
 	delete(nodeData, "name")
-	delete(nodeData, "udp")
+	mapMihomoUDPFlagToSingboxNetwork(nodeData)
+	mapTLSFingerprintFields(nodeData)
+	applyDomainResolverBinding(nodeData, domainResolver)
 
 	return nodeData, nil
+}
+
+func (s *ConfigGeneratorService) generateWireGuardEndpoint(node *model.Node, tag string, domainResolver map[string]interface{}) (map[string]interface{}, error) {
+	var nodeData map[string]interface{}
+	if err := json.Unmarshal([]byte(node.RawJSON), &nodeData); err != nil {
+		return nil, fmt.Errorf("解析 WireGuard 节点 JSON 失败: %w", err)
+	}
+	address := stringListValue(firstExistingValue(nodeData, "address", "local_address", "local-address"))
+	if len(address) == 0 {
+		return nil, fmt.Errorf("缺少 WireGuard address")
+	}
+	privateKey := firstStringValue(nodeData, "private_key", "private-key")
+	publicKey := firstStringValue(nodeData, "peer_public_key", "public_key", "public-key")
+	if privateKey == "" || publicKey == "" {
+		return nil, fmt.Errorf("缺少 WireGuard private_key 或 public_key")
+	}
+	server := firstStringValue(nodeData, "server")
+	serverPort := intValue(firstExistingValue(nodeData, "server_port", "port"))
+	if server == "" || serverPort == 0 {
+		return nil, fmt.Errorf("缺少 WireGuard peer address 或 port")
+	}
+	peer := map[string]interface{}{
+		"address":     server,
+		"port":        serverPort,
+		"public_key":  publicKey,
+		"allowed_ips": []string{"0.0.0.0/0", "::/0"},
+	}
+	if psk := firstStringValue(nodeData, "pre_shared_key", "pre-shared-key", "preshared-key"); psk != "" {
+		peer["pre_shared_key"] = psk
+	}
+	if reserved, ok := firstExistingValue(nodeData, "reserved").([]interface{}); ok && len(reserved) > 0 {
+		peer["reserved"] = reserved
+	} else if reservedInts := intListValue(firstExistingValue(nodeData, "reserved")); len(reservedInts) > 0 {
+		peer["reserved"] = reservedInts
+	}
+	if keepalive := intValue(firstExistingValue(nodeData, "persistent_keepalive_interval", "persistent-keepalive", "persistent_keepalive")); keepalive > 0 {
+		peer["persistent_keepalive_interval"] = keepalive
+	}
+	endpoint := map[string]interface{}{
+		"type":        "wireguard",
+		"tag":         tag,
+		"address":     address,
+		"private_key": privateKey,
+		"peers":       []interface{}{peer},
+	}
+	if mtu := intValue(firstExistingValue(nodeData, "mtu")); mtu > 0 {
+		endpoint["mtu"] = mtu
+	}
+	if workers := intValue(firstExistingValue(nodeData, "workers")); workers > 0 {
+		endpoint["workers"] = workers
+	}
+	applyDomainResolverBinding(endpoint, domainResolver)
+	return endpoint, nil
+}
+
+func firstExistingValue(data map[string]interface{}, keys ...string) interface{} {
+	for _, key := range keys {
+		if value, ok := data[key]; ok {
+			return value
+		}
+	}
+	return nil
+}
+
+func firstStringValue(data map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if value := configStringValue(data[key]); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func configStringValue(value interface{}) string {
+	switch v := value.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case float64:
+		return fmt.Sprintf("%g", v)
+	case int:
+		return fmt.Sprintf("%d", v)
+	default:
+		return ""
+	}
+}
+
+func stringListValue(value interface{}) []string {
+	switch v := value.(type) {
+	case []string:
+		return v
+	case []interface{}:
+		items := make([]string, 0, len(v))
+		for _, item := range v {
+			if str := configStringValue(item); str != "" {
+				items = append(items, str)
+			}
+		}
+		return items
+	case string:
+		parts := strings.Split(v, ",")
+		items := make([]string, 0, len(parts))
+		for _, part := range parts {
+			if part = strings.TrimSpace(part); part != "" {
+				items = append(items, part)
+			}
+		}
+		return items
+	default:
+		return nil
+	}
+}
+
+func intListValue(value interface{}) []int {
+	switch v := value.(type) {
+	case []int:
+		return v
+	case []interface{}:
+		items := make([]int, 0, len(v))
+		for _, item := range v {
+			if i := intValue(item); i >= 0 {
+				items = append(items, i)
+			}
+		}
+		return items
+	default:
+		return nil
+	}
+}
+
+func intValue(value interface{}) int {
+	switch v := value.(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	case string:
+		parsed, _ := strconv.Atoi(strings.TrimSpace(v))
+		return parsed
+	default:
+		return 0
+	}
+}
+
+func mapTLSFingerprintFields(nodeData map[string]interface{}) {
+	tlsMap, ok := nodeData["tls"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	utlsMap, ok := tlsMap["utls"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	fingerprint, _ := utlsMap["fingerprint"].(string)
+	if fingerprint == "" || isSingboxUTLSFingerprint(fingerprint) {
+		return
+	}
+	if isSHA256HexString(fingerprint) {
+		tlsMap["certificate_public_key_sha256"] = []string{fingerprint}
+	}
+	delete(utlsMap, "fingerprint")
+	if len(utlsMap) == 1 && configBoolValue(utlsMap["enabled"]) {
+		delete(tlsMap, "utls")
+	}
+}
+
+func isSingboxUTLSFingerprint(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "chrome", "firefox", "edge", "safari", "360", "qq", "ios", "android", "random", "randomized", "chrome_psk", "chrome_psk_shuffle", "chrome_padding_psk_shuffle", "chrome_pq", "chrome_pq_psk":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSHA256HexString(value string) bool {
+	value = strings.TrimSpace(value)
+	if len(value) != 64 {
+		return false
+	}
+	for _, r := range value {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
+			return false
+		}
+	}
+	return true
+}
+
+func mapMihomoUDPFlagToSingboxNetwork(nodeData map[string]interface{}) {
+	// Mihomo's top-level udp flag is an adapter capability switch: false means the
+	// proxy must not handle UDP. sing-box has no equivalent udp outbound field;
+	// the closest schema mapping is network="tcp" for UDP-disabled nodes. true is
+	// sing-box's default TCP+UDP behavior, so the flag is intentionally omitted.
+	if udp, ok := nodeData["udp"]; ok {
+		if !configBoolValue(udp) {
+			nodeData["network"] = "tcp"
+		}
+		delete(nodeData, "udp")
+	}
+}
+
+func (s *ConfigGeneratorService) dnsOutboundResolverBindings() map[string]map[string]interface{} {
+	bindings := make(map[string]map[string]interface{})
+	dnsRules, err := s.store.ListDNSRules()
+	if err != nil {
+		logging.Info("config_generator.dns", "读取 DNS 出口绑定失败: %v", err)
+		return bindings
+	}
+	for _, rule := range dnsRules {
+		if !rule.Enabled || rule.Server == "" {
+			continue
+		}
+		conditions := decodeDNSRuleConditions(rule.ConditionsJSON)
+		for _, outbound := range dnsRuleOutboundConditions(conditions) {
+			if outbound == "" || outbound == "block" {
+				continue
+			}
+			if _, exists := bindings[outbound]; exists {
+				logging.Info("config_generator.dns", "outbound %s 绑定了多个 DNS server，保留第一个", outbound)
+				continue
+			}
+			resolver := map[string]interface{}{"server": rule.Server}
+			if rule.DisableCache {
+				resolver["disable_cache"] = true
+			}
+			if rule.RewriteTTL > 0 {
+				resolver["rewrite_ttl"] = rule.RewriteTTL
+			}
+			if rule.ClientSubnet != "" {
+				resolver["client_subnet"] = rule.ClientSubnet
+			}
+			bindings[outbound] = resolver
+		}
+	}
+	return bindings
+}
+
+func collectionNodeDomainResolverBindings(collections []*model.ProxyCollectionWithNodes, groupNodeUIDs map[int64][]string, usedNodeUIDs map[string]bool, bindings map[string]map[string]interface{}) map[string]map[string]interface{} {
+	nodeResolvers := make(map[string]map[string]interface{})
+	hasProxyCollection := false
+	for _, col := range collections {
+		if !col.Enabled {
+			continue
+		}
+		if col.Name == "proxy" {
+			hasProxyCollection = true
+		}
+		resolver := bindings[col.Name]
+		if len(resolver) == 0 {
+			continue
+		}
+		for _, uid := range collectionNodeUIDs(col, groupNodeUIDs) {
+			if _, exists := nodeResolvers[uid]; !exists {
+				nodeResolvers[uid] = resolver
+			}
+		}
+	}
+	if resolver := bindings["proxy"]; len(resolver) > 0 && !hasProxyCollection {
+		for uid := range usedNodeUIDs {
+			if _, exists := nodeResolvers[uid]; !exists {
+				nodeResolvers[uid] = resolver
+			}
+		}
+	}
+	return nodeResolvers
+}
+
+func collectionNodeUIDs(col *model.ProxyCollectionWithNodes, groupNodeUIDs map[int64][]string) []string {
+	if col.SourceType != "node_groups" {
+		return col.NodeUIDs
+	}
+	uids := make([]string, 0)
+	seen := make(map[string]bool)
+	for _, group := range col.ReferencedGroups {
+		for _, uid := range groupNodeUIDs[group.ID] {
+			if seen[uid] {
+				continue
+			}
+			seen[uid] = true
+			uids = append(uids, uid)
+		}
+	}
+	return uids
+}
+
+func applyDomainResolverBinding(outbound map[string]interface{}, resolver map[string]interface{}) {
+	if len(resolver) == 0 {
+		return
+	}
+	outbound["domain_resolver"] = resolver
+}
+
+func configBoolValue(value interface{}) bool {
+	switch v := value.(type) {
+	case bool:
+		return v
+	case string:
+		return v == "1" || strings.EqualFold(v, "true")
+	case int:
+		return v != 0
+	case int64:
+		return v != 0
+	case float64:
+		return v != 0
+	default:
+		return false
+	}
 }
 
 func buildNodeOutboundTags(nodes []model.Node) map[string]string {
@@ -483,6 +812,9 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 			"protocol": "dns",
 			"action":   "hijack-dns",
 		})
+		if resolver := s.defaultDomainResolver(); len(resolver) > 0 {
+			route["default_domain_resolver"] = resolver
+		}
 	}
 
 	// 获取代理模式
@@ -629,7 +961,7 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase() map[string]interface{
 		if srv.Strategy != "" {
 			server["strategy"] = srv.Strategy
 		}
-		if srv.Detour != "" {
+		if srv.Detour != "" && srv.Detour != "direct" {
 			server["detour"] = srv.Detour
 		}
 		if srv.ClientSubnet != "" {
@@ -667,17 +999,20 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase() map[string]interface{
 		if !rule.Enabled {
 			continue
 		}
+		conditions := decodeDNSRuleConditions(rule.ConditionsJSON)
+		if _, hasOutbound := conditions["outbound"]; hasOutbound {
+			// DNS rule outbound matching was deprecated in sing-box 1.12 and is generated
+			// as outbound domain_resolver instead.
+			delete(conditions, "outbound")
+		}
+		if len(conditions) == 0 {
+			continue
+		}
 		ruleMap := map[string]interface{}{
 			"server": rule.Server,
 		}
-		// 解析 conditions_json
-		if rule.ConditionsJSON != "" && rule.ConditionsJSON != "{}" {
-			var conditions map[string]interface{}
-			if json.Unmarshal([]byte(rule.ConditionsJSON), &conditions) == nil {
-				for k, v := range conditions {
-					ruleMap[k] = v
-				}
-			}
+		for k, v := range conditions {
+			ruleMap[k] = v
 		}
 		if rule.DisableCache {
 			ruleMap["disable_cache"] = true
@@ -717,6 +1052,55 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase() map[string]interface{
 
 	logging.Info("config_generator.dns", "生成 DNS 配置: %d servers, %d rules", len(servers), len(rules))
 	return dns
+}
+
+func decodeDNSRuleConditions(raw string) map[string]interface{} {
+	conditions := make(map[string]interface{})
+	if raw == "" || raw == "{}" {
+		return conditions
+	}
+	if err := json.Unmarshal([]byte(raw), &conditions); err != nil {
+		return map[string]interface{}{}
+	}
+	return conditions
+}
+
+func dnsRuleOutboundConditions(conditions map[string]interface{}) []string {
+	value, ok := conditions["outbound"]
+	if !ok {
+		return nil
+	}
+	switch v := value.(type) {
+	case string:
+		if v == "" {
+			return nil
+		}
+		return []string{v}
+	case []interface{}:
+		outbounds := make([]string, 0, len(v))
+		for _, item := range v {
+			if outbound, ok := item.(string); ok && outbound != "" {
+				outbounds = append(outbounds, outbound)
+			}
+		}
+		return outbounds
+	case []string:
+		return v
+	default:
+		return nil
+	}
+}
+
+func (s *ConfigGeneratorService) defaultDomainResolver() map[string]interface{} {
+	settings, err := s.store.GetDNSGlobalSettings()
+	if err != nil || settings == nil || !settings.Enabled || settings.Final == "" {
+		return nil
+	}
+	resolver := map[string]interface{}{"server": settings.Final}
+	if settings.ClientSubnet != "" {
+		resolver["client_subnet"] = settings.ClientSubnet
+	}
+	return resolver
 }
 
 func (s *ConfigGeneratorService) enabledRouteRuleSubscriptionTags() map[string]bool {
@@ -860,7 +1244,7 @@ func (s *ConfigGeneratorService) generateInbounds(listen string, port int) []int
 				"type":           "tun",
 				"tag":            "tun-in",
 				"interface_name": "tun0",
-				"inet4_address":  "172.19.0.1/30",
+				"address":        []string{"172.19.0.1/30"},
 				"auto_route":     true,
 				"strict_route":   true,
 				"stack":          "system",
@@ -885,7 +1269,7 @@ func (s *ConfigGeneratorService) generateInbounds(listen string, port int) []int
 				"type":           "tun",
 				"tag":            "tun-in",
 				"interface_name": "tun0",
-				"inet4_address":  "172.19.0.1/30",
+				"address":        []string{"172.19.0.1/30"},
 				"auto_route":     true,
 				"strict_route":   true,
 				"stack":          "system",

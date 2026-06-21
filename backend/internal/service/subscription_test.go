@@ -52,7 +52,7 @@ func TestFetchAndParseSubscription(t *testing.T) {
 	if result.NodeCount != 2 || result.TrafficUsedBytes != 30 || result.TrafficTotalBytes != 100 || result.ExpireAt != 2000000000000 {
 		t.Fatalf("unexpected result: %+v", result)
 	}
-	if len(result.Nodes) != 2 || result.Nodes[0].Type != "ss" || result.Nodes[1].Type != "trojan" {
+	if len(result.Nodes) != 2 || result.Nodes[0].Type != "shadowsocks" || result.Nodes[1].Type != "trojan" {
 		t.Fatalf("unexpected parsed nodes: %+v", result.Nodes)
 	}
 }

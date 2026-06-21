@@ -63,7 +63,7 @@ func parseShadowsocks(raw string) (*model.ParsedNode, error) {
 	if method == "" || server == "" {
 		return nil, fmt.Errorf("invalid ss url")
 	}
-	node := map[string]any{"name": name, "type": "ss", "server": server, "port": port, "cipher": method, "password": password, "udp": true}
+	node := map[string]any{"name": name, "type": "shadowsocks", "server": server, "port": port, "cipher": method, "password": password, "udp": true}
 	if plugin := query["plugin"]; plugin != "" {
 		applySSPlugin(node, plugin)
 	}

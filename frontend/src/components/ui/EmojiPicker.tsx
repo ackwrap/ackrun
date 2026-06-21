@@ -1,4 +1,5 @@
 import React from 'react';
+import { getFlagImageURL } from '@/utils/nodeFlags';
 
 const emojiGroups = [
   { key: 'common', label: '常用', emojis: ['🌐', '🤖', '🎬', '📺', '🎮', '💬', '🛡️', '🚫', '🇨🇳', '✈️', '⚡', '🚀', '✨', '🔎', '🧠', '☁️'] },
@@ -9,6 +10,10 @@ const emojiGroups = [
   { key: 'symbol', label: '符号', emojis: ['⭐', '🌟', '✨', '🔥', '⚡', '💎', '🎯', '📌', '📍', '🔴', '🟠', '🟡', '🟢', '🔵', '🟣', '⚫', '⚪', '🟤', '🔺', '🔻', '🔸', '🔹', '🔶', '🔷'] },
   { key: 'more', label: '更多', emojis: ['😀', '😄', '😁', '😎', '🤔', '😺', '🐶', '🐱', '🦊', '🐼', '🐳', '🦄', '🌈', '☀️', '🌙', '⭐', '🌍', '🏠', '🏢', '🚗', '🚄', '✈️', '🚢', '⏱️', '📅', '💰', '💡', '🔧', '🧲', '🪄'] },
 ];
+
+const regionFlagCodes: Record<string, string> = {
+  '🇨🇳': 'cn', '🇭🇰': 'hk', '🇲🇴': 'mo', '🇹🇼': 'tw', '🇯🇵': 'jp', '🇰🇷': 'kr', '🇸🇬': 'sg', '🇺🇸': 'us', '🇬🇧': 'gb', '🇩🇪': 'de', '🇫🇷': 'fr', '🇳🇱': 'nl', '🇨🇦': 'ca', '🇦🇺': 'au', '🇮🇳': 'in', '🇷🇺': 'ru', '🇧🇷': 'br', '🇪🇺': 'eu', '🇹🇭': 'th', '🇻🇳': 'vn', '🇲🇾': 'my', '🇵🇭': 'ph', '🇮🇩': 'id', '🇹🇷': 'tr',
+};
 
 export const defaultEmojis = emojiGroups.flatMap(group => group.emojis).filter((emoji, index, items) => items.indexOf(emoji) === index);
 
@@ -43,10 +48,16 @@ export function EmojiPicker({ value, onChange, emojis = defaultEmojis }: EmojiPi
     setCustomEmoji('');
   };
 
+  const renderEmoji = (emoji: string) => {
+    const flagCode = regionFlagCodes[emoji];
+    if (!flagCode) return emoji;
+    return <img src={getFlagImageURL(emoji)} alt="" title={emoji} className="h-4 w-4" loading="lazy" />;
+  };
+
   return (
     <div className="relative">
       <button type="button" onClick={() => setOpen(current => !current)} className="flex h-10 w-12 items-center justify-center rounded-md border border-[var(--border-default)] bg-[#152235] text-base text-white outline-none hover:border-emerald-400/60" title="选择 emoji">
-        {value || '无'}
+        {value ? renderEmoji(value) : '无'}
       </button>
       {open && (
         <div className="absolute left-0 top-11 z-20 w-[380px] rounded-xl border border-[var(--border-default)] bg-[#101b2b] p-3 shadow-[var(--shadow-card)]">
@@ -62,7 +73,7 @@ export function EmojiPicker({ value, onChange, emojis = defaultEmojis }: EmojiPi
           </div>
           <div className="grid max-h-56 grid-cols-10 gap-1 overflow-auto pr-1">
             {visibleEmojis.map(emoji => (
-              <button key={emoji} type="button" onClick={() => selectEmoji(emoji)} className={`flex h-8 items-center justify-center rounded-md text-lg hover:bg-white/[0.08] ${value === emoji ? 'bg-emerald-500/20 ring-1 ring-emerald-400/40' : 'bg-white/[0.03]'}`}>{emoji}</button>
+              <button key={emoji} type="button" onClick={() => selectEmoji(emoji)} className={`flex h-8 items-center justify-center rounded-md text-lg hover:bg-white/[0.08] ${value === emoji ? 'bg-emerald-500/20 ring-1 ring-emerald-400/40' : 'bg-white/[0.03]'}`}>{renderEmoji(emoji)}</button>
             ))}
             {visibleEmojis.length === 0 && <div className="col-span-10 py-5 text-center text-xs text-[var(--text-tertiary)]">没有匹配的 emoji，可在下方自定义输入</div>}
           </div>

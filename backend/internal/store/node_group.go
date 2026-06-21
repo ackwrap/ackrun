@@ -105,6 +105,9 @@ func (s *Store) DeleteNodeGroup(id int64) error {
 }
 
 func (s *Store) DeleteNodeGroups(ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -121,6 +124,23 @@ func (s *Store) DeleteNodeGroups(ids []int64) error {
 		return err
 	}
 	return s.removeNodeGroupRefsFromProxyCollections(ids)
+}
+
+func (s *Store) DeleteEmptyNodeGroups() ([]int64, error) {
+	groups, err := s.ListNodeGroups()
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]int64, 0)
+	for _, group := range groups {
+		if group.MatchedNodeCount == 0 {
+			ids = append(ids, group.ID)
+		}
+	}
+	if err := s.DeleteNodeGroups(ids); err != nil {
+		return nil, err
+	}
+	return ids, nil
 }
 
 func (s *Store) ReorderNodeGroups(ids []int64) error {

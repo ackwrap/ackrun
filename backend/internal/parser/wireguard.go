@@ -25,6 +25,9 @@ func parseWireGuard(raw string) (*model.ParsedNode, error) {
 			node[key] = decodeURLValue(value)
 		}
 	}
+	if value := query["pre-shared-key"]; value != "" {
+		node["pre-shared-key"] = decodeURLValue(value)
+	}
 	if reserved := query["reserved"]; reserved != "" {
 		parts := strings.Split(decodeURLValue(reserved), ",")
 		reservedInts := make([]int, 0, len(parts))
@@ -49,7 +52,7 @@ func parseWireGuard(raw string) (*model.ParsedNode, error) {
 		for i, a := range addrs {
 			addrs[i] = strings.TrimSpace(a)
 		}
-		node["local-address"] = addrs
+		node["address"] = addrs
 	}
 	if mtu := query["mtu"]; mtu != "" {
 		node["mtu"] = parsePort(mtu)

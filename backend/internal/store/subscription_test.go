@@ -1,6 +1,8 @@
 package store
 
 import (
+	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -139,6 +141,70 @@ func TestSubscriptionStoreCRUDAndSyncResult(t *testing.T) {
 	}
 	if deleted != nil {
 		t.Fatalf("expected deleted subscription to be nil, got %+v", deleted)
+	}
+}
+
+func TestDeleteSubscriptionCascadesNodesGroupsAndStrategyRefs(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+
+	sub, err := db.CreateSubscription(&model.SubscriptionRequest{Name: "sub", URL: "https://example.com/sub", UserAgent: "clash-meta/2.4.0", SyncMode: "off", SyncTimeoutSecs: 60})
+	if err != nil {
+		t.Fatalf("create subscription: %v", err)
+	}
+	if err := db.ReplaceSubscriptionNodes(sub.ID, []model.ParsedNode{
+		{Name: "TW-01", Type: "vless", Server: "tw.example.com", ServerPort: 443, Raw: "raw-tw", RawJSON: `{"type":"vless","server":"tw.example.com","server_port":443,"uuid":"uuid-tw"}`},
+	}); err != nil {
+		t.Fatalf("replace subscription nodes: %v", err)
+	}
+	nodes, err := db.ListNodesBySubscription(sub.ID)
+	if err != nil {
+		t.Fatalf("list nodes: %v", err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected one node, got %+v", nodes)
+	}
+
+	manualGroup, err := db.CreateNodeGroup(&model.NodeGroupRequest{Name: "manual group", Type: "selector", NodeUIDs: []string{nodes[0].UID}, Enabled: true})
+	if err != nil {
+		t.Fatalf("create manual group: %v", err)
+	}
+	filterGroup, err := db.CreateNodeGroup(&model.NodeGroupRequest{Name: "filter group", Type: "selector", FilterSubscriptions: fmt.Sprintf("%d", sub.ID), FilterInclude: ".*", Enabled: true})
+	if err != nil {
+		t.Fatalf("create filter group: %v", err)
+	}
+	refs, _ := json.Marshal([]int64{manualGroup.ID, filterGroup.ID})
+	collection := &model.ProxyCollection{Name: "策略", Type: "selector", SourceType: "node_groups", ReferencedGroupIDs: string(refs), RouteRuleIDs: "[]", NodeUIDs: "[]", Enabled: true}
+	if err := db.CreateProxyCollection(collection); err != nil {
+		t.Fatalf("create proxy collection: %v", err)
+	}
+
+	if err := db.DeleteSubscription(sub.ID); err != nil {
+		t.Fatalf("delete subscription: %v", err)
+	}
+	nodes, err = db.ListNodesBySubscription(sub.ID)
+	if err != nil {
+		t.Fatalf("list deleted subscription nodes: %v", err)
+	}
+	if len(nodes) != 0 {
+		t.Fatalf("expected subscription nodes deleted, got %+v", nodes)
+	}
+	groups, err := db.ListNodeGroups()
+	if err != nil {
+		t.Fatalf("list node groups: %v", err)
+	}
+	if len(groups) != 0 {
+		t.Fatalf("expected empty node groups deleted, got %+v", groups)
+	}
+	updatedCollection, err := db.GetProxyCollection(collection.ID)
+	if err != nil {
+		t.Fatalf("get proxy collection: %v", err)
+	}
+	if updatedCollection.ReferencedGroupIDs != "[]" {
+		t.Fatalf("expected strategy group refs removed, got %s", updatedCollection.ReferencedGroupIDs)
 	}
 }
 

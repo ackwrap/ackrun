@@ -25,16 +25,17 @@ func parseClashYAML(body []byte) []model.ParsedNode {
 	for _, proxy := range sub.Proxies {
 		name := getString(proxy, "name")
 		typ := strings.ToLower(getString(proxy, "type"))
+		normalizedType := normalizeProtocolType(typ)
 		server := getString(proxy, "server")
 		port := getInt(proxy, "port")
 		if name == "" || typ == "" || server == "" || port == 0 {
 			continue
 		}
-		normalized := normalizeClashProxy(proxy, typ)
+		normalized := normalizeClashProxy(proxy, normalizedType)
 		rawJSON, _ := json.Marshal(normalized)
 		nodes = append(nodes, model.ParsedNode{
 			Name:       name,
-			Type:       typ,
+			Type:       normalizedType,
 			Server:     server,
 			ServerPort: port,
 			Raw:        string(rawJSON),
@@ -42,6 +43,17 @@ func parseClashYAML(body []byte) []model.ParsedNode {
 		})
 	}
 	return nodes
+}
+
+func normalizeProtocolType(typ string) string {
+	switch strings.ToLower(strings.TrimSpace(typ)) {
+	case "ss":
+		return "shadowsocks"
+	case "socks5", "socks4", "socks4a":
+		return "socks"
+	default:
+		return strings.ToLower(strings.TrimSpace(typ))
+	}
 }
 
 func normalizeClashProxy(proxy map[string]any, typ string) map[string]any {
@@ -60,7 +72,7 @@ func normalizeClashProxy(proxy map[string]any, typ string) map[string]any {
 	if cipher, ok := proxy["cipher"]; ok {
 		if typ == "vmess" {
 			result["security"] = cipher
-		} else if typ == "shadowsocks" || typ == "ss" {
+		} else if typ == "shadowsocks" {
 			result["method"] = cipher
 		} else {
 			result["cipher"] = cipher
@@ -68,7 +80,7 @@ func normalizeClashProxy(proxy map[string]any, typ string) map[string]any {
 	}
 
 	// Shadowsocks udp_over_tcp
-	if typ == "shadowsocks" || typ == "ss" {
+	if typ == "shadowsocks" {
 		if uot, ok := proxy["udp-over-tcp"]; ok && boolOrString(uot) {
 			if ver, ok := proxy["udp-over-tcp-version"]; ok {
 				// 有 version，使用完整格式
@@ -182,7 +194,7 @@ func normalizeClashProxy(proxy map[string]any, typ string) map[string]any {
 			}
 		}
 		if len(addresses) > 0 {
-			result["local_address"] = addresses
+			result["address"] = addresses
 		}
 	}
 
@@ -221,8 +233,8 @@ func normalizeClashProxy(proxy map[string]any, typ string) map[string]any {
 	if _, hasReality := proxy["reality-opts"]; hasReality {
 		needsTLS = true
 	}
-	// Hysteria2 必须使用 TLS
-	if typ == "hysteria2" {
+	// Hysteria2 / TUIC 必须使用 TLS
+	if typ == "hysteria2" || typ == "tuic" {
 		needsTLS = true
 		hasExplicitTLS = true
 	}
@@ -254,10 +266,17 @@ func normalizeClashProxy(proxy map[string]any, typ string) map[string]any {
 		if disableSni, ok := proxy["disable-sni"]; ok && boolOrString(disableSni) {
 			tls["disable_sni"] = true
 		}
-		// client-fingerprint 优先，fingerprint 作为备用
-		fp := firstNonEmpty(getString(proxy, "client-fingerprint"), getString(proxy, "fingerprint"))
-		if fp != "" {
-			tls["utls"] = map[string]any{"enabled": true, "fingerprint": fp}
+		clientFingerprint := getString(proxy, "client-fingerprint")
+		certFingerprint := getString(proxy, "fingerprint")
+		if clientFingerprint == "" && isKnownUTLSFingerprint(certFingerprint) {
+			clientFingerprint = certFingerprint
+			certFingerprint = ""
+		}
+		if clientFingerprint != "" {
+			tls["utls"] = map[string]any{"enabled": true, "fingerprint": clientFingerprint}
+		}
+		if isSHA256Hex(certFingerprint) {
+			tls["certificate_public_key_sha256"] = []string{certFingerprint}
 		}
 		if alpn, ok := proxy["alpn"]; ok {
 			tls["alpn"] = alpn

@@ -3,18 +3,19 @@ backend/backend.exe
 backend/backend
 backend/ackwrap.db
 backend/ui/
-
+mihomo-Alpha
 # Frontend
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
 .codegraph
 .omo
+*.db
 img
 docs
 zashboard-main
 sing-box
-mihomo-Alpha
+
 # Go
 *.exe
 *.exe~

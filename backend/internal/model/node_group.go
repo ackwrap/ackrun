@@ -5,7 +5,7 @@ type NodeGroup struct {
 	ID                  int64  `json:"id"`
 	Name                string `json:"name"`
 	Type                string `json:"type"`                 // selector, urltest
-	FilterProtocols     string `json:"filter_protocols"`     // 逗号分隔: trojan,vless,ss
+	FilterProtocols     string `json:"filter_protocols"`     // 逗号分隔: trojan,vless,shadowsocks
 	FilterSubscriptions string `json:"filter_subscriptions"` // 逗号分隔: 1,2,3
 	FilterInclude       string `json:"filter_include"`
 	FilterExclude       string `json:"filter_exclude"`

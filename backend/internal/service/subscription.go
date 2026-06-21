@@ -188,6 +188,19 @@ func (svc *SubscriptionService) Update(id int64, req *model.SubscriptionRequest)
 
 func (svc *SubscriptionService) Delete(id int64) (*model.ActionResponse, error) {
 	logging.Info("subscription.delete", "deleting subscription: %d", id)
+	item, err := svc.store.GetSubscription(id)
+	if err != nil {
+		return nil, err
+	}
+	if item == nil {
+		return nil, fmt.Errorf("subscription not found")
+	}
+	if item.URL == "manual://local" {
+		if err := svc.store.ClearSubscriptionNodes(id); err != nil {
+			return nil, err
+		}
+		return &model.ActionResponse{Success: true, Message: "local subscription nodes cleared"}, nil
+	}
 	svc.removeJob(id)
 	return &model.ActionResponse{Success: true, Message: "subscription deleted"}, svc.store.DeleteSubscription(id)
 }

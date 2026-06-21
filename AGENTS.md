@@ -36,6 +36,10 @@ npm run build
 
 如果不能，不要进入下一步。
 
+## 文档查询规则
+
+遇到不确定的库、框架、SDK、CLI、配置字段或协议字段问题时，必须先通过 Context7 查询对应官方文档，再决定实现或映射方式。尤其是 sing-box / Mihomo / React / Vite / Gin / SQLite 等第三方 API 和配置 schema，不允许只凭经验或错误信息直接判断。
+
 ## 协议支持验证规则
 
 **遇到 sing-box 配置校验失败 `unknown outbound type: XXX` 时，必须：**

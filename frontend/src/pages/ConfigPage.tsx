@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, FileJson, Play, RefreshCw, Save, XCircle } from 'lucide-react';
+import { CheckCircle2, ChevronDown, Play, Save, XCircle } from 'lucide-react';
 
 import { PageHeader } from '@/components/layout/PageHeader';
 import { JsonPreview } from '@/components/JsonPreview';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Toast } from '@/components/ui/Toast';
 import { api } from '@/services/api';
-import type { ConfigFileItem, ConfigGenerateRequest } from '@/services/types';
+import type { ConfigGenerateRequest } from '@/services/types';
 
 const defaultRequest: ConfigGenerateRequest = {
   default_outbound: 'proxy',
@@ -15,25 +15,14 @@ const defaultRequest: ConfigGenerateRequest = {
   log_level: 'info',
 };
 
-function formatTime(value?: number) {
-  if (!value) return '-';
-  return new Date(value).toLocaleString();
-}
-
-function formatSize(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
 export function ConfigPage() {
   const [request, setRequest] = useState<ConfigGenerateRequest>(defaultRequest);
-  const [files, setFiles] = useState<ConfigFileItem[]>([]);
   const [generated, setGenerated] = useState<any>(null);
-  const [loadingFiles, setLoadingFiles] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [applying, setApplying] = useState(false);
   const [confirmApply, setConfirmApply] = useState(false);
+  const [showFullPreview, setShowFullPreview] = useState(false);
+  const [expandedModules, setExpandedModules] = useState<Record<string, boolean>>({});
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState<'success' | 'error'>('error');
 
@@ -41,14 +30,15 @@ export function ConfigPage() {
   const moduleItems = useMemo(() => {
     const route = config?.route || {};
     return [
-      { name: '日志', count: config?.log ? 1 : 0, detail: config?.log?.level ? `level=${config.log.level}` : '未生成' },
-      { name: '入站', count: config?.inbounds?.length || 0, detail: '来自运行模式与本地监听设置' },
-      { name: '出站/策略组', count: config?.outbounds?.length || 0, detail: '来自节点、节点组、策略组' },
-      { name: '路由规则', count: route?.rules?.length || 0, detail: '来自规则管理和策略组绑定' },
-      { name: '规则集', count: route?.rule_set?.length || 0, detail: '来自 Geo/规则订阅自动生成' },
-      { name: 'DNS', count: config?.dns ? (config.dns.servers?.length || 0) : 0, detail: config?.dns ? `${config.dns.rules?.length || 0} 条 DNS 规则` : '未启用' },
-      { name: 'NTP', count: config?.ntp ? 1 : 0, detail: config?.ntp ? config.ntp.server : '未启用' },
-      { name: '实验功能', count: config?.experimental ? Object.keys(config.experimental).length : 0, detail: 'Clash API / Cache File' },
+      { key: 'log', name: '日志', count: config?.log ? 1 : 0, detail: config?.log?.level ? `level=${config.log.level}` : '未生成', data: config?.log, accent: 'border-blue-400/50 bg-blue-500/5', badge: 'bg-blue-500/10 text-blue-300' },
+      { key: 'inbounds', name: '入站', count: config?.inbounds?.length || 0, detail: '来自运行模式与本地监听设置', data: config?.inbounds, accent: 'border-cyan-400/50 bg-cyan-500/5', badge: 'bg-cyan-500/10 text-cyan-300' },
+      { key: 'outbounds', name: '出站/策略组', count: config?.outbounds?.length || 0, detail: '来自节点、节点组、策略组', data: config?.outbounds, accent: 'border-emerald-400/50 bg-emerald-500/5', badge: 'bg-emerald-500/10 text-emerald-300' },
+      { key: 'endpoints', name: '端点', count: config?.endpoints?.length || 0, detail: 'WireGuard 等 endpoint 类型节点', data: config?.endpoints, accent: 'border-teal-400/50 bg-teal-500/5', badge: 'bg-teal-500/10 text-teal-300' },
+      { key: 'route.rules', name: '路由规则', count: route?.rules?.length || 0, detail: '来自规则管理和策略组绑定', data: route?.rules, accent: 'border-amber-400/50 bg-amber-500/5', badge: 'bg-amber-500/10 text-amber-300' },
+      { key: 'route.rule_set', name: '规则集', count: route?.rule_set?.length || 0, detail: '来自 Geo/规则订阅自动生成', data: route?.rule_set, accent: 'border-orange-400/50 bg-orange-500/5', badge: 'bg-orange-500/10 text-orange-300' },
+      { key: 'dns', name: 'DNS', count: config?.dns ? (config.dns.servers?.length || 0) : 0, detail: config?.dns ? `${config.dns.rules?.length || 0} 条 DNS 规则` : '未启用', data: config?.dns, accent: 'border-violet-400/50 bg-violet-500/5', badge: 'bg-violet-500/10 text-violet-300' },
+      { key: 'ntp', name: 'NTP', count: config?.ntp ? 1 : 0, detail: config?.ntp ? config.ntp.server : '未启用', data: config?.ntp, accent: 'border-pink-400/50 bg-pink-500/5', badge: 'bg-pink-500/10 text-pink-300' },
+      { key: 'experimental', name: '实验功能', count: config?.experimental ? Object.keys(config.experimental).length : 0, detail: 'Clash API / Cache File', data: config?.experimental, accent: 'border-slate-400/50 bg-slate-500/5', badge: 'bg-slate-500/10 text-slate-300' },
     ];
   }, [config]);
 
@@ -62,16 +52,6 @@ export function ConfigPage() {
     const timer = window.setTimeout(() => setMessage(''), messageType === 'error' ? 5000 : 3000);
     return () => window.clearTimeout(timer);
   }, [message, messageType]);
-
-  const loadFiles = async () => {
-    try {
-      setFiles(await api.getConfigFiles());
-    } catch (e: any) {
-      showMessage(`配置列表加载失败: ${e.message}`, 'error');
-    } finally {
-      setLoadingFiles(false);
-    }
-  };
 
   const handleGenerate = async () => {
     try {
@@ -96,7 +76,6 @@ export function ConfigPage() {
       await api.applyConfig({ restart_core: true });
       setConfirmApply(false);
       showMessage('配置已应用', 'success');
-      await loadFiles();
     } catch (e: any) {
       showMessage(`应用失败: ${e.message}`, 'error');
     } finally {
@@ -104,8 +83,39 @@ export function ConfigPage() {
     }
   };
 
+  const toggleModuleRow = (index: number) => {
+    const rowStart = Math.floor(index / 2) * 2;
+    const rowItems = moduleItems.slice(rowStart, rowStart + 2);
+    const nextExpanded = !rowItems.every(item => expandedModules[item.key]);
+    setExpandedModules(prev => {
+      const next = { ...prev };
+      rowItems.forEach(item => {
+        next[item.key] = nextExpanded;
+      });
+      return next;
+    });
+  };
+
+  const copyFullConfig = async () => {
+    if (!config) return;
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(config, null, 2));
+      showMessage('完整配置已复制', 'success');
+    } catch (e: any) {
+      showMessage(`复制失败: ${e.message || '浏览器不支持剪贴板'}`, 'error');
+    }
+  };
+
+  const copyModuleConfig = async (key: string, data: any) => {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify({ [key]: data ?? null }, null, 2));
+      showMessage(`${key} 已复制`, 'success');
+    } catch (e: any) {
+      showMessage(`复制失败: ${e.message || '浏览器不支持剪贴板'}`, 'error');
+    }
+  };
+
   useEffect(() => {
-    loadFiles();
     handleGenerate();
   }, []);
 
@@ -114,9 +124,6 @@ export function ConfigPage() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <PageHeader title="配置生成" description="从当前订阅、节点、策略组、路由规则、DNS、Geo 和运行设置生成完整 sing-box 配置" />
         <div className="flex flex-wrap gap-2">
-          <button onClick={loadFiles} className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border-default)] bg-[var(--bg-surface)] px-3 text-sm text-[var(--text-primary)] hover:bg-[var(--bg-sidebar-hover)]">
-            <RefreshCw size={15} />刷新列表
-          </button>
           <button onClick={handleGenerate} disabled={generating} className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--button-primary-border)] bg-[var(--button-primary-bg)] px-3 text-sm font-medium text-[var(--button-primary-text)] hover:bg-[var(--button-primary-hover)] disabled:opacity-50">
             <Play size={15} />{generating ? '生成中...' : '生成完整配置'}
           </button>
@@ -127,38 +134,8 @@ export function ConfigPage() {
       </div>
       <Toast message={message} type={messageType} />
 
-      <div className="grid gap-4 xl:grid-cols-[420px_1fr]">
-        <div className="space-y-4">
-          <section className="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-card)]">
-            <h3 className="text-sm font-semibold text-[var(--text-primary)]">配置列表</h3>
-            <p className="mt-1 text-xs text-[var(--text-tertiary)]">当前配置目录中的 JSON 配置文件。</p>
-            <div className="mt-4 space-y-2">
-              {loadingFiles ? (
-                <div className="rounded-lg border border-[var(--border-default)] p-4 text-sm text-[var(--text-secondary)]">加载中...</div>
-              ) : files.length === 0 ? (
-                <div className="rounded-lg border border-[var(--border-default)] p-4 text-sm text-[var(--text-secondary)]">暂无配置文件，先生成并应用配置。</div>
-              ) : files.map(file => (
-                <div key={file.path} className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-base)] p-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 text-sm font-medium text-[var(--text-primary)]">
-                        <FileJson size={15} className="shrink-0" />
-                        <span className="truncate">{file.name}</span>
-                      </div>
-                      <div className="mt-1 text-xs text-[var(--text-tertiary)]">{formatSize(file.size_bytes)} · {formatTime(file.updated_at)}</div>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      {file.active && <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-xs text-blue-300">当前</span>}
-                      <span className={`rounded-full px-2 py-0.5 text-xs ${file.valid ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'}`}>{file.valid ? '有效' : '无效'}</span>
-                    </div>
-                  </div>
-                  {file.error && <div className="mt-2 line-clamp-2 text-xs text-red-300">{file.error}</div>}
-                </div>
-              ))}
-            </div>
-          </section>
-
-          <section className="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-card)]">
+      <div className="space-y-4">
+        <section className="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-card)]">
             <h3 className="text-sm font-semibold text-[var(--text-primary)]">生成参数</h3>
             <div className="mt-4 grid gap-3">
               <label className="block">
@@ -184,40 +161,58 @@ export function ConfigPage() {
                 </select>
               </label>
             </div>
-          </section>
+        </section>
 
-          <section className="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-card)]">
-            <h3 className="text-sm font-semibold text-[var(--text-primary)]">生成模块清单</h3>
-            <div className="mt-4 space-y-2">
-              {moduleItems.map(item => (
-                <div key={item.name} className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border-default)] bg-[var(--bg-base)] px-3 py-2">
-                  <div>
-                    <div className="text-sm text-[var(--text-primary)]">{item.name}</div>
-                    <div className="text-xs text-[var(--text-tertiary)]">{item.detail}</div>
-                  </div>
-                  <span className="rounded-full bg-white/5 px-2 py-1 text-xs text-[var(--text-secondary)]">{item.count}</span>
-                </div>
-              ))}
-            </div>
-          </section>
-        </div>
-
-        <section className="min-h-[720px] rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] shadow-[var(--shadow-card)]">
-          <div className="flex items-center justify-between border-b border-[var(--border-default)] px-5 py-4">
+        <section className="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] shadow-[var(--shadow-card)]">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-default)] px-5 py-4">
             <div>
-              <h3 className="text-sm font-semibold text-[var(--text-primary)]">完整配置预览</h3>
-              <p className="mt-1 text-xs text-[var(--text-tertiary)]">生成结果会先写入临时文件并执行 sing-box check，应用后才覆盖正式配置。</p>
+              <h3 className="text-sm font-semibold text-[var(--text-primary)]">模块化配置预览</h3>
+              <p className="mt-1 text-xs text-[var(--text-tertiary)]">每块对应最终 sing-box JSON 的一个顶层字段；生成结果仍会先写入临时文件并执行 sing-box check。</p>
             </div>
             {generated && (
-              <div className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs ${generated.valid ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'}`}>
-                {generated.valid ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
-                {generated.valid ? '校验通过' : '校验失败'}
+              <div className="flex items-center gap-2">
+                <div className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs ${generated.valid ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'}`}>
+                  {generated.valid ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
+                  {generated.valid ? '校验通过' : '校验失败'}
+                </div>
+                {generated.valid && (
+                  <button onClick={() => setShowFullPreview(true)} className="rounded-md border border-[var(--border-default)] bg-[var(--bg-surface)] px-3 py-1.5 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-sidebar-hover)]">
+                    预览最终配置文件
+                  </button>
+                )}
               </div>
             )}
           </div>
           <div className="p-5">
             {generated?.error && <div className="mb-4 rounded-lg border border-red-400/20 bg-red-500/10 p-3 text-sm text-red-300">{generated.error}</div>}
-            {config ? <JsonPreview data={config} maxHeight="none" /> : <div className="flex h-64 items-center justify-center text-sm text-[var(--text-secondary)]">{generating ? '生成中...' : '暂无配置预览'}</div>}
+            {config ? (
+              <div className="grid gap-4 xl:grid-cols-2">
+                {moduleItems.map((item, index) => (
+                  <div key={item.key} className={`overflow-hidden rounded-[var(--radius-xl)] border ${item.accent} p-4`}>
+                    <button onClick={() => toggleModuleRow(index)} className="flex w-full items-start justify-between gap-3 text-left">
+                      <div>
+                        <div className="text-sm font-semibold text-[var(--text-primary)]">{item.name}</div>
+                        <div className="mt-1 text-xs text-[var(--text-tertiary)]">{item.detail}</div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        {expandedModules[item.key] && (
+                          <span onClick={e => { e.stopPropagation(); copyModuleConfig(item.key, item.data); }} className="rounded-md border border-[var(--border-default)] bg-[var(--bg-surface)] px-2.5 py-1 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-sidebar-hover)]">
+                            复制
+                          </span>
+                        )}
+                        <span className={`rounded-full px-2 py-1 text-xs ${item.badge}`}>{item.count}</span>
+                        <ChevronDown size={16} className={`text-[var(--text-tertiary)] transition-transform ${expandedModules[item.key] ? 'rotate-180' : ''}`} />
+                      </div>
+                    </button>
+                    {expandedModules[item.key] && (
+                      <div className="mt-3">
+                        <JsonPreview data={{ [item.key]: item.data ?? null }} maxHeight="320px" className="bg-[var(--bg-base)]/80" />
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : <div className="flex h-64 items-center justify-center text-sm text-[var(--text-secondary)]">{generating ? '生成中...' : '暂无配置预览'}</div>}
           </div>
         </section>
       </div>
@@ -230,6 +225,26 @@ export function ConfigPage() {
         onConfirm={handleApply}
         onCancel={() => setConfirmApply(false)}
       />
+
+      {showFullPreview && config && (
+        <div className="aw-modal-backdrop" onClick={() => setShowFullPreview(false)}>
+          <div className="aw-modal-panel max-h-[90vh] w-full max-w-6xl overflow-hidden p-5" onClick={e => e.stopPropagation()}>
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold text-[var(--text-primary)]">最终配置文件</h3>
+                <p className="mt-1 text-xs text-[var(--text-tertiary)]">这是将写入 sing-box 的完整 JSON 配置。</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={copyFullConfig} className="rounded-md border border-[var(--border-default)] bg-[var(--bg-surface)] px-3 py-1.5 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-sidebar-hover)]">
+                  复制
+                </button>
+                <button onClick={() => setShowFullPreview(false)} className="aw-modal-close">✕</button>
+              </div>
+            </div>
+            <JsonPreview data={config} maxHeight="72vh" />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

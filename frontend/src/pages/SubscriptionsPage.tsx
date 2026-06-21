@@ -145,8 +145,10 @@ export function SubscriptionsPage() {
   const [importContent, setImportContent] = React.useState('');
   const [previewItems, setPreviewItems] = React.useState<NodeImportPreviewItem[]>([]);
   const [previewLoading, setPreviewLoading] = React.useState(false);
+  const [autoPreviewError, setAutoPreviewError] = React.useState('');
   const [previewDetail, setPreviewDetail] = React.useState<NodeImportPreviewItem | null>(null);
   const [previewDetailFormat, setPreviewDetailFormat] = React.useState<'json' | 'yaml'>('json');
+  const lastAutoPreviewContent = React.useRef('');
   
   // 节点过滤规则状态
   const [filters, setFilters] = React.useState<NodeFilter[]>([]);
@@ -324,37 +326,61 @@ export function SubscriptionsPage() {
     }
   };
 
-  const previewImportNodes = async () => {
+  const previewImportNodes = async (silent = false) => {
+    if (!importContent.trim()) return;
     setPreviewLoading(true);
+    setAutoPreviewError('');
     try {
       const result = await api.previewImportNodes({ content: importContent });
       setPreviewItems(result.items);
-      setMessage(`预览完成：识别到 ${result.count} 个节点`);
+      if (!silent) setMessage(`预览完成：识别到 ${result.count} 个节点`);
     } catch (e: any) {
       setPreviewItems([]);
-      setMessage(`节点预览失败: ${e.message}`);
+      if (silent) {
+        setAutoPreviewError(e.message || '自动解析失败');
+      } else {
+        setMessage(`节点预览失败: ${e.message}`);
+      }
     } finally {
       setPreviewLoading(false);
     }
   };
+
+  React.useEffect(() => {
+    const content = importContent.trim();
+    if (!content) {
+      lastAutoPreviewContent.current = '';
+      setPreviewItems([]);
+      setAutoPreviewError('');
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      if (lastAutoPreviewContent.current === content) return;
+      lastAutoPreviewContent.current = content;
+      previewImportNodes(true);
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [importContent]);
 
   const importLineCount = React.useMemo(() => importContent.split('\n').filter(line => line.trim()).length, [importContent]);
 
   const clearImportContent = () => {
     setImportContent('');
     setPreviewItems([]);
+    setAutoPreviewError('');
     setPreviewDetail(null);
   };
 
   const remove = async () => {
     if (!deleteTarget) return;
+    const isManual = deleteTarget.url === manualSubscriptionURL;
     try {
       await api.deleteSubscription(deleteTarget.id);
-      setMessage('订阅已删除');
+      setMessage(isManual ? '本地订阅节点已清空' : '订阅已删除');
       setDeleteTarget(null);
       await load();
     } catch (e: any) {
-      setMessage(`删除失败: ${e.message}`);
+      setMessage(`${isManual ? '清空失败' : '删除失败'}: ${e.message}`);
     }
   };
 
@@ -418,7 +444,7 @@ export function SubscriptionsPage() {
                       <div className="flex items-center gap-2">
                         <IconButton title={isManual ? '手动导入源不可编辑' : '编辑'} onClick={isManual || isSyncing ? undefined : () => openEdit(subscription)}><Edit3 size={14} /></IconButton>
                         <IconButton title={isManual ? '手动导入源不可同步' : '同步'} onClick={isManual || isSyncing ? undefined : () => syncOne(subscription)}><RefreshCw size={14} /></IconButton>
-                        <IconButton title={isManual ? '手动导入源不可删除' : '删除'} onClick={isManual || isSyncing ? undefined : () => setDeleteTarget(subscription)}><Trash2 size={14} /></IconButton>
+                        <IconButton title={isManual ? (subscription.node_count > 0 ? '清空本地节点' : '本地订阅暂无节点') : '删除'} onClick={(isManual ? subscription.node_count <= 0 : isSyncing) ? undefined : () => setDeleteTarget(subscription)}><Trash2 size={14} /></IconButton>
                       </div>
                     </td>
                   </tr>
@@ -459,7 +485,7 @@ export function SubscriptionsPage() {
               </div>
               <div className="flex gap-2">
                 {importContent && <button onClick={clearImportContent} className="h-9 rounded-md border border-[var(--border-default)] bg-white/[0.04] px-3 text-sm text-[var(--text-secondary)] hover:bg-white/[0.08] hover:text-white">清空</button>}
-                <button disabled={!importContent.trim() || previewLoading} onClick={previewImportNodes} className={`inline-flex h-9 items-center gap-2 rounded-md border px-4 text-sm font-medium ${importContent.trim() && !previewLoading ? 'border-cyan-400/30 bg-cyan-500/15 text-cyan-100 hover:bg-cyan-500/25' : 'cursor-not-allowed border-[var(--border-default)] bg-white/[0.03] text-[var(--text-tertiary)]'}`}>
+                <button disabled={!importContent.trim() || previewLoading} onClick={() => previewImportNodes(false)} className={`inline-flex h-9 items-center gap-2 rounded-md border px-4 text-sm font-medium ${importContent.trim() && !previewLoading ? 'border-cyan-400/30 bg-cyan-500/15 text-cyan-100 hover:bg-cyan-500/25' : 'cursor-not-allowed border-[var(--border-default)] bg-white/[0.03] text-[var(--text-tertiary)]'}`}>
                   <FileJson size={15} />{previewLoading ? '预览中...' : '节点预览'}
                 </button>
                 <button disabled={!importContent.trim()} onClick={importNodes} className={`inline-flex h-9 items-center gap-2 rounded-md border px-4 text-sm font-medium ${importContent.trim() ? 'border-blue-400/30 bg-blue-500/20 text-blue-100 hover:bg-blue-500/30' : 'cursor-not-allowed border-[var(--border-default)] bg-white/[0.03] text-[var(--text-tertiary)]'}`}>
@@ -470,20 +496,20 @@ export function SubscriptionsPage() {
             <div className="grid gap-4 xl:grid-cols-[minmax(0,3fr)_minmax(320px,2fr)]">
               <div className="relative">
                 <textarea value={importContent} onChange={e => { setImportContent(e.target.value); setPreviewItems([]); }} rows={11} placeholder={'vless://...\nvmess://...\nss://...\n\n# 或直接粘贴 Clash YAML / sing-box JSON'} className="h-full min-h-[300px] w-full resize-y rounded-xl border border-blue-400/25 bg-[#0d1a2b]/80 px-4 py-4 font-mono text-sm leading-6 text-blue-50 outline-none ring-1 ring-transparent transition placeholder:text-[var(--text-tertiary)] focus:border-blue-300/70 focus:ring-blue-400/20" />
-                {!importContent && <div className="pointer-events-none absolute bottom-4 right-4 rounded-md border border-[var(--border-default)] bg-black/20 px-2 py-1 text-[10px] uppercase tracking-[0.2em] text-[var(--text-tertiary)]">auto parse</div>}
+                <div className={`pointer-events-none absolute bottom-4 right-4 rounded-md border border-[var(--border-default)] bg-black/20 px-2 py-1 text-[10px] uppercase tracking-[0.2em] ${previewLoading ? 'text-cyan-200' : previewItems.length > 0 ? 'text-emerald-200' : autoPreviewError ? 'text-red-200' : 'text-[var(--text-tertiary)]'}`}>{previewLoading ? 'parsing' : previewItems.length > 0 ? 'parsed' : autoPreviewError ? 'parse failed' : 'auto parse'}</div>
               </div>
 
               <aside className="min-h-[300px] rounded-xl border border-[var(--border-default)] bg-black/15 p-4">
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <div className="text-sm font-medium text-white">节点预览</div>
-                    <div className="mt-1 text-xs text-[var(--text-tertiary)]">{previewItems.length > 0 ? `已识别 ${previewItems.length} 个节点` : '预览后显示解析结果'}</div>
+                    <div className="mt-1 text-xs text-[var(--text-tertiary)]">{previewItems.length > 0 ? `已识别 ${previewItems.length} 个节点` : autoPreviewError ? `自动解析失败：${autoPreviewError}` : '粘贴后自动解析，也可手动预览'}</div>
                   </div>
                   <span className="rounded-full border border-blue-400/20 bg-blue-500/10 px-2 py-1 text-xs text-blue-100">preview</span>
                 </div>
                 <div className="mt-4 max-h-[238px] space-y-2 overflow-auto pr-1">
                   {previewItems.length === 0 ? (
-                    <div className="flex h-[210px] items-center justify-center rounded-lg border border-dashed border-[var(--border-default)] text-center text-xs leading-5 text-[var(--text-tertiary)]">点击“节点预览”后，节点名称、协议和地址会显示在这里。</div>
+                    <div className="flex h-[210px] items-center justify-center rounded-lg border border-dashed border-[var(--border-default)] text-center text-xs leading-5 text-[var(--text-tertiary)]">粘贴内容后会自动解析；也可以点击“节点预览”手动刷新。</div>
                   ) : previewItems.slice(0, 50).map(item => (
                     <div key={item.uid} className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border-default)] bg-white/[0.035] px-3 py-2">
                       <div className="min-w-0">
@@ -585,11 +611,11 @@ export function SubscriptionsPage() {
       {deleteTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[linear-gradient(180deg,rgba(20,33,52,0.98),rgba(16,27,43,0.96))] p-5 shadow-[var(--shadow-card)]">
-            <h3 className="text-base font-semibold text-white">删除订阅</h3>
-            <p className="mt-2 text-sm text-[var(--text-secondary)]">确定删除订阅「{deleteTarget.name}」？这会删除该订阅下的节点记录，但不会影响已生成的配置文件。</p>
+            <h3 className="text-base font-semibold text-white">{deleteTarget.url === manualSubscriptionURL ? '清空本地节点' : '删除订阅'}</h3>
+            <p className="mt-2 text-sm text-[var(--text-secondary)]">{deleteTarget.url === manualSubscriptionURL ? `确定清空本地订阅中的 ${deleteTarget.node_count} 个节点？这会同步清理空节点组和策略组引用，但保留本地订阅入口。` : `确定删除订阅「${deleteTarget.name}」？这会删除该订阅下的节点记录，并同步清理空节点组和策略组引用。`}</p>
             <div className="mt-5 flex justify-end gap-2">
               <button onClick={() => setDeleteTarget(null)} className="h-9 rounded-md border border-[var(--border-default)] bg-white/[0.04] px-4 text-sm text-[var(--text-secondary)] hover:text-white">取消</button>
-              <button onClick={remove} className="h-9 rounded-md bg-red-500 px-4 text-sm font-medium text-white hover:bg-red-600">删除</button>
+              <button onClick={remove} className="h-9 rounded-md bg-red-500 px-4 text-sm font-medium text-white hover:bg-red-600">{deleteTarget.url === manualSubscriptionURL ? '清空节点' : '删除'}</button>
             </div>
           </div>
         </div>

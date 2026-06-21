@@ -95,7 +95,53 @@ func (s *Store) UpdateSubscription(id int64, req *model.SubscriptionRequest) (*m
 }
 
 func (s *Store) DeleteSubscription(id int64) error {
-	_, err := s.db.Exec(`DELETE FROM subscriptions WHERE id = ?`, id)
+	existing, err := s.GetSubscription(id)
+	if err != nil || existing == nil {
+		return err
+	}
+	if err := s.deleteSubscriptionNodesAndCleanup(id); err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`DELETE FROM subscriptions WHERE id = ?`, id)
+	return err
+}
+
+func (s *Store) ClearSubscriptionNodes(id int64) error {
+	existing, err := s.GetSubscription(id)
+	if err != nil || existing == nil {
+		return err
+	}
+	return s.deleteSubscriptionNodesAndCleanup(id)
+}
+
+func (s *Store) deleteSubscriptionNodesAndCleanup(id int64) error {
+	uids, err := s.GetSubscriptionNodeUIDs(id)
+	if err != nil {
+		return err
+	}
+	if len(uids) > 0 {
+		if err := s.removeNodeUIDsFromProxyCollections(uids); err != nil {
+			return err
+		}
+		if err := s.removeNodeUIDsFromNodeGroups(uids); err != nil {
+			return err
+		}
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM nodes WHERE subscription_id = ?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE subscriptions SET node_count = 0, updated_at = ? WHERE id = ?`, time.Now().UnixMilli(), id); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	_, err = s.DeleteEmptyNodeGroups()
 	return err
 }
 

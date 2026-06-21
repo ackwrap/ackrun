@@ -2,6 +2,7 @@ package parser
 
 import (
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -39,6 +40,8 @@ func normalizeToSingbox(cfg map[string]any, typ string) map[string]any {
 
 	// 移除不需要的字段
 	delete(result, "name")
+	typ = normalizeProtocolType(typ)
+	result["type"] = typ
 
 	// 字段转换
 	if port, ok := result["port"]; ok {
@@ -50,7 +53,7 @@ func normalizeToSingbox(cfg map[string]any, typ string) map[string]any {
 	if cipher, ok := result["cipher"]; ok {
 		if typ == "vmess" {
 			result["security"] = cipher
-		} else if typ == "shadowsocks" || typ == "ss" {
+		} else if typ == "shadowsocks" {
 			result["method"] = cipher
 		} else {
 			result["method"] = cipher
@@ -68,6 +71,14 @@ func normalizeToSingbox(cfg map[string]any, typ string) map[string]any {
 	if pluginOpts, ok := result["plugin-opts"]; ok {
 		result["plugin_opts"] = pluginOpts
 		delete(result, "plugin-opts")
+	}
+
+	if typ == "wireguard" {
+		moveKey(result, "private-key", "private_key")
+		moveKey(result, "public-key", "public_key")
+		moveKey(result, "preshared-key", "pre_shared_key")
+		moveKey(result, "pre-shared-key", "pre_shared_key")
+		moveKey(result, "local-address", "address")
 	}
 
 	// TLS 布尔值转嵌套对象
@@ -98,7 +109,54 @@ func normalizeToSingbox(cfg map[string]any, typ string) map[string]any {
 		}
 	}
 
+	clientFingerprint := getString(result, "client-fingerprint")
+	certFingerprint := getString(result, "fingerprint")
+	if clientFingerprint == "" && isKnownUTLSFingerprint(certFingerprint) {
+		clientFingerprint = certFingerprint
+		certFingerprint = ""
+	}
+	if clientFingerprint != "" || isSHA256Hex(certFingerprint) {
+		if !tlsIsMap {
+			result["tls"] = map[string]any{"enabled": true}
+			tlsObj = result["tls"].(map[string]any)
+			tlsIsMap = true
+		}
+		if clientFingerprint != "" {
+			tlsObj["utls"] = map[string]any{"enabled": true, "fingerprint": clientFingerprint}
+		}
+		if isSHA256Hex(certFingerprint) {
+			tlsObj["certificate_public_key_sha256"] = []string{certFingerprint}
+		}
+	}
+	delete(result, "client-fingerprint")
+	delete(result, "fingerprint")
+
 	return result
+}
+
+func moveKey(data map[string]any, from string, to string) {
+	if value, ok := data[from]; ok {
+		data[to] = value
+		delete(data, from)
+	}
+}
+
+func isKnownUTLSFingerprint(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "chrome", "firefox", "edge", "safari", "360", "qq", "ios", "android", "random", "randomized", "chrome_psk", "chrome_psk_shuffle", "chrome_padding_psk_shuffle", "chrome_pq", "chrome_pq_psk":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSHA256Hex(value string) bool {
+	value = strings.TrimSpace(value)
+	if len(value) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 func base64DecodeURLSafe(value string) (string, error) {

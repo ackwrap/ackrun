@@ -14,8 +14,26 @@ func (s *Store) removeNodeUIDFromProxyCollections(uid string) error {
 	return s.updateProxyCollectionStringRefs("node_uids", map[string]bool{uid: true})
 }
 
+func (s *Store) removeNodeUIDsFromProxyCollections(uids []string) error {
+	return s.updateProxyCollectionStringRefs("node_uids", stringRemoveSet(uids))
+}
+
 func (s *Store) removeNodeUIDFromNodeGroups(uid string) error {
 	return s.updateNodeGroupStringRefs("node_uids", map[string]bool{uid: true})
+}
+
+func (s *Store) removeNodeUIDsFromNodeGroups(uids []string) error {
+	return s.updateNodeGroupStringRefs("node_uids", stringRemoveSet(uids))
+}
+
+func stringRemoveSet(values []string) map[string]bool {
+	remove := make(map[string]bool, len(values))
+	for _, value := range values {
+		if value != "" {
+			remove[value] = true
+		}
+	}
+	return remove
 }
 
 func (s *Store) removeNodeGroupRefsFromProxyCollections(ids []int64) error {

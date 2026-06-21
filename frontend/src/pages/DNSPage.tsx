@@ -76,7 +76,7 @@ const dnsRuleConditionTypes = [
   { value: 'domain_keyword', label: '域名关键词', hint: 'domain_keyword' },
   { value: 'domain_regex', label: '域名正则', hint: 'domain_regex' },
   { value: 'geosite', label: 'GeoSite', hint: 'geosite' },
-  { value: 'outbound', label: 'Outbound', hint: 'outbound' },
+  { value: 'outbound', label: 'Outbound（生成 domain_resolver）', hint: 'outbound' },
   { value: 'query_type', label: '查询类型', hint: 'query_type' },
   { value: 'network', label: '网络类型', hint: 'network' },
   { value: 'protocol', label: '协议', hint: 'protocol' },
@@ -92,20 +92,20 @@ const strategyOptions = [
 ];
 
 const builtinDNSServers = [
-  { key: 'alidns-doh', label: '阿里 DoH', tag: 'dns_ali', server_type: 'https', address: 'https://dns.alidns.com/dns-query', detour: 'direct' },
-  { key: 'alidns-udp', label: '阿里 DNS UDP', tag: 'dns_ali_udp', server_type: 'udp', address: '223.5.5.5', detour: 'direct' },
-  { key: 'alidns-udp-backup', label: '阿里 DNS UDP 备用', tag: 'dns_ali_udp_2', server_type: 'udp', address: '223.6.6.6', detour: 'direct' },
-  { key: 'dnspod-doh', label: '腾讯 DNSPod DoH', tag: 'dns_tencent', server_type: 'https', address: 'https://doh.pub/dns-query', detour: 'direct' },
-  { key: 'dnspod-udp', label: '腾讯 DNSPod UDP', tag: 'dns_tencent_udp', server_type: 'udp', address: '119.29.29.29', detour: 'direct' },
-  { key: 'dnspod-udp-backup', label: '腾讯 DNSPod UDP 备用', tag: 'dns_tencent_udp_2', server_type: 'udp', address: '119.28.28.28', detour: 'direct' },
+  { key: 'alidns-doh', label: '阿里 DoH', tag: 'dns_ali', server_type: 'https', address: 'https://dns.alidns.com/dns-query', detour: '' },
+  { key: 'alidns-udp', label: '阿里 DNS UDP', tag: 'dns_ali_udp', server_type: 'udp', address: '223.5.5.5', detour: '' },
+  { key: 'alidns-udp-backup', label: '阿里 DNS UDP 备用', tag: 'dns_ali_udp_2', server_type: 'udp', address: '223.6.6.6', detour: '' },
+  { key: 'dnspod-doh', label: '腾讯 DNSPod DoH', tag: 'dns_tencent', server_type: 'https', address: 'https://doh.pub/dns-query', detour: '' },
+  { key: 'dnspod-udp', label: '腾讯 DNSPod UDP', tag: 'dns_tencent_udp', server_type: 'udp', address: '119.29.29.29', detour: '' },
+  { key: 'dnspod-udp-backup', label: '腾讯 DNSPod UDP 备用', tag: 'dns_tencent_udp_2', server_type: 'udp', address: '119.28.28.28', detour: '' },
   { key: 'cloudflare-doh', label: 'Cloudflare DoH', tag: 'dns_cloudflare', server_type: 'https', address: 'https://cloudflare-dns.com/dns-query', detour: 'proxy' },
   { key: 'google-doh', label: 'Google DoH', tag: 'dns_google', server_type: 'https', address: 'https://dns.google/dns-query', detour: 'proxy' },
   { key: 'quad9-doh', label: 'Quad9 DoH', tag: 'dns_quad9', server_type: 'https', address: 'https://dns.quad9.net/dns-query', detour: 'proxy' },
-  { key: '114-udp', label: '114 DNS UDP', tag: 'dns_114', server_type: 'udp', address: '114.114.114.114', detour: 'direct' },
-  { key: 'baidu-udp', label: '百度 DNS UDP', tag: 'dns_baidu', server_type: 'udp', address: '180.76.76.76', detour: 'direct' },
-  { key: 'mobile-udp', label: '移动 DNS UDP', tag: 'dns_mobile', server_type: 'udp', address: '211.136.192.6', detour: 'direct' },
-  { key: 'unicom-udp', label: '联通 DNS UDP', tag: 'dns_unicom', server_type: 'udp', address: '123.125.81.6', detour: 'direct' },
-  { key: 'telecom-udp', label: '电信 DNS UDP', tag: 'dns_telecom', server_type: 'udp', address: '202.96.128.86', detour: 'direct' },
+  { key: '114-udp', label: '114 DNS UDP', tag: 'dns_114', server_type: 'udp', address: '114.114.114.114', detour: '' },
+  { key: 'baidu-udp', label: '百度 DNS UDP', tag: 'dns_baidu', server_type: 'udp', address: '180.76.76.76', detour: '' },
+  { key: 'mobile-udp', label: '移动 DNS UDP', tag: 'dns_mobile', server_type: 'udp', address: '211.136.192.6', detour: '' },
+  { key: 'unicom-udp', label: '联通 DNS UDP', tag: 'dns_unicom', server_type: 'udp', address: '123.125.81.6', detour: '' },
+  { key: 'telecom-udp', label: '电信 DNS UDP', tag: 'dns_telecom', server_type: 'udp', address: '202.96.128.86', detour: '' },
 ];
 
 export function DNSPage() {
@@ -410,10 +410,10 @@ export function DNSPage() {
   const previewDNSBinding = (outbound: string) => {
     const server = dnsBindings[outbound] ?? findOutboundBindingRule(outbound)?.server ?? '';
     if (!server) {
-      setPreviewJSON(JSON.stringify({ outbound: [outbound], server: '(未绑定)' }, null, 2));
+      setPreviewJSON(JSON.stringify({ tag: outbound, domain_resolver: '(未绑定)' }, null, 2));
       return;
     }
-    setPreviewJSON(JSON.stringify({ outbound: [outbound], server }, null, 2));
+    setPreviewJSON(JSON.stringify({ tag: outbound, domain_resolver: { server } }, null, 2));
   };
 
   // DNS Rule CRUD
@@ -764,7 +764,7 @@ export function DNSPage() {
           <section className="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[linear-gradient(180deg,rgba(20,33,52,0.92),rgba(16,27,43,0.74))] p-5 shadow-[var(--shadow-card)]">
             <div className="mb-4">
               <h3 className="text-sm font-semibold text-white">DNS 出口绑定</h3>
-              <p className="mt-1 text-xs text-[var(--text-tertiary)]">让不同策略组使用对应地区出口查询 DNS，避免 CDN 返回和实际代理地区不一致。</p>
+              <p className="mt-1 text-xs text-[var(--text-tertiary)]">让不同策略组使用对应地区出口查询 DNS。生成 sing-box 1.13 配置时会迁移为节点出站的 domain_resolver。</p>
             </div>
             <div className="overflow-hidden rounded-xl border border-[var(--border-default)]">
               <div className="overflow-x-auto">
@@ -789,7 +789,7 @@ export function DNSPage() {
                               {servers.filter(server => server.enabled && server.server_type !== 'fakeip').map(server => <option key={server.id} value={server.tag}>{server.tag}{server.detour ? ` · detour=${server.detour}` : ''}</option>)}
                             </select>
                           </td>
-                          <td className="px-4 py-3 text-xs text-[var(--text-tertiary)]">{existingRule ? `dns.rules #${existingRule.id}` : '未生成'}</td>
+                          <td className="px-4 py-3 text-xs text-[var(--text-tertiary)]">{existingRule ? `domain_resolver 绑定 #${existingRule.id}` : '未生成'}</td>
                           <td className="px-4 py-3">
                             <div className="flex gap-2">
                               <button onClick={() => previewDNSBinding(target.value)} className="rounded-md border border-[var(--border-default)] bg-[var(--bg-surface)] px-3 py-1.5 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-sidebar-hover)]">预览</button>
@@ -803,7 +803,7 @@ export function DNSPage() {
                 </table>
               </div>
             </div>
-            <p className="mt-3 text-xs text-[var(--text-tertiary)]">建议为香港、美国、日本等单地区策略组分别创建真实 DNS Server，并让 DNS Server 的 Detour 指向同一个策略组。FakeIP 只用于返回给客户端，不参与这里的真实 CDN 解析出口绑定。</p>
+            <p className="mt-3 text-xs text-[var(--text-tertiary)]">建议为香港、美国、日本等单地区策略组分别创建真实 DNS Server，并让 DNS Server 的 Detour 指向同一个策略组。FakeIP 只用于返回给客户端，不参与这里的真实 CDN 解析出口绑定。策略组本身不会写入 domain_resolver，后端会把绑定下发到该策略组引用的节点出站。</p>
           </section>
 
           {/* DNS 规则管理 */}
@@ -873,7 +873,7 @@ export function DNSPage() {
                   </label>
                   <label className="block md:col-span-2">
                     <span className="text-xs text-[var(--text-tertiary)]">匹配值（每行一个{ruleConditionType === 'clash_mode' ? '，仅第一行生效' : ''}）</span>
-                    <textarea value={ruleConditionValues} onChange={e => setRuleConditionValues(e.target.value)} rows={3} placeholder={ruleConditionType === 'clash_mode' ? 'rule 或 direct 或 global' : ruleConditionType === 'query_type' ? 'A\nAAAA\nHTTPS' : ruleConditionType === 'outbound' ? 'direct\nproxy' : ruleConditionType === 'domain_suffix' ? 'example.com\ngoogle.com' : ruleConditionType === 'geosite' ? 'cn\ngeolocation-!cn' : '每行一个值'} className="mt-1 w-full rounded-md border border-[var(--border-default)] bg-[var(--bg-surface)] px-3 py-2 font-mono text-xs text-[var(--text-primary)] outline-none focus:border-blue-400"></textarea>
+                    <textarea value={ruleConditionValues} onChange={e => setRuleConditionValues(e.target.value)} rows={3} placeholder={ruleConditionType === 'clash_mode' ? 'rule 或 direct 或 global' : ruleConditionType === 'query_type' ? 'A\nAAAA\nHTTPS' : ruleConditionType === 'outbound' ? 'direct\nproxy（生成时迁移到 domain_resolver）' : ruleConditionType === 'domain_suffix' ? 'example.com\ngoogle.com' : ruleConditionType === 'geosite' ? 'cn\ngeolocation-!cn' : '每行一个值'} className="mt-1 w-full rounded-md border border-[var(--border-default)] bg-[var(--bg-surface)] px-3 py-2 font-mono text-xs text-[var(--text-primary)] outline-none focus:border-blue-400"></textarea>
                   </label>
                   <label className="block">
                     <span className="text-xs text-[var(--text-tertiary)]">DNS Server Tag</span>

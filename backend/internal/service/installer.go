@@ -1,7 +1,9 @@
 package service
 
 import (
+	"archive/tar"
 	"archive/zip"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,8 +22,7 @@ import (
 )
 
 var (
-	singboxVersion    = "1.13.13"
-	singboxVersionURL = "https://api.github.com/repos/SagerNet/sing-box/releases/latest"
+	singboxVersionURL = "https://api.github.com/repos/ackwrap/sing-box-wrap/releases/latest"
 )
 
 type InstallerService struct {
@@ -101,16 +102,17 @@ func (svc *InstallerService) runInstall() {
 	// 获取最新版本
 	latestVersion, err := svc.fetchLatestVersion()
 	if err != nil {
-		logging.Info("installer.version", "failed to fetch latest version, using fallback %s: %v", singboxVersion, err)
-	} else if latestVersion != "" {
-		singboxVersion = latestVersion
-		logging.Info("installer.version", "using latest version: %s", singboxVersion)
+		logging.Info("installer.version", "failed to fetch latest version: %v", err)
+		svc.setState(model.InstallFailed, "", 0, "", fmt.Sprintf("fetch latest version failed: %v", err))
+		svc.broadcastStatus()
+		return
 	}
+	logging.Info("installer.version", "using latest version: %s", latestVersion)
 
 	svc.setState(model.InstallDownloading, "downloading", 0, "", "")
 	svc.broadcastStatus()
 
-	url, err := svc.buildDownloadURL()
+	url, err := svc.buildDownloadURL(latestVersion)
 	if err != nil {
 		svc.setState(model.InstallFailed, "", 0, "", err.Error())
 		svc.broadcastStatus()
@@ -137,18 +139,16 @@ func (svc *InstallerService) runInstall() {
 
 	os.Remove(tmpFile)
 
-	svc.setState(model.InstallDone, singboxVersion, 0, "installed", "")
+	svc.setState(model.InstallDone, latestVersion, 0, "installed", "")
 	svc.broadcastStatus()
 
-	svc.realtime.Broadcast("runtime.status", model.RuntimeResponse{Status: model.RuntimeNoConfig, Version: singboxVersion})
-	logging.Info("installer.start", "sing-box installed successfully, version=%s", singboxVersion)
+	svc.realtime.Broadcast("runtime.status", model.RuntimeResponse{Status: model.RuntimeNoConfig, Version: latestVersion})
+	logging.Info("installer.start", "sing-box installed successfully, version=%s", latestVersion)
 }
 
 func (svc *InstallerService) fetchLatestVersion() (string, error) {
-	// 尝试多个 API 源
 	urls := []string{
-		"https://api.github.com/repos/SagerNet/sing-box/releases/latest",
-		"https://api.github.com/repos/sagernet/sing-box/releases/latest", // 小写尝试
+		singboxVersionURL,
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
@@ -188,7 +188,7 @@ func (svc *InstallerService) fetchLatestVersion() (string, error) {
 	return "", fmt.Errorf("all API sources failed")
 }
 
-func (svc *InstallerService) buildDownloadURL() (string, error) {
+func (svc *InstallerService) buildDownloadURL(version string) (string, error) {
 	goos := runtime.GOOS
 	arch := runtime.GOARCH
 
@@ -211,8 +211,12 @@ func (svc *InstallerService) buildDownloadURL() (string, error) {
 		ext = ".tar.gz"
 	}
 
-	name := fmt.Sprintf("sing-box-%s-%s-%s", singboxVersion, goos, archStr)
-	url := fmt.Sprintf("https://github.com/SagerNet/sing-box/releases/download/v%s/%s%s", singboxVersion, name, ext)
+	variant := ""
+	if goos == "linux" {
+		variant = "-musl"
+	}
+	name := fmt.Sprintf("sing-wrap-%s-%s-%s%s", version, goos, archStr, variant)
+	url := fmt.Sprintf("https://github.com/ackwrap/sing-box-wrap/releases/download/v%s/%s%s", version, name, ext)
 	return url, nil
 }
 
@@ -269,7 +273,7 @@ func (svc *InstallerService) extract(archive string) error {
 	if runtime.GOOS == "windows" {
 		return svc.extractZip(archive)
 	}
-	return fmt.Errorf("tar.gz extraction not yet implemented on this platform")
+	return svc.extractTarGz(archive)
 }
 
 func (svc *InstallerService) extractZip(archive string) error {
@@ -280,29 +284,89 @@ func (svc *InstallerService) extractZip(archive string) error {
 	defer r.Close()
 
 	for _, f := range r.File {
-		name := filepath.Base(f.Name)
-		if strings.HasPrefix(name, "sing-box") && !f.FileInfo().IsDir() {
-			rc, err := f.Open()
-			if err != nil {
-				return fmt.Errorf("open entry: %w", err)
-			}
-
-			outPath := filepath.Join(svc.paths.BinaryDir, name)
-			out, err := os.OpenFile(outPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0755)
-			if err != nil {
-				rc.Close()
-				return fmt.Errorf("create binary: %w", err)
-			}
-
-			_, err = io.Copy(out, rc)
-			out.Close()
-			rc.Close()
-			if err != nil {
-				return fmt.Errorf("copy binary: %w", err)
-			}
-
-			logging.Info("installer.extract", "extracted: %s", outPath)
+		if f.FileInfo().IsDir() {
+			continue
 		}
+		name := archiveEntryBase(f.Name)
+		if name == "" {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return fmt.Errorf("open entry: %w", err)
+		}
+		if err := writeExtractedFile(filepath.Join(svc.paths.BinaryDir, name), rc, f.FileInfo().Mode()); err != nil {
+			rc.Close()
+			return err
+		}
+		rc.Close()
+		logging.Info("installer.extract", "extracted: %s", filepath.Join(svc.paths.BinaryDir, name))
+	}
+	return nil
+}
+
+func (svc *InstallerService) extractTarGz(archive string) error {
+	f, err := os.Open(archive)
+	if err != nil {
+		return fmt.Errorf("open tar.gz: %w", err)
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return fmt.Errorf("open gzip: %w", err)
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("read tar: %w", err)
+		}
+		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
+			continue
+		}
+		name := archiveEntryBase(header.Name)
+		if name == "" {
+			continue
+		}
+		outPath := filepath.Join(svc.paths.BinaryDir, name)
+		if err := writeExtractedFile(outPath, tr, os.FileMode(header.Mode)); err != nil {
+			return err
+		}
+		logging.Info("installer.extract", "extracted: %s", outPath)
+	}
+	return nil
+}
+
+func archiveEntryBase(name string) string {
+	name = filepath.ToSlash(name)
+	name = strings.TrimPrefix(name, "./")
+	parts := strings.Split(name, "/")
+	if len(parts) == 0 {
+		return ""
+	}
+	base := parts[len(parts)-1]
+	if base == "" || base == "." || base == ".." {
+		return ""
+	}
+	return base
+}
+
+func writeExtractedFile(outPath string, src io.Reader, mode os.FileMode) error {
+	out, err := os.OpenFile(outPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode|0755)
+	if err != nil {
+		return fmt.Errorf("create extracted file: %w", err)
+	}
+	_, copyErr := io.Copy(out, src)
+	closeErr := out.Close()
+	if copyErr != nil {
+		return fmt.Errorf("copy extracted file: %w", copyErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close extracted file: %w", closeErr)
 	}
 	return nil
 }

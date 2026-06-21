@@ -12,8 +12,11 @@ func applyTLSOptions(node map[string]any, query map[string]string, sniKey string
 	if alpn := query["alpn"]; alpn != "" {
 		node["alpn"] = splitCSV(alpn)
 	}
-	if fp := firstNonEmpty(query["fp"], query["fingerprint"]); fp != "" {
+	if fp := query["fp"]; fp != "" {
 		node["client-fingerprint"] = fp
+	}
+	if fingerprint := query["fingerprint"]; fingerprint != "" {
+		node["fingerprint"] = fingerprint
 	}
 	if truthy(query["allowInsecure"]) || truthy(query["skip-cert-verify"]) || truthy(query["insecure"]) {
 		node["skip-cert-verify"] = true
