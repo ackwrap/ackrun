@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -26,6 +27,23 @@ import (
 	"github.com/ackwrap/ackwrap/internal/paths"
 	"github.com/ackwrap/ackwrap/internal/store"
 )
+
+// SystemAdBlockRouteRuleName 系统默认广告拦截规则名称。
+// 智能快速配置时自动创建，并绑定到系统默认策略组 应用净化。
+const SystemAdBlockRouteRuleName = "广告拦截"
+
+// ErrSystemRouteRuleProtected 系统默认规则不可删除或修改名称/匹配，仅允许启停。
+var ErrSystemRouteRuleProtected = errors.New("系统默认规则不可删除或编辑，只能启用或停用")
+
+// IsSystemRouteRuleName 判断规则是否为系统默认规则。
+func IsSystemRouteRuleName(name string) bool {
+	switch strings.TrimSpace(name) {
+	case SystemAdBlockRouteRuleName:
+		return true
+	default:
+		return false
+	}
+}
 
 type RouteRuleService struct {
 	store       *store.Store
@@ -186,6 +204,9 @@ func (svc *RouteRuleService) List() ([]model.RouteRule, error) {
 }
 
 func (svc *RouteRuleService) Create(req *model.RouteRuleRequest) (*model.RouteRule, error) {
+	if IsSystemRouteRuleName(req.Name) {
+		return nil, ErrSystemRouteRuleProtected
+	}
 	if err := svc.validateRouteRule(req); err != nil {
 		return nil, err
 	}
@@ -194,6 +215,36 @@ func (svc *RouteRuleService) Create(req *model.RouteRuleRequest) (*model.RouteRu
 }
 
 func (svc *RouteRuleService) Update(id int64, req *model.RouteRuleRequest) (*model.RouteRule, error) {
+	existing, err := svc.store.GetRouteRule(id)
+	if err != nil {
+		return nil, err
+	}
+	if existing == nil {
+		return nil, fmt.Errorf("route rule not found")
+	}
+	// 系统默认规则只允许启停，其余字段强制保持原值。
+	if IsSystemRouteRuleName(existing.Name) {
+		logging.Info("route_rule.update", "updating system route rule enabled only: %d (%s)", id, existing.Name)
+		item, err := svc.store.UpdateRouteRule(id, &model.RouteRuleRequest{
+			Name:     existing.Name,
+			Enabled:  req.Enabled,
+			Priority: existing.Priority,
+			RuleType: existing.RuleType,
+			Values:   existing.Values,
+			Outbound: existing.Outbound,
+			Invert:   existing.Invert,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if item == nil {
+			return nil, fmt.Errorf("route rule not found")
+		}
+		return item, nil
+	}
+	if IsSystemRouteRuleName(req.Name) {
+		return nil, ErrSystemRouteRuleProtected
+	}
 	if err := svc.validateRouteRule(req); err != nil {
 		return nil, err
 	}
@@ -210,6 +261,13 @@ func (svc *RouteRuleService) Update(id int64, req *model.RouteRuleRequest) (*mod
 
 func (svc *RouteRuleService) Delete(id int64) (*model.ActionResponse, error) {
 	logging.Info("route_rule.delete", "deleting route rule: %d", id)
+	existing, err := svc.store.GetRouteRule(id)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil && IsSystemRouteRuleName(existing.Name) {
+		return nil, ErrSystemRouteRuleProtected
+	}
 	if err := svc.store.DeleteRouteRule(id); err != nil {
 		return nil, err
 	}

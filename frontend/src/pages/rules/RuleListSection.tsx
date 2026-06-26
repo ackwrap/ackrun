@@ -2,6 +2,12 @@ import { ArrowDown, ArrowUp, Eye, Plus, Route, Trash2 } from 'lucide-react';
 
 import type { RouteRule, RouteRuleSubscription } from '@/services/types';
 
+const SYSTEM_RULE_NAMES = ['广告拦截'];
+
+function isSystemRule(rule: RouteRule): boolean {
+  return SYSTEM_RULE_NAMES.includes(rule.name.trim());
+}
+
 interface RuleListSectionProps {
   rules: RouteRule[];
   subscriptions: RouteRuleSubscription[];
@@ -73,7 +79,12 @@ export function RuleListSection({
                       <button onClick={() => onMove(index, 1)} disabled={index === rules.length - 1} className="rounded border border-[var(--border-default)] bg-white/[0.04] p-1 disabled:opacity-30"><ArrowDown size={13} /></button>
                     </div>
                   </td>
-                  <td className="px-4 py-3 font-medium text-white">{rule.name}</td>
+                  <td className="px-4 py-3 font-medium text-white">
+                    <div className="flex items-center gap-2">
+                      <span>{rule.name}</span>
+                      {isSystemRule(rule) ? <span className="rounded bg-blue-500/15 px-1.5 py-0.5 text-[11px] font-medium text-blue-200">系统默认</span> : null}
+                    </div>
+                  </td>
                   <td className="px-4 py-3">{ruleTypeLabel(rule.rule_type)}{rule.invert ? <span className="ml-2 rounded bg-yellow-500/10 px-1.5 py-0.5 text-xs text-yellow-300">反向</span> : null}</td>
                   <td className="max-w-[360px] truncate px-4 py-3 font-mono text-xs" title={rule.values.join('\n')}>{rule.values.join(', ')}</td>
                   <td className="px-4 py-3"><span className={`rounded border px-2 py-1 text-xs ${outboundClass(rule.outbound)}`}>{outboundLabel(rule.outbound)}</span></td>
@@ -81,8 +92,8 @@ export function RuleListSection({
                   <td className="px-4 py-3 text-xs">{formatTime(rule.updated_at)}</td>
                   <td className="px-4 py-3">
                     <div className="flex gap-2">
-                      <button onClick={() => onEdit(rule)} className="rounded-md border border-[var(--border-default)] bg-white/[0.04] px-3 py-1 text-xs text-white hover:bg-white/[0.08]">编辑</button>
-                      <button onClick={() => onRemove(rule)} className="inline-flex items-center gap-1 rounded-md border border-red-400/30 bg-red-500/10 px-3 py-1 text-xs text-red-200 hover:bg-red-500/20"><Trash2 size={12} />删除</button>
+                      <button onClick={() => onEdit(rule)} className="rounded-md border border-[var(--border-default)] bg-white/[0.04] px-3 py-1 text-xs text-white hover:bg-white/[0.08]">{isSystemRule(rule) ? '查看' : '编辑'}</button>
+                      {isSystemRule(rule) ? null : <button onClick={() => onRemove(rule)} className="inline-flex items-center gap-1 rounded-md border border-red-400/30 bg-red-500/10 px-3 py-1 text-xs text-red-200 hover:bg-red-500/20"><Trash2 size={12} />删除</button>}
                     </div>
                   </td>
                 </tr>

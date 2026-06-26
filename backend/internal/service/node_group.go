@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"strings"
 
 	"github.com/ackwrap/ackwrap/internal/logging"
@@ -146,7 +147,160 @@ func (svc *NodeGroupService) QuickSetup(req model.NodeGroupQuickSetupRequest) er
 		createdCount++
 	}
 
-	logging.Info("node_group.quick_setup", "智能快速配置完成，创建节点组数: %d，已存在跳过: %d，参与匹配的启用节点数: %d，订阅筛选: %s，协议筛选: %s", createdCount, skippedExistingCount, len(allNodes), req.FilterSubscriptions, req.FilterProtocols)
+	strategyCreatedCount, strategySkippedCount, err := svc.createDefaultProxyCollections()
+	if err != nil {
+		return err
+	}
+
+	logging.Info("node_group.quick_setup", "智能快速配置完成，创建节点组数: %d，已存在跳过: %d，创建默认策略组数: %d，默认策略组已存在跳过: %d，参与匹配的启用节点数: %d，订阅筛选: %s，协议筛选: %s", createdCount, skippedExistingCount, strategyCreatedCount, strategySkippedCount, len(allNodes), req.FilterSubscriptions, req.FilterProtocols)
+	return nil
+}
+
+func (svc *NodeGroupService) createDefaultProxyCollections() (int, int, error) {
+	existingCollections, err := svc.store.ListProxyCollections()
+	if err != nil {
+		return 0, 0, err
+	}
+	existingCollectionNames := make(map[string]bool, len(existingCollections))
+	for _, collection := range existingCollections {
+		existingCollectionNames[collection.Name] = true
+	}
+
+	nodeGroups, err := svc.store.ListNodeGroups()
+	if err != nil {
+		return 0, 0, err
+	}
+	var allNodesGroupID int64
+	for _, group := range nodeGroups {
+		if group.Name == "全部节点" {
+			allNodesGroupID = group.ID
+			break
+		}
+	}
+
+	// 确保系统默认广告拦截规则存在，并把它绑定到 应用净化 策略组。
+	// 规则只能选 direct/block/proxy 抽象出站，要走 应用净化 必须通过策略组 route_rule_ids 绑定，
+	// 由配置生成时 routeRuleOutboundOverrides() 把出站改写成 应用净化。
+	adBlockRuleID, err := svc.ensureAdBlockRouteRule()
+	if err != nil {
+		return 0, 0, err
+	}
+
+	type defaultCollection struct {
+		name               string
+		referencedGroupIDs []int64
+		builtinOutbounds   []string
+		routeRuleIDs       []int64
+	}
+
+	defaults := []defaultCollection{
+		{name: "全球直连", referencedGroupIDs: []int64{}, builtinOutbounds: []string{"direct"}},
+		{name: "应用净化", builtinOutbounds: []string{"reject", "block", "direct"}},
+	}
+	if allNodesGroupID > 0 {
+		defaults[0].referencedGroupIDs = []int64{allNodesGroupID}
+	}
+	if adBlockRuleID > 0 {
+		defaults[1].routeRuleIDs = []int64{adBlockRuleID}
+	}
+
+	createdCount := 0
+	skippedCount := 0
+	for _, item := range defaults {
+		if existingCollectionNames[item.name] {
+			skippedCount++
+			continue
+		}
+
+		referencedGroupIDsJSON, _ := json.Marshal(item.referencedGroupIDs)
+		builtinOutboundsJSON, _ := json.Marshal(item.builtinOutbounds)
+		routeRuleIDs := item.routeRuleIDs
+		if routeRuleIDs == nil {
+			routeRuleIDs = []int64{}
+		}
+		routeRuleIDsJSON, _ := json.Marshal(routeRuleIDs)
+		collection := &model.ProxyCollection{
+			Name:               item.name,
+			Type:               "selector",
+			SourceType:         "node_groups",
+			ReferencedGroupIDs: string(referencedGroupIDsJSON),
+			RouteRuleIDs:       string(routeRuleIDsJSON),
+			NodeUIDs:           string(builtinOutboundsJSON),
+			TestURL:            "https://www.gstatic.com/generate_204",
+			TestInterval:       300,
+			Tolerance:          100,
+			Enabled:            true,
+		}
+		if err := svc.store.CreateProxyCollection(collection); err != nil {
+			return createdCount, skippedCount, err
+		}
+		createdCount++
+	}
+
+	// 即使 应用净化 已存在（旧数据），也补齐广告拦截规则绑定。
+	if adBlockRuleID > 0 {
+		if err := svc.bindRouteRuleToCollection("应用净化", adBlockRuleID); err != nil {
+			logging.Info("node_group.quick_setup", "广告拦截规则绑定到 应用净化 失败: %v", err)
+		}
+	}
+
+	return createdCount, skippedCount, nil
+}
+
+// ensureAdBlockRouteRule 确保系统默认广告拦截规则存在，返回规则 ID。
+// 默认使用 geosite category-ads-all，出站先用 block 作为安全兜底；
+// 绑定到 应用净化 后，配置生成会把出站改写成 应用净化（默认 reject，可临时切 direct 排查误杀）。
+func (svc *NodeGroupService) ensureAdBlockRouteRule() (int64, error) {
+	rules, err := svc.store.ListRouteRules()
+	if err != nil {
+		return 0, err
+	}
+	for _, rule := range rules {
+		if IsSystemRouteRuleName(rule.Name) {
+			return rule.ID, nil
+		}
+	}
+
+	created, err := svc.store.CreateRouteRule(&model.RouteRuleRequest{
+		Name:     SystemAdBlockRouteRuleName,
+		Enabled:  true,
+		Priority: 1,
+		RuleType: "geosite",
+		Values:   []string{"category-ads-all"},
+		Outbound: "block",
+		Invert:   false,
+	})
+	if err != nil {
+		return 0, err
+	}
+	logging.Info("node_group.quick_setup", "创建系统默认广告拦截规则: %s (geosite category-ads-all)", SystemAdBlockRouteRuleName)
+	return created.ID, nil
+}
+
+// bindRouteRuleToCollection 把路由规则 ID 绑定到指定名称的策略组 route_rule_ids（去重）。
+func (svc *NodeGroupService) bindRouteRuleToCollection(collectionName string, ruleID int64) error {
+	collections, err := svc.store.ListProxyCollections()
+	if err != nil {
+		return err
+	}
+	for _, collection := range collections {
+		if collection.Name != collectionName {
+			continue
+		}
+		var ruleIDs []int64
+		if collection.RouteRuleIDs != "" && collection.RouteRuleIDs != "[]" {
+			_ = json.Unmarshal([]byte(collection.RouteRuleIDs), &ruleIDs)
+		}
+		for _, existing := range ruleIDs {
+			if existing == ruleID {
+				return nil
+			}
+		}
+		ruleIDs = append(ruleIDs, ruleID)
+		ruleIDsJSON, _ := json.Marshal(ruleIDs)
+		collection.RouteRuleIDs = string(ruleIDsJSON)
+		return svc.store.UpdateProxyCollection(collection.ID, collection)
+	}
 	return nil
 }
 

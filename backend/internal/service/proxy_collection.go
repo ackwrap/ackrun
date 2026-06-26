@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/ackwrap/ackwrap/internal/logging"
@@ -14,6 +15,8 @@ type ProxyCollectionService struct {
 	store *store.Store
 }
 
+var ErrSystemProxyCollectionProtected = errors.New("系统默认策略组不可编辑")
+
 // NewProxyCollectionService 创建代理集合服务
 func NewProxyCollectionService(store *store.Store) *ProxyCollectionService {
 	return &ProxyCollectionService{store: store}
@@ -22,6 +25,9 @@ func NewProxyCollectionService(store *store.Store) *ProxyCollectionService {
 // Create 创建代理集合
 func (s *ProxyCollectionService) Create(req model.ProxyCollectionRequest) (*model.ProxyCollectionWithNodes, error) {
 	logging.Info("proxy_collection.create", "创建代理集合: %s", req.Name)
+	if IsSystemProxyCollectionName(req.Name) {
+		return nil, ErrSystemProxyCollectionProtected
+	}
 
 	// 验证类型
 	if req.Type != "selector" && req.Type != "urltest" && req.Type != "fallback" {
@@ -81,6 +87,13 @@ func (s *ProxyCollectionService) List() ([]*model.ProxyCollectionWithNodes, erro
 // Update 更新代理集合
 func (s *ProxyCollectionService) Update(id int, req model.ProxyCollectionRequest) error {
 	logging.Info("proxy_collection.update", "更新代理集合: %d", id)
+	existing, err := s.store.GetProxyCollection(id)
+	if err != nil {
+		return err
+	}
+	if IsSystemProxyCollectionName(existing.Name) || IsSystemProxyCollectionName(req.Name) {
+		return ErrSystemProxyCollectionProtected
+	}
 
 	// 验证类型
 	if req.Type != "selector" && req.Type != "urltest" && req.Type != "fallback" {
@@ -126,6 +139,13 @@ func (s *ProxyCollectionService) Update(id int, req model.ProxyCollectionRequest
 // Delete 删除代理集合
 func (s *ProxyCollectionService) Delete(id int) error {
 	logging.Info("proxy_collection.delete", "删除代理集合: %d", id)
+	existing, err := s.store.GetProxyCollection(id)
+	if err != nil {
+		return err
+	}
+	if IsSystemProxyCollectionName(existing.Name) {
+		return ErrSystemProxyCollectionProtected
+	}
 	return s.store.DeleteProxyCollection(id)
 }
 
@@ -135,7 +155,19 @@ func (s *ProxyCollectionService) ToggleEnabled(id int) error {
 	if err != nil {
 		return err
 	}
+	if IsSystemProxyCollectionName(pc.Name) {
+		return ErrSystemProxyCollectionProtected
+	}
 
 	pc.Enabled = !pc.Enabled
 	return s.store.UpdateProxyCollection(id, pc)
+}
+
+func IsSystemProxyCollectionName(name string) bool {
+	switch name {
+	case "全球直连", "应用净化":
+		return true
+	default:
+		return false
+	}
 }

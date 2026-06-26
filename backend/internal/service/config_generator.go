@@ -195,6 +195,10 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface
 		"type": "block",
 		"tag":  "block",
 	})
+	outbounds = append(outbounds, map[string]interface{}{
+		"type": "block",
+		"tag":  "reject",
+	})
 
 	// 2. 获取所有启用的代理集合
 	collections, err := s.store.ListProxyCollectionsWithNodes()
@@ -360,8 +364,8 @@ func (s *ConfigGeneratorService) generateCollectionOutbound(col *model.ProxyColl
 
 	// 判断是引用节点组还是手动选节点
 	if col.SourceType == "node_groups" && len(col.ReferencedGroups) > 0 {
-		// 引用节点组模式
-		referencedTags := []string{}
+		// 引用节点组模式。node_uids 兼容存放 direct/reject 这类内置出站 tag。
+		referencedTags := collectionBuiltinOutboundTags(col)
 		for _, group := range col.ReferencedGroups {
 			if !validGroupTags[group.Name] {
 				logging.Info("config_generator.outbound", "策略组 %s 跳过空节点组引用: %s", col.Name, group.Name)
@@ -378,7 +382,8 @@ func (s *ConfigGeneratorService) generateCollectionOutbound(col *model.ProxyColl
 		if len(col.NodeUIDs) == 0 {
 			return nil, fmt.Errorf("策略组没有可用节点")
 		}
-		outboundTags := nodeUIDsToOutboundTags(col.NodeUIDs, nodeTags)
+		outboundTags := collectionBuiltinOutboundTags(col)
+		outboundTags = append(outboundTags, nodeUIDsToOutboundTags(col.NodeUIDs, nodeTags)...)
 		if len(outboundTags) == 0 {
 			return nil, fmt.Errorf("策略组没有可用节点 outbound")
 		}
@@ -396,6 +401,47 @@ func (s *ConfigGeneratorService) generateCollectionOutbound(col *model.ProxyColl
 	}
 
 	return outbound, nil
+}
+
+func builtinOutboundTags(values []string) []string {
+	tags := make([]string, 0, len(values))
+	seen := map[string]bool{}
+	for _, value := range values {
+		switch value {
+		case "direct", "reject", "block":
+			if seen[value] {
+				continue
+			}
+			seen[value] = true
+			tags = append(tags, value)
+		}
+	}
+	return tags
+}
+
+func collectionBuiltinOutboundTags(col *model.ProxyCollectionWithNodes) []string {
+	defaults := []string{}
+	switch col.Name {
+	case "全球直连":
+		defaults = []string{"direct"}
+	case "应用净化":
+		defaults = []string{"reject", "block", "direct"}
+	}
+
+	seen := make(map[string]bool)
+	tags := make([]string, 0, len(defaults)+len(col.NodeUIDs))
+	for _, tag := range defaults {
+		seen[tag] = true
+		tags = append(tags, tag)
+	}
+	for _, tag := range builtinOutboundTags(col.NodeUIDs) {
+		if seen[tag] {
+			continue
+		}
+		seen[tag] = true
+		tags = append(tags, tag)
+	}
+	return tags
 }
 
 // generateNodeOutbound 为节点生成 outbound

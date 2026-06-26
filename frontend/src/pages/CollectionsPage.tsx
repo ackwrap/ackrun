@@ -75,6 +75,43 @@ function parseNodeUIDs(value: string | string[] | undefined) {
   }
 }
 
+function builtinOutboundLabel(value: string) {
+  if (value === 'direct') return '直连';
+  if (value === 'reject') return 'reject';
+  if (value === 'block') return '阻断';
+  return value;
+}
+
+function builtinOutbounds(values: string[] | undefined) {
+  return (values || []).filter(value => ['direct', 'reject', 'block'].includes(value));
+}
+
+function collectionBuiltinOutbounds(collection: Pick<ProxyCollection, 'name' | 'node_uids'> | null | undefined) {
+  if (!collection) return [];
+  const defaults = collection.name === '全球直连'
+    ? ['direct']
+    : collection.name === '应用净化'
+      ? ['reject', 'block', 'direct']
+      : [];
+  return Array.from(new Set([...defaults, ...builtinOutbounds(collection.node_uids)]));
+}
+
+function isSystemDefaultCollection(name: string) {
+  return name === '全球直连' || name === '应用净化';
+}
+
+function systemDefaultCollectionIcon(name: string) {
+  if (name === '全球直连') return '🎯';
+  if (name === '应用净化') return '🍃';
+  return '';
+}
+
+function systemDefaultCollectionOrder(name: string) {
+  if (name === '全球直连') return 0;
+  if (name === '应用净化') return 1;
+  return 100;
+}
+
 export function CollectionsPage() {
   const [activeTab, setActiveTab] = React.useState<'node-groups' | 'collections'>('node-groups');
   
@@ -380,11 +417,21 @@ export function CollectionsPage() {
     const start = (nodeGroupPage - 1) * nodeGroupPageSize;
     return filteredNodeGroups.slice(start, start + nodeGroupPageSize);
   }, [filteredNodeGroups, nodeGroupPage, nodeGroupPageSize]);
-  const collectionTotalPages = Math.max(1, Math.ceil(collections.length / collectionPageSize));
+  const sortedCollections = React.useMemo(() => {
+    return collections
+      .map((collection, index) => ({ collection, index }))
+      .sort((a, b) => {
+        const orderDiff = systemDefaultCollectionOrder(a.collection.name) - systemDefaultCollectionOrder(b.collection.name);
+        return orderDiff || a.index - b.index;
+      })
+      .map(item => item.collection);
+  }, [collections]);
+
+  const collectionTotalPages = Math.max(1, Math.ceil(sortedCollections.length / collectionPageSize));
   const pagedCollections = React.useMemo(() => {
     const start = (collectionPage - 1) * collectionPageSize;
-    return collections.slice(start, start + collectionPageSize);
-  }, [collections, collectionPage, collectionPageSize]);
+    return sortedCollections.slice(start, start + collectionPageSize);
+  }, [sortedCollections, collectionPage, collectionPageSize]);
 
   React.useEffect(() => {
     if (nodeGroupPage > nodeGroupTotalPages) setNodeGroupPage(nodeGroupTotalPages);
@@ -444,6 +491,10 @@ export function CollectionsPage() {
   };
 
   const editCollection = (col: ProxyCollection) => {
+    if (isSystemDefaultCollection(col.name)) {
+      showMessage('系统默认策略组不可编辑', 'info');
+      return;
+    }
     setEditingCollection(col);
     setColName(col.name);
     setColType(col.type);
@@ -467,7 +518,7 @@ export function CollectionsPage() {
         source_type: colSourceType,
         referenced_group_ids: colSourceType === 'node_groups' ? colSelectedGroupIDs : [],
         route_rule_ids: colSelectedRuleIDs,
-        node_uids: [],
+        node_uids: colSourceType === 'node_groups' ? collectionBuiltinOutbounds(editingCollection) : [],
         enabled: colEnabled,
         test_url: colTestURL,
         test_interval: colTestInterval,
@@ -500,6 +551,10 @@ export function CollectionsPage() {
   };
 
   const deleteCollection = async (col: ProxyCollection) => {
+    if (isSystemDefaultCollection(col.name)) {
+      showMessage('系统默认策略组不可删除', 'info');
+      return;
+    }
     if (!confirm(`确定删除策略组 "${col.name}" 吗？`)) return;
     try {
       await fetch(`/api/v1/collections/${col.id}`, { method: 'DELETE' });
@@ -516,7 +571,7 @@ export function CollectionsPage() {
       tag: col.name,
       type: col.type,
       outbounds: col.source_type === 'node_groups'
-        ? (col.referenced_groups || []).map(group => group.name)
+        ? [...collectionBuiltinOutbounds(col), ...(col.referenced_groups || []).map(group => group.name)]
         : (col.node_uids || []),
     };
     if (col.type === 'urltest' || col.type === 'fallback') {
@@ -936,14 +991,20 @@ export function CollectionsPage() {
                         </tr>
                       ) : pagedCollections.map(col => (
                         <tr key={col.id} className="border-b border-[var(--border-default)] text-[var(--text-secondary)] last:border-b-0 hover:bg-white/[0.02]">
-                          <td className="px-4 py-3 font-medium text-white">{col.name}</td>
+                          <td className="px-4 py-3 font-medium text-white">
+                            <div className="flex items-center gap-2">
+                              {isSystemDefaultCollection(col.name) && <span className="text-base leading-none">{systemDefaultCollectionIcon(col.name)}</span>}
+                              <span>{col.name}</span>
+                              {isSystemDefaultCollection(col.name) && <span className="rounded border border-blue-400/25 bg-blue-500/10 px-2 py-0.5 text-[11px] font-normal text-blue-200">系统默认</span>}
+                            </div>
+                          </td>
                           <td className="max-w-[260px] truncate px-4 py-3 text-xs" title={(col.route_rule_ids || []).map(id => routeRuleNameByID.get(id) || `#${id}`).join('\n')}>
                             {(col.route_rule_ids || []).length ? (col.route_rule_ids || []).map(id => routeRuleNameByID.get(id) || `#${id}`).join('、') : '-'}
                           </td>
                           <td className="px-4 py-3">{col.type === 'urltest' ? '自动' : '手动'}</td>
                           <td className="max-w-[400px] truncate px-4 py-3 text-xs">
-                            {col.source_type === 'node_groups' && col.referenced_groups 
-                              ? col.referenced_groups.map(g => g.name).join('、') 
+                            {col.source_type === 'node_groups' && col.referenced_groups
+                              ? [...collectionBuiltinOutbounds(col).map(builtinOutboundLabel), ...col.referenced_groups.map(g => g.name)].join('、') || '-'
                               : col.source_type === 'manual' ? `手动选择 (${col.node_uids?.length || 0} 个节点)` : '-'}
                           </td>
                           <td className="px-4 py-3">
@@ -956,12 +1017,16 @@ export function CollectionsPage() {
                               <button onClick={() => previewCollectionConfig(col)} className="rounded-md border border-[var(--border-default)] bg-white/[0.04] px-3 py-1 text-xs text-white hover:bg-white/[0.08]">
                                 <Eye size={12} className="inline mr-1" />预览
                               </button>
-                              <button onClick={() => editCollection(col)} className="rounded-md border border-[var(--border-default)] bg-white/[0.04] px-3 py-1 text-xs text-white hover:bg-white/[0.08]">
-                                <Edit size={12} className="inline mr-1" />编辑
-                              </button>
-                              <button onClick={() => deleteCollection(col)} className="inline-flex items-center gap-1 rounded-md border border-red-400/30 bg-red-500/10 px-3 py-1 text-xs text-red-200 hover:bg-red-500/20">
-                                <Trash2 size={12} />删除
-                              </button>
+                              {!isSystemDefaultCollection(col.name) && (
+                                <button onClick={() => editCollection(col)} className="rounded-md border border-[var(--border-default)] bg-white/[0.04] px-3 py-1 text-xs text-white hover:bg-white/[0.08]">
+                                  <Edit size={12} className="inline mr-1" />编辑
+                                </button>
+                              )}
+                              {!isSystemDefaultCollection(col.name) && (
+                                <button onClick={() => deleteCollection(col)} className="inline-flex items-center gap-1 rounded-md border border-red-400/30 bg-red-500/10 px-3 py-1 text-xs text-red-200 hover:bg-red-500/20">
+                                  <Trash2 size={12} />删除
+                                </button>
+                              )}
                             </div>
                           </td>
                         </tr>

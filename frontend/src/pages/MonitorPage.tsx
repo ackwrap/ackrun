@@ -20,6 +20,12 @@ function formatSpeed(bytesPerSecond: number): string {
   return formatBytes(bytesPerSecond) + '/s';
 }
 
+function proxyGroupIcon(group: ProxyGroup): string {
+  if (group.name === '全球直连') return '🎯';
+  if (group.name === '应用净化') return '🍃';
+  return group.type === 'Selector' ? '👆' : '🚀';
+}
+
 export function MonitorPage() {
   const [activeTab, setActiveTab] = React.useState<TabType>('overview');
   const [totalUp, setTotalUp] = React.useState(0);
@@ -411,10 +417,10 @@ export function MonitorPage() {
                       onClick={() => setSelectedGroup(selectedGroup === group.name ? null : group.name)}
                     >
                       <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className="text-lg">
-                            {group.type === 'Selector' ? '👆' : '🚀'}
-                          </div>
+	                        <div className="flex items-center gap-3">
+	                          <div className="text-lg">
+	                            {proxyGroupIcon(group)}
+	                          </div>
                           <div>
                             <div className="font-semibold text-white">{group.name}</div>
                             <div className="mt-0.5 text-xs text-[var(--text-tertiary)]">
