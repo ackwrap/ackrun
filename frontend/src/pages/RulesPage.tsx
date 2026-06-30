@@ -451,7 +451,15 @@ export function RulesPage() {
 
   const toggleRule = async (rule: RouteRule) => {
     try {
-      await api.updateRouteRule(rule.id, { ...rule, enabled: !rule.enabled });
+      await api.updateRouteRule(rule.id, {
+        name: rule.name,
+        enabled: !rule.enabled,
+        priority: rule.priority,
+        rule_type: rule.rule_type,
+        values: rule.values,
+        outbound: rule.outbound,
+        invert: rule.invert,
+      });
       await load();
     } catch (e: any) {
       showMessage(`规则状态更新失败: ${e.message}`, 'error');

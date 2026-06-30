@@ -47,6 +47,13 @@ export interface CoreStatus {
   error?: string;
 }
 
+export interface CoreLogEntry {
+	id: number;
+	time: number;
+	source: 'stdout' | 'stderr' | string;
+	line: string;
+}
+
 export interface UpdateSettings {
   acceleration: string;
   custom_mirror_url?: string;
@@ -331,6 +338,8 @@ export interface RouteRule {
 	values: string[];
 	outbound: string;
 	invert: boolean;
+	system_key?: string;
+	is_system: boolean;
 	created_at: number;
 	updated_at: number;
 }

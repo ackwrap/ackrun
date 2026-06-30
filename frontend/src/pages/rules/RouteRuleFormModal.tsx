@@ -105,6 +105,7 @@ export function RouteRuleFormModal({
   ruleValueHelp,
   ruleValuePlaceholder,
 }: RouteRuleFormModalProps) {
+  const isSystemRule = editing?.is_system ?? false;
   const currentEmoji = selectedRuleEmoji(name);
   const mixedBlocks = parseMixedBlocks(valuesText);
   const mixedRuleTypes = ruleTypes.filter(item => item.value !== 'mixed');
@@ -129,7 +130,7 @@ export function RouteRuleFormModal({
       <div className="aw-modal-panel max-w-5xl">
         <div className="flex items-start justify-between gap-4 border-b border-[var(--border-default)] px-5 py-4">
           <div>
-            <h3 className="text-base font-semibold text-white">{editing ? '编辑路由规则' : '添加路由规则'}</h3>
+            <h3 className="text-base font-semibold text-white">{isSystemRule ? '查看路由规则' : editing ? '编辑路由规则' : '添加路由规则'}</h3>
             <p className="mt-1 text-xs text-[var(--text-tertiary)]">{ruleValueHelp(ruleType)}</p>
           </div>
           <button onClick={onClose} className="aw-modal-close" title="关闭">×</button>
@@ -141,19 +142,19 @@ export function RouteRuleFormModal({
               <label className="block lg:col-span-2">
                 <span className="text-xs text-[var(--text-tertiary)]">规则名称</span>
                 <div className="mt-1 grid gap-2 sm:grid-cols-[48px_minmax(0,1fr)]">
-                  <EmojiPicker value={currentEmoji} onChange={updateEmoji} />
-                  <input value={name} onChange={e => onNameChange(e.target.value)} placeholder="例如：🤖 OpenAI 代理" className="w-full rounded-md border border-[var(--border-default)] bg-white/[0.04] px-3 py-2 text-sm text-white outline-none focus:border-emerald-400" />
+                  <EmojiPicker value={currentEmoji} onChange={updateEmoji} disabled={isSystemRule} />
+                  <input value={name} onChange={e => onNameChange(e.target.value)} disabled={isSystemRule} placeholder="例如：🤖 OpenAI 代理" className="w-full rounded-md border border-[var(--border-default)] bg-white/[0.04] px-3 py-2 text-sm text-white outline-none focus:border-emerald-400 disabled:cursor-not-allowed disabled:opacity-70" />
                 </div>
               </label>
               <label className="block">
                 <span className="text-xs text-[var(--text-tertiary)]">匹配类型</span>
-                <select value={ruleType} onChange={e => onRuleTypeChange(e.target.value)} className="mt-1 w-full rounded-md border border-[var(--border-default)] bg-[#152235] px-3 py-2 text-sm text-white outline-none focus:border-emerald-400">
+                <select value={ruleType} onChange={e => onRuleTypeChange(e.target.value)} disabled={isSystemRule} className="mt-1 w-full rounded-md border border-[var(--border-default)] bg-[#152235] px-3 py-2 text-sm text-white outline-none focus:border-emerald-400 disabled:cursor-not-allowed disabled:opacity-70">
                   {ruleTypes.map(item => <option key={item.value} className="bg-[#152235] text-white" value={item.value}>{item.label}</option>)}
                 </select>
               </label>
               <label className="block">
                 <span className="text-xs text-[var(--text-tertiary)]">命中后走</span>
-                <select value={outbound} onChange={e => onOutboundChange(e.target.value)} className="mt-1 w-full rounded-md border border-[var(--border-default)] bg-[#152235] px-3 py-2 text-sm text-white outline-none focus:border-emerald-400">
+                <select value={outbound} onChange={e => onOutboundChange(e.target.value)} disabled={isSystemRule} className="mt-1 w-full rounded-md border border-[var(--border-default)] bg-[#152235] px-3 py-2 text-sm text-white outline-none focus:border-emerald-400 disabled:cursor-not-allowed disabled:opacity-70">
                   {outboundOptions.map(item => <option key={item.value} className="bg-[#152235] text-white" value={item.value}>{item.label}</option>)}
                 </select>
               </label>
@@ -161,24 +162,24 @@ export function RouteRuleFormModal({
                 <div className="lg:col-span-2 space-y-3">
                   <div className="flex items-center justify-between gap-3">
                     <span className="text-xs text-[var(--text-tertiary)]">混合匹配条件</span>
-                    <button type="button" onClick={addMixedBlock} className="inline-flex h-8 items-center gap-1 rounded-md border border-emerald-400/25 bg-emerald-500/10 px-3 text-xs font-medium text-emerald-100 hover:bg-emerald-500/20"><Plus size={13} />添加下一条规则</button>
+                    {!isSystemRule && <button type="button" onClick={addMixedBlock} className="inline-flex h-8 items-center gap-1 rounded-md border border-emerald-400/25 bg-emerald-500/10 px-3 text-xs font-medium text-emerald-100 hover:bg-emerald-500/20"><Plus size={13} />添加下一条规则</button>}
                   </div>
                   {mixedBlocks.map((block, index) => (
                     <div key={index} className="rounded-xl border border-[var(--border-default)] bg-white/[0.025] p-3">
                       <div className="mb-2 flex items-center justify-between gap-3">
                         <span className="text-xs font-medium text-white">条件 #{index + 1}</span>
-                        {mixedBlocks.length > 1 && <button type="button" onClick={() => removeMixedBlock(index)} className="rounded-md border border-red-400/25 bg-red-500/10 px-2 py-1 text-xs text-red-200 hover:bg-red-500/20">删除</button>}
+                        {mixedBlocks.length > 1 && !isSystemRule && <button type="button" onClick={() => removeMixedBlock(index)} className="rounded-md border border-red-400/25 bg-red-500/10 px-2 py-1 text-xs text-red-200 hover:bg-red-500/20">删除</button>}
                       </div>
                       <div className="grid gap-2 sm:grid-cols-[220px_minmax(0,1fr)]">
                         <label className="block">
                           <span className="text-xs text-[var(--text-tertiary)]">匹配类型</span>
-                          <select value={block.ruleType} onChange={e => updateMixedBlock(index, { ruleType: e.target.value })} className="mt-1 w-full rounded-md border border-[var(--border-default)] bg-[#152235] px-3 py-2 text-sm text-white outline-none focus:border-emerald-400">
+                          <select value={block.ruleType} onChange={e => updateMixedBlock(index, { ruleType: e.target.value })} disabled={isSystemRule} className="mt-1 w-full rounded-md border border-[var(--border-default)] bg-[#152235] px-3 py-2 text-sm text-white outline-none focus:border-emerald-400 disabled:cursor-not-allowed disabled:opacity-70">
                             {mixedRuleTypes.map(item => <option key={item.value} className="bg-[#152235] text-white" value={item.value}>{item.label}</option>)}
                           </select>
                         </label>
                         <label className="block">
                           <span className="text-xs text-[var(--text-tertiary)]">匹配值</span>
-                          <input value={block.value} onChange={e => updateMixedBlock(index, { value: e.target.value })} placeholder={ruleValuePlaceholder(block.ruleType).split('\n')[0]} className="mt-1 w-full rounded-md border border-[var(--border-default)] bg-white/[0.04] px-3 py-2 font-mono text-sm text-white outline-none focus:border-emerald-400" />
+                          <input value={block.value} onChange={e => updateMixedBlock(index, { value: e.target.value })} disabled={isSystemRule} placeholder={ruleValuePlaceholder(block.ruleType).split('\n')[0]} className="mt-1 w-full rounded-md border border-[var(--border-default)] bg-white/[0.04] px-3 py-2 font-mono text-sm text-white outline-none focus:border-emerald-400 disabled:cursor-not-allowed disabled:opacity-70" />
                         </label>
                       </div>
                     </div>
@@ -187,14 +188,14 @@ export function RouteRuleFormModal({
               ) : (
                 <label className="block lg:col-span-2">
                   <span className="text-xs text-[var(--text-tertiary)]">匹配值</span>
-                  <textarea value={valuesText} onChange={e => onValuesTextChange(e.target.value)} rows={7} placeholder={ruleValuePlaceholder(ruleType)} className="mt-1 w-full rounded-md border border-[var(--border-default)] bg-white/[0.04] px-3 py-2 font-mono text-sm text-white outline-none focus:border-emerald-400" />
+                  <textarea value={valuesText} onChange={e => onValuesTextChange(e.target.value)} disabled={isSystemRule} rows={7} placeholder={ruleValuePlaceholder(ruleType)} className="mt-1 w-full rounded-md border border-[var(--border-default)] bg-white/[0.04] px-3 py-2 font-mono text-sm text-white outline-none focus:border-emerald-400 disabled:cursor-not-allowed disabled:opacity-70" />
                 </label>
               )}
               {ruleType === 'rule_set' && subscriptions.length > 0 && (
                 <div className="lg:col-span-2 rounded-lg border border-emerald-400/15 bg-emerald-500/[0.06] p-3">
                   <div className="mb-2 text-xs text-emerald-100">可用规则集 tag</div>
                   <div className="flex flex-wrap gap-2">
-                    {subscriptions.map(item => <button key={item.id} type="button" onClick={() => onAppendRuleSetTag(item.tag)} className="rounded-md border border-emerald-400/25 bg-emerald-500/10 px-2 py-1 font-mono text-xs text-emerald-100 hover:bg-emerald-500/20">{item.tag}</button>)}
+                    {subscriptions.map(item => <button key={item.id} type="button" onClick={() => onAppendRuleSetTag(item.tag)} disabled={isSystemRule} className="rounded-md border border-emerald-400/25 bg-emerald-500/10 px-2 py-1 font-mono text-xs text-emerald-100 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-70">{item.tag}</button>)}
                   </div>
                 </div>
               )}
@@ -202,10 +203,10 @@ export function RouteRuleFormModal({
 
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex gap-2">
-                <label className="inline-flex items-center gap-2 rounded-md border border-[var(--border-default)] bg-white/[0.04] px-3 py-2 text-sm text-[var(--text-secondary)]"><input type="checkbox" checked={enabled} onChange={e => onEnabledChange(e.target.checked)} />启用</label>
-                <label className="inline-flex items-center gap-2 rounded-md border border-[var(--border-default)] bg-white/[0.04] px-3 py-2 text-sm text-[var(--text-secondary)]"><input type="checkbox" checked={invert} onChange={e => onInvertChange(e.target.checked)} />反向匹配</label>
+                <label className="inline-flex items-center gap-2 rounded-md border border-[var(--border-default)] bg-white/[0.04] px-3 py-2 text-sm text-[var(--text-secondary)]"><input type="checkbox" checked={enabled} disabled={isSystemRule} onChange={e => onEnabledChange(e.target.checked)} />启用</label>
+                <label className="inline-flex items-center gap-2 rounded-md border border-[var(--border-default)] bg-white/[0.04] px-3 py-2 text-sm text-[var(--text-secondary)]"><input type="checkbox" checked={invert} disabled={isSystemRule} onChange={e => onInvertChange(e.target.checked)} />反向匹配</label>
               </div>
-              <button onClick={onSave} className="inline-flex h-9 items-center gap-2 rounded-md bg-emerald-600 px-4 text-sm font-medium text-white shadow-sm hover:bg-emerald-500"><Plus size={15} />{editing ? '更新规则' : '添加规则'}</button>
+              {isSystemRule ? <span className="text-xs text-[var(--text-tertiary)]">系统默认规则仅可在列表中启停。</span> : <button onClick={onSave} className="inline-flex h-9 items-center gap-2 rounded-md bg-emerald-600 px-4 text-sm font-medium text-white shadow-sm hover:bg-emerald-500"><Plus size={15} />{editing ? '更新规则' : '添加规则'}</button>}
             </div>
           </div>
 

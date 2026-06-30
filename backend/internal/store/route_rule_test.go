@@ -62,6 +62,30 @@ func TestRouteRuleStoreCRUDAndReorder(t *testing.T) {
 	}
 }
 
+func TestRouteRuleStoreSystemKey(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+
+	created, err := db.CreateRouteRule(&model.RouteRuleRequest{Name: "广告拦截", Enabled: true, RuleType: "geosite", Values: []string{"category-ads-all"}, Outbound: "block", SystemKey: "ad_block"})
+	if err != nil {
+		t.Fatalf("create system rule: %v", err)
+	}
+	if !created.IsSystem || created.SystemKey != "ad_block" {
+		t.Fatalf("expected system rule metadata: %+v", created)
+	}
+
+	updated, err := db.UpdateRouteRule(created.ID, &model.RouteRuleRequest{Name: "广告拦截", Enabled: false, Priority: created.Priority, RuleType: "geosite", Values: []string{"category-ads-all"}, Outbound: "block"})
+	if err != nil {
+		t.Fatalf("update system rule: %v", err)
+	}
+	if !updated.IsSystem || updated.SystemKey != "ad_block" || updated.Enabled {
+		t.Fatalf("system key should survive normal update: %+v", updated)
+	}
+}
+
 func TestRouteRuleSubscriptionStoreCRUD(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {

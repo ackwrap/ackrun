@@ -27,7 +27,8 @@ func main() {
 	defer db.Close()
 
 	realtimeSvc := service.NewRealtimeService()
-	singboxSvc := service.NewSingboxService(p, realtimeSvc, db)
+	coreLogSvc := service.NewCoreLogService()
+	singboxSvc := service.NewSingboxService(p, realtimeSvc, coreLogSvc, db)
 	runtimeSvc := service.NewRuntimeService(p, db, singboxSvc)
 	installerSvc := service.NewInstallerService(db, p, realtimeSvc)
 	configSvc := service.NewConfigService(p, db, realtimeSvc)
@@ -68,7 +69,7 @@ func main() {
 	r := gin.Default()
 
 	r.Static("/assets", "./ui/assets")
-	api.RegisterRoutes(r, runtimeSvc, installerSvc, singboxSvc, configSvc, settingsSvc, subscriptionSvc, nodeSvc, routeRuleSvc, proxyCollectionSvc, configGenSvc, realtimeSvc, dnsSvc, nodeGroupSvc)
+	api.RegisterRoutes(r, runtimeSvc, installerSvc, singboxSvc, configSvc, settingsSvc, subscriptionSvc, nodeSvc, routeRuleSvc, proxyCollectionSvc, configGenSvc, realtimeSvc, coreLogSvc, dnsSvc, nodeGroupSvc)
 
 	r.NoRoute(func(c *gin.Context) {
 		if len(c.Request.URL.Path) >= 4 && c.Request.URL.Path[:4] == "/api" {

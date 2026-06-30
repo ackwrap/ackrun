@@ -1,8 +1,10 @@
 package service
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"regexp"
@@ -18,6 +20,7 @@ import (
 type SingboxService struct {
 	paths     *paths.Paths
 	realtime  *RealtimeService
+	coreLogs  *CoreLogService
 	store     *store.Store
 	cmd       *exec.Cmd
 	pid       int
@@ -28,8 +31,8 @@ type SingboxService struct {
 
 var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
 
-func NewSingboxService(p *paths.Paths, rt *RealtimeService, s *store.Store) *SingboxService {
-	return &SingboxService{paths: p, realtime: rt, store: s}
+func NewSingboxService(p *paths.Paths, rt *RealtimeService, logs *CoreLogService, s *store.Store) *SingboxService {
+	return &SingboxService{paths: p, realtime: rt, coreLogs: logs, store: s}
 }
 
 func (svc *SingboxService) Start() (*model.ActionResponse, error) {
@@ -88,35 +91,8 @@ func (svc *SingboxService) Start() (*model.ActionResponse, error) {
 	})
 	svc.broadcastRuntimeStatus(model.RuntimeRunning, svc.pid)
 
-	go func() {
-		buf := make([]byte, 4096)
-		for {
-			n, err := stdout.Read(buf)
-			if n > 0 {
-				svc.realtime.Broadcast("core.log", map[string]any{
-					"line": cleanLogLine(string(buf[:n])),
-				})
-			}
-			if err != nil {
-				break
-			}
-		}
-	}()
-
-	go func() {
-		buf := make([]byte, 4096)
-		for {
-			n, err := stderr.Read(buf)
-			if n > 0 {
-				svc.realtime.Broadcast("core.log", map[string]any{
-					"line": cleanLogLine(string(buf[:n])),
-				})
-			}
-			if err != nil {
-				break
-			}
-		}
-	}()
+	go svc.captureCoreLog(stdout, "stdout")
+	go svc.captureCoreLog(stderr, "stderr")
 
 	go func() {
 		err := cmd.Wait()
@@ -228,67 +204,64 @@ func cleanLogLine(line string) string {
 	return ansiEscapePattern.ReplaceAllString(line, "")
 }
 
-// CloseConnections closes all active connections by restarting the service
+func (svc *SingboxService) captureCoreLog(reader io.Reader, source string) {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := cleanLogLine(scanner.Text())
+		if line == "" {
+			continue
+		}
+		now := time.Now().UnixMilli()
+		entry := svc.coreLogs.Append(source, now, line)
+		svc.realtime.Broadcast("core.log", entry)
+	}
+}
+
+// CloseConnections closes active connections by restarting the service.
 func (svc *SingboxService) CloseConnections() (*model.ActionResponse, error) {
 	logging.Info("core.close_connections", "closing all connections")
-
 	if !svc.isRunning() {
 		return nil, fmt.Errorf("sing-box is not running")
 	}
-
-	// Restart to close all connections
-	_, err := svc.Restart()
-	if err != nil {
+	if _, err := svc.Restart(); err != nil {
 		return nil, fmt.Errorf("failed to close connections: %w", err)
 	}
-
 	return &model.ActionResponse{Success: true, Message: "all connections closed"}, nil
 }
 
-// ResetFirewall resets firewall rules (platform-specific implementation)
+// ResetFirewall resets local firewall rules on Windows.
 func (svc *SingboxService) ResetFirewall() (*model.ActionResponse, error) {
 	logging.Info("core.reset_firewall", "resetting firewall rules")
-
-	// For Windows
 	cmd := exec.Command("netsh", "advfirewall", "reset")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		logging.Info("core.reset_firewall", "failed: %v, output: %s", err, string(output))
 		return nil, fmt.Errorf("failed to reset firewall: %w", err)
 	}
-
 	logging.Info("core.reset_firewall", "firewall reset successful")
 	return &model.ActionResponse{Success: true, Message: "firewall rules reset"}, nil
 }
 
-// FlushDNS clears the DNS cache (platform-specific implementation)
+// FlushDNS clears the local DNS cache on Windows.
 func (svc *SingboxService) FlushDNS() (*model.ActionResponse, error) {
 	logging.Info("core.flush_dns", "flushing DNS cache")
-
-	// For Windows
 	cmd := exec.Command("ipconfig", "/flushdns")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		logging.Info("core.flush_dns", "failed: %v, output: %s", err, string(output))
 		return nil, fmt.Errorf("failed to flush DNS cache: %w", err)
 	}
-
 	logging.Info("core.flush_dns", "DNS cache flushed successfully")
 	return &model.ActionResponse{Success: true, Message: "DNS cache flushed"}, nil
 }
 
-// CheckUpdate checks for available updates
+// CheckUpdate reports the installed core version until remote update checks are implemented.
 func (svc *SingboxService) CheckUpdate() (*model.ActionResponse, error) {
 	logging.Info("core.check_update", "checking for updates")
-
 	currentVersion := svc.getVersion()
 	if currentVersion == "" {
 		return nil, fmt.Errorf("failed to get current version")
 	}
-
-	// TODO: Implement actual version checking logic
-	// For now, just return current version info
-	message := fmt.Sprintf("current version: %s (update check not yet implemented)", currentVersion)
-
-	return &model.ActionResponse{Success: true, Message: message}, nil
+	return &model.ActionResponse{Success: true, Message: fmt.Sprintf("current version: %s (update check not yet implemented)", currentVersion)}, nil
 }

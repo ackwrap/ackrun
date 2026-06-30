@@ -93,9 +93,13 @@ func (s *Store) migrate() error {
 			values_json TEXT NOT NULL,
 			outbound TEXT NOT NULL,
 			invert INTEGER NOT NULL DEFAULT 0,
+			system_key TEXT NOT NULL DEFAULT '',
 			created_at INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL
 		)`,
+		`ALTER TABLE route_rules ADD COLUMN system_key TEXT NOT NULL DEFAULT ''`,
+		`UPDATE route_rules SET system_key = 'ad_block' WHERE id = (SELECT id FROM route_rules WHERE name = '广告拦截' AND COALESCE(system_key, '') = '' ORDER BY id ASC LIMIT 1) AND NOT EXISTS (SELECT 1 FROM route_rules WHERE system_key = 'ad_block')`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_route_rules_system_key ON route_rules(system_key) WHERE system_key <> ''`,
 		`CREATE TABLE IF NOT EXISTS route_rule_subscriptions (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			name TEXT NOT NULL,
@@ -354,7 +358,8 @@ func isDuplicateColumnMigration(m string) bool {
 		`ALTER TABLE proxy_collections ADD COLUMN referenced_group_ids TEXT NOT NULL DEFAULT '[]'`,
 		`ALTER TABLE proxy_collections ADD COLUMN route_rule_ids TEXT NOT NULL DEFAULT '[]'`,
 		`ALTER TABLE proxy_collections ADD COLUMN node_uids TEXT NOT NULL DEFAULT '[]'`,
-		`ALTER TABLE node_groups ADD COLUMN node_uids TEXT NOT NULL DEFAULT '[]'`:
+		`ALTER TABLE node_groups ADD COLUMN node_uids TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE route_rules ADD COLUMN system_key TEXT NOT NULL DEFAULT ''`:
 		return true
 	default:
 		return false

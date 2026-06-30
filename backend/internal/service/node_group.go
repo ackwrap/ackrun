@@ -256,19 +256,26 @@ func (svc *NodeGroupService) ensureAdBlockRouteRule() (int64, error) {
 		return 0, err
 	}
 	for _, rule := range rules {
-		if IsSystemRouteRuleName(rule.Name) {
+		if IsSystemRouteRuleKey(rule.SystemKey) {
+			return rule.ID, nil
+		}
+		if rule.SystemKey == "" && IsSystemRouteRuleName(rule.Name) {
+			if err := svc.store.SetRouteRuleSystemKey(rule.ID, SystemRuleAdBlockKey); err != nil {
+				return 0, err
+			}
 			return rule.ID, nil
 		}
 	}
 
 	created, err := svc.store.CreateRouteRule(&model.RouteRuleRequest{
-		Name:     SystemAdBlockRouteRuleName,
-		Enabled:  true,
-		Priority: 1,
-		RuleType: "geosite",
-		Values:   []string{"category-ads-all"},
-		Outbound: "block",
-		Invert:   false,
+		Name:      SystemAdBlockRouteRuleName,
+		Enabled:   true,
+		Priority:  1,
+		RuleType:  "geosite",
+		Values:    []string{"category-ads-all"},
+		Outbound:  "block",
+		Invert:    false,
+		SystemKey: SystemRuleAdBlockKey,
 	})
 	if err != nil {
 		return 0, err

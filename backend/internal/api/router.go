@@ -20,6 +20,7 @@ func RegisterRoutes(
 	proxyCollectionSvc *service.ProxyCollectionService,
 	configGenSvc *service.ConfigGeneratorService,
 	realtimeSvc *service.RealtimeService,
+	coreLogSvc *service.CoreLogService,
 	dnsSvc *service.DNSService,
 	nodeGroupSvc *service.NodeGroupService,
 ) {
@@ -34,6 +35,7 @@ func RegisterRoutes(
 	proxyCollectionH := handler.NewProxyCollectionHandler(proxyCollectionSvc)
 	configGenH := handler.NewConfigGeneratorHandler(configGenSvc)
 	realtimeH := handler.NewRealtimeHandler(realtimeSvc, runtimeSvc, installerSvc, configSvc, singboxSvc)
+	logH := handler.NewLogHandler(coreLogSvc)
 	dnsH := handler.NewDNSHandler(dnsSvc)
 	nodeGroupH := handler.NewNodeGroupHandler(nodeGroupSvc)
 
@@ -72,6 +74,8 @@ func RegisterRoutes(
 		v1.POST("/core/reset-firewall", coreH.ResetFirewall)
 		v1.POST("/core/flush-dns", coreH.FlushDNS)
 		v1.POST("/core/check-update", coreH.CheckUpdate)
+		v1.GET("/logs/core", logH.ListCore)
+		v1.DELETE("/logs/core", logH.ClearCore)
 
 		v1.GET("/settings/update", settingsH.GetUpdateSettings)
 		v1.PUT("/settings/update", settingsH.SetUpdateSettings)

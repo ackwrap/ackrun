@@ -21,9 +21,10 @@ interface EmojiPickerProps {
   value: string;
   onChange: (value: string) => void;
   emojis?: string[];
+  disabled?: boolean;
 }
 
-export function EmojiPicker({ value, onChange, emojis = defaultEmojis }: EmojiPickerProps) {
+export function EmojiPicker({ value, onChange, emojis = defaultEmojis, disabled = false }: EmojiPickerProps) {
   const [open, setOpen] = React.useState(false);
   const [customEmoji, setCustomEmoji] = React.useState('');
   const [activeGroup, setActiveGroup] = React.useState(emojiGroups[0].key);
@@ -56,7 +57,7 @@ export function EmojiPicker({ value, onChange, emojis = defaultEmojis }: EmojiPi
 
   return (
     <div className="relative">
-      <button type="button" onClick={() => setOpen(current => !current)} className="flex h-10 w-12 items-center justify-center rounded-md border border-[var(--border-default)] bg-[#152235] text-base text-white outline-none hover:border-emerald-400/60" title="选择 emoji">
+      <button type="button" disabled={disabled} onClick={() => setOpen(current => !current)} className="flex h-10 w-12 items-center justify-center rounded-md border border-[var(--border-default)] bg-[#152235] text-base text-white outline-none hover:border-emerald-400/60 disabled:cursor-not-allowed disabled:opacity-70" title="选择 emoji">
         {value ? renderEmoji(value) : '无'}
       </button>
       {open && (

@@ -2,10 +2,8 @@ import { ArrowDown, ArrowUp, Eye, Plus, Route, Trash2 } from 'lucide-react';
 
 import type { RouteRule, RouteRuleSubscription } from '@/services/types';
 
-const SYSTEM_RULE_NAMES = ['广告拦截'];
-
 function isSystemRule(rule: RouteRule): boolean {
-  return SYSTEM_RULE_NAMES.includes(rule.name.trim());
+	return rule.is_system;
 }
 
 interface RuleListSectionProps {
@@ -93,7 +91,9 @@ export function RuleListSection({
                   <td className="px-4 py-3">
                     <div className="flex gap-2">
                       <button onClick={() => onEdit(rule)} className="rounded-md border border-[var(--border-default)] bg-white/[0.04] px-3 py-1 text-xs text-white hover:bg-white/[0.08]">{isSystemRule(rule) ? '查看' : '编辑'}</button>
-                      {isSystemRule(rule) ? null : <button onClick={() => onRemove(rule)} className="inline-flex items-center gap-1 rounded-md border border-red-400/30 bg-red-500/10 px-3 py-1 text-xs text-red-200 hover:bg-red-500/20"><Trash2 size={12} />删除</button>}
+	                      {isSystemRule(rule) ? (
+	                        <button disabled className="inline-flex cursor-not-allowed items-center gap-1 rounded-md border border-[var(--border-default)] bg-white/[0.03] px-3 py-1 text-xs text-[var(--text-tertiary)] opacity-60" title="系统默认规则不可删除"><Trash2 size={12} />删除</button>
+	                      ) : <button onClick={() => onRemove(rule)} className="inline-flex items-center gap-1 rounded-md border border-red-400/30 bg-red-500/10 px-3 py-1 text-xs text-red-200 hover:bg-red-500/20"><Trash2 size={12} />删除</button>}
                     </div>
                   </td>
                 </tr>

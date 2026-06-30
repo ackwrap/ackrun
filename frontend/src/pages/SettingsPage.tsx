@@ -2,12 +2,14 @@ import React from 'react';
 import { api } from '@/services/api';
 import { Button } from '@/components/ui/Button';
 import { PageHeader } from '@/components/layout/PageHeader';
+import { Toast } from '@/components/ui/Toast';
 
 export function SettingsPage() {
   const [acceleration, setAcceleration] = React.useState('');
   const [customMirror, setCustomMirror] = React.useState('');
   const [githubToken, setGithubToken] = React.useState('');
-  const [msg, setMsg] = React.useState('');
+  const [message, setMessage] = React.useState('');
+  const [messageType, setMessageType] = React.useState<'success' | 'error' | 'info'>('success');
 
   // 实验性功能设置
   const [clashApiPort, setClashApiPort] = React.useState('9090');
@@ -18,12 +20,10 @@ export function SettingsPage() {
   const [cacheFileStoreFakeIP, setCacheFileStoreFakeIP] = React.useState(true);
   const [cacheFileStoreRDRC, setCacheFileStoreRDRC] = React.useState(true);
   const [cacheFileRDRCTimeout, setCacheFileRDRCTimeout] = React.useState('7d');
-  const [expMsg, setExpMsg] = React.useState('');
 
   // 日志配置
   const [logLevel, setLogLevel] = React.useState('info');
   const [logTimestamp, setLogTimestamp] = React.useState(true);
-  const [logMsg, setLogMsg] = React.useState('');
 
   // NTP 配置
   const [ntpEnabled, setNtpEnabled] = React.useState(true);
@@ -31,7 +31,17 @@ export function SettingsPage() {
   const [ntpServerPort, setNtpServerPort] = React.useState(123);
   const [ntpInterval, setNtpInterval] = React.useState('30m');
   const [ntpDetour, setNtpDetour] = React.useState('direct');
-  const [ntpMsg, setNtpMsg] = React.useState('');
+
+  const showMessage = (msg: string, type: 'success' | 'error' | 'info' = 'success') => {
+    setMessage(msg);
+    setMessageType(type);
+  };
+
+  React.useEffect(() => {
+    if (!message) return;
+    const timer = window.setTimeout(() => setMessage(''), messageType === 'error' ? 5000 : 3000);
+    return () => window.clearTimeout(timer);
+  }, [message, messageType]);
 
   React.useEffect(() => {
     api.getUpdateSettings().then(data => {
@@ -69,8 +79,8 @@ export function SettingsPage() {
   const handleSave = async () => {
     try {
       await api.setUpdateSettings({ acceleration, custom_mirror_url: customMirror, github_token: githubToken });
-      setMsg('保存成功');
-    } catch (e: any) { setMsg(`保存失败: ${e.message}`); }
+      showMessage('更新设置已保存');
+    } catch (e: any) { showMessage(`保存失败: ${e.message}`, 'error'); }
   };
 
   const handleSaveExperimental = async () => {
@@ -86,8 +96,8 @@ export function SettingsPage() {
         cache_file_store_rdrc: cacheFileStoreRDRC,
         cache_file_rdrc_timeout: cacheFileRDRCTimeout,
       });
-      setExpMsg('实验性功能设置已保存');
-    } catch (e: any) { setExpMsg(`保存失败: ${e.message}`); }
+      showMessage('实验性功能设置已保存');
+    } catch (e: any) { showMessage(`保存失败: ${e.message}`, 'error'); }
   };
 
   const handleSaveNTP = async () => {
@@ -99,22 +109,22 @@ export function SettingsPage() {
         interval: ntpInterval,
         detour: ntpDetour,
       });
-      setNtpMsg('NTP 设置已保存（下次生成配置时生效）');
-    } catch (e: any) { setNtpMsg(`保存失败: ${e.message}`); }
+      showMessage('NTP 设置已保存（下次生成配置时生效）');
+    } catch (e: any) { showMessage(`保存失败: ${e.message}`, 'error'); }
   };
 
   const handleSaveLog = async () => {
     try {
       await api.setLogSettings({ timestamp: logTimestamp });
-      setLogMsg('日志配置已保存（下次生成配置时生效）');
-    } catch (e: any) { setLogMsg(`保存失败: ${e.message}`); }
+      showMessage('日志配置已保存（下次生成配置时生效）');
+    } catch (e: any) { showMessage(`保存失败: ${e.message}`, 'error'); }
   };
 
   return (
-    <div className="space-y-4">
-      <PageHeader title="设置" />
-
-      {msg && <div className="rounded-md bg-white/[0.04] px-3 py-2 text-xs text-[var(--text-secondary)]">{msg}</div>}
+    <>
+      <Toast message={message} type={messageType} />
+      <div className="space-y-4">
+        <PageHeader title="设置" />
 
       <div className="grid grid-cols-1 items-stretch gap-4 lg:grid-cols-2">
         {/* 实验性功能配置区域 - 左侧占两行高度 */}
@@ -123,9 +133,6 @@ export function SettingsPage() {
             <h2 className="font-semibold text-white">实验性功能</h2>
             <span className="rounded bg-amber-500/20 px-2 py-0.5 text-xs text-amber-300">实验性</span>
           </div>
-
-          {expMsg && <div className="mb-4 rounded-md bg-white/[0.04] px-3 py-2 text-xs text-[var(--text-secondary)]">{expMsg}</div>}
-
           <div className="flex flex-1 flex-col space-y-4">
             {/* Clash API 配置 - 强制开启 */}
             <div className="rounded-lg border border-[var(--border-default)] bg-white/[0.02] p-4">
@@ -301,9 +308,6 @@ export function SettingsPage() {
               <h2 className="font-semibold text-white">日志配置</h2>
               <span className="rounded bg-blue-500/20 px-2 py-0.5 text-xs text-blue-300">sing-box</span>
             </div>
-
-            {logMsg && <div className="mb-4 rounded-md bg-white/[0.04] px-3 py-2 text-xs text-[var(--text-secondary)]">{logMsg}</div>}
-
             <div className="space-y-4">
               <div>
                 <label className="block text-xs text-[var(--text-secondary)] mb-1">日志级别</label>
@@ -350,9 +354,6 @@ export function SettingsPage() {
             <h2 className="font-semibold text-white">NTP 时间同步</h2>
             <span className="rounded bg-blue-500/20 px-2 py-0.5 text-xs text-blue-300">sing-box</span>
           </div>
-
-            {ntpMsg && <div className="mb-4 rounded-md bg-white/[0.04] px-3 py-2 text-xs text-[var(--text-secondary)]">{ntpMsg}</div>}
-
             <div className="grid flex-1 gap-4 lg:grid-cols-[260px_1fr]">
             <div className="flex flex-col justify-between rounded-lg border border-[var(--border-default)] bg-white/[0.02] p-4">
               <div>
@@ -427,7 +428,8 @@ export function SettingsPage() {
           </section>
         </div>
       </div>
-    </div>
+      </div>
+    </>
   );
 }
 

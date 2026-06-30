@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -41,6 +42,39 @@ func TestRouteRuleServicePreview(t *testing.T) {
 	}
 	if len(preview.Rules) != 1 || preview.Rules[0]["outbound"] != "proxy" {
 		t.Fatalf("unexpected preview: %+v", preview)
+	}
+}
+
+func TestRouteRuleServiceProtectsSystemRule(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+
+	svc := newTestRouteRuleService(t, db)
+	if _, err := svc.Create(&model.RouteRuleRequest{Name: SystemAdBlockRouteRuleName, Enabled: true, RuleType: "geosite", Values: []string{"category-ads-all"}, Outbound: "block"}); !errors.Is(err, ErrSystemRouteRuleProtected) {
+		t.Fatalf("expected create protection, got %v", err)
+	}
+
+	systemRule, err := db.CreateRouteRule(&model.RouteRuleRequest{Name: SystemAdBlockRouteRuleName, Enabled: true, Priority: 1, RuleType: "geosite", Values: []string{"category-ads-all"}, Outbound: "block", SystemKey: SystemRuleAdBlockKey})
+	if err != nil {
+		t.Fatalf("seed system rule: %v", err)
+	}
+
+	updated, err := svc.Update(systemRule.ID, &model.RouteRuleRequest{Name: "Changed", Enabled: false, Priority: 99, RuleType: "domain_suffix", Values: []string{"example.com"}, Outbound: "direct", Invert: true})
+	if err != nil {
+		t.Fatalf("update system rule enabled: %v", err)
+	}
+	if updated.Enabled || updated.Name != SystemAdBlockRouteRuleName || updated.RuleType != "geosite" || updated.Outbound != "block" || updated.Invert {
+		t.Fatalf("system rule fields should be preserved except enabled: %+v", updated)
+	}
+	if len(updated.Values) != 1 || updated.Values[0] != "category-ads-all" || updated.SystemKey != SystemRuleAdBlockKey || !updated.IsSystem {
+		t.Fatalf("system rule metadata should be preserved: %+v", updated)
+	}
+
+	if _, err := svc.Delete(systemRule.ID); !errors.Is(err, ErrSystemRouteRuleProtected) {
+		t.Fatalf("expected delete protection, got %v", err)
 	}
 }
 

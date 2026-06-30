@@ -26,12 +26,13 @@ const sizeClasses: Record<ButtonSize, string> = {
 };
 
 export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ variant = 'secondary', size = 'md', icon, loading, fullWidth, disabled, className = '', children, ...props }, ref) => {
-    return (
-      <button
-        ref={ref}
-        className={`inline-flex items-center justify-center gap-1.5 font-medium transition-colors duration-[var(--duration-fast)] ease-[var(--easing-default)] btn-press focus-ring disabled:opacity-50 disabled:cursor-not-allowed ${variantClasses[variant]} ${sizeClasses[size]} ${fullWidth ? 'w-full' : ''} ${className}`}
-        disabled={disabled || loading}
+	({ variant = 'secondary', size = 'md', icon, loading, fullWidth, disabled, className = '', children, type = 'button', ...props }, ref) => {
+		return (
+			<button
+				ref={ref}
+				type={type}
+				className={`inline-flex items-center justify-center gap-1.5 font-medium transition-colors duration-[var(--duration-fast)] ease-[var(--easing-default)] btn-press focus-ring disabled:opacity-50 disabled:cursor-not-allowed ${variantClasses[variant]} ${sizeClasses[size]} ${fullWidth ? 'w-full' : ''} ${className}`}
+				disabled={disabled || loading}
         {...props}
       >
         {loading && <span className="inline-block w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />}

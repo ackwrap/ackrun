@@ -9,6 +9,8 @@ type RouteRule struct {
 	Values    []string `json:"values"`
 	Outbound  string   `json:"outbound"`
 	Invert    bool     `json:"invert"`
+	SystemKey string   `json:"system_key,omitempty"`
+	IsSystem  bool     `json:"is_system"`
 	CreatedAt int64    `json:"created_at"`
 	UpdatedAt int64    `json:"updated_at"`
 }
@@ -21,6 +23,8 @@ type RouteRuleRequest struct {
 	Values   []string `json:"values" binding:"required"`
 	Outbound string   `json:"outbound" binding:"required"`
 	Invert   bool     `json:"invert"`
+	// SystemKey is internal-only. User API requests must not set system rule identity.
+	SystemKey string `json:"-"`
 }
 
 type RouteRuleReorderRequest struct {

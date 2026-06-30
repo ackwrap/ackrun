@@ -32,17 +32,25 @@ import (
 // 智能快速配置时自动创建，并绑定到系统默认策略组 应用净化。
 const SystemAdBlockRouteRuleName = "广告拦截"
 
+// SystemRuleAdBlockKey 系统默认广告拦截规则内部标识。
+const SystemRuleAdBlockKey = "ad_block"
+
 // ErrSystemRouteRuleProtected 系统默认规则不可删除或修改名称/匹配，仅允许启停。
 var ErrSystemRouteRuleProtected = errors.New("系统默认规则不可删除或编辑，只能启用或停用")
 
-// IsSystemRouteRuleName 判断规则是否为系统默认规则。
-func IsSystemRouteRuleName(name string) bool {
-	switch strings.TrimSpace(name) {
-	case SystemAdBlockRouteRuleName:
+// IsSystemRouteRuleKey 判断规则是否为系统默认规则。
+func IsSystemRouteRuleKey(systemKey string) bool {
+	switch strings.TrimSpace(systemKey) {
+	case SystemRuleAdBlockKey:
 		return true
 	default:
 		return false
 	}
+}
+
+// IsSystemRouteRuleName 仅用于阻止用户创建占用系统默认显示名的普通规则。
+func IsSystemRouteRuleName(name string) bool {
+	return strings.TrimSpace(name) == SystemAdBlockRouteRuleName
 }
 
 type RouteRuleService struct {
@@ -223,7 +231,7 @@ func (svc *RouteRuleService) Update(id int64, req *model.RouteRuleRequest) (*mod
 		return nil, fmt.Errorf("route rule not found")
 	}
 	// 系统默认规则只允许启停，其余字段强制保持原值。
-	if IsSystemRouteRuleName(existing.Name) {
+	if IsSystemRouteRuleKey(existing.SystemKey) {
 		logging.Info("route_rule.update", "updating system route rule enabled only: %d (%s)", id, existing.Name)
 		item, err := svc.store.UpdateRouteRule(id, &model.RouteRuleRequest{
 			Name:     existing.Name,
@@ -265,7 +273,7 @@ func (svc *RouteRuleService) Delete(id int64) (*model.ActionResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	if existing != nil && IsSystemRouteRuleName(existing.Name) {
+	if existing != nil && IsSystemRouteRuleKey(existing.SystemKey) {
 		return nil, ErrSystemRouteRuleProtected
 	}
 	if err := svc.store.DeleteRouteRule(id); err != nil {

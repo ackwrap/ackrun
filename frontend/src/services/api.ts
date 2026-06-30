@@ -45,7 +45,8 @@ import type {
 	ProxyCollectionRequest,
 	ConfigGenerateRequest,
 	ConfigGenerateResponse,
-	ConfigApplyRequest,
+  ConfigApplyRequest,
+  CoreLogEntry,
 } from './types';
 
 const API_BASE = '/api/v1';
@@ -85,6 +86,8 @@ export const api = {
   resetFirewall: () => request<ActionResponse>('/core/reset-firewall', { method: 'POST' }),
   flushDNS: () => request<ActionResponse>('/core/flush-dns', { method: 'POST' }),
   checkUpdate: () => request<ActionResponse>('/core/check-update', { method: 'POST' }),
+  getCoreLogs: (limit = 500) => request<CoreLogEntry[]>(`/logs/core?limit=${limit}`),
+  clearCoreLogs: () => request<ActionResponse>('/logs/core', { method: 'DELETE' }),
 
 	getUpdateSettings: () => request<UpdateSettingsResponse>('/settings/update'),
 	setUpdateSettings: (body: UpdateSettings) => request<ActionResponse>('/settings/update', { method: 'PUT', body: JSON.stringify(body) }),
