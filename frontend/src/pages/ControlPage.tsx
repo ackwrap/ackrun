@@ -39,6 +39,17 @@ const installLabel: Record<string, string> = {
   idle: '未安装', downloading: '下载中', extracting: '解压中', done: '已安装', failed: '失败',
 };
 
+function isVersionNewer(candidate?: string, current?: string) {
+  if (!candidate || !current) return false;
+  const parse = (value: string) => value.replace(/^v/, '').split(/[+-]/, 1)[0].split('.').map(part => Number(part) || 0);
+  const left = parse(candidate);
+  const right = parse(current);
+  for (let index = 0; index < 3; index += 1) {
+    if ((left[index] || 0) !== (right[index] || 0)) return (left[index] || 0) > (right[index] || 0);
+  }
+  return false;
+}
+
 function RuntimeAction({ icon, label, tone = 'default', disabled = false, onClick }: { icon: React.ReactNode; label: string; tone?: 'default' | 'danger'; disabled?: boolean; onClick?: () => void }) {
   return (
     <button
@@ -55,13 +66,13 @@ function RuntimeAction({ icon, label, tone = 'default', disabled = false, onClic
   );
 }
 
-function ModeOption({ name, value, checked, title, description, recommended = false, onChange }: { name: string; value: string; checked: boolean; title: string; description: string; recommended?: boolean; onChange: (value: string) => void }) {
+function ModeOption({ name, value, checked, title, description, recommended = false, disabled = false, onChange }: { name: string; value: string; checked: boolean; title: string; description: string; recommended?: boolean; disabled?: boolean; onChange: (value: string) => void }) {
   return (
     <label
-      className={`flex cursor-pointer items-center justify-between gap-3 rounded-lg border px-3 py-2.5 transition ${
+      className={`flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5 transition ${disabled ? 'cursor-not-allowed opacity-55' : 'cursor-pointer'} ${
         checked
           ? 'border-blue-400/45 bg-blue-500/10 text-[var(--text-primary)]'
-          : 'border-transparent bg-[var(--bg-base)] text-[var(--text-secondary)] hover:border-[var(--border-default)] hover:bg-[var(--bg-sidebar-hover)]'
+          : `border-transparent bg-[var(--bg-base)] text-[var(--text-secondary)] ${disabled ? '' : 'hover:border-[var(--border-default)] hover:bg-[var(--bg-sidebar-hover)]'}`
       }`}
     >
       <input
@@ -69,6 +80,7 @@ function ModeOption({ name, value, checked, title, description, recommended = fa
         name={name}
         value={value}
         checked={checked}
+        disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
         className="sr-only"
       />
@@ -86,12 +98,13 @@ function ModeOption({ name, value, checked, title, description, recommended = fa
 
 export function ControlPage() {
   const [runtime, setRuntime] = React.useState<{ status: string; pid?: number; version?: string } | null>(null);
-  const [installStatus, setInstallStatus] = React.useState<{ status: string; version?: string; progress?: number; message?: string; error?: string } | null>(null);
+  const [installStatus, setInstallStatus] = React.useState<{ status: string; version?: string; latest_version?: string; progress?: number; message?: string; error?: string } | null>(null);
   const [configStatus, setConfigStatus] = React.useState<{ has_config: boolean; valid: boolean; file_name?: string; updated_at?: number; error?: string } | null>(null);
   const [installProgress, setInstallProgress] = React.useState<{ percent: number; downloaded_bytes: number; total_bytes: number } | null>(null);
   const [guideDismissed, setGuideDismissed] = React.useState(false);
   const [inboundMode, setInboundMode] = React.useState<string>('tun_mixed');
   const [proxyMode, setProxyMode] = React.useState<string>('rule');
+  const [modeChanging, setModeChanging] = React.useState(false);
   const [message, setMessage] = React.useState('');
   const [messageType, setMessageType] = React.useState<'success' | 'error' | 'info'>('success');
 
@@ -99,7 +112,17 @@ export function ControlPage() {
     console.log('[WS]', event.type, event.data);
     switch (event.type) {
       case 'runtime.status': setRuntime(event.data as any); break;
-      case 'installer.status': setInstallStatus(event.data as any); break;
+      case 'installer.status': {
+        const status = event.data as any;
+        setInstallStatus(previous => ({ ...previous, ...status }));
+        if (status.status === 'done' || status.status === 'failed') {
+          setInstallProgress(null);
+        }
+        if (status.status === 'done') {
+          api.getRuntime().then(setRuntime).catch(() => {});
+        }
+        break;
+      }
       case 'installer.progress': setInstallProgress(event.data as any); break;
       case 'core.status': {
         const d = event.data as any;
@@ -167,11 +190,17 @@ export function ControlPage() {
   const isNotInstalled = isRuntimeChecked && rt === 'not_installed';
   const isNoConfig = rt === 'no_config';
   const isInstalling = installStatus?.status === 'downloading' || installStatus?.status === 'extracting';
+  const currentVersion = runtime?.version || installStatus?.version;
+  const latestVersion = installStatus?.latest_version;
+  const updateAvailable = isVersionNewer(latestVersion, currentVersion);
   const view = runtimeStatusMap[rt] || runtimeStatusMap.not_installed;
-  const configUpdatedAt = configStatus?.updated_at ? new Date(configStatus.updated_at).toLocaleString() : '--';
-  const configName = configStatus?.file_name || (configStatus?.has_config ? 'config.json' : '--');
   const showInstallGuide = !guideDismissed && isRuntimeChecked && (isNotInstalled || isInstalling);
   const showConfigGuide = !guideDismissed && !isNotInstalled && !isInstalling && configStatus?.has_config === false;
+  const displayedInstallProgress = {
+    percent: Math.max(installProgress?.percent ?? 0, installStatus?.progress ?? 0),
+    downloaded_bytes: installProgress?.downloaded_bytes ?? 0,
+    total_bytes: installProgress?.total_bytes ?? 0,
+  };
 
   const doAction = async (fn: () => Promise<any>, label: string) => {
     try {
@@ -188,23 +217,75 @@ export function ControlPage() {
     }, 1000);
   };
 
+  const installCore = async (label: string) => {
+    try {
+      await api.install();
+      setInstallStatus(previous => ({ ...previous, status: 'downloading', progress: 0, message: 'preparing download', error: undefined }));
+      setInstallProgress(null);
+      showMessage(`${label}任务已启动`, 'info');
+    } catch (e: any) {
+      showMessage(`${label}启动失败: ${e.message}`, 'error');
+    }
+  };
+
+  React.useEffect(() => {
+    if (!isInstalling) return;
+
+    let cancelled = false;
+    let refreshing = false;
+    const refresh = async () => {
+      if (refreshing) return;
+      refreshing = true;
+      try {
+        const status = await api.getInstallerStatus();
+        if (cancelled) return;
+        setInstallStatus(status);
+        if (status.status === 'done' || status.status === 'failed') setInstallProgress(null);
+        if (status.status === 'done') api.getRuntime().then(setRuntime).catch(() => {});
+      } catch (error: any) {
+        if (cancelled) return;
+        const detail = error?.message || '连接被重置';
+        const errorMessage = `安装状态查询失败，后端连接已断开: ${detail}`;
+        setInstallStatus(previous => ({ ...previous, status: 'failed', error: errorMessage }));
+        setInstallProgress(null);
+        showMessage(errorMessage, 'error');
+      } finally {
+        refreshing = false;
+      }
+    };
+
+    const timer = window.setInterval(refresh, 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [isInstalling]);
+
   const changeInboundMode = async (mode: string) => {
+    if (isRunning || modeChanging) return;
+    setModeChanging(true);
     try {
       await api.setInboundMode(mode);
       setInboundMode(mode);
       showMessage(`运行模式已切换为 ${inboundModeLabels[mode]}`);
     } catch (e: any) {
       showMessage(`切换运行模式失败: ${e.message}`, 'error');
+    } finally {
+      setModeChanging(false);
     }
   };
 
   const changeProxyMode = async (mode: string) => {
+    if (isRunning || modeChanging) return;
+    setModeChanging(true);
     try {
       await api.setProxyMode(mode);
       setProxyMode(mode);
       showMessage(`代理模式已切换为 ${proxyModeLabels[mode]}`);
     } catch (e: any) {
       showMessage(`切换代理模式失败: ${e.message}`, 'error');
+    } finally {
+      setModeChanging(false);
     }
   };
 
@@ -240,14 +321,14 @@ export function ControlPage() {
               </div>
             </div>
 
-            {showInstallGuide && installProgress && (
+            {showInstallGuide && isInstalling && (
               <div className="mt-4">
                 <div className="h-2 overflow-hidden rounded-full bg-white/[0.08]">
-                  <div className="h-full rounded-full bg-blue-400 transition-all" style={{ width: `${Math.min(100, installProgress.percent)}%` }} />
+                  <div className="h-full rounded-full bg-blue-400 transition-all" style={{ width: `${Math.min(100, displayedInstallProgress.percent)}%` }} />
                 </div>
                 <div className="mt-1 text-xs text-[var(--text-tertiary)]">
-                  {installProgress.percent.toFixed(1)}%
-                  {installProgress.total_bytes > 0 && ` · ${(installProgress.downloaded_bytes / 1024 / 1024).toFixed(1)} MB / ${(installProgress.total_bytes / 1024 / 1024).toFixed(1)} MB`}
+                  {displayedInstallProgress.percent.toFixed(1)}%
+                  {displayedInstallProgress.total_bytes > 0 && ` · ${(displayedInstallProgress.downloaded_bytes / 1024 / 1024).toFixed(1)} MB / ${(displayedInstallProgress.total_bytes / 1024 / 1024).toFixed(1)} MB`}
                 </div>
               </div>
             )}
@@ -255,7 +336,7 @@ export function ControlPage() {
             <div className="mt-5 flex items-center justify-end gap-2">
               <Button size="sm" variant="ghost" onClick={() => setGuideDismissed(true)}>稍后处理</Button>
               {showInstallGuide ? (
-                <Button size="sm" variant="primary" icon={<Download size={14} />} loading={isInstalling} disabled={isInstalling} onClick={() => doAction(api.install, '安装')}>{isInstalling ? '安装中...' : '安装 sing-box'}</Button>
+                <Button size="sm" variant="primary" icon={<Download size={14} />} loading={isInstalling} disabled={isInstalling} onClick={() => installCore('安装')}>{isInstalling ? '安装中...' : '安装 sing-box'}</Button>
               ) : (
                 <Button size="sm" variant="primary" disabled={isRunning} onClick={() => doAction(api.generateDefaultConfig, '生成默认配置')}>生成默认配置</Button>
               )}
@@ -354,7 +435,7 @@ export function ControlPage() {
       {/* 模式配置 */}
       <div className="shrink-0 grid grid-cols-1 gap-4 mt-4 md:grid-cols-2">
         <Panel className="h-full">
-          <PanelTitle title="运行模式" extra={<span className="text-xs text-[var(--text-tertiary)]">Inbound</span>} />
+          <PanelTitle title="运行模式" extra={<span className="text-xs text-[var(--text-tertiary)]">{isRunning ? '停止核心后可修改' : 'Inbound'}</span>} />
           <div className="space-y-1.5">
             <ModeOption
               name="inbound-mode"
@@ -363,6 +444,7 @@ export function ControlPage() {
               title="TUN + Mixed"
               description="透明代理 + 端口"
               recommended
+              disabled={isRunning || modeChanging}
               onChange={changeInboundMode}
             />
             <ModeOption
@@ -371,6 +453,7 @@ export function ControlPage() {
               checked={inboundMode === 'tun'}
               title="TUN 模式"
               description="纯透明代理"
+              disabled={isRunning || modeChanging}
               onChange={changeInboundMode}
             />
             <ModeOption
@@ -379,13 +462,14 @@ export function ControlPage() {
               checked={inboundMode === 'mixed'}
               title="Mixed 模式"
               description="SOCKS5 + HTTP 混合端口"
+              disabled={isRunning || modeChanging}
               onChange={changeInboundMode}
             />
           </div>
         </Panel>
 
         <Panel className="h-full">
-          <PanelTitle title="代理模式" extra={<span className="text-xs text-[var(--text-tertiary)]">Route</span>} />
+          <PanelTitle title="代理模式" extra={<span className="text-xs text-[var(--text-tertiary)]">{isRunning ? '停止核心后可修改' : 'Route'}</span>} />
           <div className="space-y-1.5">
             <ModeOption
               name="proxy-mode"
@@ -394,6 +478,7 @@ export function ControlPage() {
               title="规则模式"
               description="根据规则自动分流"
               recommended
+              disabled={isRunning || modeChanging}
               onChange={changeProxyMode}
             />
             <ModeOption
@@ -402,6 +487,7 @@ export function ControlPage() {
               checked={proxyMode === 'global'}
               title="全局模式"
               description="所有流量走代理"
+              disabled={isRunning || modeChanging}
               onChange={changeProxyMode}
             />
             <ModeOption
@@ -410,37 +496,15 @@ export function ControlPage() {
               checked={proxyMode === 'direct'}
               title="直连模式"
               description="所有流量直连"
+              disabled={isRunning || modeChanging}
               onChange={changeProxyMode}
             />
           </div>
         </Panel>
       </div>
 
-      {/* 配置文件 + 安装维护 */}
-      <div className="shrink-0 grid grid-cols-1 gap-4 mt-4 lg:grid-cols-2">
-        {/* 配置文件 */}
-        <Panel>
-          <div className="mb-3 text-sm font-semibold text-white">配置文件</div>
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex min-w-0 items-center gap-2">
-              <span className={`h-2 w-2 shrink-0 rounded-full ${configStatus?.valid ? 'bg-blue-400' : configStatus?.has_config ? 'bg-red-400' : 'bg-orange-400'}`} />
-              <div className="truncate text-lg font-semibold text-white">{configName}</div>
-            </div>
-            <div className="shrink-0 rounded-md border border-[var(--border-default)] bg-white/[0.04] px-2 py-1 text-xs text-[var(--text-tertiary)]">
-              更新时间: {configUpdatedAt}
-            </div>
-          </div>
-
-          <div className="mt-3 flex items-center gap-2">
-            <div className="flex h-9 min-w-0 flex-1 items-center rounded-md border border-[var(--border-default)] bg-white/[0.04] px-3 text-sm text-[var(--text-secondary)]">
-              <span className="truncate">{configName}</span>
-            </div>
-            <button className="flex h-8 w-8 items-center justify-center rounded-md border border-[var(--border-default)] bg-white/[0.04] text-[var(--text-secondary)] hover:text-white" title="刷新状态" onClick={() => api.getConfigStatus().then(setConfigStatus).catch(() => {})}><RefreshCw size={14} /></button>
-            <button className="flex h-8 w-8 items-center justify-center rounded-md border border-[var(--border-default)] bg-white/[0.04] text-[var(--text-secondary)] hover:text-white" title="重新生成" disabled={isRunning} onClick={() => doAction(api.generateDefaultConfig, '生成默认配置')}><RotateCcw size={14} /></button>
-          </div>
-        </Panel>
-
-        {/* 安装维护 */}
+      {/* 安装维护 */}
+      <div className="shrink-0 mt-4">
         <Panel>
           <PanelTitle title="安装维护" extra={<span className="text-xs text-[var(--text-tertiary)]">GitHub Release</span>} />
           <div className="grid grid-cols-3 gap-2">
@@ -453,30 +517,30 @@ export function ControlPage() {
             </div>
             <div className="rounded-lg bg-white/[0.04] px-3 py-2">
               <div className="text-[10px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">当前版本</div>
-              <div className="mt-1 text-sm font-semibold text-white">{runtime?.version || installStatus?.version || '--'}</div>
+              <div className="mt-1 text-sm font-semibold text-white">{currentVersion || '--'}</div>
             </div>
             <div className="rounded-lg bg-white/[0.04] px-3 py-2">
               <div className="text-[10px] uppercase tracking-[0.12em] text-[var(--text-tertiary)]">最新版本</div>
-              <div className="mt-1 text-sm font-semibold text-white">--</div>
+              <div className={`mt-1 text-sm font-semibold ${updateAvailable ? 'text-amber-300' : 'text-white'}`}>{latestVersion || '--'}</div>
             </div>
           </div>
 
           {installStatus?.error && <div className="mt-2 text-xs text-red-300">{installStatus.error}</div>}
-          {installProgress && (
+          {isInstalling && (
             <div className="mt-3">
               <div className="h-2 overflow-hidden rounded-full bg-white/[0.08]">
-                <div className="h-full rounded-full bg-blue-400 transition-all" style={{ width: `${Math.min(100, installProgress.percent)}%` }} />
+                <div className="h-full rounded-full bg-blue-400 transition-all" style={{ width: `${Math.min(100, displayedInstallProgress.percent)}%` }} />
               </div>
               <div className="mt-1 text-xs text-[var(--text-tertiary)]">
-                {installProgress.percent.toFixed(1)}%
-                {installProgress.total_bytes > 0 && ` · ${(installProgress.downloaded_bytes / 1024 / 1024).toFixed(1)} MB / ${(installProgress.total_bytes / 1024 / 1024).toFixed(1)} MB`}
+                {displayedInstallProgress.percent.toFixed(1)}%
+                {displayedInstallProgress.total_bytes > 0 && ` · ${(displayedInstallProgress.downloaded_bytes / 1024 / 1024).toFixed(1)} MB / ${(displayedInstallProgress.total_bytes / 1024 / 1024).toFixed(1)} MB`}
               </div>
             </div>
           )}
 
           <div className="mt-3 flex justify-end">
-            <Button variant="primary" size="sm" icon={<Download size={14} />} disabled={isInstalling || isRunning} onClick={() => doAction(api.install, '安装')} loading={isInstalling}>
-              {isInstalling ? '安装中...' : installStatus?.status === 'done' ? '重新安装' : '安装'}
+            <Button variant="primary" size="sm" icon={<Download size={14} />} disabled={isInstalling || isRunning} onClick={() => installCore(updateAvailable ? '更新' : '安装')} loading={isInstalling}>
+              {isInstalling ? (updateAvailable ? '更新中...' : '安装中...') : updateAvailable ? `更新至 ${latestVersion}` : installStatus?.status === 'done' ? '重新安装' : '安装'}
             </Button>
           </div>
         </Panel>

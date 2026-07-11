@@ -24,7 +24,15 @@ func generatedGeoRuleSetURL(tag string) string {
 	return fmt.Sprintf("https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/%s.srs", tag)
 }
 
-func appendGeneratedGeoRuleSets(ruleSets []map[string]interface{}, seen map[string]bool, ruleType string, values []string) []map[string]interface{} {
+func generatedGeoRuleSetContentURL(baseURL, tag string) string {
+	path := fmt.Sprintf("/api/v1/rules/geo/rule-sets/%s/content", tag)
+	if strings.TrimSpace(baseURL) == "" {
+		return path
+	}
+	return strings.TrimRight(baseURL, "/") + path
+}
+
+func appendGeneratedGeoRuleSets(ruleSets []map[string]interface{}, seen map[string]bool, ruleType string, values []string, baseURL string) []map[string]interface{} {
 	for _, value := range values {
 		tag := generatedGeoRuleSetTag(ruleType, value)
 		if tag == "" || seen[tag] {
@@ -35,7 +43,7 @@ func appendGeneratedGeoRuleSets(ruleSets []map[string]interface{}, seen map[stri
 			"tag":             tag,
 			"type":            "remote",
 			"format":          "binary",
-			"url":             generatedGeoRuleSetURL(tag),
+			"url":             generatedGeoRuleSetContentURL(baseURL, tag),
 			"download_detour": "direct",
 		})
 	}

@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/ackwrap/ackwrap/internal/logging"
@@ -26,11 +27,24 @@ func (svc *NodeGroupService) Get(id int64) (*model.NodeGroup, error) {
 }
 
 func (svc *NodeGroupService) Create(req *model.NodeGroupRequest) (*model.NodeGroup, error) {
+	if err := validateNodeGroupType(req.Type); err != nil {
+		return nil, err
+	}
 	return svc.store.CreateNodeGroup(req)
 }
 
 func (svc *NodeGroupService) Update(id int64, req *model.NodeGroupRequest) error {
+	if err := validateNodeGroupType(req.Type); err != nil {
+		return err
+	}
 	return svc.store.UpdateNodeGroup(id, req)
+}
+
+func validateNodeGroupType(groupType string) error {
+	if !isSupportedGroupType(groupType) {
+		return fmt.Errorf("无效的节点组类型: %s", groupType)
+	}
+	return nil
 }
 
 func (svc *NodeGroupService) Delete(id int64) error {
@@ -178,10 +192,9 @@ func (svc *NodeGroupService) createDefaultProxyCollections() (int, int, error) {
 		}
 	}
 
-	// 确保系统默认广告拦截规则存在，并把它绑定到 应用净化 策略组。
-	// 规则只能选 direct/block/proxy 抽象出站，要走 应用净化 必须通过策略组 route_rule_ids 绑定，
-	// 由配置生成时 routeRuleOutboundOverrides() 把出站改写成 应用净化。
-	adBlockRuleID, err := svc.ensureAdBlockRouteRule()
+	// 确保系统默认广告拦截规则存在。sing-box 1.13 已移除 block outbound，
+	// 拦截必须在 route rule 中生成 action=reject，不能绑定到 selector 出站。
+	_, err = svc.ensureAdBlockRouteRule()
 	if err != nil {
 		return 0, 0, err
 	}
@@ -195,13 +208,10 @@ func (svc *NodeGroupService) createDefaultProxyCollections() (int, int, error) {
 
 	defaults := []defaultCollection{
 		{name: "全球直连", referencedGroupIDs: []int64{}, builtinOutbounds: []string{"direct"}},
-		{name: "应用净化", builtinOutbounds: []string{"reject", "block", "direct"}},
+		{name: "应用净化", builtinOutbounds: []string{"direct"}},
 	}
 	if allNodesGroupID > 0 {
 		defaults[0].referencedGroupIDs = []int64{allNodesGroupID}
-	}
-	if adBlockRuleID > 0 {
-		defaults[1].routeRuleIDs = []int64{adBlockRuleID}
 	}
 
 	createdCount := 0
@@ -237,19 +247,11 @@ func (svc *NodeGroupService) createDefaultProxyCollections() (int, int, error) {
 		createdCount++
 	}
 
-	// 即使 应用净化 已存在（旧数据），也补齐广告拦截规则绑定。
-	if adBlockRuleID > 0 {
-		if err := svc.bindRouteRuleToCollection("应用净化", adBlockRuleID); err != nil {
-			logging.Info("node_group.quick_setup", "广告拦截规则绑定到 应用净化 失败: %v", err)
-		}
-	}
-
 	return createdCount, skippedCount, nil
 }
 
 // ensureAdBlockRouteRule 确保系统默认广告拦截规则存在，返回规则 ID。
-// 默认使用 geosite category-ads-all，出站先用 block 作为安全兜底；
-// 绑定到 应用净化 后，配置生成会把出站改写成 应用净化（默认 reject，可临时切 direct 排查误杀）。
+// 默认使用 geosite category-ads-all，出站为 block 抽象动作，配置生成时会转换为 action=reject。
 func (svc *NodeGroupService) ensureAdBlockRouteRule() (int64, error) {
 	rules, err := svc.store.ListRouteRules()
 	if err != nil {

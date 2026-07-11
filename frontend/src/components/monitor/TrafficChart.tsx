@@ -1,6 +1,5 @@
 import React from 'react';
-import * as echarts from 'echarts';
-import type { ECharts } from 'echarts';
+import type { ECharts, EChartsOption } from 'echarts';
 
 interface TrafficChartProps {
   className?: string;
@@ -19,107 +18,9 @@ export interface TrafficChartRef {
 export const TrafficChart = React.forwardRef<TrafficChartRef, TrafficChartProps>(({ className = '' }, ref) => {
   const chartRef = React.useRef<HTMLDivElement>(null);
   const chartInstanceRef = React.useRef<ECharts | null>(null);
+  const disposedRef = React.useRef(false);
   const dataRef = React.useRef<TrafficPoint[]>([]);
   const maxDataPoints = 60; // 保留 60 秒数据
-
-  // 初始化图表
-  React.useEffect(() => {
-    if (!chartRef.current) return;
-
-    const chart = echarts.init(chartRef.current, 'dark');
-    chartInstanceRef.current = chart;
-
-    const option: echarts.EChartsOption = {
-      backgroundColor: 'transparent',
-      grid: {
-        left: '3%',
-        right: '4%',
-        bottom: '10%',
-        top: '10%',
-        containLabel: true,
-      },
-      tooltip: {
-        trigger: 'axis',
-        axisPointer: {
-          type: 'cross',
-        },
-        formatter: (params: any) => {
-          const upload = params[0];
-          const download = params[1];
-          return `${upload.axisValueLabel}<br/>
-            上传: ${formatSpeed(upload.value)}<br/>
-            下载: ${formatSpeed(download.value)}`;
-        },
-      },
-      xAxis: {
-        type: 'category',
-        boundaryGap: false,
-        data: [],
-        axisLabel: {
-          formatter: (value: string) => {
-            const date = new Date(parseInt(value));
-            return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}:${date.getSeconds().toString().padStart(2, '0')}`;
-          },
-        },
-      },
-      yAxis: {
-        type: 'value',
-        axisLabel: {
-          formatter: (value: number) => formatSpeed(value),
-        },
-      },
-      series: [
-        {
-          name: '上传',
-          type: 'line',
-          smooth: true,
-          symbol: 'none',
-          lineStyle: {
-            width: 2,
-            color: '#10b981',
-          },
-          areaStyle: {
-            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-              { offset: 0, color: 'rgba(16, 185, 129, 0.3)' },
-              { offset: 1, color: 'rgba(16, 185, 129, 0.05)' },
-            ]),
-          },
-          data: [],
-        },
-        {
-          name: '下载',
-          type: 'line',
-          smooth: true,
-          symbol: 'none',
-          lineStyle: {
-            width: 2,
-            color: '#3b82f6',
-          },
-          areaStyle: {
-            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-              { offset: 0, color: 'rgba(59, 130, 246, 0.3)' },
-              { offset: 1, color: 'rgba(59, 130, 246, 0.05)' },
-            ]),
-          },
-          data: [],
-        },
-      ],
-    };
-
-    chart.setOption(option);
-
-    // 监听窗口大小变化
-    const handleResize = () => {
-      chart.resize();
-    };
-    window.addEventListener('resize', handleResize);
-
-    return () => {
-      window.removeEventListener('resize', handleResize);
-      chart.dispose();
-      chartInstanceRef.current = null;
-    };
-  }, []);
 
   const updateChart = React.useCallback(() => {
     if (!chartInstanceRef.current) return;
@@ -139,6 +40,116 @@ export const TrafficChart = React.forwardRef<TrafficChartRef, TrafficChartProps>
     });
   }, []);
 
+  // 初始化图表
+  React.useEffect(() => {
+    if (!chartRef.current) return;
+    disposedRef.current = false;
+
+    let handleResize: (() => void) | null = null;
+
+    import('echarts').then((echarts) => {
+      if (!chartRef.current || disposedRef.current) return;
+
+      const chart = echarts.init(chartRef.current, 'dark');
+      chartInstanceRef.current = chart;
+
+      const option: EChartsOption = {
+        backgroundColor: 'transparent',
+        grid: {
+          left: 8,
+          right: 12,
+          bottom: 8,
+          top: 12,
+          containLabel: true,
+        },
+        tooltip: {
+          trigger: 'axis',
+          axisPointer: {
+            type: 'cross',
+          },
+          formatter: (params: any) => {
+            const upload = params[0];
+            const download = params[1];
+            return `${upload.axisValueLabel}<br/>
+            上传: ${formatSpeed(upload.value)}<br/>
+            下载: ${formatSpeed(download.value)}`;
+          },
+        },
+        xAxis: {
+          type: 'category',
+          boundaryGap: false,
+          data: [],
+          axisLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.18)' } },
+          axisTick: { show: false },
+          axisLabel: {
+            color: '#7B8AA2',
+            fontSize: 10,
+            formatter: (value: string) => {
+              const date = new Date(parseInt(value));
+              return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}:${date.getSeconds().toString().padStart(2, '0')}`;
+            },
+          },
+        },
+        yAxis: {
+          type: 'value',
+          splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.10)' } },
+          axisLabel: { color: '#7B8AA2', fontSize: 10, formatter: (value: number) => formatSpeed(value) },
+        },
+        series: [
+          {
+            name: '上传',
+            type: 'line',
+            smooth: true,
+            symbol: 'none',
+            lineStyle: {
+              width: 2,
+              color: '#10b981',
+            },
+            areaStyle: {
+              color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                { offset: 0, color: 'rgba(16, 185, 129, 0.3)' },
+                { offset: 1, color: 'rgba(16, 185, 129, 0.05)' },
+              ]),
+            },
+            data: [],
+          },
+          {
+            name: '下载',
+            type: 'line',
+            smooth: true,
+            symbol: 'none',
+            lineStyle: {
+              width: 2,
+              color: '#3b82f6',
+            },
+            areaStyle: {
+              color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                { offset: 0, color: 'rgba(59, 130, 246, 0.3)' },
+                { offset: 1, color: 'rgba(59, 130, 246, 0.05)' },
+              ]),
+            },
+            data: [],
+          },
+        ],
+      };
+
+      chart.setOption(option);
+      updateChart();
+
+      handleResize = () => {
+        chart.resize();
+      };
+      window.addEventListener('resize', handleResize);
+    });
+
+    return () => {
+      disposedRef.current = true;
+      if (handleResize) window.removeEventListener('resize', handleResize);
+      chartInstanceRef.current?.dispose();
+      chartInstanceRef.current = null;
+    };
+  }, [updateChart]);
+
   // 暴露方法给父组件
   React.useImperativeHandle(ref, () => ({
     addData: (upload: number, download: number) => {
@@ -154,7 +165,7 @@ export const TrafficChart = React.forwardRef<TrafficChartRef, TrafficChartProps>
     },
   }), [updateChart]);
 
-  return <div ref={chartRef} className={`w-full ${className}`} style={{ height: '300px' }} />;
+  return <div ref={chartRef} className={`w-full ${className || 'h-[300px]'}`} />;
 });
 
 TrafficChart.displayName = 'TrafficChart';

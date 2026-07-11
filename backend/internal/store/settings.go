@@ -10,7 +10,7 @@ import (
 
 func (s *Store) GetUpdateSettings() (*model.UpdateSettingsResponse, error) {
 	r := &model.UpdateSettingsResponse{}
-	rows, err := s.db.Query(`SELECT key, value FROM app_settings WHERE key IN ('update.acceleration', 'update.custom_mirror_url', 'update.github_token')`)
+	rows, err := s.db.Query(`SELECT key, value FROM app_settings WHERE key IN ('update.acceleration', 'update.custom_mirror_url', 'update.github_token', 'update.proxy_url')`)
 	if err != nil {
 		return nil, err
 	}
@@ -28,6 +28,8 @@ func (s *Store) GetUpdateSettings() (*model.UpdateSettingsResponse, error) {
 			r.CustomMirrorURL = value
 		case "update.github_token":
 			r.GithubToken = value
+		case "update.proxy_url":
+			r.ProxyURL = value
 		}
 	}
 	return r, nil
@@ -39,6 +41,7 @@ func (s *Store) SetUpdateSettings(req *model.UpdateSettings) error {
 		"update.acceleration":      req.Acceleration,
 		"update.custom_mirror_url": req.CustomMirrorURL,
 		"update.github_token":      req.GithubToken,
+		"update.proxy_url":         req.ProxyURL,
 	}
 	for key, value := range settings {
 		if value == "" {
@@ -347,9 +350,11 @@ func (s *Store) GetExperimentalSettings() (*model.ExperimentalSettingsResponse, 
 		ClashAPIPort:         "9090",
 		CacheFileEnabled:     true,
 		CacheFileStoreFakeIP: true,
-		CacheFileStoreRDRC:   true,
-		CacheFileRDRCTimeout: "7d",
+		CacheFileStoreDNS:    true,
 	}
+	storeDNSConfigured := false
+	legacyStoreRDRC := false
+	legacyStoreRDRCConfigured := false
 
 	rows, err := s.db.Query(`SELECT key, value FROM app_settings WHERE key LIKE 'experimental.%'`)
 	if err != nil {
@@ -377,11 +382,16 @@ func (s *Store) GetExperimentalSettings() (*model.ExperimentalSettingsResponse, 
 			r.CacheFileEnabled = value == "true"
 		case "experimental.cache_file.store_fakeip":
 			r.CacheFileStoreFakeIP = value == "true"
+		case "experimental.cache_file.store_dns":
+			r.CacheFileStoreDNS = value == "true"
+			storeDNSConfigured = true
 		case "experimental.cache_file.store_rdrc":
-			r.CacheFileStoreRDRC = value == "true"
-		case "experimental.cache_file.rdrc_timeout":
-			r.CacheFileRDRCTimeout = value
+			legacyStoreRDRC = value == "true"
+			legacyStoreRDRCConfigured = true
 		}
+	}
+	if !storeDNSConfigured && legacyStoreRDRCConfigured {
+		r.CacheFileStoreDNS = legacyStoreRDRC
 	}
 
 	// 确保 Clash API 始终启用（强制）
@@ -401,8 +411,7 @@ func (s *Store) SetExperimentalSettings(req *model.ExperimentalSettings) error {
 		"experimental.clash_api.external_ui_download_url": req.ClashAPIExternalUIDownloadURL,
 		"experimental.cache_file.enabled":                 fmt.Sprintf("%t", req.CacheFileEnabled),
 		"experimental.cache_file.store_fakeip":            fmt.Sprintf("%t", req.CacheFileStoreFakeIP),
-		"experimental.cache_file.store_rdrc":              fmt.Sprintf("%t", req.CacheFileStoreRDRC),
-		"experimental.cache_file.rdrc_timeout":            req.CacheFileRDRCTimeout,
+		"experimental.cache_file.store_dns":               fmt.Sprintf("%t", req.CacheFileStoreDNS),
 	}
 	for key, value := range settings {
 		if value == "" {
@@ -420,6 +429,9 @@ func (s *Store) SetExperimentalSettings(req *model.ExperimentalSettings) error {
 		if err != nil {
 			return err
 		}
+	}
+	if _, err := s.db.Exec(`DELETE FROM app_settings WHERE key IN ('experimental.cache_file.store_rdrc', 'experimental.cache_file.rdrc_timeout')`); err != nil {
+		return err
 	}
 	return nil
 }

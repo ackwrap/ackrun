@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,6 +27,8 @@ type SingboxService struct {
 	pid       int
 	mu        sync.Mutex
 	cancel    context.CancelFunc
+	done      chan struct{}
+	stopping  bool
 	cachedVer string
 }
 
@@ -39,6 +42,9 @@ func (svc *SingboxService) Start() (*model.ActionResponse, error) {
 	svc.mu.Lock()
 	defer svc.mu.Unlock()
 
+	if svc.stopping {
+		return nil, fmt.Errorf("sing-box is stopping")
+	}
 	if svc.isRunning() {
 		return nil, fmt.Errorf("sing-box is already running (pid=%d)", svc.pid)
 	}
@@ -54,6 +60,18 @@ func (svc *SingboxService) Start() (*model.ActionResponse, error) {
 	if !ok {
 		return nil, fmt.Errorf("config file not found")
 	}
+	if output, err := exec.Command(svc.paths.BinaryPath, "check", "-c", configPath).CombinedOutput(); err != nil {
+		message := strings.TrimSpace(string(output))
+		if message == "" {
+			message = err.Error()
+		}
+		svc.realtime.Broadcast("core.status", map[string]any{
+			"status": "error",
+			"pid":    0,
+			"error":  message,
+		})
+		return nil, fmt.Errorf("config check failed: %s", message)
+	}
 
 	logging.Info("core.start", "starting sing-box")
 	svc.realtime.Broadcast("core.status", map[string]any{
@@ -65,10 +83,20 @@ func (svc *SingboxService) Start() (*model.ActionResponse, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	svc.cancel = cancel
 
-	cmd := exec.CommandContext(ctx, svc.paths.BinaryPath, "run", "-c", configPath)
+	cmd := exec.CommandContext(ctx, svc.paths.BinaryPath, "run", "-c", configPath, "--disable-color")
 
-	stdout, _ := cmd.StdoutPipe()
-	stderr, _ := cmd.StderrPipe()
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		svc.cancel = nil
+		return nil, fmt.Errorf("capture sing-box stdout: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		cancel()
+		svc.cancel = nil
+		return nil, fmt.Errorf("capture sing-box stderr: %w", err)
+	}
 
 	if err := cmd.Start(); err != nil {
 		cancel()
@@ -83,6 +111,9 @@ func (svc *SingboxService) Start() (*model.ActionResponse, error) {
 
 	svc.cmd = cmd
 	svc.pid = cmd.Process.Pid
+	svc.done = make(chan struct{})
+	svc.stopping = false
+	done := svc.done
 
 	logging.Info("core.start", "sing-box started, pid=%d", svc.pid)
 	svc.realtime.Broadcast("core.status", map[string]any{
@@ -97,22 +128,33 @@ func (svc *SingboxService) Start() (*model.ActionResponse, error) {
 	go func() {
 		err := cmd.Wait()
 		svc.mu.Lock()
-		svc.pid = 0
-		svc.cmd = nil
-		svc.cancel = nil
+		intentionalStop := svc.cmd == cmd && svc.stopping
+		if svc.cmd == cmd {
+			svc.stopping = true
+			svc.pid = 0
+			svc.cmd = nil
+			svc.cancel = nil
+			svc.done = nil
+		}
 		svc.mu.Unlock()
 
 		statusMsg := "stopped"
-		if err != nil {
+		errorMessage := ""
+		if err != nil && !intentionalStop {
 			statusMsg = "error"
+			errorMessage = err.Error()
 		}
 		logging.Info("core.start", "sing-box exited: %v", err)
 		svc.realtime.Broadcast("core.status", map[string]any{
 			"status": statusMsg,
 			"pid":    0,
-			"error":  "",
+			"error":  errorMessage,
 		})
 		svc.broadcastRuntimeStatus(model.RuntimeStopped, 0)
+		svc.mu.Lock()
+		svc.stopping = false
+		svc.mu.Unlock()
+		close(done)
 	}()
 
 	return &model.ActionResponse{Success: true, Message: "service started"}, nil
@@ -120,34 +162,43 @@ func (svc *SingboxService) Start() (*model.ActionResponse, error) {
 
 func (svc *SingboxService) Stop() (*model.ActionResponse, error) {
 	svc.mu.Lock()
-	defer svc.mu.Unlock()
-
 	if !svc.isRunning() {
+		svc.mu.Unlock()
 		return nil, fmt.Errorf("sing-box is not running")
 	}
 
-	logging.Info("core.stop", "stopping sing-box, pid=%d", svc.pid)
+	pid := svc.pid
+	cmd := svc.cmd
+	cancel := svc.cancel
+	done := svc.done
+	svc.stopping = true
+	svc.mu.Unlock()
 
-	if svc.cancel != nil {
-		svc.cancel()
-	}
+	logging.Info("core.stop", "stopping sing-box, pid=%d", pid)
 
 	svc.realtime.Broadcast("core.status", map[string]any{
 		"status": "stopping",
-		"pid":    svc.pid,
+		"pid":    pid,
 	})
 
-	time.AfterFunc(10*time.Second, func() {
-		svc.mu.Lock()
-		defer svc.mu.Unlock()
-		if svc.isRunning() {
-			logging.Info("core.stop", "force killing sing-box, pid=%d", svc.pid)
-			cmd := svc.cmd
+	if cancel != nil {
+		cancel()
+	}
+	if done != nil {
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			logging.Info("core.stop", "force killing sing-box, pid=%d", pid)
 			if cmd != nil && cmd.Process != nil {
-				cmd.Process.Kill()
+				_ = cmd.Process.Kill()
+			}
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				return nil, fmt.Errorf("sing-box process did not exit after force kill (pid=%d)", pid)
 			}
 		}
-	})
+	}
 
 	return &model.ActionResponse{Success: true, Message: "service stopped"}, nil
 }
@@ -157,14 +208,12 @@ func (svc *SingboxService) Restart() (*model.ActionResponse, error) {
 		return nil, err
 	}
 
-	time.Sleep(500 * time.Millisecond)
-
 	return svc.Start()
 }
 
 func (svc *SingboxService) ReloadConfig() (*model.ActionResponse, error) {
 	logging.Info("core.reload_config", "reloading sing-box config")
-	if !svc.isRunning() {
+	if !svc.IsRunning() {
 		return &model.ActionResponse{Success: true, Message: "core is stopped; config will be used on next start"}, nil
 	}
 	return svc.Restart()
@@ -172,6 +221,12 @@ func (svc *SingboxService) ReloadConfig() (*model.ActionResponse, error) {
 
 func (svc *SingboxService) isRunning() bool {
 	return svc.pid > 0 && svc.cmd != nil && svc.cmd.Process != nil
+}
+
+func (svc *SingboxService) IsRunning() bool {
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
+	return svc.isRunning()
 }
 
 func (svc *SingboxService) GetPID() int {
@@ -221,7 +276,7 @@ func (svc *SingboxService) captureCoreLog(reader io.Reader, source string) {
 // CloseConnections closes active connections by restarting the service.
 func (svc *SingboxService) CloseConnections() (*model.ActionResponse, error) {
 	logging.Info("core.close_connections", "closing all connections")
-	if !svc.isRunning() {
+	if !svc.IsRunning() {
 		return nil, fmt.Errorf("sing-box is not running")
 	}
 	if _, err := svc.Restart(); err != nil {
@@ -256,12 +311,25 @@ func (svc *SingboxService) FlushDNS() (*model.ActionResponse, error) {
 	return &model.ActionResponse{Success: true, Message: "DNS cache flushed"}, nil
 }
 
-// CheckUpdate reports the installed core version until remote update checks are implemented.
 func (svc *SingboxService) CheckUpdate() (*model.ActionResponse, error) {
 	logging.Info("core.check_update", "checking for updates")
 	currentVersion := svc.getVersion()
 	if currentVersion == "" {
 		return nil, fmt.Errorf("failed to get current version")
 	}
-	return &model.ActionResponse{Success: true, Message: fmt.Sprintf("current version: %s (update check not yet implemented)", currentVersion)}, nil
+	settings, err := svc.store.GetUpdateSettings()
+	if err != nil {
+		return nil, fmt.Errorf("读取更新设置失败: %w", err)
+	}
+	latestVersion, err := fetchLatestSingboxVersionWithSettings(settings, singboxVersionURL)
+	if err != nil {
+		logging.Error("core.check_update", "检查更新失败: %v", err)
+		return nil, fmt.Errorf("检查最新版本失败: %w", err)
+	}
+	if compareSingboxVersions(currentVersion, latestVersion) < 0 {
+		logging.Info("core.check_update", "发现新版本 current=%s latest=%s", currentVersion, latestVersion)
+		return &model.ActionResponse{Success: true, Message: fmt.Sprintf("发现新版本 %s（当前版本 %s），可通过核心安装器更新", latestVersion, currentVersion)}, nil
+	}
+	logging.Info("core.check_update", "当前已是最新版本: %s", currentVersion)
+	return &model.ActionResponse{Success: true, Message: fmt.Sprintf("当前已是最新版本: %s", currentVersion)}, nil
 }

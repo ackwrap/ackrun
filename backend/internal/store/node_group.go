@@ -234,7 +234,7 @@ func (s *Store) listEnabledNodesForNodeGroup() ([]model.Node, error) {
 	rows, err := s.db.Query(`
 		SELECT n.id, n.uid, n.subscription_id, COALESCE(s.name, '') AS subscription_name,
 			n.name, n.name_overridden, n.type, n.server, n.server_port, n.raw, n.raw_json, n.enabled, n.preferred,
-			n.latency_ms, n.status, n.created_at, n.updated_at
+			n.latency_ms, n.status, n.last_test_at, n.test_latency_ms, n.test_success, n.created_at, n.updated_at
 		FROM nodes n LEFT JOIN subscriptions s ON s.id = n.subscription_id
 		WHERE n.enabled = 1
 		ORDER BY n.updated_at DESC, n.id DESC`)

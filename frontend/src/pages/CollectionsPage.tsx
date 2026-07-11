@@ -5,7 +5,8 @@ import { PageHeader } from '@/components/layout/PageHeader';
 import { Pagination } from '@/components/ui/Pagination';
 import { Toast } from '@/components/ui/Toast';
 import { api } from '@/services/api';
-import type { NodeItem } from '@/services/types';
+import type { CollectionTestResponse, NodeItem, WSEvent } from '@/services/types';
+import { useRealtimeSocket } from '@/hooks/useRealtimeSocket';
 import { defaultFlag, getFlagImageURL } from '@/utils/nodeFlags';
 import { NodeGroupDetailModal } from './collections/NodeGroupDetailModal';
 
@@ -77,13 +78,11 @@ function parseNodeUIDs(value: string | string[] | undefined) {
 
 function builtinOutboundLabel(value: string) {
   if (value === 'direct') return '直连';
-  if (value === 'reject') return 'reject';
-  if (value === 'block') return '阻断';
   return value;
 }
 
 function builtinOutbounds(values: string[] | undefined) {
-  return (values || []).filter(value => ['direct', 'reject', 'block'].includes(value));
+  return (values || []).filter(value => value === 'direct');
 }
 
 function collectionBuiltinOutbounds(collection: Pick<ProxyCollection, 'name' | 'node_uids'> | null | undefined) {
@@ -91,7 +90,7 @@ function collectionBuiltinOutbounds(collection: Pick<ProxyCollection, 'name' | '
   const defaults = collection.name === '全球直连'
     ? ['direct']
     : collection.name === '应用净化'
-      ? ['reject', 'block', 'direct']
+      ? ['direct']
       : [];
   return Array.from(new Set([...defaults, ...builtinOutbounds(collection.node_uids)]));
 }
@@ -161,6 +160,8 @@ export function CollectionsPage() {
   const [collectionPageSize, setCollectionPageSize] = React.useState(25);
   const [previewCollection, setPreviewCollection] = React.useState<ProxyCollection | null>(null);
   const [previewOutbound, setPreviewOutbound] = React.useState<Record<string, unknown> | null>(null);
+  const [collectionTests, setCollectionTests] = React.useState<Record<number, CollectionTestResponse>>({});
+  const [testingCollections, setTestingCollections] = React.useState<Set<number>>(new Set());
   
   const [loading, setLoading] = React.useState(true);
   const [message, setMessage] = React.useState('');
@@ -216,6 +217,15 @@ export function CollectionsPage() {
   }, []);
 
   React.useEffect(() => { load(); }, [load]);
+
+  useRealtimeSocket((event: WSEvent) => {
+    if (event.type !== 'collection.test') return;
+    const result = event.data as CollectionTestResponse;
+    setCollectionTests(current => ({ ...current, [result.collection_id]: result }));
+    if (result.error && result.available === 0) {
+      showMessage(`自动测速失败: ${result.error}`, 'error');
+    }
+  });
 
   // 节点组操作
   const resetNodeGroupForm = () => {
@@ -574,12 +584,32 @@ export function CollectionsPage() {
         ? [...collectionBuiltinOutbounds(col), ...(col.referenced_groups || []).map(group => group.name)]
         : (col.node_uids || []),
     };
-    if (col.type === 'urltest' || col.type === 'fallback') {
+		if (col.type === 'urltest') {
       outbound.url = col.test_url || 'https://www.gstatic.com/generate_204';
       outbound.interval = `${col.test_interval || 300}s`;
       outbound.tolerance = col.tolerance || 100;
     }
     setPreviewOutbound(outbound);
+  };
+
+  const testCollection = async (col: ProxyCollection) => {
+    setTestingCollections(current => new Set(current).add(col.id));
+    try {
+      const result = await api.testProxyCollection(col.id);
+      setCollectionTests(current => ({ ...current, [col.id]: result }));
+      showMessage(result.available > 0
+        ? `测速完成：${result.available}/${result.tested} 个节点可用，最低 ${result.fastest_latency}ms`
+        : `测速完成：全部节点不可用${result.error ? `，${result.error}` : ''}`,
+      result.available > 0 ? 'success' : 'error');
+    } catch (e: any) {
+      showMessage(`测速失败: ${e.message}`, 'error');
+    } finally {
+      setTestingCollections(current => {
+        const next = new Set(current);
+        next.delete(col.id);
+        return next;
+      });
+    }
   };
 
   const toggleGroupSelected = (id: number) => {
@@ -1011,12 +1041,23 @@ export function CollectionsPage() {
                             <span className={`rounded px-2 py-1 text-xs ${col.enabled ? 'bg-emerald-500/10 text-emerald-300' : 'bg-gray-500/10 text-gray-400'}`}>
                               {col.enabled ? '启用' : '停用'}
                             </span>
+                            {collectionTests[col.id] && (
+                              <div className={`mt-1 text-[11px] ${collectionTests[col.id].available > 0 ? 'text-emerald-300' : 'text-red-300'}`}>
+                                {collectionTests[col.id].tested > 0 ? `${collectionTests[col.id].available}/${collectionTests[col.id].tested} 可用` : '测速失败'}
+                                {collectionTests[col.id].fastest_latency ? ` · ${collectionTests[col.id].fastest_latency}ms` : ''}
+                              </div>
+                            )}
                           </td>
                           <td className="px-4 py-3">
                             <div className="flex gap-2">
                               <button onClick={() => previewCollectionConfig(col)} className="rounded-md border border-[var(--border-default)] bg-white/[0.04] px-3 py-1 text-xs text-white hover:bg-white/[0.08]">
                                 <Eye size={12} className="inline mr-1" />预览
                               </button>
+                              {!isSystemDefaultCollection(col.name) && (
+                                <button onClick={() => testCollection(col)} disabled={testingCollections.has(col.id) || !col.enabled} className="rounded-md border border-[var(--border-default)] bg-[var(--bg-surface)] px-3 py-1 text-xs text-[var(--text-primary)] hover:bg-[var(--bg-sidebar-hover)] disabled:cursor-not-allowed disabled:opacity-50">
+                                  <Zap size={12} className="mr-1 inline" />{testingCollections.has(col.id) ? '测速中' : '测速'}
+                                </button>
+                              )}
                               {!isSystemDefaultCollection(col.name) && (
                                 <button onClick={() => editCollection(col)} className="rounded-md border border-[var(--border-default)] bg-white/[0.04] px-3 py-1 text-xs text-white hover:bg-white/[0.08]">
                                   <Edit size={12} className="inline mr-1" />编辑

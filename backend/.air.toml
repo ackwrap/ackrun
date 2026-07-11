@@ -1,0 +1,13 @@
+root = "."
+tmp_dir = ".air"
+
+[build]
+cmd = "go build -o ./.air/ackwrap ./cmd/server"
+entrypoint = ["./.air/ackwrap"]
+include_ext = ["go"]
+exclude_dir = ["ui", ".air", ".dev"]
+delay = 500
+
+[build.windows]
+cmd = "go build -o ./.air/ackwrap.exe ./cmd/server"
+entrypoint = ["./.air/ackwrap.exe"]

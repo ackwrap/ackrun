@@ -1,11 +1,15 @@
 import { useEffect, useState } from 'react';
 import { Moon, Sun } from 'lucide-react';
+import { useRealtimeSocket } from '@/hooks/useRealtimeSocket';
+import type { WSEvent } from '@/services/types';
+import { Toast } from '@/components/ui/Toast';
 import { Sidebar } from './Sidebar';
 
 type ThemeMode = 'dark' | 'light';
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
+  const [reconcileError, setReconcileError] = useState('');
   const [theme, setTheme] = useState<ThemeMode>(() => {
     if (typeof window === 'undefined') return 'dark';
     return (localStorage.getItem('ackwrap.theme') as ThemeMode) || 'dark';
@@ -16,10 +20,25 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
     localStorage.setItem('ackwrap.theme', theme);
   }, [theme]);
 
+  useRealtimeSocket((event: WSEvent) => {
+    if (event.type !== 'config.reconcile') return;
+    const data = event.data as { status?: string; error?: string };
+    if (data.status === 'failed') {
+      setReconcileError(data.error || '配置自动应用失败');
+    }
+  });
+
+  useEffect(() => {
+    if (!reconcileError) return;
+    const timer = window.setTimeout(() => setReconcileError(''), 6000);
+    return () => window.clearTimeout(timer);
+  }, [reconcileError]);
+
   const toggleTheme = () => setTheme(value => value === 'dark' ? 'light' : 'dark');
 
   return (
     <div className="flex h-screen bg-[var(--bg-base)] text-[var(--text-primary)]">
+      <Toast message={reconcileError} type="error" />
       <Sidebar collapsed={collapsed} onToggle={() => setCollapsed(v => !v)} />
       <main id="main-content" className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <header className="flex items-center justify-between px-5 h-[62px] bg-[var(--header-bg)] border-b border-[var(--border-light)] backdrop-blur-xl shrink-0">

@@ -3,6 +3,7 @@ backend/backend.exe
 backend/backend
 backend/ackwrap.db
 backend/ui/
+backend/.air/
 mihomo-Alpha
 # Frontend
 frontend/node_modules/

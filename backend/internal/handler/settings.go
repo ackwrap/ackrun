@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -155,13 +156,48 @@ func (h *SettingsHandler) SetInboundMode(c *gin.Context) {
 	}
 
 	if err := h.svc.SetInboundMode(req.Mode); err != nil {
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
-			Error: model.APIError{Code: "SETTINGS_SAVE_FAILED", Message: err.Error()},
+		status := http.StatusInternalServerError
+		code := "SETTINGS_SAVE_FAILED"
+		if errors.Is(err, service.ErrModeChangeWhileRunning) {
+			status = http.StatusConflict
+			code = "MODE_CHANGE_NOT_ALLOWED"
+		}
+		c.JSON(status, model.ErrorResponse{
+			Error: model.APIError{Code: code, Message: err.Error()},
 		})
 		return
 	}
 
 	c.JSON(http.StatusOK, model.ActionResponse{Success: true, Message: "inbound mode updated"})
+}
+
+func (h *SettingsHandler) GetProxyMode(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"mode": h.svc.GetProxyMode()})
+}
+
+func (h *SettingsHandler) SetProxyMode(c *gin.Context) {
+	var req struct {
+		Mode string `json:"mode" binding:"required,oneof=rule global direct"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{
+			Error: model.APIError{Code: "INVALID_MODE", Message: "mode must be one of: rule, global, direct"},
+		})
+		return
+	}
+	if err := h.svc.SetProxyMode(req.Mode); err != nil {
+		status := http.StatusInternalServerError
+		code := "SETTINGS_SAVE_FAILED"
+		if errors.Is(err, service.ErrModeChangeWhileRunning) {
+			status = http.StatusConflict
+			code = "MODE_CHANGE_NOT_ALLOWED"
+		}
+		c.JSON(status, model.ErrorResponse{
+			Error: model.APIError{Code: code, Message: err.Error()},
+		})
+		return
+	}
+	c.JSON(http.StatusOK, model.ActionResponse{Success: true, Message: "proxy mode updated"})
 }
 
 func (h *SettingsHandler) GetExperimentalSettings(c *gin.Context) {

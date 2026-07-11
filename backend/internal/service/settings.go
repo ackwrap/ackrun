@@ -1,20 +1,32 @@
 package service
 
 import (
+	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 
+	"github.com/ackwrap/ackwrap/internal/logging"
 	"github.com/ackwrap/ackwrap/internal/model"
 	"github.com/ackwrap/ackwrap/internal/store"
 )
 
 type SettingsService struct {
-	store *store.Store
+	store           *store.Store
+	singbox         *SingboxService
+	configGenerator *ConfigGeneratorService
 }
+
+var ErrModeChangeWhileRunning = errors.New("核心运行时不能切换模式，请先停止核心")
 
 func NewSettingsService(s *store.Store) *SettingsService {
 	return &SettingsService{store: s}
+}
+
+func (svc *SettingsService) SetModeDependencies(singbox *SingboxService, generator *ConfigGeneratorService) {
+	svc.singbox = singbox
+	svc.configGenerator = generator
 }
 
 func (svc *SettingsService) GetUpdateSettings() (*model.UpdateSettingsResponse, error) {
@@ -22,7 +34,39 @@ func (svc *SettingsService) GetUpdateSettings() (*model.UpdateSettingsResponse, 
 }
 
 func (svc *SettingsService) SetUpdateSettings(req *model.UpdateSettings) error {
+	req.Acceleration = strings.TrimSpace(req.Acceleration)
+	req.CustomMirrorURL = strings.TrimSpace(req.CustomMirrorURL)
+	req.ProxyURL = strings.TrimSpace(req.ProxyURL)
+	switch req.Acceleration {
+	case "", "proxy", "ghproxy", "custom":
+	default:
+		return fmt.Errorf("更新加速方式无效")
+	}
+	if req.Acceleration == "proxy" {
+		if req.ProxyURL == "" {
+			req.ProxyURL = "http://127.0.0.1:2080"
+		}
+		if err := validateUpdateURL(req.ProxyURL, "代理 URL"); err != nil {
+			return err
+		}
+	}
+	if req.Acceleration == "custom" {
+		if req.CustomMirrorURL == "" {
+			return fmt.Errorf("自定义镜像 URL 不能为空")
+		}
+		if err := validateUpdateURL(req.CustomMirrorURL, "自定义镜像 URL"); err != nil {
+			return err
+		}
+	}
 	return svc.store.SetUpdateSettings(req)
+}
+
+func validateUpdateURL(value, field string) error {
+	parsed, err := url.ParseRequestURI(value)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return fmt.Errorf("%s 必须是有效的 http/https URL", field)
+	}
+	return nil
 }
 
 func (svc *SettingsService) GetLogSettings() (*model.LogSettingsResponse, error) {
@@ -54,7 +98,53 @@ func (svc *SettingsService) GetInboundMode() string {
 }
 
 func (svc *SettingsService) SetInboundMode(mode string) error {
-	return svc.store.SetInboundMode(mode)
+	switch mode {
+	case "tun", "mixed", "tun_mixed":
+	default:
+		return fmt.Errorf("运行模式无效")
+	}
+	logging.Info("settings.update", "切换运行模式: %s", mode)
+	return svc.setMode(svc.store.GetInboundMode(), mode, svc.store.SetInboundMode)
+}
+
+func (svc *SettingsService) GetProxyMode() string {
+	return svc.store.GetProxyMode()
+}
+
+func (svc *SettingsService) SetProxyMode(mode string) error {
+	switch mode {
+	case "rule", "global", "direct":
+	default:
+		return fmt.Errorf("代理模式无效")
+	}
+	logging.Info("settings.update", "切换代理模式: %s", mode)
+	return svc.setMode(svc.store.GetProxyMode(), mode, svc.store.SetProxyMode)
+}
+
+func (svc *SettingsService) setMode(previous, next string, persist func(string) error) error {
+	if svc.singbox != nil && svc.singbox.IsRunning() {
+		return ErrModeChangeWhileRunning
+	}
+	if previous == next {
+		return nil
+	}
+	if err := persist(next); err != nil {
+		return err
+	}
+	if svc.configGenerator == nil {
+		return nil
+	}
+	result, err := svc.configGenerator.ReconcileCurrent()
+	if err == nil && result != nil && !result.Valid {
+		err = fmt.Errorf("配置校验失败: %s", result.Error)
+	}
+	if err == nil {
+		return nil
+	}
+	if rollbackErr := persist(previous); rollbackErr != nil {
+		return fmt.Errorf("切换模式失败: %v；回滚模式也失败: %w", err, rollbackErr)
+	}
+	return fmt.Errorf("切换模式失败，已回滚: %w", err)
 }
 
 func (svc *SettingsService) GetExperimentalSettings() (*model.ExperimentalSettingsResponse, error) {

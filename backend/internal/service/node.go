@@ -80,7 +80,7 @@ func (svc *NodeService) parseImportNodes(content string) ([]model.ParsedNode, er
 	}
 
 	// 过滤不支持的协议
-	unsupportedTypes := map[string]bool{"ssr": true, "snell": true, "mieru": true}
+	unsupportedTypes := map[string]bool{"ssr": true, "mieru": true}
 	supportedNodes := make([]model.ParsedNode, 0, len(nodes))
 	unsupportedCount := 0
 
@@ -97,7 +97,7 @@ func (svc *NodeService) parseImportNodes(content string) ([]model.ParsedNode, er
 	}
 
 	if len(supportedNodes) == 0 {
-		return nil, fmt.Errorf("all nodes are unsupported protocols (ssr/snell/mieru)")
+		return nil, fmt.Errorf("all nodes are unsupported protocols (ssr/mieru)")
 	}
 
 	return svc.applyNodeFilters(supportedNodes)

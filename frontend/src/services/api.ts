@@ -43,6 +43,7 @@ import type {
 	GeoLookupResponse,
 	ProxyCollectionWithNodes,
 	ProxyCollectionRequest,
+	CollectionTestResponse,
 	ConfigGenerateRequest,
 	ConfigGenerateResponse,
   ConfigApplyRequest,
@@ -166,4 +167,5 @@ export const api = {
 	updateProxyCollection: (id: number, data: ProxyCollectionRequest) => request<ActionResponse>(`/collections/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
 	deleteProxyCollection: (id: number) => request<ActionResponse>(`/collections/${id}`, { method: 'DELETE' }),
 	toggleProxyCollectionEnabled: (id: number) => request<ActionResponse>(`/collections/${id}/enabled`, { method: 'PUT' }),
+	testProxyCollection: (id: number) => request<CollectionTestResponse>(`/collections/${id}/test`, { method: 'POST' }),
 };

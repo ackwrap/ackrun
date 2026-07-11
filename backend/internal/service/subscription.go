@@ -39,13 +39,12 @@ type subscriptionSyncResult struct {
 }
 
 type SubscriptionService struct {
-	store          *store.Store
-	realtime       *RealtimeService
-	configService  *ConfigService
-	singboxService *SingboxService
-	cron           *cron.Cron
-	entries        map[int64]cron.EntryID
-	mu             sync.Mutex
+	store      *store.Store
+	realtime   *RealtimeService
+	reconciler *ConfigReconcileService
+	cron       *cron.Cron
+	entries    map[int64]cron.EntryID
+	mu         sync.Mutex
 }
 
 func NewSubscriptionService(s *store.Store, rt *RealtimeService) *SubscriptionService {
@@ -57,14 +56,9 @@ func NewSubscriptionService(s *store.Store, rt *RealtimeService) *SubscriptionSe
 	}
 }
 
-// SetConfigService 设置配置服务（延迟注入避免循环依赖）
-func (svc *SubscriptionService) SetConfigService(cs *ConfigService) {
-	svc.configService = cs
-}
-
-// SetSingBoxService 设置 sing-box 服务（延迟注入避免循环依赖）
-func (svc *SubscriptionService) SetSingBoxService(sb *SingboxService) {
-	svc.singboxService = sb
+// SetConfigReconciler 注入统一配置协调器。
+func (svc *SubscriptionService) SetConfigReconciler(reconciler *ConfigReconcileService) {
+	svc.reconciler = reconciler
 }
 
 func (svc *SubscriptionService) StartScheduler() {
@@ -332,16 +326,6 @@ func (svc *SubscriptionService) runSync(id int64) {
 			}
 		}
 
-		// 5. 触发配置生成
-		if svc.configService != nil {
-			logging.Info("subscription.sync", "触发配置生成（节点有变化）")
-			// 这里不直接调用 Generate，而是通过后台异步触发
-			go func() {
-				time.Sleep(1 * time.Second) // 等待订阅状态更新完成
-				// TODO: 需要一个统一的配置生成+重启流程
-				logging.Info("subscription.sync", "配置自动生成暂未实现，请手动重新生成配置")
-			}()
-		}
 	} else {
 		logging.Info("subscription.sync", "订阅 %d 节点无变化，跳过配置更新", id)
 	}
@@ -356,6 +340,9 @@ func (svc *SubscriptionService) runSync(id int64) {
 		svc.broadcastSubscriptionWithWarning(updated, "updated", 100, warningMsg)
 	} else {
 		svc.broadcastSubscription(updated, "updated", 100)
+	}
+	if hasChanges && svc.reconciler != nil {
+		svc.reconciler.Trigger("subscription.sync")
 	}
 }
 
@@ -507,7 +494,7 @@ func (svc *SubscriptionService) fetchAndParse(rawURL string, userAgent string, t
 	}
 
 	// 过滤不支持的协议
-	unsupportedTypes := map[string]bool{"ssr": true, "snell": true, "mieru": true}
+	unsupportedTypes := map[string]bool{"ssr": true, "mieru": true}
 	supportedNodes := make([]model.ParsedNode, 0, len(nodes))
 	unsupportedCount := map[string]int{}
 

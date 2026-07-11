@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -208,5 +209,70 @@ func TestRouteRuleSubscriptionContentConvertsClashYAML(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "cerebras.ai") || !strings.Contains(string(body), "LM Studio") {
 		t.Fatalf("converted content missing expected values: %s", string(body))
+	}
+}
+
+func TestGeneratedGeoRuleSetContentCachesDownload(t *testing.T) {
+	payload := []byte("compiled-rule-set")
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+	svc := newTestRouteRuleService(t, db)
+
+	for i := 0; i < 2; i++ {
+		data, contentType, err := svc.generatedGeoRuleSetContent("geosite-test", server.URL)
+		if err != nil {
+			t.Fatalf("generated geo content: %v", err)
+		}
+		if string(data) != string(payload) || contentType != "application/octet-stream" {
+			t.Fatalf("unexpected content: type=%s data=%q", contentType, data)
+		}
+	}
+	if requests != 1 {
+		t.Fatalf("upstream requests = %d, want 1", requests)
+	}
+	cachePath := filepath.Join(svc.paths.RulesDir, "geo", "geosite-test.srs")
+	if data, err := os.ReadFile(cachePath); err != nil || string(data) != string(payload) {
+		t.Fatalf("unexpected cache: data=%q err=%v", data, err)
+	}
+}
+
+func TestGeneratedGeoRuleSetContentRejectsInvalidTag(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+	svc := newTestRouteRuleService(t, db)
+	if _, _, err := svc.generatedGeoRuleSetContent("../geoip-cn", "https://example.com"); err == nil {
+		t.Fatal("expected invalid tag error")
+	}
+}
+
+func TestPreviewUsesGeneratedGeoRuleSetCacheEndpoint(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+	svc := newTestRouteRuleService(t, db)
+	if _, err := svc.Create(&model.RouteRuleRequest{Name: "CN Direct", Enabled: true, RuleType: "geoip", Values: []string{"cn"}, Outbound: "direct"}); err != nil {
+		t.Fatalf("create geo rule: %v", err)
+	}
+	preview, err := svc.PreviewWithBaseURL("http://127.0.0.1:8080")
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	if len(preview.RuleSets) != 1 || preview.RuleSets[0]["url"] != "http://127.0.0.1:8080/api/v1/rules/geo/rule-sets/geoip-cn/content" {
+		t.Fatalf("unexpected generated geo rule set: %+v", preview.RuleSets)
 	}
 }

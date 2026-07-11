@@ -4,7 +4,6 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -31,6 +30,9 @@ type InstallerService struct {
 	realtime *RealtimeService
 	mu       sync.Mutex
 	busy     bool
+	latestMu sync.Mutex
+	latest   string
+	latestAt time.Time
 }
 
 func NewInstallerService(s *store.Store, p *paths.Paths, rt *RealtimeService) *InstallerService {
@@ -41,6 +43,15 @@ func (svc *InstallerService) GetStatus() (*model.InstallStateResponse, error) {
 	state, err := svc.store.GetInstallState()
 	if err != nil {
 		return nil, err
+	}
+	if isActiveInstallStatus(state.Status) && !svc.isBusy() {
+		state.Status = model.InstallFailed
+		state.Message = "installation interrupted"
+		state.Error = "安装任务已中断，请重新安装"
+		state.Progress = 0
+		if err := svc.store.SetInstallState(state); err != nil {
+			return nil, err
+		}
 	}
 
 	version := state.Version
@@ -58,7 +69,7 @@ func (svc *InstallerService) GetStatus() (*model.InstallStateResponse, error) {
 	}
 
 	// 获取最新可用版本
-	latestVersion, err := svc.fetchLatestVersion()
+	latestVersion, err := svc.getLatestVersion()
 	if err != nil {
 		logging.Info("installer.latest_version", "failed to fetch: %v", err)
 	}
@@ -76,6 +87,16 @@ func isInstallStatus(status model.InstallStatus) bool {
 	}
 }
 
+func isActiveInstallStatus(status model.InstallStatus) bool {
+	return status == model.InstallDownloading || status == model.InstallExtracting
+}
+
+func (svc *InstallerService) isBusy() bool {
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
+	return svc.busy
+}
+
 func (svc *InstallerService) Install() (*model.ActionResponse, error) {
 	svc.mu.Lock()
 	if svc.busy {
@@ -84,14 +105,17 @@ func (svc *InstallerService) Install() (*model.ActionResponse, error) {
 	}
 	svc.busy = true
 	svc.mu.Unlock()
+	svc.setState(model.InstallDownloading, "preparing download", 0, "", "")
+	svc.broadcastStatus()
 
-	defer func() {
-		svc.mu.Lock()
-		svc.busy = false
-		svc.mu.Unlock()
+	go func() {
+		defer func() {
+			svc.mu.Lock()
+			svc.busy = false
+			svc.mu.Unlock()
+		}()
+		svc.runInstall()
 	}()
-
-	go svc.runInstall()
 
 	return &model.ActionResponse{Success: true, Message: "install started"}, nil
 }
@@ -100,7 +124,7 @@ func (svc *InstallerService) runInstall() {
 	logging.Info("installer.start", "starting sing-box installation")
 
 	// 获取最新版本
-	latestVersion, err := svc.fetchLatestVersion()
+	latestVersion, err := svc.getLatestVersion()
 	if err != nil {
 		logging.Info("installer.version", "failed to fetch latest version: %v", err)
 		svc.setState(model.InstallFailed, "", 0, "", fmt.Sprintf("fetch latest version failed: %v", err))
@@ -139,58 +163,48 @@ func (svc *InstallerService) runInstall() {
 
 	os.Remove(tmpFile)
 
-	svc.setState(model.InstallDone, latestVersion, 0, "installed", "")
+	svc.setState(model.InstallDone, "installed", 0, latestVersion, "")
 	svc.broadcastStatus()
 
-	svc.realtime.Broadcast("runtime.status", model.RuntimeResponse{Status: model.RuntimeNoConfig, Version: latestVersion})
+	runtimeStatus := model.RuntimeNoConfig
+	if _, ok, err := svc.paths.ActiveConfigPath(); err == nil && ok {
+		runtimeStatus = model.RuntimeStopped
+	}
+	svc.realtime.Broadcast("runtime.status", model.RuntimeResponse{Status: runtimeStatus, Version: latestVersion})
 	logging.Info("installer.start", "sing-box installed successfully, version=%s", latestVersion)
 }
 
 func (svc *InstallerService) fetchLatestVersion() (string, error) {
-	urls := []string{
-		singboxVersionURL,
+	settings, err := svc.store.GetUpdateSettings()
+	if err != nil {
+		return "", fmt.Errorf("读取更新设置失败: %w", err)
 	}
+	return fetchLatestSingboxVersionWithSettings(settings, singboxVersionURL)
+}
 
-	client := &http.Client{Timeout: 10 * time.Second}
-
-	for _, url := range urls {
-		req, err := http.NewRequest("GET", url, nil)
-		if err != nil {
-			continue
-		}
-
-		req.Header.Set("User-Agent", "Ackwrap/1.0")
-		req.Header.Set("Accept", "application/vnd.github.v3+json")
-
-		resp, err := client.Do(req)
-		if err != nil {
-			continue
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			continue
-		}
-
-		var release struct {
-			TagName string `json:"tag_name"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-			continue
-		}
-
-		version := strings.TrimPrefix(release.TagName, "v")
-		if version != "" {
-			return version, nil
-		}
+func (svc *InstallerService) getLatestVersion() (string, error) {
+	svc.latestMu.Lock()
+	defer svc.latestMu.Unlock()
+	if svc.latest != "" && time.Since(svc.latestAt) < 5*time.Minute {
+		return svc.latest, nil
 	}
-
-	return "", fmt.Errorf("all API sources failed")
+	version, err := svc.fetchLatestVersion()
+	if err != nil {
+		return "", err
+	}
+	svc.latest = version
+	svc.latestAt = time.Now()
+	return version, nil
 }
 
 func (svc *InstallerService) buildDownloadURL(version string) (string, error) {
-	goos := runtime.GOOS
-	arch := runtime.GOARCH
+	return buildDownloadURLFor(version, runtime.GOOS, runtime.GOARCH)
+}
+
+func buildDownloadURLFor(version, goos, arch string) (string, error) {
+	if goos != "windows" && goos != "linux" && goos != "darwin" {
+		return "", fmt.Errorf("unsupported operating system: %s", goos)
+	}
 
 	var archStr string
 	switch arch {
@@ -221,16 +235,36 @@ func (svc *InstallerService) buildDownloadURL(version string) (string, error) {
 }
 
 func (svc *InstallerService) download(url, dest string) error {
-	logging.Info("installer.download", "downloading from: %s", url)
-
-	resp, err := http.Get(url)
+	settings, err := svc.store.GetUpdateSettings()
 	if err != nil {
-		return fmt.Errorf("http get: %w", err)
+		return fmt.Errorf("读取更新设置失败: %w", err)
+	}
+	attempts, err := buildUpdateRequestAttempts(settings, url)
+	if err != nil {
+		return err
+	}
+	var lastErr error
+	for _, attempt := range attempts {
+		logging.Info("installer.download", "download attempt: %s", attempt.name)
+		if err := svc.downloadOnce(attempt.client, attempt.url, dest); err == nil {
+			return nil
+		} else {
+			lastErr = err
+			logging.Info("installer.download", "download attempt failed: %s: %v", attempt.name, err)
+		}
+	}
+	return lastErr
+}
+
+func (svc *InstallerService) downloadOnce(client *http.Client, downloadURL, dest string) error {
+	resp, err := client.Get(downloadURL)
+	if err != nil {
+		return fmt.Errorf("请求下载地址失败: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("http status: %d", resp.StatusCode)
+		return fmt.Errorf("下载地址返回 HTTP %d", resp.StatusCode)
 	}
 
 	total := resp.ContentLength
@@ -283,24 +317,30 @@ func (svc *InstallerService) extractZip(archive string) error {
 	}
 	defer r.Close()
 
+	foundBinary := false
 	for _, f := range r.File {
 		if f.FileInfo().IsDir() {
 			continue
 		}
 		name := archiveEntryBase(f.Name)
-		if name == "" {
+		mode, ok := runtimeArchiveFileMode(name)
+		if !ok {
 			continue
 		}
+		foundBinary = foundBinary || name == "sing-box.exe"
 		rc, err := f.Open()
 		if err != nil {
 			return fmt.Errorf("open entry: %w", err)
 		}
-		if err := writeExtractedFile(filepath.Join(svc.paths.BinaryDir, name), rc, f.FileInfo().Mode()); err != nil {
+		if err := writeExtractedFile(filepath.Join(svc.paths.BinaryDir, name), rc, mode); err != nil {
 			rc.Close()
 			return err
 		}
 		rc.Close()
 		logging.Info("installer.extract", "extracted: %s", filepath.Join(svc.paths.BinaryDir, name))
+	}
+	if !foundBinary {
+		return fmt.Errorf("archive does not contain sing-box.exe")
 	}
 	return nil
 }
@@ -317,6 +357,7 @@ func (svc *InstallerService) extractTarGz(archive string) error {
 	}
 	defer gz.Close()
 	tr := tar.NewReader(gz)
+	foundBinary := false
 	for {
 		header, err := tr.Next()
 		if err == io.EOF {
@@ -329,14 +370,19 @@ func (svc *InstallerService) extractTarGz(archive string) error {
 			continue
 		}
 		name := archiveEntryBase(header.Name)
-		if name == "" {
+		mode, ok := runtimeArchiveFileMode(name)
+		if !ok {
 			continue
 		}
+		foundBinary = foundBinary || name == "sing-box"
 		outPath := filepath.Join(svc.paths.BinaryDir, name)
-		if err := writeExtractedFile(outPath, tr, os.FileMode(header.Mode)); err != nil {
+		if err := writeExtractedFile(outPath, tr, mode); err != nil {
 			return err
 		}
 		logging.Info("installer.extract", "extracted: %s", outPath)
+	}
+	if !foundBinary {
+		return fmt.Errorf("archive does not contain sing-box")
 	}
 	return nil
 }
@@ -355,11 +401,29 @@ func archiveEntryBase(name string) string {
 	return base
 }
 
+func runtimeArchiveFileMode(name string) (os.FileMode, bool) {
+	switch strings.ToLower(name) {
+	case "sing-box":
+		return 0755, true
+	case "sing-box.exe":
+		return 0755, true
+	case "libcronet.so", "libcronet.dylib", "libcronet.dll":
+		return 0644, true
+	default:
+		return 0, false
+	}
+}
+
 func writeExtractedFile(outPath string, src io.Reader, mode os.FileMode) error {
-	out, err := os.OpenFile(outPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode|0755)
+	if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
+		return fmt.Errorf("create binary directory: %w", err)
+	}
+	out, err := os.CreateTemp(filepath.Dir(outPath), ".ackwrap-install-*")
 	if err != nil {
 		return fmt.Errorf("create extracted file: %w", err)
 	}
+	tmpPath := out.Name()
+	defer os.Remove(tmpPath)
 	_, copyErr := io.Copy(out, src)
 	closeErr := out.Close()
 	if copyErr != nil {
@@ -367,6 +431,17 @@ func writeExtractedFile(outPath string, src io.Reader, mode os.FileMode) error {
 	}
 	if closeErr != nil {
 		return fmt.Errorf("close extracted file: %w", closeErr)
+	}
+	if err := os.Chmod(tmpPath, mode); err != nil {
+		return fmt.Errorf("set extracted file permissions: %w", err)
+	}
+	if runtime.GOOS == "windows" {
+		if err := os.Remove(outPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("replace extracted file: %w", err)
+		}
+	}
+	if err := os.Rename(tmpPath, outPath); err != nil {
+		return fmt.Errorf("commit extracted file: %w", err)
 	}
 	return nil
 }

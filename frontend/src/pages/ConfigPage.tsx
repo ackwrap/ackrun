@@ -143,7 +143,6 @@ export function ConfigPage() {
                 <select value={request.default_outbound} onChange={e => setRequest(prev => ({ ...prev, default_outbound: e.target.value }))} className="mt-1 w-full rounded-md border border-[var(--border-default)] bg-[var(--bg-base)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-blue-400">
                   <option value="proxy">proxy（策略）</option>
                   <option value="direct">direct（直连）</option>
-                  <option value="block">block（阻断）</option>
                 </select>
               </label>
               <label className="block">

@@ -217,19 +217,66 @@ button:disabled {
   }
 
   .aw-toast {
-    @apply min-w-[220px] max-w-[calc(100vw-2rem)] rounded-full border px-4 py-2.5 text-sm font-medium shadow-[0_16px_48px_rgba(0,0,0,0.35)] backdrop-blur-md;
+    @apply relative mx-auto flex w-fit min-w-[320px] max-w-full items-center gap-3.5 overflow-hidden rounded-2xl border px-4 py-3.5 backdrop-blur-xl;
+    animation: aw-toast-enter 180ms ease-out;
+    background: linear-gradient(135deg, rgba(20, 30, 49, 0.97), rgba(10, 17, 30, 0.95));
+    box-shadow: 0 18px 55px rgba(2, 6, 23, 0.48), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  }
+
+  .aw-toast::after {
+    content: '';
+    position: absolute;
+    top: -30px;
+    right: -18px;
+    width: 96px;
+    height: 72px;
+    border-radius: 999px;
+    background: var(--toast-glow);
+    filter: blur(20px);
+    opacity: 0.5;
+  }
+
+  .aw-toast-icon {
+    @apply relative z-[1] flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white;
+    background: linear-gradient(145deg, var(--toast-from), var(--toast-to));
+    box-shadow: 0 7px 20px var(--toast-shadow), inset 0 1px 0 rgba(255, 255, 255, 0.38);
+  }
+
+  .aw-toast-label {
+    @apply relative z-[1] block text-[13px] font-semibold leading-[18px] tracking-normal;
+    color: var(--toast-label);
+  }
+
+  .aw-toast-message {
+    @apply relative z-[1] mt-0.5 block break-words text-[14px] font-normal leading-[21px];
+    color: #f8fafc;
   }
 
   .aw-toast-success {
-    @apply border-emerald-400/25 bg-emerald-950/90 text-emerald-100;
+    --toast-from: #22c55e;
+    --toast-to: #06b6d4;
+    --toast-glow: rgba(34, 197, 94, 0.38);
+    --toast-shadow: rgba(6, 182, 212, 0.24);
+    --toast-label: #6ee7b7;
+    border-color: rgba(52, 211, 153, 0.3);
   }
 
   .aw-toast-error {
-    @apply border-red-400/25 bg-red-950/90 text-red-100;
+    --toast-from: #fb7185;
+    --toast-to: #f97316;
+    --toast-glow: rgba(244, 63, 94, 0.42);
+    --toast-shadow: rgba(249, 115, 22, 0.25);
+    --toast-label: #fda4af;
+    border-color: rgba(251, 113, 133, 0.34);
   }
 
   .aw-toast-info {
-    @apply border-blue-400/25 bg-blue-950/90 text-blue-100;
+    --toast-from: #38bdf8;
+    --toast-to: #8b5cf6;
+    --toast-glow: rgba(99, 102, 241, 0.42);
+    --toast-shadow: rgba(56, 189, 248, 0.24);
+    --toast-label: #a5b4fc;
+    border-color: rgba(96, 165, 250, 0.34);
   }
 
   .aw-confirm-cancel {
@@ -324,25 +371,27 @@ button:disabled {
 }
 
 :root[data-theme='light'] .aw-toast {
-  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.18) !important;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.96)) !important;
+  box-shadow: 0 20px 48px rgba(51, 65, 85, 0.18), inset 0 1px 0 #ffffff !important;
+}
+
+:root[data-theme='light'] .aw-toast-message {
+  color: #0f172a !important;
 }
 
 :root[data-theme='light'] .aw-toast-success {
-  background-color: rgba(240, 253, 244, 0.96) !important;
-  border-color: rgba(22, 163, 74, 0.24) !important;
-  color: #166534 !important;
+  --toast-label: #047857;
+  border-color: rgba(16, 185, 129, 0.28) !important;
 }
 
 :root[data-theme='light'] .aw-toast-error {
-  background-color: rgba(254, 242, 242, 0.96) !important;
-  border-color: rgba(220, 38, 38, 0.24) !important;
-  color: #991b1b !important;
+  --toast-label: #be123c;
+  border-color: rgba(244, 63, 94, 0.28) !important;
 }
 
 :root[data-theme='light'] .aw-toast-info {
-  background-color: rgba(239, 246, 255, 0.96) !important;
-  border-color: rgba(37, 99, 235, 0.24) !important;
-  color: #1e40af !important;
+  --toast-label: #4f46e5;
+  border-color: rgba(99, 102, 241, 0.28) !important;
 }
 
 :root[data-theme='light'] .aw-confirm-cancel {

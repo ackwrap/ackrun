@@ -8,6 +8,7 @@ export function SettingsPage() {
   const [acceleration, setAcceleration] = React.useState('');
   const [customMirror, setCustomMirror] = React.useState('');
   const [githubToken, setGithubToken] = React.useState('');
+  const [proxyURL, setProxyURL] = React.useState('http://127.0.0.1:2080');
   const [message, setMessage] = React.useState('');
   const [messageType, setMessageType] = React.useState<'success' | 'error' | 'info'>('success');
 
@@ -18,8 +19,7 @@ export function SettingsPage() {
   const [clashApiExternalUIDownloadURL, setClashApiExternalUIDownloadURL] = React.useState('');
   const [cacheFileEnabled, setCacheFileEnabled] = React.useState(true);
   const [cacheFileStoreFakeIP, setCacheFileStoreFakeIP] = React.useState(true);
-  const [cacheFileStoreRDRC, setCacheFileStoreRDRC] = React.useState(true);
-  const [cacheFileRDRCTimeout, setCacheFileRDRCTimeout] = React.useState('7d');
+  const [cacheFileStoreDNS, setCacheFileStoreDNS] = React.useState(true);
 
   // 日志配置
   const [logLevel, setLogLevel] = React.useState('info');
@@ -48,6 +48,7 @@ export function SettingsPage() {
       setAcceleration(data.acceleration || '');
       setCustomMirror(data.custom_mirror_url || '');
       setGithubToken(data.github_token || '');
+      setProxyURL(data.proxy_url || 'http://127.0.0.1:2080');
     }).catch(() => {});
 
     // 加载实验性功能设置
@@ -58,8 +59,7 @@ export function SettingsPage() {
       setClashApiExternalUIDownloadURL(data.clash_api_external_ui_download_url || '');
       setCacheFileEnabled(data.cache_file_enabled !== false);
       setCacheFileStoreFakeIP(data.cache_file_store_fakeip !== false);
-      setCacheFileStoreRDRC(data.cache_file_store_rdrc !== false);
-      setCacheFileRDRCTimeout(data.cache_file_rdrc_timeout || '7d');
+      setCacheFileStoreDNS(data.cache_file_store_dns !== false);
     }).catch(() => {});
 
     api.getLogSettings().then(data => {
@@ -78,7 +78,7 @@ export function SettingsPage() {
 
   const handleSave = async () => {
     try {
-      await api.setUpdateSettings({ acceleration, custom_mirror_url: customMirror, github_token: githubToken });
+      await api.setUpdateSettings({ acceleration, custom_mirror_url: customMirror, github_token: githubToken, proxy_url: proxyURL });
       showMessage('更新设置已保存');
     } catch (e: any) { showMessage(`保存失败: ${e.message}`, 'error'); }
   };
@@ -93,8 +93,7 @@ export function SettingsPage() {
         clash_api_external_ui_download_url: clashApiExternalUIDownloadURL,
         cache_file_enabled: cacheFileEnabled,
         cache_file_store_fakeip: cacheFileStoreFakeIP,
-        cache_file_store_rdrc: cacheFileStoreRDRC,
-        cache_file_rdrc_timeout: cacheFileRDRCTimeout,
+        cache_file_store_dns: cacheFileStoreDNS,
       });
       showMessage('实验性功能设置已保存');
     } catch (e: any) { showMessage(`保存失败: ${e.message}`, 'error'); }
@@ -227,27 +226,16 @@ export function SettingsPage() {
                     </label>
                   </div>
                   <div className="flex items-center justify-between">
-                    <label className="text-xs text-[var(--text-secondary)]">缓存 RDRC（延迟 DNS 响应缓存）</label>
+                    <label className="text-xs text-[var(--text-secondary)]">持久化完整 DNS 缓存</label>
                     <label className="relative inline-flex cursor-pointer items-center">
                       <input
                         type="checkbox"
-                        checked={cacheFileStoreRDRC}
-                        onChange={e => setCacheFileStoreRDRC(e.target.checked)}
+                        checked={cacheFileStoreDNS}
+                        onChange={e => setCacheFileStoreDNS(e.target.checked)}
                         className="peer sr-only"
                       />
                       <div className="peer h-5 w-9 rounded-full bg-gray-700 after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:bg-white after:transition-all after:content-[''] peer-checked:bg-blue-500 peer-checked:after:translate-x-full peer-focus:ring-2 peer-focus:ring-blue-500/30"></div>
                     </label>
-                  </div>
-                  <div>
-                    <label className="block text-xs text-[var(--text-secondary)] mb-1">RDRC 过期时间</label>
-                    <input
-                      type="text"
-                      value={cacheFileRDRCTimeout}
-                      onChange={e => setCacheFileRDRCTimeout(e.target.value)}
-                      placeholder="7d"
-                      className="w-full rounded-[var(--radius-md)] border border-[var(--border-default)] bg-white/[0.04] px-3 py-2 text-sm text-white outline-none focus:border-[var(--color-primary)]"
-                    />
-                    <span className="mt-1 block text-xs text-[var(--text-tertiary)]">支持格式：d（天）、h（小时）、m（分钟），如 7d、168h、10080m</span>
                   </div>
                   <div className="rounded bg-amber-500/10 p-2 text-xs text-amber-300">
                     <strong>说明：</strong> 缓存文件保存到 <code>cache.db</code>，重启后自动恢复。关闭可能导致 DNS 重复查询和规则集重新加载。
@@ -286,10 +274,18 @@ export function SettingsPage() {
                 <label className="block text-sm text-[var(--text-secondary)] mb-1">下载加速</label>
                 <select value={acceleration} onChange={e => setAcceleration(e.target.value)} className="w-full rounded-[var(--radius-md)] border border-[var(--border-default)] bg-white/[0.04] px-3 py-2 text-sm text-white outline-none focus:border-[var(--color-primary)]">
                   <option value="">无加速</option>
+                  <option value="proxy">本地代理优先（推荐）</option>
                   <option value="ghproxy">GHProxy</option>
                   <option value="custom">自定义镜像</option>
                 </select>
               </div>
+              {acceleration === 'proxy' && (
+                <div>
+                  <label className="block text-sm text-[var(--text-secondary)] mb-1">本地 HTTP 代理 URL</label>
+                  <input value={proxyURL} onChange={e => setProxyURL(e.target.value)} placeholder="http://127.0.0.1:2080" className="w-full rounded-[var(--radius-md)] border border-[var(--border-default)] bg-white/[0.04] px-3 py-2 text-sm text-white outline-none focus:border-[var(--color-primary)]" />
+                  <span className="mt-1 block text-xs text-[var(--text-tertiary)]">优先通过本地代理访问 GitHub；代理不可用时自动回退直连。</span>
+                </div>
+              )}
               {acceleration === 'custom' && (
                 <div>
                   <label className="block text-sm text-[var(--text-secondary)] mb-1">自定义镜像 URL</label>

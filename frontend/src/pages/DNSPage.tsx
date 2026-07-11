@@ -161,7 +161,6 @@ export function DNSPage() {
       { value: '', label: '留空（默认出站）' },
       { value: 'direct', label: 'direct（直连）' },
       { value: 'proxy', label: 'proxy（默认策略）' },
-      { value: 'block', label: 'block（阻断）' },
     ];
     for (const collection of collections) {
       if (!collection.enabled) continue;

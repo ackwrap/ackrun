@@ -1,6 +1,5 @@
 import React from 'react';
-import * as echarts from 'echarts';
-import type { ECharts } from 'echarts';
+import type { ECharts, EChartsOption } from 'echarts';
 
 interface MiniSparklineProps {
   data: number[];
@@ -29,67 +28,82 @@ const colorMap = {
 export function MiniSparkline({ data, color = 'blue', className = '' }: MiniSparklineProps) {
   const chartRef = React.useRef<HTMLDivElement>(null);
   const chartInstanceRef = React.useRef<ECharts | null>(null);
+  const disposedRef = React.useRef(false);
+  const latestDataRef = React.useRef<number[]>(data);
+  latestDataRef.current = data;
+
+  const updateChart = React.useCallback((nextData: number[]) => {
+    if (!chartInstanceRef.current || nextData.length === 0) return;
+    chartInstanceRef.current.setOption({
+      series: [{ data: nextData }],
+    });
+  }, []);
 
   React.useEffect(() => {
     if (!chartRef.current) return;
+    disposedRef.current = false;
 
-    const chart = echarts.init(chartRef.current, 'dark');
-    chartInstanceRef.current = chart;
+    let handleResize: (() => void) | null = null;
 
-    const colors = colorMap[color];
-    const option: echarts.EChartsOption = {
-      grid: { left: 0, top: 0, right: 0, bottom: 0 },
-      xAxis: {
-        type: 'category',
-        show: false,
-        boundaryGap: false,
-      },
-      yAxis: {
-        type: 'value',
-        show: false,
-      },
-      series: [
-        {
-          type: 'line',
-          symbol: 'none',
-          smooth: true,
-          lineStyle: {
-            width: 1.5,
-            color: colors.line,
-          },
-          areaStyle: {
-            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-              { offset: 0, color: colors.areaStart },
-              { offset: 1, color: colors.areaEnd },
-            ]),
-          },
-          data: data,
+    import('echarts').then((echarts) => {
+      if (!chartRef.current || disposedRef.current) return;
+
+      const chart = echarts.init(chartRef.current, 'dark');
+      chartInstanceRef.current = chart;
+
+      const colors = colorMap[color];
+      const option: EChartsOption = {
+        grid: { left: 0, top: 0, right: 0, bottom: 0 },
+        xAxis: {
+          type: 'category',
+          show: false,
+          boundaryGap: false,
         },
-      ],
-    };
+        yAxis: {
+          type: 'value',
+          show: false,
+        },
+        series: [
+          {
+            type: 'line',
+            symbol: 'none',
+            smooth: true,
+            lineStyle: {
+              width: 1.5,
+              color: colors.line,
+            },
+            areaStyle: {
+              color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                { offset: 0, color: colors.areaStart },
+                { offset: 1, color: colors.areaEnd },
+              ]),
+            },
+            data: latestDataRef.current,
+          },
+        ],
+      };
 
-    chart.setOption(option);
+      chart.setOption(option);
+      updateChart(latestDataRef.current);
 
-    const handleResize = () => {
-      chart.resize();
-    };
-    window.addEventListener('resize', handleResize);
+      handleResize = () => {
+        chart.resize();
+      };
+      window.addEventListener('resize', handleResize);
+    });
 
     return () => {
-      window.removeEventListener('resize', handleResize);
-      chart.dispose();
+      disposedRef.current = true;
+      if (handleResize) window.removeEventListener('resize', handleResize);
+      chartInstanceRef.current?.dispose();
       chartInstanceRef.current = null;
     };
-  }, [color]);
+  }, [color, updateChart]);
 
   // 更新数据
   React.useEffect(() => {
-    if (chartInstanceRef.current && data.length > 0) {
-      chartInstanceRef.current.setOption({
-        series: [{ data }],
-      });
-    }
-  }, [data]);
+    updateChart(data);
+  }, [data, updateChart]);
 
   return <div ref={chartRef} className={`w-full ${className}`} style={{ height: '56px' }} />;
 }

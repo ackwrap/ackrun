@@ -90,9 +90,10 @@ class ClashAPIClient {
       },
     });
 
-    if (!response.ok) {
-      throw new Error(`Clash API error: ${response.status} ${response.statusText}`);
-    }
+		if (!response.ok) {
+			const err = await response.json().catch(() => null);
+			throw new Error(err?.error?.message || `Clash API error: ${response.status} ${response.statusText}`);
+		}
 
     return response.json();
   }

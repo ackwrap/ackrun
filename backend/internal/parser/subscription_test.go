@@ -191,7 +191,7 @@ func TestHysteriaAdvancedFields(t *testing.T) {
 }
 
 func TestHysteria2AdvancedFields(t *testing.T) {
-	node, err := ParseProxyURI("hy2://pass@hy2.example.com:443?sni=hy2.example.com&alpn=h3&fp=chrome&insecure=1&obfs=salamander&obfs-password=obfspass#HY2-Adv")
+	node, err := ParseProxyURI("hy2://pass@hy2.example.com:443?sni=hy2.example.com&alpn=h3&fp=chrome&insecure=1&obfs=gecko&obfs-password=obfspass&min_packet_size=100&max_packet_size=1200&hop_interval=30s&hop_interval_max=45s&bbr_profile=mobile&up=20&down=100#HY2-Adv")
 	if err != nil {
 		t.Fatalf("parse hysteria2: %v", err)
 	}
@@ -201,8 +201,12 @@ func TestHysteria2AdvancedFields(t *testing.T) {
 	}
 	assertTLSEnabled(t, cfg)
 	assertUTLSFingerprint(t, cfg, "chrome")
-	if cfg["obfs-password"] != "obfspass" {
-		t.Fatalf("expected obfs-password, got %v", cfg["obfs-password"])
+	obfs, ok := cfg["obfs"].(map[string]any)
+	if !ok || obfs["type"] != "gecko" || obfs["password"] != "obfspass" || obfs["min_packet_size"] != float64(100) || obfs["max_packet_size"] != float64(1200) {
+		t.Fatalf("unexpected obfs options: %v", cfg["obfs"])
+	}
+	if cfg["hop_interval"] != "30s" || cfg["hop_interval_max"] != "45s" || cfg["bbr_profile"] != "mobile" {
+		t.Fatalf("unexpected Hysteria2 options: %+v", cfg)
 	}
 }
 
@@ -248,7 +252,7 @@ func TestNaiveTLSFields(t *testing.T) {
 }
 
 func TestAnytlsTLSFields(t *testing.T) {
-	node, err := ParseProxyURI("anytls://pass@anytls.example.com:443?sni=anytls.example.com&alpn=h2&fp=chrome&insecure=1#AnyTLS-Adv")
+	node, err := ParseProxyURI("anytls://pass@anytls.example.com:443?sni=anytls.example.com&alpn=h2&fp=chrome&insecure=1&idle_session_check_interval=20s&idle_session_timeout=40s&min_idle_session=3#AnyTLS-Adv")
 	if err != nil {
 		t.Fatalf("parse anytls: %v", err)
 	}
@@ -262,6 +266,9 @@ func TestAnytlsTLSFields(t *testing.T) {
 		t.Fatalf("expected tls.server_name=anytls.example.com, got %v", tlsMap)
 	}
 	assertUTLSFingerprint(t, cfg, "chrome")
+	if cfg["idle_session_check_interval"] != "20s" || cfg["idle_session_timeout"] != "40s" || cfg["min_idle_session"] != float64(3) {
+		t.Fatalf("unexpected AnyTLS session options: %+v", cfg)
+	}
 }
 
 func TestSocksTLSAndVersion(t *testing.T) {
@@ -366,7 +373,7 @@ func TestSSRAdvancedParams(t *testing.T) {
 }
 
 func TestSnellObfsOpts(t *testing.T) {
-	node, err := ParseProxyURI("snell://psk@snell.example.com:440?version=3&obfs=tls&obfs-host=snell.example.com&obfs-param=obfsparamval#Snell-Adv")
+	node, err := ParseProxyURI("snell://psk@snell.example.com:440?version=4&obfs=http&obfs-host=snell.example.com&reuse=true#Snell-Adv")
 	if err != nil {
 		t.Fatalf("parse snell: %v", err)
 	}
@@ -374,18 +381,37 @@ func TestSnellObfsOpts(t *testing.T) {
 	if err := json.Unmarshal([]byte(node.RawJSON), &cfg); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if cfg["version"] != "3" {
-		t.Fatalf("expected version=3, got %v", cfg["version"])
+	if cfg["version"] != float64(4) {
+		t.Fatalf("expected version=4, got %v", cfg["version"])
 	}
-	if cfg["obfs"] != "tls" {
-		t.Fatalf("expected obfs=tls, got %v", cfg["obfs"])
+	if cfg["obfs_mode"] != "http" || cfg["obfs_host"] != "snell.example.com" || cfg["reuse"] != true {
+		t.Fatalf("unexpected Snell options: %+v", cfg)
 	}
-	obfsOpts, ok := cfg["obfs-opts"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected obfs-opts map, got %v", cfg["obfs-opts"])
+}
+
+func TestSnellVersionMapping(t *testing.T) {
+	v5, err := ParseProxyURI("snell://redacted@snell.example.com:440?version=5#Snell-v5")
+	if err != nil {
+		t.Fatalf("parse Snell v5: %v", err)
 	}
-	if obfsOpts["host"] != "snell.example.com" {
-		t.Fatalf("expected obfs-opts.host, got %v", obfsOpts)
+	var v5Config map[string]any
+	if err := json.Unmarshal([]byte(v5.RawJSON), &v5Config); err != nil {
+		t.Fatalf("unmarshal Snell v5: %v", err)
+	}
+	if v5Config["version"] != float64(4) {
+		t.Fatalf("Snell v5 version = %v, want wire-compatible v4", v5Config["version"])
+	}
+
+	v6, err := ParseProxyURI("snell://long-redacted-psk@snell.example.com:440?version=6&mode=unshaped#Snell-v6")
+	if err != nil {
+		t.Fatalf("parse Snell v6: %v", err)
+	}
+	var v6Config map[string]any
+	if err := json.Unmarshal([]byte(v6.RawJSON), &v6Config); err != nil {
+		t.Fatalf("unmarshal Snell v6: %v", err)
+	}
+	if v6Config["version"] != float64(6) || v6Config["mode"] != "unshaped" {
+		t.Fatalf("unexpected Snell v6 config: %+v", v6Config)
 	}
 }
 
@@ -588,7 +614,7 @@ func TestParseRemainingProxyURIs(t *testing.T) {
 		{name: "wireguard", uri: "wireguard://wg.example.com:51820?public-key=pub&private-key=priv#WG-01", typ: "wireguard", server: "wg.example.com", port: 51820},
 		{name: "naive", uri: "naive+https://user:pass@naive.example.com:443#Naive-01", typ: "naive", server: "naive.example.com", port: 443},
 		{name: "mieru", uri: "mieru://user:pass@mieru.example.com:2999?protocol=TCP#Mieru-01", typ: "mieru", server: "mieru.example.com", port: 2999},
-		{name: "snell", uri: "snell://psk@snell.example.com:440?version=3#Snell-01", typ: "snell", server: "snell.example.com", port: 440},
+		{name: "snell", uri: "snell://psk@snell.example.com:440?version=4#Snell-01", typ: "snell", server: "snell.example.com", port: 440},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

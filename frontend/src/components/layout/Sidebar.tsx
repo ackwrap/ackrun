@@ -10,12 +10,12 @@ import {
   FileCode,
   ChevronLeft,
   ChevronRight,
-  Monitor,
+  Gauge,
 } from 'lucide-react';
 import { NavLink, useLocation } from 'react-router-dom';
 
 const navItems = [
-  { key: 'monitor', label: '实时监控', icon: <Monitor size={18} />, path: '/' },
+  { key: 'monitor', label: '仪表盘', icon: <Gauge size={18} />, path: '/' },
   { key: 'control', label: '控制面板', icon: <LayoutDashboard size={18} />, path: '/control' },
   { key: 'subscriptions', label: '订阅管理', icon: <RadioTower size={18} />, path: '/subscriptions' },
   { key: 'nodes', label: '节点管理', icon: <Network size={18} />, path: '/nodes' },
@@ -35,11 +35,11 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle:
       <div className="h-[62px] flex items-center justify-between px-5 border-b border-[var(--border-light)]">
         {!collapsed && (
           <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-sky-400 to-blue-700 text-[10px] font-black shadow-[0_0_24px_rgba(47,129,247,0.45)]">AW</div>
+            <img src="/favicon.png" alt="" className="h-9 w-9 shrink-0 drop-shadow-[0_0_16px_rgba(47,129,247,0.3)]" />
             <span className="text-[var(--text-primary)] font-bold text-lg tracking-wide">AckWrap</span>
           </div>
         )}
-        {collapsed && <span className="text-[var(--text-primary)] font-bold text-lg mx-auto">A</span>}
+        {collapsed && <img src="/favicon.png" alt="Ackwrap" className="mx-auto h-9 w-9 drop-shadow-[0_0_14px_rgba(47,129,247,0.28)]" />}
       </div>
       <nav className="flex-1 px-4 py-5 overflow-y-auto space-y-2">
         {navItems.map(item => {

@@ -7,6 +7,13 @@ export default defineConfig({
   build: {
     outDir: '../backend/ui',
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules/echarts')) return 'echarts'
+        },
+      },
+    },
   },
   resolve: {
     alias: {

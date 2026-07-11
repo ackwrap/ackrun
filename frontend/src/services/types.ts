@@ -11,6 +11,7 @@ export type InstallStatusType = 'idle' | 'downloading' | 'extracting' | 'done' |
 export interface InstallStateResponse {
   status: InstallStatusType;
   version?: string;
+  latest_version?: string;
   progress?: number;
   message?: string;
   error?: string;
@@ -58,12 +59,14 @@ export interface UpdateSettings {
   acceleration: string;
   custom_mirror_url?: string;
   github_token?: string;
+	proxy_url?: string;
 }
 
 export interface UpdateSettingsResponse {
 	acceleration: string;
 	custom_mirror_url: string;
 	github_token: string;
+	proxy_url: string;
 }
 
 export interface LogSettings {
@@ -140,8 +143,7 @@ export interface ExperimentalSettings {
 	clash_api_external_ui_download_url?: string;
 	cache_file_enabled: boolean;
 	cache_file_store_fakeip: boolean;
-	cache_file_store_rdrc: boolean;
-	cache_file_rdrc_timeout: string;
+	cache_file_store_dns: boolean;
 }
 
 export interface ExperimentalSettingsResponse {
@@ -152,8 +154,7 @@ export interface ExperimentalSettingsResponse {
 	clash_api_external_ui_download_url?: string;
 	cache_file_enabled: boolean;
 	cache_file_store_fakeip: boolean;
-	cache_file_store_rdrc: boolean;
-	cache_file_rdrc_timeout: string;
+	cache_file_store_dns: boolean;
 }
 
 export interface NodeFilter {
@@ -227,6 +228,9 @@ export interface NodeItem {
 	preferred: boolean;
 	latency_ms: number;
 	status: string;
+	last_test_at: number;
+	test_latency_ms: number;
+	test_success: boolean;
 	created_at: number;
 	updated_at: number;
 }
@@ -481,6 +485,23 @@ export interface ProxyCollectionRequest {
   enabled: boolean;
   route_rule_ids: number[];
   node_uids: string[];
+}
+
+export interface CollectionTestNodeResult {
+  uid: string;
+  success: boolean;
+  latency_ms: number;
+  error?: string;
+}
+
+export interface CollectionTestResponse {
+  collection_id: number;
+  tested: number;
+  available: number;
+  fastest_uid?: string;
+  fastest_latency?: number;
+  error?: string;
+  results: CollectionTestNodeResult[];
 }
 
 export interface ConfigGenerateRequest {
