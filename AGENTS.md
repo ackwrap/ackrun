@@ -38,7 +38,7 @@ npm run build
 
 ## 文档查询规则
 
-遇到不确定的库、框架、SDK、CLI、配置字段或协议字段问题时，必须先通过 Context7 查询对应官方文档，再决定实现或映射方式。尤其是 sing-box / Mihomo / React / Vite / Gin / SQLite 等第三方 API 和配置 schema，不允许只凭经验或错误信息直接判断。
+遇到不确定的库、框架、SDK、CLI、配置字段或协议字段问题时，必须先通过 Context7 查询对应官方文档，再决定实现或映射方式。尤其是 sing-box / Mihomo / Vue / Vite / Gin / SQLite 等第三方 API 和配置 schema，不允许只凭经验或错误信息直接判断。
 
 ## 协议支持验证规则
 
@@ -92,7 +92,7 @@ npm run build
 | SQLite Driver | modernc.org/sqlite |
 | WebSocket | Gorilla WebSocket |
 | 定时任务 | github.com/robfig/cron/v3 |
-| 前端 | React 18 + TypeScript + Vite + Tailwind CSS |
+| 前端 | Vue 3 + TypeScript + Vite + Tailwind CSS 4 + DaisyUI |
 | 配置格式 | JSON |
 | 日志 | internal/logging 包装 log.Printf |
 | API 格式 | REST + JSON |
