@@ -63,7 +63,9 @@ func normalizeToSingbox(cfg map[string]any, typ string) map[string]any {
 
 	// AlterId 转换
 	if alterId, ok := result["alterId"]; ok {
-		result["alter_id"] = alterId
+		if getInt(result, "alterId") > 0 {
+			result["alter_id"] = alterId
+		}
 		delete(result, "alterId")
 	}
 

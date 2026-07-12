@@ -64,8 +64,8 @@ func normalizeClashProxy(proxy map[string]any, typ string) map[string]any {
 	}
 
 	copyClashField(result, proxy, "uuid")
-	if alterId, ok := proxy["alterId"]; ok {
-		result["alter_id"] = alterId
+	if alterID := getInt(proxy, "alterId"); alterID > 0 {
+		result["alter_id"] = alterID
 	}
 
 	// Cipher 字段映射

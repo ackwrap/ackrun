@@ -208,7 +208,6 @@ func (svc *NodeGroupService) createDefaultProxyCollections() (int, int, error) {
 
 	defaults := []defaultCollection{
 		{name: "全球直连", referencedGroupIDs: []int64{}, builtinOutbounds: []string{"direct"}},
-		{name: "应用净化", builtinOutbounds: []string{"direct"}},
 	}
 	if allNodesGroupID > 0 {
 		defaults[0].referencedGroupIDs = []int64{allNodesGroupID}

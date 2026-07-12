@@ -5,9 +5,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"regexp"
+	goruntime "runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -53,24 +57,14 @@ func (svc *SingboxService) Start() (*model.ActionResponse, error) {
 		return nil, fmt.Errorf("sing-box binary not found")
 	}
 
-	configPath, ok, err := svc.paths.ActiveConfigPath()
+	configPath, err := svc.validateActiveConfig()
 	if err != nil {
-		return nil, err
-	}
-	if !ok {
-		return nil, fmt.Errorf("config file not found")
-	}
-	if output, err := exec.Command(svc.paths.BinaryPath, "check", "-c", configPath).CombinedOutput(); err != nil {
-		message := strings.TrimSpace(string(output))
-		if message == "" {
-			message = err.Error()
-		}
 		svc.realtime.Broadcast("core.status", map[string]any{
 			"status": "error",
 			"pid":    0,
-			"error":  message,
+			"error":  err.Error(),
 		})
-		return nil, fmt.Errorf("config check failed: %s", message)
+		return nil, err
 	}
 
 	logging.Info("core.start", "starting sing-box")
@@ -204,11 +198,32 @@ func (svc *SingboxService) Stop() (*model.ActionResponse, error) {
 }
 
 func (svc *SingboxService) Restart() (*model.ActionResponse, error) {
+	if _, err := svc.validateActiveConfig(); err != nil {
+		return nil, err
+	}
 	if _, err := svc.Stop(); err != nil {
 		return nil, err
 	}
 
 	return svc.Start()
+}
+
+func (svc *SingboxService) validateActiveConfig() (string, error) {
+	configPath, ok, err := svc.paths.ActiveConfigPath()
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", fmt.Errorf("config file not found")
+	}
+	if output, err := exec.Command(svc.paths.BinaryPath, "check", "-c", configPath).CombinedOutput(); err != nil {
+		message := strings.TrimSpace(cleanLogLine(string(output)))
+		if message == "" {
+			message = err.Error()
+		}
+		return "", fmt.Errorf("config check failed: %s", message)
+	}
+	return configPath, nil
 }
 
 func (svc *SingboxService) ReloadConfig() (*model.ActionResponse, error) {
@@ -273,21 +288,61 @@ func (svc *SingboxService) captureCoreLog(reader io.Reader, source string) {
 	}
 }
 
-// CloseConnections closes active connections by restarting the service.
+// CloseConnections closes active connections through sing-box's Clash API.
 func (svc *SingboxService) CloseConnections() (*model.ActionResponse, error) {
 	logging.Info("core.close_connections", "closing all connections")
 	if !svc.IsRunning() {
 		return nil, fmt.Errorf("sing-box is not running")
 	}
-	if _, err := svc.Restart(); err != nil {
+	settings, err := svc.store.GetExperimentalSettings()
+	if err != nil {
+		return nil, fmt.Errorf("read Clash API settings: %w", err)
+	}
+	port := "9090"
+	secret := ""
+	if settings != nil {
+		if settings.ClashAPIPort != "" {
+			port = settings.ClashAPIPort
+		}
+		secret = settings.ClashAPISecret
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return nil, fmt.Errorf("invalid Clash API port")
+	}
+	target := "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(portNumber)) + "/connections"
+	if err := requestClashAPI(http.MethodDelete, target, secret); err != nil {
 		return nil, fmt.Errorf("failed to close connections: %w", err)
 	}
 	return &model.ActionResponse{Success: true, Message: "all connections closed"}, nil
 }
 
+func requestClashAPI(method, target, secret string) error {
+	req, err := http.NewRequest(method, target, nil)
+	if err != nil {
+		return err
+	}
+	if secret != "" {
+		req.Header.Set("Authorization", "Bearer "+secret)
+	}
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("Clash API returned HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
 // ResetFirewall resets local firewall rules on Windows.
 func (svc *SingboxService) ResetFirewall() (*model.ActionResponse, error) {
 	logging.Info("core.reset_firewall", "resetting firewall rules")
+	if goruntime.GOOS != "windows" {
+		return nil, fmt.Errorf("reset firewall is only supported on Windows")
+	}
 	cmd := exec.Command("netsh", "advfirewall", "reset")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -301,6 +356,9 @@ func (svc *SingboxService) ResetFirewall() (*model.ActionResponse, error) {
 // FlushDNS clears the local DNS cache on Windows.
 func (svc *SingboxService) FlushDNS() (*model.ActionResponse, error) {
 	logging.Info("core.flush_dns", "flushing DNS cache")
+	if goruntime.GOOS != "windows" {
+		return nil, fmt.Errorf("flush DNS is only supported on Windows")
+	}
 	cmd := exec.Command("ipconfig", "/flushdns")
 	output, err := cmd.CombinedOutput()
 	if err != nil {

@@ -15,8 +15,8 @@ import {
 import { NavLink, useLocation } from 'react-router-dom';
 
 const navItems = [
-  { key: 'monitor', label: '仪表盘', icon: <Gauge size={18} />, path: '/' },
   { key: 'control', label: '控制面板', icon: <LayoutDashboard size={18} />, path: '/control' },
+  { key: 'monitor', label: '仪表盘', icon: <Gauge size={18} />, path: '/' },
   { key: 'subscriptions', label: '订阅管理', icon: <RadioTower size={18} />, path: '/subscriptions' },
   { key: 'nodes', label: '节点管理', icon: <Network size={18} />, path: '/nodes' },
   { key: 'rules', label: '规则管理', icon: <ListChecks size={18} />, path: '/rules' },

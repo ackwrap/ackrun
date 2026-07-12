@@ -306,29 +306,29 @@ export function NodesPage() {
   return (
     <div className="space-y-4">
       <PageHeader title="节点管理" />
-      <section className="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[linear-gradient(180deg,rgba(20,33,52,0.92),rgba(16,27,43,0.74))] p-5 shadow-[var(--shadow-card)]">
+      <section className="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-card)]">
         <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <div className="text-base font-semibold text-white">节点列表 ({total})</div>
+            <div className="text-base font-semibold text-[var(--text-primary)]">节点列表 ({total})</div>
             <div className="mt-1 text-sm text-[var(--text-secondary)]">管理订阅解析后的节点，控制是否参与后续配置生成。</div>
             <div className="mt-1 text-xs text-[var(--text-tertiary)]">共 {total} 个节点{loading ? '，加载中...' : ''}</div>
           </div>
           <div className="flex flex-wrap justify-start gap-2 lg:justify-end">
-            <button onClick={runTCPing} disabled={tcpingLoading || nodes.length === 0} className={`inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border-default)] px-3 text-sm ${tcpingLoading || nodes.length === 0 ? 'cursor-not-allowed bg-white/[0.03] text-[var(--text-tertiary)]' : 'bg-white/[0.04] text-white hover:bg-white/[0.08]'}`}><Zap size={14} />{tcpingLoading ? '测速中...' : '节点测速'}</button>
-            <button onClick={syncSubscriptions} className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border-default)] bg-white/[0.04] px-3 text-sm text-white hover:bg-white/[0.08]"><RefreshCw size={14} />同步外部订阅</button>
-            <button onClick={addEmoji} disabled={selectedNodes.length === 0} className={`inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border-default)] px-3 text-sm ${selectedNodes.length === 0 ? 'cursor-not-allowed bg-white/[0.03] text-[var(--text-tertiary)]' : 'bg-white/[0.04] text-white hover:bg-white/[0.08]'}`}><Smile size={14} />添加 emoji ({selectedNodes.length})</button>
-            <button onClick={openRename} disabled={selectedNodes.length === 0} className={`inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border-default)] px-3 text-sm ${selectedNodes.length === 0 ? 'cursor-not-allowed bg-white/[0.03] text-[var(--text-tertiary)]' : 'bg-white/[0.04] text-white hover:bg-white/[0.08]'}`}><Edit3 size={14} />修改名称 ({selectedNodes.length})</button>
-            <button onClick={batchSetPreferred} disabled={selectedNodes.length === 0} className={`inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border-default)] px-3 text-sm ${selectedNodes.length === 0 ? 'cursor-not-allowed bg-white/[0.03] text-[var(--text-tertiary)]' : 'bg-white/[0.04] text-white hover:bg-white/[0.08]'}`}><Tags size={14} />管理首选 ({selectedNodes.length})</button>
-            <button onClick={() => batchSetEnabled(false)} disabled={selectedNodes.length === 0} className={`inline-flex h-9 items-center gap-2 rounded-md border border-red-400/30 px-3 text-sm ${selectedNodes.length === 0 ? 'cursor-not-allowed bg-red-500/5 text-red-200/40' : 'bg-red-500/20 text-red-100 hover:bg-red-500/30'}`}><Trash2 size={14} />批量禁用 ({selectedNodes.length})</button>
-            <button onClick={batchDelete} disabled={selectedNodes.length === 0} className={`inline-flex h-9 items-center gap-2 rounded-md border border-red-500/50 px-3 text-sm ${selectedNodes.length === 0 ? 'cursor-not-allowed bg-red-500/5 text-red-200/40' : 'bg-red-500/30 text-red-50 hover:bg-red-500/40'}`}><Trash2 size={14} />批量删除 ({selectedNodes.length})</button>
-            <button onClick={() => batchSetEnabled(true)} disabled={selectedNodes.length === 0} className={`h-9 rounded-md border border-emerald-400/30 px-3 text-sm ${selectedNodes.length === 0 ? 'cursor-not-allowed bg-emerald-500/5 text-emerald-200/40' : 'bg-emerald-500/20 text-emerald-100 hover:bg-emerald-500/30'}`}>批量启用</button>
-            <button onClick={() => { loadFacetNodes(); loadNodes(); }} className="h-9 rounded-md border border-[var(--border-default)] bg-white/[0.04] px-4 text-sm text-white hover:bg-white/[0.08]">刷新</button>
+            <button onClick={runTCPing} disabled={tcpingLoading || nodes.length === 0} className="aw-action-button aw-action-neutral h-9 px-3 text-sm"><Zap size={14} />{tcpingLoading ? '测速中...' : '节点测速'}</button>
+            <button onClick={syncSubscriptions} className="aw-action-button aw-action-neutral h-9 px-3 text-sm"><RefreshCw size={14} />同步外部订阅</button>
+            <button onClick={addEmoji} disabled={selectedNodes.length === 0} className="aw-action-button aw-action-neutral h-9 px-3 text-sm"><Smile size={14} />添加 emoji ({selectedNodes.length})</button>
+            <button onClick={openRename} disabled={selectedNodes.length === 0} className="aw-action-button aw-action-neutral h-9 px-3 text-sm"><Edit3 size={14} />修改名称 ({selectedNodes.length})</button>
+            <button onClick={batchSetPreferred} disabled={selectedNodes.length === 0} className="aw-action-button aw-action-neutral h-9 px-3 text-sm"><Tags size={14} />管理首选 ({selectedNodes.length})</button>
+            <button onClick={() => batchSetEnabled(false)} disabled={selectedNodes.length === 0} className="aw-action-button aw-action-danger h-9 px-3 text-sm"><Trash2 size={14} />批量禁用 ({selectedNodes.length})</button>
+            <button onClick={batchDelete} disabled={selectedNodes.length === 0} className="aw-action-button aw-action-danger h-9 px-3 text-sm"><Trash2 size={14} />批量删除 ({selectedNodes.length})</button>
+            <button onClick={() => batchSetEnabled(true)} disabled={selectedNodes.length === 0} className="aw-action-button aw-action-success h-9 px-3 text-sm">批量启用</button>
+            <button onClick={() => { loadFacetNodes(); loadNodes(); }} className="aw-action-button aw-action-neutral h-9 px-4 text-sm">刷新</button>
           </div>
         </div>
 
         <Toast message={message} type={toastType} />
 
-        <div className="mb-4 space-y-3 rounded-md border border-[var(--border-default)] bg-white/[0.025] p-3">
+        <div className="mb-4 space-y-3 rounded-md border border-[var(--border-default)] bg-[var(--bg-base)] p-3">
           <div>
             <div className="mb-2 text-xs font-medium text-[var(--text-tertiary)]">按协议筛选</div>
             <div className="flex flex-wrap gap-2">

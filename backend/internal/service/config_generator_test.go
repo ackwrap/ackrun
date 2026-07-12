@@ -1,9 +1,12 @@
 package service
 
 import (
+	"fmt"
+	"path/filepath"
 	"testing"
 
 	"github.com/ackwrap/ackwrap/internal/model"
+	"github.com/ackwrap/ackwrap/internal/store"
 )
 
 func TestMapMihomoUDPFlagToSingboxNetwork(t *testing.T) {
@@ -145,7 +148,7 @@ func TestNeedsGeneratedDNSBootstrapForUnresolvedDoH(t *testing.T) {
 func TestBuiltinOutboundTagsOnlyIncludesRealOutbounds(t *testing.T) {
 	got := collectionBuiltinOutboundTags(&model.ProxyCollectionWithNodes{
 		ProxyCollection: model.ProxyCollection{
-			Name:     "应用净化",
+			Name:     "custom",
 			NodeUIDs: `["reject","block","direct"]`,
 		},
 		NodeUIDs: []string{"reject", "block", "direct"},
@@ -210,7 +213,7 @@ func TestGenerateNodeOutboundSupportsNewCoreProtocols(t *testing.T) {
 		typ     string
 		rawJSON string
 	}{
-		{typ: "anytls", rawJSON: `{"type":"anytls","server":"example.com","server_port":443,"password":"redacted","tls":{"enabled":true}}`},
+		{typ: "anytls", rawJSON: `{"type":"anytls","server":"example.com","server_port":443,"password":"redacted"}`},
 		{typ: "snell", rawJSON: `{"type":"snell","server":"example.com","server_port":443,"version":4,"psk":"redacted"}`},
 	}
 	for _, test := range tests {
@@ -222,6 +225,121 @@ func TestGenerateNodeOutboundSupportsNewCoreProtocols(t *testing.T) {
 			if outbound["type"] != test.typ || outbound["tag"] != test.typ+"-node" {
 				t.Fatalf("unexpected outbound: %+v", outbound)
 			}
+			if test.typ == "anytls" {
+				tlsOptions, ok := outbound["tls"].(map[string]interface{})
+				if !ok || tlsOptions["enabled"] != true {
+					t.Fatalf("required TLS was not enabled: %+v", outbound["tls"])
+				}
+			}
 		})
 	}
+}
+
+func TestEnsureRequiredOutboundTLS(t *testing.T) {
+	for _, outboundType := range []string{"anytls", "hysteria", "hysteria2", "naive", "shadowtls", "trojan", "tuic"} {
+		t.Run(outboundType, func(t *testing.T) {
+			nodeData := map[string]interface{}{"tls": map[string]interface{}{"enabled": false}}
+			ensureRequiredOutboundTLS(nodeData, outboundType)
+			tlsOptions := nodeData["tls"].(map[string]interface{})
+			if tlsOptions["enabled"] != true {
+				t.Fatalf("TLS enabled = %v, want true", tlsOptions["enabled"])
+			}
+		})
+	}
+
+	nodeData := map[string]interface{}{}
+	ensureRequiredOutboundTLS(nodeData, "vmess")
+	if _, exists := nodeData["tls"]; exists {
+		t.Fatal("optional TLS protocol should remain unchanged")
+	}
+}
+
+func TestGenerateNodeOutboundRemovesZeroVMessAlterID(t *testing.T) {
+	service := &ConfigGeneratorService{}
+	node := &model.Node{
+		Name:    "legacy-vmess",
+		Type:    "vmess",
+		RawJSON: `{"type":"vmess","server":"example.com","server_port":443,"uuid":"00000000-0000-0000-0000-000000000000","cipher":"auto","alter_id":0}`,
+	}
+	outbound, err := service.generateNodeOutbound(node, "legacy-vmess", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := outbound["alter_id"]; exists {
+		t.Fatalf("generated outbound contains unsupported alter_id: %+v", outbound)
+	}
+	if _, exists := outbound["cipher"]; exists {
+		t.Fatalf("generated outbound contains legacy cipher: %+v", outbound)
+	}
+	if outbound["security"] != "auto" {
+		t.Fatalf("generated outbound security = %v, want auto", outbound["security"])
+	}
+}
+
+func TestGenerateNodeOutboundRejectsNonZeroVMessAlterID(t *testing.T) {
+	service := &ConfigGeneratorService{}
+	node := &model.Node{
+		Name:    "legacy-vmess",
+		Type:    "vmess",
+		RawJSON: `{"type":"vmess","server":"example.com","server_port":443,"uuid":"00000000-0000-0000-0000-000000000000","security":"auto","alter_id":64}`,
+	}
+	if _, err := service.generateNodeOutbound(node, "legacy-vmess", nil); err == nil {
+		t.Fatal("generateNodeOutbound() error = nil, want unsupported legacy alter_id error")
+	}
+}
+
+func TestGenerateOutboundsDoesNotApplyNodeListPageLimit(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	subscription, err := db.CreateSubscription(&model.SubscriptionRequest{
+		Name: "synthetic-subscription", URL: "https://example.com/subscription",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := make([]model.ParsedNode, 0, 75)
+	for index := 0; index < 75; index++ {
+		server := fmt.Sprintf("node-%03d.example.com", index)
+		nodes = append(nodes, model.ParsedNode{
+			Name:       fmt.Sprintf("Node %03d", index),
+			Type:       "socks",
+			Server:     server,
+			ServerPort: 1080,
+			RawJSON:    fmt.Sprintf(`{"type":"socks","server":%q,"server_port":1080}`, server),
+		})
+	}
+	if err := db.ReplaceSubscriptionNodes(subscription.ID, nodes); err != nil {
+		t.Fatal(err)
+	}
+	group, err := db.CreateNodeGroup(&model.NodeGroupRequest{
+		Name: "全部节点", Type: "selector", FilterInclude: ".*", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	service := NewConfigGeneratorService(db, nil)
+	outbounds, _, err := service.generateOutbounds()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range outbounds {
+		outbound, ok := item.(map[string]interface{})
+		if !ok || outbound["tag"] != group.Name {
+			continue
+		}
+		members, ok := outbound["outbounds"].([]string)
+		if !ok {
+			t.Fatalf("group outbounds type = %T, want []string", outbound["outbounds"])
+		}
+		if len(members) != 75 {
+			t.Fatalf("group member count = %d, want 75", len(members))
+		}
+		return
+	}
+	t.Fatal("generated all-nodes group not found")
 }

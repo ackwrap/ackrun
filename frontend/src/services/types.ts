@@ -4,6 +4,8 @@ export interface RuntimeResponse {
   status: RuntimeStatus;
   pid?: number;
   version?: string;
+  platform?: string;
+  proxy_port?: number;
 }
 
 export type InstallStatusType = 'idle' | 'downloading' | 'extracting' | 'done' | 'failed';

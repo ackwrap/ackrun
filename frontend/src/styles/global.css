@@ -65,6 +65,14 @@ select:disabled {
   background-color: rgba(15, 23, 42, 0.04) !important;
 }
 
+:root[data-theme='light'] [class*="bg-white/"] {
+  background-color: rgba(15, 23, 42, 0.035) !important;
+}
+
+:root[data-theme='light'] [class*="hover:bg-white/"]:hover {
+  background-color: var(--bg-sidebar-hover) !important;
+}
+
 :root[data-theme='light'] input,
 :root[data-theme='light'] textarea,
 :root[data-theme='light'] select {
@@ -108,8 +116,15 @@ select:disabled {
 }
 
 :root[data-theme='light'] .text-red-200,
-:root[data-theme='light'] .text-red-300 {
+:root[data-theme='light'] .text-red-300,
+:root[data-theme='light'] [class*="text-red-50"],
+:root[data-theme='light'] [class*="text-red-100"] {
   color: #b91c1c !important;
+}
+
+:root[data-theme='light'] [class*="text-emerald-100"],
+:root[data-theme='light'] [class*="text-emerald-200"] {
+  color: #047857 !important;
 }
 
 :root[data-theme='light'] .text-yellow-100,
@@ -145,6 +160,40 @@ button:disabled {
 .animate-pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
 
 @layer components {
+  .aw-action-button {
+    @apply inline-flex items-center justify-center gap-2 rounded-md border font-medium transition-colors disabled:cursor-not-allowed;
+    border-color: var(--border-default);
+  }
+
+  .aw-action-neutral {
+    background: var(--button-secondary-bg);
+    color: var(--text-primary);
+  }
+
+  .aw-action-neutral:hover:not(:disabled) {
+    background: var(--button-secondary-hover);
+  }
+
+  .aw-action-danger {
+    background: var(--color-error-bg);
+    border-color: color-mix(in srgb, var(--color-error) 34%, transparent);
+    color: var(--color-error);
+  }
+
+  .aw-action-danger:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--color-error) 20%, transparent);
+  }
+
+  .aw-action-success {
+    background: var(--color-success-bg);
+    border-color: color-mix(in srgb, var(--color-success) 34%, transparent);
+    color: var(--color-success);
+  }
+
+  .aw-action-success:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--color-success) 20%, transparent);
+  }
+
   .aw-modal-backdrop {
     @apply fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-sm;
     background: var(--bg-overlay);

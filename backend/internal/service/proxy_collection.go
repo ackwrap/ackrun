@@ -229,7 +229,7 @@ func normalizeCollectionHealthSettings(req *model.ProxyCollectionRequest) error 
 
 func IsSystemProxyCollectionName(name string) bool {
 	switch name {
-	case "全球直连", "应用净化":
+	case "全球直连":
 		return true
 	default:
 		return false

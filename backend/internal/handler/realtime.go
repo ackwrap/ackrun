@@ -92,7 +92,7 @@ func (h *RealtimeHandler) pushInitialState(conn *websocket.Conn) {
 				"pid":    pid,
 			},
 		})
-	} else {
+	} else if runtimeStatus != "not_installed" && runtimeStatus != "no_config" {
 		conn.WriteJSON(map[string]any{
 			"type": "core.status",
 			"time": 0,

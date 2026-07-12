@@ -17,6 +17,7 @@ export function MonitorPage() {
   const [totalDown, setTotalDown] = React.useState(0);
   const [speedUp, setSpeedUp] = React.useState(0);
   const [speedDown, setSpeedDown] = React.useState(0);
+  const [memory, setMemory] = React.useState(0);
   const [connected, setConnected] = React.useState(false);
   const [clashUnavailableReason, setClashUnavailableReason] = React.useState('');
   const [message, setMessage] = React.useState('');
@@ -37,6 +38,7 @@ export function MonitorPage() {
   const [uploadSpeedHistory, setUploadSpeedHistory] = React.useState<number[]>([]);
   const [downloadSpeedHistory, setDownloadSpeedHistory] = React.useState<number[]>([]);
   const [connectionCountHistory, setConnectionCountHistory] = React.useState<number[]>([]);
+  const [memoryHistory, setMemoryHistory] = React.useState<number[]>([]);
 
   const chartRef = React.useRef<TrafficChartRef>(null);
 
@@ -81,18 +83,19 @@ export function MonitorPage() {
   React.useEffect(() => {
     const clashClient = getClashClient();
 
-    clashClient.connectTraffic((data: TrafficData) => {
-      markClashAvailable();
+    clashClient.connectTraffic(
+      (data: TrafficData) => {
+        markClashAvailable();
 
-      // Clash traffic events already contain the current one-second throughput.
-      setSpeedUp(data.up);
-      setSpeedDown(data.down);
-      setTotalUp(prev => prev + data.up);
-      setTotalDown(prev => prev + data.down);
-      setUploadSpeedHistory(prev => [...prev, data.up].slice(-60));
-      setDownloadSpeedHistory(prev => [...prev, data.down].slice(-60));
-      chartRef.current?.addData(data.up, data.down);
-    });
+        // Clash traffic events already contain the current one-second throughput.
+        setSpeedUp(data.up);
+        setSpeedDown(data.down);
+        setUploadSpeedHistory(prev => [...prev, data.up].slice(-60));
+        setDownloadSpeedHistory(prev => [...prev, data.down].slice(-60));
+        chartRef.current?.addData(data.up, data.down);
+      },
+      error => markClashUnavailable(new Error(error)),
+    );
 
     ensureClashAvailable();
 
@@ -119,7 +122,7 @@ export function MonitorPage() {
   }, [connected, ensureClashAvailable, isClashUnavailableError, markClashUnavailable, showMessage]);
 
   React.useEffect(() => {
-    if (activeTab === 'proxies' && Object.keys(proxies).length === 0) {
+    if ((activeTab === 'overview' || activeTab === 'proxies') && Object.keys(proxies).length === 0) {
       loadProxies();
     }
   }, [activeTab, proxies, loadProxies]);
@@ -148,7 +151,11 @@ export function MonitorPage() {
     try {
       const result = await getClashClient().getConnections();
       setConnections(result.connections);
+      setTotalUp(result.uploadTotal);
+      setTotalDown(result.downloadTotal);
+      setMemory(result.memory || 0);
       setConnectionCountHistory(prev => [...prev, result.connections.length].slice(-60));
+      setMemoryHistory(prev => [...prev, result.memory || 0].slice(-60));
     } catch (e: any) {
       if (isClashUnavailableError(e)) {
         markClashUnavailable(e);
@@ -253,11 +260,17 @@ export function MonitorPage() {
             totalDown={totalDown}
             speedUp={speedUp}
             speedDown={speedDown}
+            memory={memory}
             connectionCount={connections.length}
+            connections={connections}
+            proxyGroups={proxyGroups}
             uploadSpeedHistory={uploadSpeedHistory}
             downloadSpeedHistory={downloadSpeedHistory}
             connectionCountHistory={connectionCountHistory}
+            memoryHistory={memoryHistory}
             chartRef={chartRef}
+            onOpenConnections={() => setActiveTab('connections')}
+            onOpenProxies={() => setActiveTab('proxies')}
           />
         )}
 

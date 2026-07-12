@@ -15,7 +15,7 @@ frontend/.vite/
 img
 zashboard-main
 sing-box
-
+zashboard-*
 # Go
 *.exe
 *.exe~

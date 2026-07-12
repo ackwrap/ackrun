@@ -562,6 +562,9 @@ func TestClashNormalized(t *testing.T) {
 	if cfg["security"] != "auto" {
 		t.Fatalf("expected security=auto, got %v", cfg["security"])
 	}
+	if _, exists := cfg["alter_id"]; exists {
+		t.Fatalf("zero alterId must not be persisted in normalized VMess config: %+v", cfg)
+	}
 	if nodes[2].Type != "socks" {
 		t.Fatalf("expected socks5 alias normalized to socks, got %+v", nodes[2])
 	}

@@ -10,7 +10,9 @@ const (
 )
 
 type RuntimeResponse struct {
-	Status  RuntimeStatus `json:"status"`
-	PID     int           `json:"pid,omitempty"`
-	Version string        `json:"version,omitempty"`
+	Status    RuntimeStatus `json:"status"`
+	PID       int           `json:"pid,omitempty"`
+	Version   string        `json:"version,omitempty"`
+	Platform  string        `json:"platform,omitempty"`
+	ProxyPort int           `json:"proxy_port,omitempty"`
 }

@@ -1,6 +1,8 @@
-import { RefreshCw } from 'lucide-react';
+import React from 'react';
+import { ChevronDown, Gauge, RefreshCw, Zap } from 'lucide-react';
 import type { ProxyGroup, ProxyNode } from '@/services/clash';
-import { monitorPanelBodyClass, monitorPanelClass, proxyGroupIcon } from './monitorUtils';
+import { monitorPanelBodyClass } from './monitorUtils';
+import { ProxyGroupIcon } from './ProxyGroupIcon';
 
 interface ProxyGroupsPanelProps {
   proxies: Record<string, ProxyGroup | ProxyNode>;
@@ -23,19 +25,36 @@ export function ProxyGroupsPanel({
   onSelectProxy,
   onTestDelay,
 }: ProxyGroupsPanelProps) {
+  const [filter, setFilter] = React.useState<'all' | 'selector' | 'automatic'>('all');
+  const selectorCount = proxyGroups.filter(group => group.type === 'Selector').length;
+  const automaticCount = proxyGroups.length - selectorCount;
+  const filteredGroups = proxyGroups.filter(group => (
+    filter === 'all' || (filter === 'selector' ? group.type === 'Selector' : group.type !== 'Selector')
+  ));
+  const desktopColumns = [
+    filteredGroups.filter((_, index) => index % 2 === 0),
+    filteredGroups.filter((_, index) => index % 2 === 1),
+  ];
+  const changeFilter = (nextFilter: 'all' | 'selector' | 'automatic') => {
+    setFilter(nextFilter);
+    onSelectGroup(null);
+  };
+
   return (
-    <div className="space-y-4">
-      <div className={`${monitorPanelClass} flex items-center justify-between`}>
-        <div>
-          <h3 className="text-sm font-semibold text-[var(--text-primary)]">策略组列表</h3>
-          <p className="mt-0.5 text-xs text-[var(--text-tertiary)]">共 {proxyGroups.length} 个策略组</p>
+    <div className="space-y-3 pb-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-2 shadow-[var(--shadow-card)]">
+        <div className="flex flex-wrap items-center gap-1">
+          <SummaryChip label="全部" count={proxyGroups.length} active={filter === 'all'} onClick={() => changeFilter('all')} />
+          <SummaryChip label="手动策略" count={selectorCount} active={filter === 'selector'} onClick={() => changeFilter('selector')} />
+          <SummaryChip label="自动选择" count={automaticCount} active={filter === 'automatic'} onClick={() => changeFilter('automatic')} />
         </div>
         <button
+          type="button"
           onClick={onRefresh}
           disabled={loading}
-          className="inline-flex h-8 items-center gap-2 rounded-md border border-[var(--border-default)] bg-white/[0.04] px-3 text-xs text-[var(--text-primary)] hover:bg-white/[0.08] disabled:opacity-50"
+          className="inline-flex h-8 items-center gap-2 rounded-lg border border-[var(--border-default)] bg-[var(--bg-base)] px-3 text-xs font-medium text-[var(--text-secondary)] transition hover:border-[var(--color-primary)] hover:text-[var(--text-primary)] disabled:opacity-50"
         >
-          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+          <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
           刷新
         </button>
       </div>
@@ -44,22 +63,51 @@ export function ProxyGroupsPanel({
         <EmptyState text="加载中..." />
       ) : proxyGroups.length === 0 ? (
         <EmptyState text="暂无策略组" />
+      ) : filteredGroups.length === 0 ? (
+        <EmptyState text="当前分类暂无策略组" />
       ) : (
-        <div className="space-y-3">
-          {proxyGroups.map(group => (
-            <ProxyGroupCard
-              key={group.name}
-              group={group}
-              proxies={proxies}
-              expanded={selectedGroup === group.name}
-              onToggle={() => onSelectGroup(selectedGroup === group.name ? null : group.name)}
-              onSelectProxy={onSelectProxy}
-              onTestDelay={onTestDelay}
-            />
-          ))}
-        </div>
+        <>
+          <div className="space-y-3 lg:hidden">
+            {filteredGroups.map(group => (
+              <ProxyGroupCard
+                key={group.name}
+                group={group}
+                proxies={proxies}
+                expanded={selectedGroup === group.name}
+                onToggle={() => onSelectGroup(selectedGroup === group.name ? null : group.name)}
+                onSelectProxy={onSelectProxy}
+                onTestDelay={onTestDelay}
+              />
+            ))}
+          </div>
+          <div className="hidden items-start gap-3 lg:grid lg:grid-cols-2">
+            {desktopColumns.map((groups, columnIndex) => (
+              <div key={columnIndex} className="space-y-3">
+                {groups.map(group => (
+                  <ProxyGroupCard
+                    key={group.name}
+                    group={group}
+                    proxies={proxies}
+                    expanded={selectedGroup === group.name}
+                    onToggle={() => onSelectGroup(selectedGroup === group.name ? null : group.name)}
+                    onSelectProxy={onSelectProxy}
+                    onTestDelay={onTestDelay}
+                  />
+                ))}
+              </div>
+            ))}
+          </div>
+        </>
       )}
     </div>
+  );
+}
+
+function SummaryChip({ label, count, active = false, onClick }: { label: string; count: number; active?: boolean; onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick} className={`inline-flex h-8 items-center gap-2 rounded-lg px-3 text-xs font-medium transition ${active ? 'bg-[var(--color-primary-bg)] text-[var(--color-primary)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-sidebar-hover)] hover:text-[var(--text-primary)]'}`}>
+      {label}<b className="font-semibold tabular-nums opacity-70">{count}</b>
+    </button>
   );
 }
 
@@ -81,62 +129,126 @@ interface ProxyGroupCardProps {
 }
 
 function ProxyGroupCard({ group, proxies, expanded, onToggle, onSelectProxy, onTestDelay }: ProxyGroupCardProps) {
+  const members = group.all || [];
+  const delays = members.map(name => latestDelay(proxies[name]));
+  const knownCount = delays.filter(delay => delay > 0).length;
+  const currentDelay = latestDelay(proxies[group.now]);
+  const distribution = delayDistribution(delays);
+
   return (
-    <div className={monitorPanelBodyClass}>
-      <div className="cursor-pointer p-4" onClick={onToggle}>
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="text-lg">{proxyGroupIcon(group)}</div>
+    <section className={`overflow-hidden rounded-[var(--radius-xl)] border bg-[var(--bg-surface)] shadow-[var(--shadow-card)] transition ${expanded ? 'border-[var(--color-primary)]' : 'border-[var(--border-default)] hover:border-[var(--border-strong)]'}`}>
+      <button type="button" onClick={onToggle} className="block w-full p-4 text-left">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--bg-base)]"><ProxyGroupIcon group={group} className="h-5 w-5" /></span>
             <div className="min-w-0">
-              <div className="truncate font-semibold text-[var(--text-primary)]">{group.name}</div>
-              <div className="mt-0.5 text-xs text-[var(--text-tertiary)]">
-                {group.type === 'Selector' ? '手动选择' : '自动测速'} · {group.all?.length || 0} 个节点
+              <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
+                <h3 className="truncate text-sm font-semibold text-[var(--text-primary)]">{group.name}</h3>
+                <span className="text-[9px] font-medium uppercase tracking-[0.12em] text-[var(--text-tertiary)]">{group.type}</span>
+                <span className="text-[10px] tabular-nums text-[var(--text-tertiary)]">{knownCount}/{members.length}</span>
+              </div>
+              <div className="mt-2 flex min-w-0 items-center gap-2 text-xs">
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--color-primary)]" />
+                <span className="truncate font-medium text-[var(--text-secondary)]">{group.now || '未选择节点'}</span>
               </div>
             </div>
           </div>
-          <div className="shrink-0 text-right">
-            <div className="max-w-[160px] truncate text-sm text-[var(--text-primary)]">{group.now || '无'}</div>
-            {group.history?.[0]?.delay && <div className="mt-0.5 text-xs text-emerald-400">{group.history[0].delay}ms</div>}
+          <div className="flex shrink-0 items-center gap-2">
+            {currentDelay > 0 && <DelayBadge delay={currentDelay} />}
+            <ChevronDown size={15} className={`text-[var(--text-tertiary)] transition-transform ${expanded ? 'rotate-180' : ''}`} />
           </div>
         </div>
-      </div>
 
-      {expanded && group.all && (
-        <div className="border-t border-[var(--border-default)] p-4">
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {group.all.map(proxyName => {
-              const proxy = proxies[proxyName] as ProxyNode | undefined;
+        <LatencyBar distribution={distribution} total={members.length} />
+      </button>
+
+      {expanded && (
+        <div className="border-t border-[var(--border-light)] bg-[var(--bg-base)]/45 p-3 sm:p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-[var(--text-tertiary)]">
+            <span>{group.type === 'Selector' ? '点击节点切换策略' : '自动测速策略，仅展示状态'}</span>
+            <span>测速结果 {knownCount}/{members.length}</span>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2 2xl:grid-cols-3">
+            {members.map(proxyName => {
               const isCurrent = group.now === proxyName;
-              const delay = proxy?.history?.[0]?.delay;
-
+              const delay = latestDelay(proxies[proxyName]);
               return (
-                <button
-                  key={proxyName}
-                  onClick={() => group.type === 'Selector' && onSelectProxy(group.name, proxyName)}
-                  onContextMenu={event => {
-                    event.preventDefault();
-                    onTestDelay(proxyName);
-                  }}
-                  disabled={group.type !== 'Selector'}
-                  className={`flex items-center justify-between rounded-lg border p-3 text-left text-sm transition-colors ${
-                    isCurrent
-                      ? 'border-blue-400/50 bg-blue-500/20 text-blue-100'
-                      : 'border-[var(--border-default)] bg-white/[0.02] text-[var(--text-secondary)] hover:bg-white/[0.04] hover:text-white'
-                  } ${group.type !== 'Selector' ? 'cursor-default' : 'cursor-pointer'}`}
-                >
-                  <span className="truncate">{proxyName}</span>
-                  {delay !== undefined && (
-                    <span className={`ml-2 text-xs ${delay < 100 ? 'text-emerald-400' : delay < 300 ? 'text-yellow-400' : 'text-red-400'}`}>{delay}ms</span>
-                  )}
-                </button>
+                <div key={proxyName} className={`flex min-w-0 items-center rounded-lg border transition ${isCurrent ? 'border-[var(--color-primary)] bg-[var(--color-primary-bg)]' : 'border-[var(--border-light)] bg-[var(--bg-surface)] hover:border-[var(--border-strong)]'}`}>
+                  <button
+                    type="button"
+                    onClick={() => group.type === 'Selector' && onSelectProxy(group.name, proxyName)}
+                    disabled={group.type !== 'Selector'}
+                    className={`min-w-0 flex-1 px-3 py-2.5 text-left ${group.type === 'Selector' ? 'cursor-pointer' : 'cursor-default'}`}
+                  >
+                    <span className={`block truncate text-xs font-medium ${isCurrent ? 'text-[var(--color-primary)]' : 'text-[var(--text-primary)]'}`}>{proxyName}</span>
+                    <span className="mt-1 block text-[10px] uppercase tracking-[0.08em] text-[var(--text-tertiary)]">{proxyType(proxies[proxyName])}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onTestDelay(proxyName)}
+                    title="测试延迟"
+                    className="mr-2 flex h-7 shrink-0 items-center gap-1 rounded-md bg-[var(--bg-base)] px-2 text-[10px] tabular-nums text-[var(--text-tertiary)] hover:text-[var(--color-primary)]"
+                  >
+                    {delay > 0 ? <span className={delayColor(delay)}>{delay}</span> : <Zap size={11} />}
+                  </button>
+                </div>
               );
             })}
           </div>
-          <div className="mt-3 text-xs text-[var(--text-tertiary)]">
-            {group.type === 'Selector' ? '点击切换节点' : '自动测速中'} · 右键节点进行测速
-          </div>
         </div>
       )}
+    </section>
+  );
+}
+
+function LatencyBar({ distribution, total }: { distribution: DelayDistribution; total: number }) {
+  if (total === 0) return <div className="mt-4 h-1.5 rounded-full bg-[var(--border-light)]" />;
+  return (
+    <div className="mt-4 flex h-1.5 overflow-hidden rounded-full bg-[var(--border-light)]" aria-label={`延迟分布：快速 ${distribution.fast}，正常 ${distribution.medium}，较慢 ${distribution.slow}，未知 ${distribution.unknown}`}>
+      {distribution.fast > 0 && <span className="bg-emerald-500" style={{ flex: distribution.fast }} />}
+      {distribution.medium > 0 && <span className="bg-amber-400" style={{ flex: distribution.medium }} />}
+      {distribution.slow > 0 && <span className="bg-rose-400" style={{ flex: distribution.slow }} />}
+      {distribution.unknown > 0 && <span className="bg-[var(--text-tertiary)] opacity-55" style={{ flex: distribution.unknown }} />}
     </div>
   );
+}
+
+function DelayBadge({ delay }: { delay: number }) {
+  return (
+    <span className={`inline-flex h-7 items-center gap-1 rounded-full bg-[var(--bg-base)] px-2.5 text-[11px] font-semibold tabular-nums ${delayColor(delay)}`}>
+      <Gauge size={11} />{delay}
+    </span>
+  );
+}
+
+interface DelayDistribution {
+  fast: number;
+  medium: number;
+  slow: number;
+  unknown: number;
+}
+
+function delayDistribution(delays: number[]): DelayDistribution {
+  return delays.reduce<DelayDistribution>((result, delay) => {
+    if (delay <= 0) result.unknown += 1;
+    else if (delay < 200) result.fast += 1;
+    else if (delay < 800) result.medium += 1;
+    else result.slow += 1;
+    return result;
+  }, { fast: 0, medium: 0, slow: 0, unknown: 0 });
+}
+
+function latestDelay(proxy: ProxyGroup | ProxyNode | undefined) {
+  const history = proxy?.history;
+  return Number(history?.[history.length - 1]?.delay || 0);
+}
+
+function proxyType(proxy: ProxyGroup | ProxyNode | undefined) {
+  return proxy?.type || 'proxy';
+}
+
+function delayColor(delay: number) {
+  if (delay < 200) return 'text-emerald-500';
+  if (delay < 800) return 'text-amber-500';
+  return 'text-rose-500';
 }

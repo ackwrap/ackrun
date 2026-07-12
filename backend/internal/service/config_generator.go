@@ -290,7 +290,6 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface
 		}
 
 		groupNodeUIDs[group.ID] = uids
-		validGroupTags[group.Name] = true
 	}
 
 	// 4. 获取所有集合和节点组中使用的节点 UID
@@ -314,14 +313,14 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface
 	nodeDomainResolvers := collectionNodeDomainResolverBindings(collections, groupNodeUIDs, usedNodeUIDs, domainResolverBindings)
 
 	// 5. 为集合和节点组使用的节点生成 outbound
-	nodeReq := model.NodeListRequest{Enabled: boolPtr(true)}
-	nodeResp, err := s.store.ListNodes(nodeReq)
+	nodes, err := s.store.ListEnabledNodes()
 	if err != nil {
 		return nil, nil, err
 	}
-	nodeTags := buildNodeOutboundTags(nodeResp.Items)
+	nodeTags := buildNodeOutboundTags(nodes)
+	generatedNodeTags := make(map[string]string, len(nodeTags))
 
-	for _, node := range nodeResp.Items {
+	for _, node := range nodes {
 		// 只生成集合中使用的节点
 		if !usedNodeUIDs[node.UID] {
 			continue
@@ -334,6 +333,7 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface
 				continue
 			}
 			endpoints = append(endpoints, endpoint)
+			generatedNodeTags[node.UID] = nodeTags[node.UID]
 			continue
 		}
 		nodeOutbound, err := s.generateNodeOutbound(&node, nodeTags[node.UID], nodeDomainResolvers[node.UID])
@@ -342,6 +342,7 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface
 			continue
 		}
 		outbounds = append(outbounds, nodeOutbound)
+		generatedNodeTags[node.UID] = nodeTags[node.UID]
 	}
 
 	// 6. 生成节点组 outbound
@@ -350,7 +351,7 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface
 		if len(uids) == 0 {
 			continue
 		}
-		groupOutbounds := nodeUIDsToOutboundTags(uids, nodeTags)
+		groupOutbounds := nodeUIDsToOutboundTags(uids, generatedNodeTags)
 		if len(groupOutbounds) == 0 {
 			logging.Info("config_generator.outbound", "节点组 %s 没有可用 outbound tag，跳过生成", group.Name)
 			continue
@@ -370,6 +371,7 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface
 		}
 
 		outbounds = append(outbounds, outbound)
+		validGroupTags[group.Name] = true
 	}
 
 	// 7. 为每个集合生成 outbound（放在节点和节点组后面，这样集合可以引用它们）
@@ -380,7 +382,7 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface
 			continue
 		}
 
-		outbound, err := s.generateCollectionOutbound(col, validGroupTags, nodeTags)
+		outbound, err := s.generateCollectionOutbound(col, validGroupTags, generatedNodeTags)
 		if err != nil {
 			return nil, nil, fmt.Errorf("策略组 %s 生成失败: %w", col.Name, err)
 		}
@@ -475,8 +477,6 @@ func collectionBuiltinOutboundTags(col *model.ProxyCollectionWithNodes) []string
 	switch col.Name {
 	case "全球直连":
 		defaults = []string{"direct"}
-	case "应用净化":
-		defaults = []string{"direct"}
 	}
 
 	seen := make(map[string]bool)
@@ -520,6 +520,10 @@ func (s *ConfigGeneratorService) generateNodeOutbound(node *model.Node, tag stri
 	delete(nodeData, "name")
 	mapMihomoUDPFlagToSingboxNetwork(nodeData)
 	mapTLSFingerprintFields(nodeData)
+	ensureRequiredOutboundTLS(nodeData, node.Type)
+	if err := normalizeLegacyVMessFields(nodeData, node.Type); err != nil {
+		return nil, err
+	}
 	applyDomainResolverBinding(nodeData, domainResolver)
 
 	return nodeData, nil
@@ -688,6 +692,58 @@ func mapTLSFingerprintFields(nodeData map[string]interface{}) {
 	if len(utlsMap) == 1 && configBoolValue(utlsMap["enabled"]) {
 		delete(tlsMap, "utls")
 	}
+}
+
+func ensureRequiredOutboundTLS(nodeData map[string]interface{}, outboundType string) {
+	switch strings.ToLower(strings.TrimSpace(outboundType)) {
+	case "anytls", "hysteria", "hysteria2", "naive", "shadowtls", "trojan", "tuic":
+	default:
+		return
+	}
+	tlsOptions, ok := nodeData["tls"].(map[string]interface{})
+	if !ok {
+		tlsOptions = map[string]interface{}{}
+		nodeData["tls"] = tlsOptions
+	}
+	tlsOptions["enabled"] = true
+}
+
+func normalizeLegacyVMessFields(nodeData map[string]interface{}, outboundType string) error {
+	if !strings.EqualFold(strings.TrimSpace(outboundType), "vmess") {
+		return nil
+	}
+	if cipher, exists := nodeData["cipher"]; exists {
+		if _, hasSecurity := nodeData["security"]; !hasSecurity {
+			nodeData["security"] = cipher
+		}
+		delete(nodeData, "cipher")
+	}
+	value, exists := nodeData["alter_id"]
+	if !exists {
+		return nil
+	}
+	delete(nodeData, "alter_id")
+	switch typed := value.(type) {
+	case nil:
+		return nil
+	case float64:
+		if typed == 0 {
+			return nil
+		}
+	case int:
+		if typed == 0 {
+			return nil
+		}
+	case int64:
+		if typed == 0 {
+			return nil
+		}
+	case string:
+		if strings.TrimSpace(typed) == "" || strings.TrimSpace(typed) == "0" {
+			return nil
+		}
+	}
+	return fmt.Errorf("旧版 VMess alter_id 节点不受当前 sing-box 版本支持")
 }
 
 func isSingboxUTLSFingerprint(value string) bool {
@@ -1439,7 +1495,7 @@ func (s *ConfigGeneratorService) validateConfig(configPath string) (bool, string
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return false, fmt.Sprintf("配置验证失败: %s", string(output))
+		return false, fmt.Sprintf("配置验证失败: %s", strings.TrimSpace(cleanLogLine(string(output))))
 	}
 
 	return true, ""
@@ -1453,6 +1509,9 @@ func (s *ConfigGeneratorService) Apply(restartCore bool) error {
 }
 
 func (s *ConfigGeneratorService) applyLocked(restartCore bool) error {
+	configFileMu.Lock()
+	defer configFileMu.Unlock()
+
 	logging.Info("config_generator.apply", "应用配置，重启核心: %v", restartCore)
 
 	tmpPath := filepath.Join(s.paths.DataDir, "config.tmp.json")
@@ -1487,12 +1546,12 @@ func (s *ConfigGeneratorService) applyLocked(restartCore bool) error {
 		return fmt.Errorf("应用配置前验证失败: %s", validationError)
 	}
 
-	// 3. 先把旧配置原子移动为备份，再把已验证的暂存文件移动到正式路径。
-	// 这样即使替换失败也不会留下被截断的正式配置，并且可以立即回滚。
+	// 3. 先复制旧配置作为备份，再原子替换正式配置。
+	// 替换失败时原配置仍位于正式路径，不需要二次回滚。
 	backupPath := ""
 	if _, err := os.Stat(targetPath); err == nil {
 		backupPath = filepath.Join(s.paths.ConfigDir, fmt.Sprintf("config.backup.%d.json", time.Now().UnixNano()))
-		if err := os.Rename(targetPath, backupPath); err != nil {
+		if err := copyFile(targetPath, backupPath); err != nil {
 			return fmt.Errorf("备份当前配置失败: %w", err)
 		}
 		logging.Info("config_generator.apply", "配置已备份到: %s", backupPath)
@@ -1500,13 +1559,8 @@ func (s *ConfigGeneratorService) applyLocked(restartCore bool) error {
 		return fmt.Errorf("检查当前配置失败: %w", err)
 	}
 
-	if err := os.Rename(stagedPath, targetPath); err != nil {
-		if backupPath != "" {
-			if restoreErr := os.Rename(backupPath, targetPath); restoreErr != nil {
-				return fmt.Errorf("应用配置失败: %v；恢复旧配置也失败: %w", err, restoreErr)
-			}
-		}
-		return fmt.Errorf("应用配置失败，已恢复旧配置: %w", err)
+	if err := atomicReplaceFile(stagedPath, targetPath); err != nil {
+		return fmt.Errorf("应用配置失败，旧配置保持不变: %w", err)
 	}
 
 	logging.Info("config_generator.apply", "配置已应用到: %s", targetPath)
@@ -1608,10 +1662,6 @@ func (s *ConfigGeneratorService) writeConfigFile(path string, config map[string]
 		return err
 	}
 	return os.WriteFile(path, data, 0644)
-}
-
-func boolPtr(b bool) *bool {
-	return &b
 }
 
 func copyFile(src, dst string) error {

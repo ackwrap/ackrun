@@ -50,7 +50,7 @@ export const TrafficChart = React.forwardRef<TrafficChartRef, TrafficChartProps>
     import('echarts').then((echarts) => {
       if (!chartRef.current || disposedRef.current) return;
 
-      const chart = echarts.init(chartRef.current, 'dark');
+      const chart = echarts.init(chartRef.current);
       chartInstanceRef.current = chart;
 
       const option: EChartsOption = {

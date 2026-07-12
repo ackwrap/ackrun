@@ -8,6 +8,9 @@
   --button-primary-active: rgba(47, 129, 247, 0.34);
   --button-primary-text: #DCEBFF;
   --button-primary-border: rgba(88, 166, 255, 0.32);
+  --button-secondary-bg: rgba(255, 255, 255, 0.04);
+  --button-secondary-hover: rgba(255, 255, 255, 0.08);
+  --button-danger-text: #FFFFFF;
   --color-success: #52C41A;
   --color-success-bg: rgba(35, 197, 94, 0.14);
   --color-warning: #FAAD14;
@@ -51,6 +54,9 @@
   --button-primary-active: rgba(37, 99, 235, 0.22);
   --button-primary-text: #1D4ED8;
   --button-primary-border: rgba(37, 99, 235, 0.22);
+  --button-secondary-bg: rgba(15, 23, 42, 0.035);
+  --button-secondary-hover: rgba(37, 99, 235, 0.10);
+  --button-danger-text: #FFFFFF;
   --color-success: #16A34A;
   --color-success-bg: rgba(22, 163, 74, 0.12);
   --color-warning: #D97706;

@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -67,7 +68,7 @@ func TestExtractTarGzInstallsRuntimeFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat binary: %v", err)
 	}
-	if info.Mode().Perm() != 0755 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0755 {
 		t.Fatalf("binary permissions = %o, want 755", info.Mode().Perm())
 	}
 	if _, err := os.Stat(filepath.Join(binaryDir, "libcronet.so")); err != nil {

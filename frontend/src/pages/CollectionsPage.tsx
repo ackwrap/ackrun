@@ -89,26 +89,44 @@ function collectionBuiltinOutbounds(collection: Pick<ProxyCollection, 'name' | '
   if (!collection) return [];
   const defaults = collection.name === '全球直连'
     ? ['direct']
-    : collection.name === '应用净化'
-      ? ['direct']
-      : [];
+    : [];
   return Array.from(new Set([...defaults, ...builtinOutbounds(collection.node_uids)]));
 }
 
 function isSystemDefaultCollection(name: string) {
-  return name === '全球直连' || name === '应用净化';
+  return name === '全球直连';
 }
 
 function systemDefaultCollectionIcon(name: string) {
   if (name === '全球直连') return '🎯';
-  if (name === '应用净化') return '🍃';
   return '';
 }
 
 function systemDefaultCollectionOrder(name: string) {
   if (name === '全球直连') return 0;
-  if (name === '应用净化') return 1;
   return 100;
+}
+
+function CollectionName({ name }: { name: string }) {
+  const systemDefault = isSystemDefaultCollection(name);
+  const customEmoji = !systemDefault ? name.match(/^(\S+)\s+(.+)$/u) : null;
+  const hasCustomEmoji = Boolean(customEmoji && /[\p{Extended_Pictographic}\p{Regional_Indicator}]/u.test(customEmoji[1]));
+  const icon = systemDefault ? systemDefaultCollectionIcon(name) : hasCustomEmoji ? customEmoji?.[1] : '';
+  const label = hasCustomEmoji ? customEmoji?.[2] : name;
+
+  return (
+    <div className="flex min-w-0 items-center gap-2">
+      <span className="flex h-5 w-5 shrink-0 items-center justify-center text-base leading-none">
+        {icon || <Zap size={14} className="text-[var(--color-primary)]" />}
+      </span>
+      <span className="truncate text-sm font-medium leading-5 text-[var(--text-primary)]">{label}</span>
+      {systemDefault && (
+        <span className="inline-flex h-5 shrink-0 items-center rounded border border-blue-400/25 bg-blue-500/10 px-2 text-[11px] font-normal leading-none text-blue-600 dark:text-blue-200">
+          系统默认
+        </span>
+      )}
+    </div>
+  );
 }
 
 export function CollectionsPage() {
@@ -1021,13 +1039,7 @@ export function CollectionsPage() {
                         </tr>
                       ) : pagedCollections.map(col => (
                         <tr key={col.id} className="border-b border-[var(--border-default)] text-[var(--text-secondary)] last:border-b-0 hover:bg-white/[0.02]">
-                          <td className="px-4 py-3 font-medium text-white">
-                            <div className="flex items-center gap-2">
-                              {isSystemDefaultCollection(col.name) && <span className="text-base leading-none">{systemDefaultCollectionIcon(col.name)}</span>}
-                              <span>{col.name}</span>
-                              {isSystemDefaultCollection(col.name) && <span className="rounded border border-blue-400/25 bg-blue-500/10 px-2 py-0.5 text-[11px] font-normal text-blue-200">系统默认</span>}
-                            </div>
-                          </td>
+                          <td className="px-4 py-3"><CollectionName name={col.name} /></td>
                           <td className="max-w-[260px] truncate px-4 py-3 text-xs" title={(col.route_rule_ids || []).map(id => routeRuleNameByID.get(id) || `#${id}`).join('\n')}>
                             {(col.route_rule_ids || []).length ? (col.route_rule_ids || []).map(id => routeRuleNameByID.get(id) || `#${id}`).join('、') : '-'}
                           </td>

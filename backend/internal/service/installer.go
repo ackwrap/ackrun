@@ -25,18 +25,25 @@ var (
 )
 
 type InstallerService struct {
-	store    *store.Store
-	paths    *paths.Paths
-	realtime *RealtimeService
-	mu       sync.Mutex
-	busy     bool
-	latestMu sync.Mutex
-	latest   string
-	latestAt time.Time
+	store       *store.Store
+	paths       *paths.Paths
+	realtime    *RealtimeService
+	mu          sync.Mutex
+	busy        bool
+	latestMu    sync.Mutex
+	latest      string
+	latestAt    time.Time
+	postInstall func(version string) error
 }
 
 func NewInstallerService(s *store.Store, p *paths.Paths, rt *RealtimeService) *InstallerService {
 	return &InstallerService{store: s, paths: p, realtime: rt}
+}
+
+func (svc *InstallerService) SetPostInstallHook(hook func(version string) error) {
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
+	svc.postInstall = hook
 }
 
 func (svc *InstallerService) GetStatus() (*model.InstallStateResponse, error) {
@@ -163,7 +170,18 @@ func (svc *InstallerService) runInstall() {
 
 	os.Remove(tmpFile)
 
-	svc.setState(model.InstallDone, "installed", 0, latestVersion, "")
+	migrationError := ""
+	svc.mu.Lock()
+	postInstall := svc.postInstall
+	svc.mu.Unlock()
+	if postInstall != nil {
+		if err := postInstall(latestVersion); err != nil {
+			migrationError = fmt.Sprintf("核心已安装，但配置兼容迁移失败: %v", err)
+			logging.Error("installer.migrate", "%s", migrationError)
+		}
+	}
+
+	svc.setState(model.InstallDone, "installed", 0, latestVersion, migrationError)
 	svc.broadcastStatus()
 
 	runtimeStatus := model.RuntimeNoConfig

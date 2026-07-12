@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ackwrap/ackwrap/internal/model"
 	"github.com/ackwrap/ackwrap/internal/store"
 )
 
@@ -23,6 +24,20 @@ func TestSetProxyModePersistsSupportedMode(t *testing.T) {
 	}
 	if got := svc.GetProxyMode(); got != "global" {
 		t.Fatalf("proxy mode = %q, want global", got)
+	}
+}
+
+func TestSetExperimentalSettingsRejectsInvalidClashAPIPort(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	svc := NewSettingsService(db)
+	err = svc.SetExperimentalSettings(&model.ExperimentalSettings{ClashAPIPort: "9090@remote.example"})
+	if err == nil {
+		t.Fatal("SetExperimentalSettings() error = nil, want invalid port error")
 	}
 }
 

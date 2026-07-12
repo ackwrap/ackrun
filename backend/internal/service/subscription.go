@@ -45,6 +45,8 @@ type SubscriptionService struct {
 	cron       *cron.Cron
 	entries    map[int64]cron.EntryID
 	mu         sync.Mutex
+	syncMu     sync.Mutex
+	syncing    map[int64]bool
 }
 
 func NewSubscriptionService(s *store.Store, rt *RealtimeService) *SubscriptionService {
@@ -53,6 +55,7 @@ func NewSubscriptionService(s *store.Store, rt *RealtimeService) *SubscriptionSe
 		realtime: rt,
 		cron:     cron.New(cron.WithSeconds()),
 		entries:  make(map[int64]cron.EntryID),
+		syncing:  make(map[int64]bool),
 	}
 }
 
@@ -62,6 +65,9 @@ func (svc *SubscriptionService) SetConfigReconciler(reconciler *ConfigReconcileS
 }
 
 func (svc *SubscriptionService) StartScheduler() {
+	if err := svc.store.ResetInterruptedSubscriptionSyncs(); err != nil {
+		logging.Error("subscription.scheduler", "reset interrupted sync states failed: %v", err)
+	}
 	items, err := svc.store.ListSubscriptions()
 	if err != nil {
 		logging.Error("subscription.scheduler", "load subscriptions failed: %v", err)
@@ -219,42 +225,56 @@ func (svc *SubscriptionService) SyncAll() (*model.ActionResponse, error) {
 		return nil, err
 	}
 	go func() {
+		total := 0
+		failed := 0
 		for _, item := range items {
 			if item.URL == "manual://local" {
 				continue
 			}
+			total++
 			svc.runSync(item.ID)
+			updated, getErr := svc.store.GetSubscription(item.ID)
+			if getErr != nil || updated == nil || updated.SyncStatus != "updated" {
+				failed++
+			}
+		}
+		if svc.realtime != nil {
+			svc.realtime.Broadcast("subscription.sync_all", map[string]any{
+				"status": "completed",
+				"total":  total,
+				"failed": failed,
+			})
 		}
 	}()
 	return &model.ActionResponse{Success: true, Message: "subscriptions sync started"}, nil
 }
 
 func (svc *SubscriptionService) runSync(id int64) {
+	if !svc.beginSync(id) {
+		item, _ := svc.store.GetSubscription(id)
+		if item != nil {
+			svc.broadcastSync(id, "syncing", item.SyncProgress, "")
+		}
+		return
+	}
+	defer svc.endSync(id)
+
 	item, err := svc.store.GetSubscription(id)
 	if err != nil || item == nil {
 		logging.Error("subscription.sync", "get subscription %d failed: %v", id, err)
 		return
 	}
-	if item.SyncStatus == "syncing" {
-		logging.Info("subscription.sync", "subscription %d already syncing, skip", id)
-		svc.broadcastSync(id, "syncing", item.SyncProgress, "")
+	// 1. 记录同步前的节点 UID 列表
+	if !svc.updateSyncProgress(id, 5) {
 		return
 	}
-
-	// 1. 记录同步前的节点 UID 列表
 	oldUIDs, err := svc.store.GetSubscriptionNodeUIDs(id)
 	if err != nil {
 		logging.Error("subscription.sync", "get old UIDs for subscription %d failed: %v", id, err)
 	}
 
-	steps := []float64{0, 30}
-	for _, progress := range steps {
-		if err := svc.store.SetSubscriptionSyncState(id, "syncing", progress); err != nil {
-			logging.Error("subscription.sync", "set sync state failed: %v", err)
-			return
-		}
-		svc.broadcastSync(id, "syncing", progress, "")
-		time.Sleep(300 * time.Millisecond)
+	if !svc.updateSyncProgress(id, 15) {
+		return
 	}
 	result, err := svc.fetchAndParse(item.URL, item.UserAgent, item.SyncTimeoutSecs)
 	if err != nil {
@@ -263,6 +283,9 @@ func (svc *SubscriptionService) runSync(id int64) {
 			logging.Error("subscription.sync", "set failed state failed: %v", setErr)
 		}
 		svc.broadcastSync(id, "failed", 0, err.Error())
+		return
+	}
+	if !svc.updateSyncProgress(id, 50) {
 		return
 	}
 
@@ -286,9 +309,17 @@ func (svc *SubscriptionService) runSync(id int64) {
 		svc.broadcastSync(id, "failed", 0, err.Error())
 		return
 	}
-	svc.broadcastSync(id, "syncing", 80, "")
+	if !svc.updateSyncProgress(id, 65) {
+		return
+	}
+	if !svc.updateSyncProgress(id, 80) {
+		return
+	}
 	if err := svc.store.ReplaceSubscriptionNodes(id, result.Nodes); err != nil {
 		logging.Error("subscription.sync", "replace nodes failed: %v", err)
+		if setErr := svc.store.SetSubscriptionSyncState(id, "failed", 0); setErr != nil {
+			logging.Error("subscription.sync", "set failed state failed: %v", setErr)
+		}
 		svc.broadcastSync(id, "failed", 0, err.Error())
 		return
 	}
@@ -330,9 +361,15 @@ func (svc *SubscriptionService) runSync(id int64) {
 		logging.Info("subscription.sync", "订阅 %d 节点无变化，跳过配置更新", id)
 	}
 
+	if !svc.updateSyncProgress(id, 95) {
+		return
+	}
 	updated, err := svc.store.UpdateSubscriptionSyncResult(id, result.NodeCount, result.TrafficUsedBytes, result.TrafficTotalBytes, result.ExpireAt)
 	if err != nil {
 		logging.Error("subscription.sync", "update sync result failed: %v", err)
+		if setErr := svc.store.SetSubscriptionSyncState(id, "failed", 0); setErr != nil {
+			logging.Error("subscription.sync", "set failed state failed: %v", setErr)
+		}
 		svc.broadcastSync(id, "failed", 0, err.Error())
 		return
 	}
@@ -344,6 +381,32 @@ func (svc *SubscriptionService) runSync(id int64) {
 	if hasChanges && svc.reconciler != nil {
 		svc.reconciler.Trigger("subscription.sync")
 	}
+}
+
+func (svc *SubscriptionService) beginSync(id int64) bool {
+	svc.syncMu.Lock()
+	defer svc.syncMu.Unlock()
+	if svc.syncing[id] {
+		logging.Info("subscription.sync", "subscription %d already syncing, skip", id)
+		return false
+	}
+	svc.syncing[id] = true
+	return true
+}
+
+func (svc *SubscriptionService) endSync(id int64) {
+	svc.syncMu.Lock()
+	delete(svc.syncing, id)
+	svc.syncMu.Unlock()
+}
+
+func (svc *SubscriptionService) updateSyncProgress(id int64, progress float64) bool {
+	if err := svc.store.SetSubscriptionSyncState(id, "syncing", progress); err != nil {
+		logging.Error("subscription.sync", "set sync progress failed: %v", err)
+		return false
+	}
+	svc.broadcastSync(id, "syncing", progress, "")
+	return true
 }
 
 func (svc *SubscriptionService) applyNodeFilters(result *subscriptionSyncResult) error {

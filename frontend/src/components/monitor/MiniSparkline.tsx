@@ -1,5 +1,4 @@
 import React from 'react';
-import type { ECharts, EChartsOption } from 'echarts';
 
 interface MiniSparklineProps {
   data: number[];
@@ -8,102 +7,37 @@ interface MiniSparklineProps {
 }
 
 const colorMap = {
-  green: {
-    line: '#10b981',
-    areaStart: 'rgba(16, 185, 129, 0.4)',
-    areaEnd: 'rgba(16, 185, 129, 0.05)',
-  },
-  blue: {
-    line: '#3b82f6',
-    areaStart: 'rgba(59, 130, 246, 0.4)',
-    areaEnd: 'rgba(59, 130, 246, 0.05)',
-  },
-  purple: {
-    line: '#a855f7',
-    areaStart: 'rgba(168, 85, 247, 0.4)',
-    areaEnd: 'rgba(168, 85, 247, 0.05)',
-  },
+  green: { line: '#10b981', area: '#10b981' },
+  blue: { line: '#3b82f6', area: '#3b82f6' },
+  purple: { line: '#a855f7', area: '#a855f7' },
 };
 
 export function MiniSparkline({ data, color = 'blue', className = '' }: MiniSparklineProps) {
-  const chartRef = React.useRef<HTMLDivElement>(null);
-  const chartInstanceRef = React.useRef<ECharts | null>(null);
-  const disposedRef = React.useRef(false);
-  const latestDataRef = React.useRef<number[]>(data);
-  latestDataRef.current = data;
+  const gradientID = React.useId().replace(/:/g, '');
+  if (data.length < 2) return <div className={`h-14 w-full ${className}`} />;
 
-  const updateChart = React.useCallback((nextData: number[]) => {
-    if (!chartInstanceRef.current || nextData.length === 0) return;
-    chartInstanceRef.current.setOption({
-      series: [{ data: nextData }],
-    });
-  }, []);
+  const width = 100;
+  const height = 56;
+  const max = Math.max(1, ...data);
+  const points = data.map((value, index) => {
+    const x = data.length === 1 ? width : index / (data.length - 1) * width;
+    const y = height - Math.max(2, value / max * (height - 5));
+    return [x, y] as const;
+  });
+  const linePath = points.map(([x, y], index) => `${index === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${y.toFixed(2)}`).join(' ');
+  const areaPath = `${linePath} L ${width} ${height} L 0 ${height} Z`;
+  const colors = colorMap[color];
 
-  React.useEffect(() => {
-    if (!chartRef.current) return;
-    disposedRef.current = false;
-
-    let handleResize: (() => void) | null = null;
-
-    import('echarts').then((echarts) => {
-      if (!chartRef.current || disposedRef.current) return;
-
-      const chart = echarts.init(chartRef.current, 'dark');
-      chartInstanceRef.current = chart;
-
-      const colors = colorMap[color];
-      const option: EChartsOption = {
-        grid: { left: 0, top: 0, right: 0, bottom: 0 },
-        xAxis: {
-          type: 'category',
-          show: false,
-          boundaryGap: false,
-        },
-        yAxis: {
-          type: 'value',
-          show: false,
-        },
-        series: [
-          {
-            type: 'line',
-            symbol: 'none',
-            smooth: true,
-            lineStyle: {
-              width: 1.5,
-              color: colors.line,
-            },
-            areaStyle: {
-              color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-                { offset: 0, color: colors.areaStart },
-                { offset: 1, color: colors.areaEnd },
-              ]),
-            },
-            data: latestDataRef.current,
-          },
-        ],
-      };
-
-      chart.setOption(option);
-      updateChart(latestDataRef.current);
-
-      handleResize = () => {
-        chart.resize();
-      };
-      window.addEventListener('resize', handleResize);
-    });
-
-    return () => {
-      disposedRef.current = true;
-      if (handleResize) window.removeEventListener('resize', handleResize);
-      chartInstanceRef.current?.dispose();
-      chartInstanceRef.current = null;
-    };
-  }, [color, updateChart]);
-
-  // 更新数据
-  React.useEffect(() => {
-    updateChart(data);
-  }, [data, updateChart]);
-
-  return <div ref={chartRef} className={`w-full ${className}`} style={{ height: '56px' }} />;
+  return (
+    <svg className={`h-14 w-full ${className}`} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" aria-hidden="true">
+      <defs>
+        <linearGradient id={gradientID} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={colors.area} stopOpacity="0.32" />
+          <stop offset="100%" stopColor={colors.area} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <path d={areaPath} fill={`url(#${gradientID})`} />
+      <path d={linePath} fill="none" stroke={colors.line} strokeWidth="1.6" vectorEffect="non-scaling-stroke" />
+    </svg>
+  );
 }

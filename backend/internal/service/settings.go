@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/ackwrap/ackwrap/internal/logging"
@@ -152,6 +153,15 @@ func (svc *SettingsService) GetExperimentalSettings() (*model.ExperimentalSettin
 }
 
 func (svc *SettingsService) SetExperimentalSettings(req *model.ExperimentalSettings) error {
+	req.ClashAPIPort = strings.TrimSpace(req.ClashAPIPort)
+	if req.ClashAPIPort == "" {
+		req.ClashAPIPort = "9090"
+	}
+	port, err := strconv.Atoi(req.ClashAPIPort)
+	if err != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("Clash API 端口必须是 1-65535 之间的整数")
+	}
+	req.ClashAPIEnabled = true
 	return svc.store.SetExperimentalSettings(req)
 }
 

@@ -161,7 +161,7 @@ func (s *Store) ReorderNodeGroups(ids []int64) error {
 
 // PreviewNodeGroupMatches 预览节点组匹配的节点
 func (s *Store) PreviewNodeGroupMatches(filterProtocols, filterSubscriptions, filterInclude, filterExclude string) ([]model.Node, error) {
-	nodes, err := s.listEnabledNodesForNodeGroup()
+	nodes, err := s.ListEnabledNodes()
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +170,7 @@ func (s *Store) PreviewNodeGroupMatches(filterProtocols, filterSubscriptions, fi
 }
 
 func (s *Store) PreviewNodeGroupManualMatches(nodeUIDs string) ([]model.Node, error) {
-	nodes, err := s.listEnabledNodesForNodeGroup()
+	nodes, err := s.ListEnabledNodes()
 	if err != nil {
 		return nil, err
 	}
@@ -179,7 +179,7 @@ func (s *Store) PreviewNodeGroupManualMatches(nodeUIDs string) ([]model.Node, er
 
 // countMatchedNodes 计算匹配节点数
 func (s *Store) countMatchedNodes(nodeUIDs, filterProtocols, filterSubscriptions, filterInclude, filterExclude string) int {
-	nodes, err := s.listEnabledNodesForNodeGroup()
+	nodes, err := s.ListEnabledNodes()
 	if err != nil {
 		return 0
 	}
@@ -230,7 +230,8 @@ func filterNodesByUIDs(nodes []model.Node, nodeUIDs string) ([]model.Node, error
 	return result, nil
 }
 
-func (s *Store) listEnabledNodesForNodeGroup() ([]model.Node, error) {
+// ListEnabledNodes returns every enabled node without applying API pagination.
+func (s *Store) ListEnabledNodes() ([]model.Node, error) {
 	rows, err := s.db.Query(`
 		SELECT n.id, n.uid, n.subscription_id, COALESCE(s.name, '') AS subscription_name,
 			n.name, n.name_overridden, n.type, n.server, n.server_port, n.raw, n.raw_json, n.enabled, n.preferred,

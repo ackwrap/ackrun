@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,7 +29,7 @@ func (h *ClashProxyHandler) targetBase() (string, string) {
 	secret := ""
 	if h.settingsSvc != nil {
 		if settings, err := h.settingsSvc.GetExperimentalSettings(); err == nil && settings != nil {
-			if settings.ClashAPIPort != "" {
+			if portNumber, parseErr := strconv.Atoi(settings.ClashAPIPort); parseErr == nil && portNumber > 0 && portNumber <= 65535 {
 				port = settings.ClashAPIPort
 			}
 			secret = settings.ClashAPISecret

@@ -80,6 +80,15 @@ func main() {
 	runtimeSvc := service.NewRuntimeService(p, db, singboxSvc)
 	installerSvc := service.NewInstallerService(db, p, realtimeSvc)
 	configSvc := service.NewConfigService(p, db, realtimeSvc)
+	if migrated, err := configSvc.MigrateCompatibility(""); err != nil {
+		logging.Error("config.migrate", "启动时配置兼容迁移失败: %v", err)
+	} else if migrated {
+		logging.Info("config.migrate", "启动时配置兼容迁移完成")
+	}
+	installerSvc.SetPostInstallHook(func(version string) error {
+		_, err := configSvc.MigrateCompatibility(version)
+		return err
+	})
 	settingsSvc := service.NewSettingsService(db)
 
 	// 初始化实验性功能默认配置（如果未设置）

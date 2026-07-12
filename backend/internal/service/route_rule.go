@@ -29,7 +29,7 @@ import (
 )
 
 // SystemAdBlockRouteRuleName 系统默认广告拦截规则名称。
-// 智能快速配置时自动创建，并绑定到系统默认策略组 应用净化。
+// 智能快速配置时自动创建，配置生成时独立转换为 action=reject。
 const SystemAdBlockRouteRuleName = "广告拦截"
 
 // SystemRuleAdBlockKey 系统默认广告拦截规则内部标识。
@@ -436,8 +436,20 @@ func (svc *RouteRuleService) SyncAllSubscriptions() (*model.ActionResponse, erro
 		return nil, err
 	}
 	go func() {
+		failed := 0
 		for _, item := range items {
 			svc.runRuleSubscriptionSync(item.ID)
+			updated, getErr := svc.store.GetRouteRuleSubscription(item.ID)
+			if getErr != nil || updated == nil || updated.SyncStatus != "updated" {
+				failed++
+			}
+		}
+		if svc.realtime != nil {
+			svc.realtime.Broadcast("route_rule_subscription.sync_all", map[string]any{
+				"status": "completed",
+				"total":  len(items),
+				"failed": failed,
+			})
 		}
 	}()
 	return &model.ActionResponse{Success: true, Message: "route rule subscriptions sync started"}, nil
@@ -487,8 +499,20 @@ func (svc *RouteRuleService) SyncAllGeoAssets() (*model.ActionResponse, error) {
 		return nil, err
 	}
 	go func() {
+		failed := 0
 		for _, item := range items {
 			svc.runGeoAssetSync(item.ID)
+			updated, getErr := svc.store.GetGeoAsset(item.ID)
+			if getErr != nil || updated == nil || updated.SyncStatus != "updated" {
+				failed++
+			}
+		}
+		if svc.realtime != nil {
+			svc.realtime.Broadcast("geo.sync_all", map[string]any{
+				"status": "completed",
+				"total":  len(items),
+				"failed": failed,
+			})
 		}
 	}()
 	return &model.ActionResponse{Success: true, Message: "geo assets sync started"}, nil
@@ -946,6 +970,7 @@ func (svc *RouteRuleService) runGeoAssetSync(id int64) {
 	}
 	if _, err := svc.store.UpdateGeoAssetSyncResult(id, localPath); err != nil {
 		logging.Error("geo.sync", "update geo sync result failed: %v", err)
+		_ = svc.store.SetGeoAssetSyncState(id, "failed", err.Error())
 	}
 }
 
@@ -988,6 +1013,7 @@ func (svc *RouteRuleService) SubscriptionContent(id int64) ([]byte, string, erro
 	}
 	if _, err := svc.store.UpdateRouteRuleSubscriptionSyncResult(id, cachedPath); err != nil {
 		logging.Error("route_rule_subscription.sync", "update sync result failed: %v", err)
+		_ = svc.store.SetRouteRuleSubscriptionSyncState(id, "failed", 0, err.Error())
 	}
 	return data, contentType, nil
 }

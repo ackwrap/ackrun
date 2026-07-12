@@ -64,6 +64,8 @@ class ClashAPIClient {
   private secret: string;
   private trafficWS: WebSocket | null = null;
   private trafficCallback: ((data: TrafficData) => void) | null = null;
+  private trafficErrorCallback: ((message: string) => void) | null = null;
+  private trafficReconnectTimer: number | null = null;
 
   constructor(baseURL: string = '/api/v1/clash', secret: string = '') {
     this.baseURL = baseURL;
@@ -99,15 +101,22 @@ class ClashAPIClient {
   }
 
   // 获取流量统计（WebSocket）
-  connectTraffic(callback: (data: TrafficData) => void): void {
+  connectTraffic(callback: (data: TrafficData) => void, onError?: (message: string) => void): void {
+    this.disconnectTraffic();
     this.trafficCallback = callback;
-    // 使用相对路径，通过后端代理
-    const wsURL = this.baseURL.replace('http://', 'ws://').replace('https://', 'wss://');
-    const token = this.secret ? `?token=${this.secret}` : '';
-    
-    this.trafficWS = new WebSocket(`${wsURL}/traffic${token}`);
-    
-    this.trafficWS.onmessage = (event) => {
+    this.trafficErrorCallback = onError || null;
+    this.openTrafficSocket();
+  }
+
+  private openTrafficSocket(): void {
+    const wsURL = new URL(`${this.baseURL}/traffic`, window.location.href);
+    wsURL.protocol = wsURL.protocol === 'https:' ? 'wss:' : 'ws:';
+    if (this.secret) wsURL.searchParams.set('token', this.secret);
+
+    const socket = new WebSocket(wsURL);
+    this.trafficWS = socket;
+
+    socket.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data) as TrafficData;
         this.trafficCallback?.(data);
@@ -116,26 +125,34 @@ class ClashAPIClient {
       }
     };
 
-    this.trafficWS.onerror = (error) => {
+    socket.onerror = (error) => {
       console.error('Traffic WebSocket error:', error);
+      this.trafficErrorCallback?.('实时流量连接失败');
     };
 
-    this.trafficWS.onclose = () => {
-      console.log('Traffic WebSocket closed');
-      // 自动重连
-      setTimeout(() => {
-        if (this.trafficCallback) {
-          this.connectTraffic(this.trafficCallback);
-        }
+    socket.onclose = () => {
+      if (this.trafficWS === socket) this.trafficWS = null;
+      if (!this.trafficCallback) return;
+      this.trafficErrorCallback?.('实时流量已断开，正在重连');
+      this.trafficReconnectTimer = window.setTimeout(() => {
+        this.trafficReconnectTimer = null;
+        if (this.trafficCallback) this.openTrafficSocket();
       }, 3000);
     };
   }
 
   disconnectTraffic(): void {
+    this.trafficCallback = null;
+    this.trafficErrorCallback = null;
+    if (this.trafficReconnectTimer !== null) {
+      window.clearTimeout(this.trafficReconnectTimer);
+      this.trafficReconnectTimer = null;
+    }
     if (this.trafficWS) {
-      this.trafficWS.close();
+      const socket = this.trafficWS;
       this.trafficWS = null;
-      this.trafficCallback = null;
+      socket.onclose = null;
+      socket.close();
     }
   }
 
@@ -163,7 +180,7 @@ class ClashAPIClient {
   }
 
   // 获取连接列表
-  async getConnections(): Promise<{ connections: Connection[]; downloadTotal: number; uploadTotal: number }> {
+  async getConnections(): Promise<{ connections: Connection[]; downloadTotal: number; uploadTotal: number; memory?: number }> {
     return this.request('/connections');
   }
 
