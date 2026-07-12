@@ -276,6 +276,25 @@ func TestGenerateNodeOutboundRemovesZeroVMessAlterID(t *testing.T) {
 	}
 }
 
+func TestGenerateNodeOutboundRemovesVLESSCipher(t *testing.T) {
+	service := &ConfigGeneratorService{}
+	node := &model.Node{
+		Name:    "legacy-vless",
+		Type:    "vless",
+		RawJSON: `{"type":"vless","server":"example.com","server_port":443,"uuid":"00000000-0000-0000-0000-000000000000","cipher":"auto"}`,
+	}
+	outbound, err := service.generateNodeOutbound(node, "legacy-vless", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := outbound["cipher"]; exists {
+		t.Fatalf("generated VLESS outbound contains unsupported cipher: %+v", outbound)
+	}
+	if _, exists := outbound["method"]; exists {
+		t.Fatalf("generated VLESS outbound contains unsupported method: %+v", outbound)
+	}
+}
+
 func TestGenerateNodeOutboundRejectsNonZeroVMessAlterID(t *testing.T) {
 	service := &ConfigGeneratorService{}
 	node := &model.Node{

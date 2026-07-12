@@ -205,14 +205,17 @@ func (s *ConfigGeneratorService) generateLocked(req *model.ConfigGenerateRequest
 		}
 	}
 	if ntpSettings.Enabled {
-		config["ntp"] = map[string]interface{}{
+		ntpConfig := map[string]interface{}{
 			"enabled":         true,
 			"server":          ntpSettings.Server,
 			"server_port":     ntpSettings.ServerPort,
 			"interval":        ntpSettings.Interval,
-			"detour":          ntpSettings.Detour,
 			"write_to_system": false,
 		}
+		if ntpSettings.Detour != "" && ntpSettings.Detour != "direct" {
+			ntpConfig["detour"] = ntpSettings.Detour
+		}
+		config["ntp"] = ntpConfig
 		logging.Info("config_generator.ntp", "NTP 已启用: %s:%d, 间隔: %s", ntpSettings.Server, ntpSettings.ServerPort, ntpSettings.Interval)
 	}
 
@@ -521,7 +524,7 @@ func (s *ConfigGeneratorService) generateNodeOutbound(node *model.Node, tag stri
 	mapMihomoUDPFlagToSingboxNetwork(nodeData)
 	mapTLSFingerprintFields(nodeData)
 	ensureRequiredOutboundTLS(nodeData, node.Type)
-	if err := normalizeLegacyVMessFields(nodeData, node.Type); err != nil {
+	if err := normalizeLegacyOutboundFields(nodeData, node.Type); err != nil {
 		return nil, err
 	}
 	applyDomainResolverBinding(nodeData, domainResolver)
@@ -708,15 +711,23 @@ func ensureRequiredOutboundTLS(nodeData map[string]interface{}, outboundType str
 	tlsOptions["enabled"] = true
 }
 
-func normalizeLegacyVMessFields(nodeData map[string]interface{}, outboundType string) error {
-	if !strings.EqualFold(strings.TrimSpace(outboundType), "vmess") {
-		return nil
-	}
+func normalizeLegacyOutboundFields(nodeData map[string]interface{}, outboundType string) error {
+	outboundType = strings.ToLower(strings.TrimSpace(outboundType))
 	if cipher, exists := nodeData["cipher"]; exists {
-		if _, hasSecurity := nodeData["security"]; !hasSecurity {
-			nodeData["security"] = cipher
+		switch outboundType {
+		case "vmess":
+			if _, hasSecurity := nodeData["security"]; !hasSecurity {
+				nodeData["security"] = cipher
+			}
+		case "shadowsocks":
+			if _, hasMethod := nodeData["method"]; !hasMethod {
+				nodeData["method"] = cipher
+			}
 		}
 		delete(nodeData, "cipher")
+	}
+	if outboundType != "vmess" {
+		return nil
 	}
 	value, exists := nodeData["alter_id"]
 	if !exists {
@@ -1051,11 +1062,10 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 			}
 
 			ruleSet := map[string]interface{}{
-				"type":            "remote",
-				"tag":             sub.Tag,
-				"format":          format,
-				"url":             fmt.Sprintf("http://127.0.0.1:8080/api/v1/rules/subscriptions/%d/content", sub.ID),
-				"download_detour": "direct",
+				"type":   "remote",
+				"tag":    sub.Tag,
+				"format": format,
+				"url":    fmt.Sprintf("http://127.0.0.1:8080/api/v1/rules/subscriptions/%d/content", sub.ID),
 			}
 			ruleSets = append(ruleSets, ruleSet)
 		}

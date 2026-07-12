@@ -314,6 +314,24 @@ export function SubscriptionsPage() {
   const displayedSubscriptions = React.useMemo(() => [manualSubscription || localSubscriptionPlaceholder, ...remoteSubscriptions], [manualSubscription, remoteSubscriptions]);
   const anySyncing = remoteSubscriptions.some(item => item.sync_status === 'syncing');
 
+  React.useEffect(() => {
+    if (!anySyncing) return;
+    let cancelled = false;
+    const timer = window.setInterval(() => {
+      api.getSubscriptions()
+        .then(items => {
+          if (!cancelled) setSubscriptions(items);
+        })
+        .catch(() => {
+          // WebSocket remains the primary channel; the next poll can recover transient REST failures.
+        });
+    }, 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [anySyncing]);
+
   const importNodes = async () => {
     try {
       const result = await api.importNodes({ content: importContent });

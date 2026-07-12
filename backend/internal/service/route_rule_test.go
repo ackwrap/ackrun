@@ -125,8 +125,11 @@ func TestRouteRuleServicePreviewRuleSubscriptions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("preview rules: %v", err)
 	}
-	if len(preview.RuleSets) != 1 || preview.RuleSets[0]["download_detour"] != "direct" || preview.RuleSets[0]["tag"] != created.Tag {
+	if len(preview.RuleSets) != 1 || preview.RuleSets[0]["tag"] != created.Tag {
 		t.Fatalf("unexpected rule set preview: %+v", preview)
+	}
+	if _, exists := preview.RuleSets[0]["download_detour"]; exists {
+		t.Fatalf("rule set preview contains deprecated download_detour: %+v", preview.RuleSets[0])
 	}
 	if len(preview.Rules) != 1 || preview.Rules[0]["outbound"] != "direct" {
 		t.Fatalf("unexpected route rule preview: %+v", preview)

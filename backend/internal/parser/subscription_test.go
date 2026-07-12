@@ -586,6 +586,34 @@ func TestClashNormalized(t *testing.T) {
 	}
 }
 
+func TestClashVLESSCipherIsNotEmitted(t *testing.T) {
+	body := []byte(`proxies:
+  - name: Clash-VLESS
+    type: vless
+    server: clash.example.com
+    port: 443
+    uuid: test-uuid
+    cipher: auto
+`)
+	nodes, err := ParseSubscriptionNodes(body)
+	if err != nil {
+		t.Fatalf("parse clash yaml: %v", err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("parsed node count = %d, want 1", len(nodes))
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal([]byte(nodes[0].RawJSON), &cfg); err != nil {
+		t.Fatalf("unmarshal VLESS node: %v", err)
+	}
+	if _, exists := cfg["cipher"]; exists {
+		t.Fatalf("normalized VLESS node contains unsupported cipher: %+v", cfg)
+	}
+	if _, exists := cfg["method"]; exists {
+		t.Fatalf("normalized VLESS node contains unsupported method: %+v", cfg)
+	}
+}
+
 func TestParseSSRURI(t *testing.T) {
 	password := base64.StdEncoding.EncodeToString([]byte("pass"))
 	remarks := base64.StdEncoding.EncodeToString([]byte("SSR-01"))

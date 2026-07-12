@@ -18,6 +18,7 @@ const defaultRequest: ConfigGenerateRequest = {
 export function ConfigPage() {
   const [request, setRequest] = useState<ConfigGenerateRequest>(defaultRequest);
   const [generated, setGenerated] = useState<any>(null);
+  const [hasConfig, setHasConfig] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [applying, setApplying] = useState(false);
   const [confirmApply, setConfirmApply] = useState(false);
@@ -67,6 +68,10 @@ export function ConfigPage() {
   };
 
   const handleApply = async () => {
+    if (!hasConfig) {
+      showMessage('当前没有可应用的配置文件', 'error');
+      return;
+    }
     if (!generated?.valid) {
       showMessage('请先生成并校验通过配置', 'error');
       return;
@@ -116,6 +121,9 @@ export function ConfigPage() {
   };
 
   useEffect(() => {
+    api.getConfigStatus()
+      .then(status => setHasConfig(status.has_config))
+      .catch(() => setHasConfig(false));
     handleGenerate();
   }, []);
 
@@ -127,7 +135,7 @@ export function ConfigPage() {
           <button onClick={handleGenerate} disabled={generating} className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--button-primary-border)] bg-[var(--button-primary-bg)] px-3 text-sm font-medium text-[var(--button-primary-text)] hover:bg-[var(--button-primary-hover)] disabled:opacity-50">
             <Play size={15} />{generating ? '生成中...' : '生成完整配置'}
           </button>
-          <button onClick={() => setConfirmApply(true)} disabled={!generated?.valid || applying} className="inline-flex h-9 items-center gap-2 rounded-md bg-emerald-600 px-3 text-sm font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50">
+          <button title={!hasConfig ? '当前没有配置文件' : undefined} onClick={() => setConfirmApply(true)} disabled={!hasConfig || !generated?.valid || applying} className="inline-flex h-9 items-center gap-2 rounded-md bg-emerald-600 px-3 text-sm font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50">
             <Save size={15} />{applying ? '应用中...' : '应用当前生成结果'}
           </button>
         </div>

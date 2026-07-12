@@ -559,7 +559,7 @@ Geo 数据库存 `geo_assets` 表。
 - 规则订阅内容缓存到 `<data>/rules/`，`/rules/subscriptions/:id/content` 优先返回本地缓存，无缓存时才拉取上游并写缓存
 - 规则订阅 URL 为 `.yml/.yaml` 时自动按 Clash rule-provider YAML 处理，预览生成 sing-box `format=source`，`url` 指向后端转换接口 `/rules/subscriptions/:id/content`
 - Clash YAML 转换支持 `payload`/`rules`，支持 classical 行如 `DOMAIN-SUFFIX,example.com`，也支持无 `behavior` 的纯域名或纯 CIDR payload
-- 预览中的 remote rule_set `url` 统一指向本机后端转换/缓存接口，`download_detour=direct`
+- 预览中的 remote rule_set `url` 统一指向本机后端转换/缓存接口；sing-box 1.14+ 不生成已弃用的 `download_detour`，本机请求使用默认 HTTP transport
 - 后端拉取上游规则订阅时按 `use_proxy` 决定是否走本地代理
 - Geo 数据库默认包含 `geoip.db` 和 `geosite.db` 两项，下载到 `<data>/geo/`，支持手动同步单个/全部和 `daily/weekly` 定时同步
 - 还未确认出站策略生成前，不直接写入正式 sing-box 配置

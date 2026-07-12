@@ -51,11 +51,10 @@ func normalizeToSingbox(cfg map[string]any, typ string) map[string]any {
 
 	// Cipher/Method 转换
 	if cipher, ok := result["cipher"]; ok {
-		if typ == "vmess" {
+		switch typ {
+		case "vmess":
 			result["security"] = cipher
-		} else if typ == "shadowsocks" {
-			result["method"] = cipher
-		} else {
+		case "shadowsocks":
 			result["method"] = cipher
 		}
 		delete(result, "cipher")

@@ -70,12 +70,11 @@ func normalizeClashProxy(proxy map[string]any, typ string) map[string]any {
 
 	// Cipher 字段映射
 	if cipher, ok := proxy["cipher"]; ok {
-		if typ == "vmess" {
+		switch typ {
+		case "vmess":
 			result["security"] = cipher
-		} else if typ == "shadowsocks" {
+		case "shadowsocks":
 			result["method"] = cipher
-		} else {
-			result["cipher"] = cipher
 		}
 	}
 

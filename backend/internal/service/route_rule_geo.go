@@ -40,11 +40,10 @@ func appendGeneratedGeoRuleSets(ruleSets []map[string]interface{}, seen map[stri
 		}
 		seen[tag] = true
 		ruleSets = append(ruleSets, map[string]interface{}{
-			"tag":             tag,
-			"type":            "remote",
-			"format":          "binary",
-			"url":             generatedGeoRuleSetContentURL(baseURL, tag),
-			"download_detour": "direct",
+			"tag":    tag,
+			"type":   "remote",
+			"format": "binary",
+			"url":    generatedGeoRuleSetContentURL(baseURL, tag),
 		})
 	}
 	return ruleSets

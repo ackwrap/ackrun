@@ -7,6 +7,7 @@ const (
 	RuntimeNoConfig     RuntimeStatus = "no_config"
 	RuntimeStopped      RuntimeStatus = "stopped"
 	RuntimeRunning      RuntimeStatus = "running"
+	RuntimeError        RuntimeStatus = "error"
 )
 
 type RuntimeResponse struct {

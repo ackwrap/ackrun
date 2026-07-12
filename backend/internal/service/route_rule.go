@@ -319,16 +319,14 @@ func (svc *RouteRuleService) PreviewWithBaseURL(baseURL string) (*model.RouteRul
 		}
 		format := item.Format
 		ruleURL := routeRuleSubscriptionContentURL(baseURL, item.ID)
-		downloadDetour := "direct"
 		if item.Format == "clash" {
 			format = "source"
 		}
 		ruleSet := map[string]any{
-			"tag":             item.Tag,
-			"type":            "remote",
-			"format":          format,
-			"url":             ruleURL,
-			"download_detour": downloadDetour,
+			"tag":    item.Tag,
+			"type":   "remote",
+			"format": format,
+			"url":    ruleURL,
 		}
 		ruleSetTags[item.Tag] = true
 		ruleSets = append(ruleSets, ruleSet)

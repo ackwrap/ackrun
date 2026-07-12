@@ -34,6 +34,7 @@ type SingboxService struct {
 	done      chan struct{}
 	stopping  bool
 	cachedVer string
+	lastError string
 }
 
 var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
@@ -76,6 +77,7 @@ func (svc *SingboxService) Start() (*model.ActionResponse, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	svc.cancel = cancel
+	svc.lastError = ""
 
 	cmd := exec.CommandContext(ctx, svc.paths.BinaryPath, "run", "-c", configPath, "--disable-color")
 
@@ -116,11 +118,20 @@ func (svc *SingboxService) Start() (*model.ActionResponse, error) {
 	})
 	svc.broadcastRuntimeStatus(model.RuntimeRunning, svc.pid)
 
-	go svc.captureCoreLog(stdout, "stdout")
-	go svc.captureCoreLog(stderr, "stderr")
+	var logWG sync.WaitGroup
+	logWG.Add(2)
+	go func() {
+		defer logWG.Done()
+		svc.captureCoreLog(stdout, "stdout")
+	}()
+	go func() {
+		defer logWG.Done()
+		svc.captureCoreLog(stderr, "stderr")
+	}()
 
 	go func() {
 		err := cmd.Wait()
+		logWG.Wait()
 		svc.mu.Lock()
 		intentionalStop := svc.cmd == cmd && svc.stopping
 		if svc.cmd == cmd {
@@ -132,19 +143,14 @@ func (svc *SingboxService) Start() (*model.ActionResponse, error) {
 		}
 		svc.mu.Unlock()
 
-		statusMsg := "stopped"
-		errorMessage := ""
-		if err != nil && !intentionalStop {
-			statusMsg = "error"
-			errorMessage = err.Error()
-		}
+		statusMsg, runtimeStatus, errorMessage := coreExitState(err, intentionalStop, svc.lastError)
 		logging.Info("core.start", "sing-box exited: %v", err)
 		svc.realtime.Broadcast("core.status", map[string]any{
 			"status": statusMsg,
 			"pid":    0,
 			"error":  errorMessage,
 		})
-		svc.broadcastRuntimeStatus(model.RuntimeStopped, 0)
+		svc.broadcastRuntimeStatus(runtimeStatus, 0)
 		svc.mu.Lock()
 		svc.stopping = false
 		svc.mu.Unlock()
@@ -285,7 +291,30 @@ func (svc *SingboxService) captureCoreLog(reader io.Reader, source string) {
 		now := time.Now().UnixMilli()
 		entry := svc.coreLogs.Append(source, now, line)
 		svc.realtime.Broadcast("core.log", entry)
+		if source == "stderr" && strings.Contains(line, "FATAL") {
+			svc.mu.Lock()
+			svc.lastError = line
+			svc.mu.Unlock()
+		}
 	}
+}
+
+func coreExitErrorMessage(lastError string, processErr error) string {
+	lower := strings.ToLower(lastError)
+	if strings.Contains(lower, "configure tun interface") && strings.Contains(lower, "access is denied") {
+		return "TUN 模式启动失败：Windows 拒绝创建 TUN 网卡，请以管理员身份运行 AckWrap"
+	}
+	if lastError != "" {
+		return lastError
+	}
+	return processErr.Error()
+}
+
+func coreExitState(processErr error, intentionalStop bool, lastError string) (string, model.RuntimeStatus, string) {
+	if processErr != nil && !intentionalStop {
+		return "error", model.RuntimeError, coreExitErrorMessage(lastError, processErr)
+	}
+	return "stopped", model.RuntimeStopped, ""
 }
 
 // CloseConnections closes active connections through sing-box's Clash API.
