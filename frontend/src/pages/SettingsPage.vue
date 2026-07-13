@@ -62,7 +62,10 @@ onMounted(() => {
     .catch(() => {});
   api
     .getLogSettings()
-    .then((d) => (logTimestamp.value = d.timestamp !== false))
+    .then((d) => {
+      logLevel.value = d.level || "info";
+      logTimestamp.value = d.timestamp !== false;
+    })
     .catch(() => {});
   api
     .getNTPSettings()
@@ -107,7 +110,10 @@ async function saveExperimental() {
 }
 async function saveLog() {
   try {
-    await api.setLogSettings({ timestamp: logTimestamp.value });
+    await api.setLogSettings({
+      level: logLevel.value,
+      timestamp: logTimestamp.value,
+    });
     notify("日志配置已保存（下次生成配置时生效）");
   } catch (e: any) {
     notify(`保存失败: ${e.message}`, "error");

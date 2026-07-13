@@ -60,9 +60,7 @@ const remote = computed(() =>
     subscriptions.value.filter((x) => x.url !== manualURL),
   ),
   manual = computed(() => subscriptions.value.find((x) => x.url === manualURL)),
-  displayed = computed(() =>
-    (manual.value ? [manual.value] : []).concat(remote.value),
-  ),
+  displayed = computed(() => remote.value),
   anySyncing = computed(() =>
     remote.value.some((x) => x.sync_status === "syncing"),
   ),
@@ -465,10 +463,35 @@ const pretty = (s: string) => {
     <section
       class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
     >
-      <h2 class="font-semibold">本地订阅导入</h2>
-      <p class="mb-4 text-xs text-[var(--text-secondary)]">
-        支持 URI List、Clash YAML 和 sing-box JSON；UID 已存在时追加/更新。
-      </p>
+      <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 class="font-semibold">本地订阅导入</h2>
+          <p class="mt-1 text-xs text-[var(--text-secondary)]">
+            支持 URI List、Clash YAML 和 sing-box JSON；UID 已存在时追加/更新。
+          </p>
+        </div>
+        <div
+          class="flex items-center gap-3 rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--bg-base)] px-3 py-2"
+        >
+          <div>
+            <div class="text-xs font-medium text-[var(--text-primary)]">
+              本地节点源
+            </div>
+            <div class="text-[11px] text-[var(--text-tertiary)]">
+              {{ manual ? "manual://local" : "首次导入时自动创建" }}
+            </div>
+          </div>
+          <button
+            class="aw-action-button aw-action-neutral"
+            :disabled="!manual?.node_count"
+            @click="
+              manual && router.push(`/nodes?subscription_id=${manual.id}`)
+            "
+          >
+            {{ manual?.node_count || 0 }} 个节点
+          </button>
+        </div>
+      </div>
       <div class="mb-3 flex flex-wrap justify-end gap-2">
         <button
           class="aw-action-button"

@@ -176,12 +176,21 @@ async function copy(value: any, label: string) {
     showMessage(`复制失败: ${e.message || "浏览器不支持剪贴板"}`);
   }
 }
-onMounted(() => {
-  api
-    .getConfigStatus()
-    .then((s) => (hasConfig.value = s.has_config))
-    .catch(() => (hasConfig.value = false));
-  void generate();
+onMounted(async () => {
+  const [statusResult, requestResult] = await Promise.allSettled([
+    api.getConfigStatus(),
+    api.getConfigGenerateRequest(),
+  ]);
+  hasConfig.value =
+    statusResult.status === "fulfilled" && statusResult.value.has_config;
+  if (requestResult.status === "rejected") {
+    showMessage(
+      `加载配置生成参数失败: ${requestResult.reason?.message || "请求失败"}`,
+    );
+    return;
+  }
+  request.value = requestResult.value;
+  await generate();
 });
 </script>
 <template>

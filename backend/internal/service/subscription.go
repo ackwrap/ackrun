@@ -556,14 +556,16 @@ func (svc *SubscriptionService) fetchAndParse(rawURL string, userAgent string, t
 		return nil, fmt.Errorf("subscription contains no supported nodes")
 	}
 
-	// 过滤不支持的协议
-	unsupportedTypes := map[string]bool{"ssr": true, "mieru": true}
+	// 过滤不支持的协议和无法安全等价转换的 Clash 协议变体。
 	supportedNodes := make([]model.ParsedNode, 0, len(nodes))
 	unsupportedCount := map[string]int{}
 
 	for _, node := range nodes {
-		if unsupportedTypes[node.Type] {
+		if isUnsupportedNodeType(node.Type) || node.UnsupportedReason != "" {
 			unsupportedCount[node.Type]++
+			if node.UnsupportedReason != "" {
+				logging.Info("subscription.parse", "filtered %s node: %s", node.Type, node.UnsupportedReason)
+			}
 		} else {
 			supportedNodes = append(supportedNodes, node)
 		}

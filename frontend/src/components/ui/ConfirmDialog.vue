@@ -7,8 +7,9 @@ withDefaults(
     confirmText?: string;
     cancelText?: string;
     danger?: boolean;
+    showCancel?: boolean;
   }>(),
-  { confirmText: "确认", cancelText: "取消" },
+  { confirmText: "确认", cancelText: "取消", showCancel: true },
 );
 defineEmits<{ confirm: []; cancel: [] }>();
 </script>
@@ -20,7 +21,11 @@ defineEmits<{ confirm: []; cancel: [] }>();
         <p class="mt-2 text-sm text-[var(--text-secondary)]">{{ message }}</p>
       </div>
       <div class="flex justify-end gap-2 px-5 py-4">
-        <button class="aw-confirm-cancel" @click="$emit('cancel')">
+        <button
+          v-if="showCancel"
+          class="aw-confirm-cancel"
+          @click="$emit('cancel')"
+        >
           {{ cancelText }}</button
         ><button
           :class="danger ? 'aw-confirm-danger' : 'aw-confirm-primary'"

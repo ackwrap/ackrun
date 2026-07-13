@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, watch } from "vue";
+import { X } from "lucide-vue-next";
 const p = withDefaults(
   defineProps<{
     open: boolean;
@@ -43,20 +44,29 @@ onBeforeUnmount(() => {
     >
       <div class="absolute inset-0 bg-[var(--bg-overlay)]" />
       <div
-        class="relative w-full rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-elevated)] shadow-[var(--shadow-xl)]"
+        class="relative flex max-h-[calc(100vh-2rem)] w-full flex-col overflow-hidden rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-elevated)] shadow-[var(--shadow-xl)]"
         :style="{ maxWidth: `${maxWidth}px` }"
         @click.stop
       >
         <header
-          class="flex items-center justify-between border-b border-[var(--border-light)] px-6 py-4"
+          class="flex shrink-0 items-center justify-between border-b border-[var(--border-light)] px-6 py-4"
         >
-          <h3 class="text-lg font-semibold">{{ title }}</h3>
-          <button v-if="closable" @click="$emit('close')">×</button>
+          <h3 class="text-base font-semibold">
+            <slot name="title">{{ title }}</slot>
+          </h3>
+          <button
+            v-if="closable"
+            class="aw-modal-close inline-flex h-8 w-8 items-center justify-center p-0"
+            aria-label="关闭"
+            @click="$emit('close')"
+          >
+            <X :size="16" />
+          </button>
         </header>
-        <div class="px-6 py-4"><slot /></div>
+        <div class="min-h-0 overflow-y-auto px-6 py-4"><slot /></div>
         <footer
           v-if="$slots.footer"
-          class="flex justify-end gap-2 border-t border-[var(--border-light)] px-6 py-4"
+          class="flex shrink-0 justify-end gap-2 border-t border-[var(--border-light)] px-6 py-4"
         >
           <slot name="footer" />
         </footer>

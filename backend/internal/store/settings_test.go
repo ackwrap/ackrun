@@ -36,3 +36,22 @@ func TestExperimentalSettingsMigratesStoreRDRCToStoreDNS(t *testing.T) {
 		t.Fatalf("legacy cache settings remain: %d", legacyCount)
 	}
 }
+
+func TestLogSettingsPersistLevelAndTimestamp(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	if err := s.SetLogSettings(&model.LogSettings{Level: "debug", Timestamp: false}); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := s.GetLogSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Level != "debug" || settings.Timestamp {
+		t.Fatalf("log settings = %+v, want debug without timestamp", settings)
+	}
+}

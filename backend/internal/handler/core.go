@@ -72,6 +72,50 @@ func (h *CoreHandler) CloseConnections(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+func (h *CoreHandler) FlushCoreDNS(c *gin.Context) {
+	resp, err := h.singbox.FlushCoreDNS()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
+			Error: model.APIError{Code: "CORE_FLUSH_CORE_DNS_FAILED", Message: err.Error()},
+		})
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+func (h *CoreHandler) FlushFakeIP(c *gin.Context) {
+	resp, err := h.singbox.FlushFakeIP()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
+			Error: model.APIError{Code: "CORE_FLUSH_FAKEIP_FAILED", Message: err.Error()},
+		})
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+func (h *CoreHandler) NetworkCheck(c *gin.Context) {
+	resp, err := h.singbox.NetworkCheck()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
+			Error: model.APIError{Code: "CORE_NETWORK_CHECK_FAILED", Message: err.Error()},
+		})
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+func (h *CoreHandler) Diagnostics(c *gin.Context) {
+	resp, err := h.singbox.Diagnostics()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
+			Error: model.APIError{Code: "CORE_DIAGNOSTICS_FAILED", Message: err.Error()},
+		})
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
 func (h *CoreHandler) ResetFirewall(c *gin.Context) {
 	resp, err := h.singbox.ResetFirewall()
 	if err != nil {

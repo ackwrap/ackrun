@@ -11,14 +11,26 @@ import {
   FileCheck2,
   ShieldCheck,
   DatabaseZap,
+  Activity,
+  AlertCircle,
+  CheckCircle2,
+  Eraser,
+  FileDown,
+  ListX,
+  XCircle,
 } from "lucide-vue-next";
 import { useRealtimeSocket } from "@/composables/useRealtimeSocket";
 import { api } from "@/services/api";
-import type { RuntimeResponse, WSEvent } from "@/services/types";
+import type {
+  MaintenanceCheckResponse,
+  RuntimeResponse,
+  WSEvent,
+} from "@/services/types";
 import Button from "@/components/ui/Button.vue";
 import PageHeader from "@/components/layout/PageHeader.vue";
 import Toast from "@/components/ui/Toast.vue";
 import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
+import Modal from "@/components/ui/Modal.vue";
 import ControlOverview from "./ControlOverview.vue";
 import ControlNetworkOverview from "./ControlNetworkOverview.vue";
 const runtime = ref<RuntimeResponse | null>(null),
@@ -33,7 +45,9 @@ const runtime = ref<RuntimeResponse | null>(null),
   messageType = ref<"success" | "error" | "info">("success"),
   refreshKey = ref(0),
   runtimeAction = ref(""),
-  confirmFirewallReset = ref(false);
+  confirmFirewallReset = ref(false),
+  confirmLogClear = ref(false),
+  maintenanceReport = ref<MaintenanceCheckResponse | null>(null);
 const labels: any = {
     running: "运行中",
     starting: "启动中",
@@ -154,6 +168,50 @@ async function action(fn: () => Promise<any>, label: string) {
       .then((r) => (installStatus.value = r))
       .catch(() => {});
   }, 1000);
+}
+
+async function runNetworkCheck() {
+  if (runtimeAction.value) return;
+  runtimeAction.value = "网络自检";
+  try {
+    maintenanceReport.value = await api.networkCheck();
+    notify(
+      maintenanceReport.value.success
+        ? "网络自检通过"
+        : "网络自检发现需要处理的项目",
+      maintenanceReport.value.success ? "success" : "info",
+    );
+  } catch (e: any) {
+    notify(`网络自检失败: ${e.message}`, "error");
+  } finally {
+    runtimeAction.value = "";
+  }
+}
+
+async function exportDiagnostics() {
+  if (runtimeAction.value) return;
+  runtimeAction.value = "导出诊断";
+  try {
+    const report = await api.getDiagnostics();
+    const blob = new Blob([JSON.stringify(report, null, 2)], {
+      type: "application/json;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `ackwrap-diagnostics-${new Date(report.generated_at)
+      .toISOString()
+      .replace(/[:.]/g, "-")}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    notify("脱敏诊断报告已导出");
+  } catch (e: any) {
+    notify(`导出诊断失败: ${e.message}`, "error");
+  } finally {
+    runtimeAction.value = "";
+  }
 }
 async function install(label: string) {
   try {
@@ -280,7 +338,55 @@ onBeforeUnmount(() => {
         confirmFirewallReset = false;
         action(api.resetFirewall, '重置防火墙');
       "
-    /><PageHeader title="控制面板" />
+    /><ConfirmDialog
+      :open="confirmLogClear"
+      title="清理核心日志"
+      message="此操作会清空当前内存中的核心日志，且无法恢复。确认继续吗？"
+      confirm-text="确认清理"
+      danger
+      @cancel="confirmLogClear = false"
+      @confirm="
+        confirmLogClear = false;
+        action(api.clearCoreLogs, '清理核心日志');
+      "
+    /><Modal
+      :open="!!maintenanceReport"
+      title="网络自检结果"
+      size="md"
+      @close="maintenanceReport = null"
+    >
+      <div class="space-y-2">
+        <div
+          v-for="check in maintenanceReport?.checks || []"
+          :key="check.key"
+          class="flex items-start gap-3 rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--bg-base)] p-3"
+        >
+          <CheckCircle2
+            v-if="check.status === 'pass'"
+            :size="17"
+            class="mt-0.5 shrink-0 text-[var(--color-success)]"
+          />
+          <AlertCircle
+            v-else-if="check.status === 'warn'"
+            :size="17"
+            class="mt-0.5 shrink-0 text-[var(--color-warning)]"
+          />
+          <XCircle
+            v-else
+            :size="17"
+            class="mt-0.5 shrink-0 text-[var(--color-error)]"
+          />
+          <div>
+            <div class="font-medium text-[var(--text-primary)]">
+              {{ check.label }}
+            </div>
+            <p class="mt-0.5 text-xs text-[var(--text-secondary)]">
+              {{ check.message }}
+            </p>
+          </div>
+        </div>
+      </div> </Modal
+    ><PageHeader title="控制面板" />
     <div
       v-if="showInstallGuide || showConfigGuide"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4"
@@ -365,7 +471,7 @@ onBeforeUnmount(() => {
             <small>sing-box 进程管理</small>
           </div>
         </div>
-        <div class="mt-4 grid grid-cols-3 gap-2">
+        <div class="mt-3 grid grid-cols-3 gap-2">
           <div
             v-for="x in [
               ['进程 ID', runtime?.pid || '-'],
@@ -378,13 +484,13 @@ onBeforeUnmount(() => {
               ],
             ]"
             :key="x[0]"
-            class="bg-[var(--bg-base)] p-2"
+            class="bg-[var(--bg-base)] px-2 py-1.5"
           >
             <small>{{ x[0] }}</small
             ><b class="block truncate">{{ x[1] }}</b>
           </div>
         </div>
-        <div class="my-auto grid grid-cols-2 gap-2 px-1 sm:grid-cols-4">
+        <div class="mt-3 grid grid-cols-2 gap-2 px-1 sm:grid-cols-4">
           <button
             class="aw-control-action"
             :disabled="!!runtimeAction || isRunning || notInstalled || noConfig"
@@ -460,7 +566,7 @@ onBeforeUnmount(() => {
       >
         <h2>高级维护</h2>
         <p class="text-xs">连接与系统网络维护操作</p>
-        <div class="my-auto grid grid-cols-2 gap-2 px-1 sm:grid-cols-4">
+        <div class="my-auto grid grid-cols-2 gap-2 px-1 sm:grid-cols-3">
           <button
             class="aw-control-action"
             :disabled="!!runtimeAction || !isRunning"
@@ -469,22 +575,52 @@ onBeforeUnmount(() => {
             <ShieldCheck :size="13" />关闭连接</button
           ><button
             class="aw-control-action"
-            :disabled="!!runtimeAction || unsupported"
-            @click="confirmFirewallReset = true"
+            :disabled="!!runtimeAction || !isRunning"
+            @click="action(api.flushCoreDNS, '清理核心 DNS')"
           >
-            <RefreshCw :size="13" />重置防火墙</button
+            <DatabaseZap :size="13" />清理核心 DNS</button
+          ><button
+            class="aw-control-action"
+            :disabled="!!runtimeAction || !isRunning"
+            @click="action(api.flushFakeIP, '清理 FakeIP')"
+          >
+            <Eraser :size="13" />清理 FakeIP</button
+          ><button
+            class="aw-control-action"
+            :disabled="!!runtimeAction"
+            @click="runNetworkCheck"
+          >
+            <Activity :size="13" />网络自检</button
           ><button
             class="aw-control-action"
             :disabled="!!runtimeAction || unsupported"
-            @click="action(api.flushDNS, '清理 DNS 缓存')"
+            @click="action(api.flushDNS, '清理系统 DNS')"
           >
-            <DatabaseZap :size="13" />清理 DNS 缓存</button
+            <RefreshCw :size="13" />清理系统 DNS</button
+          ><button
+            class="aw-control-action"
+            :disabled="!!runtimeAction"
+            @click="confirmLogClear = true"
+          >
+            <ListX :size="13" />清理核心日志</button
+          ><button
+            class="aw-control-action"
+            :disabled="!!runtimeAction"
+            @click="exportDiagnostics"
+          >
+            <FileDown :size="13" />导出诊断</button
           ><button
             class="aw-control-action"
             :disabled="!!runtimeAction || notInstalled"
             @click="action(api.checkUpdate, '检查更新')"
           >
-            <FileCheck2 :size="13" />检查更新
+            <FileCheck2 :size="13" />检查更新</button
+          ><button
+            class="aw-control-action aw-action-danger"
+            :disabled="!!runtimeAction || unsupported"
+            @click="confirmFirewallReset = true"
+          >
+            <AlertTriangle :size="13" />重置防火墙
           </button>
         </div>
       </section>

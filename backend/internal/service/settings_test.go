@@ -41,6 +41,42 @@ func TestSetExperimentalSettingsRejectsInvalidClashAPIPort(t *testing.T) {
 	}
 }
 
+func TestSetLogSettingsPersistsLevelInGenerationRequest(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	request := &model.ConfigGenerateRequest{DefaultOutbound: "proxy", LogLevel: "info"}
+	if err := db.SetConfigGenerateRequest(request); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewSettingsService(db)
+	if err := svc.SetLogSettings(&model.LogSettings{Level: "debug", Timestamp: true}); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := db.GetConfigGenerateRequest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored == nil || stored.LogLevel != "debug" {
+		t.Fatalf("generation log level = %+v, want debug", stored)
+	}
+}
+
+func TestSetLogSettingsRejectsInvalidLevel(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if err := NewSettingsService(db).SetLogSettings(&model.LogSettings{Level: "verbose"}); err == nil {
+		t.Fatal("SetLogSettings() error = nil, want invalid level error")
+	}
+}
+
 func TestSetProxyModeRejectsRunningCore(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {

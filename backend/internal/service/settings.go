@@ -75,7 +75,24 @@ func (svc *SettingsService) GetLogSettings() (*model.LogSettingsResponse, error)
 }
 
 func (svc *SettingsService) SetLogSettings(req *model.LogSettings) error {
-	return svc.store.SetLogSettings(req)
+	req.Level = strings.ToLower(strings.TrimSpace(req.Level))
+	switch req.Level {
+	case "trace", "debug", "info", "warn", "error", "fatal", "panic":
+	default:
+		return fmt.Errorf("日志级别无效")
+	}
+	if err := svc.store.SetLogSettings(req); err != nil {
+		return err
+	}
+	generateRequest, err := svc.store.GetConfigGenerateRequest()
+	if err != nil {
+		return fmt.Errorf("读取配置生成参数失败: %w", err)
+	}
+	if generateRequest == nil {
+		return nil
+	}
+	generateRequest.LogLevel = req.Level
+	return svc.store.SetConfigGenerateRequest(generateRequest)
 }
 
 func (svc *SettingsService) GetNTPSettings() (*model.NTPSettingsResponse, error) {

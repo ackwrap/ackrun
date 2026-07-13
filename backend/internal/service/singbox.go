@@ -323,9 +323,38 @@ func (svc *SingboxService) CloseConnections() (*model.ActionResponse, error) {
 	if !svc.IsRunning() {
 		return nil, fmt.Errorf("sing-box is not running")
 	}
+	if err := svc.requestClashAPI(http.MethodDelete, "/connections"); err != nil {
+		return nil, fmt.Errorf("failed to close connections: %w", err)
+	}
+	return &model.ActionResponse{Success: true, Message: "all connections closed"}, nil
+}
+
+func (svc *SingboxService) FlushCoreDNS() (*model.ActionResponse, error) {
+	logging.Info("core.flush_core_dns", "flushing sing-box DNS cache")
+	if !svc.IsRunning() {
+		return nil, fmt.Errorf("sing-box is not running")
+	}
+	if err := svc.requestClashAPI(http.MethodPost, "/cache/dns/flush"); err != nil {
+		return nil, fmt.Errorf("failed to flush sing-box DNS cache: %w", err)
+	}
+	return &model.ActionResponse{Success: true, Message: "sing-box DNS cache flushed"}, nil
+}
+
+func (svc *SingboxService) FlushFakeIP() (*model.ActionResponse, error) {
+	logging.Info("core.flush_fakeip", "flushing sing-box FakeIP cache")
+	if !svc.IsRunning() {
+		return nil, fmt.Errorf("sing-box is not running")
+	}
+	if err := svc.requestClashAPI(http.MethodPost, "/cache/fakeip/flush"); err != nil {
+		return nil, fmt.Errorf("failed to flush FakeIP cache: %w", err)
+	}
+	return &model.ActionResponse{Success: true, Message: "FakeIP cache flushed"}, nil
+}
+
+func (svc *SingboxService) requestClashAPI(method, path string) error {
 	settings, err := svc.store.GetExperimentalSettings()
 	if err != nil {
-		return nil, fmt.Errorf("read Clash API settings: %w", err)
+		return fmt.Errorf("read Clash API settings: %w", err)
 	}
 	port := "9090"
 	secret := ""
@@ -337,13 +366,13 @@ func (svc *SingboxService) CloseConnections() (*model.ActionResponse, error) {
 	}
 	portNumber, err := strconv.Atoi(port)
 	if err != nil || portNumber < 1 || portNumber > 65535 {
-		return nil, fmt.Errorf("invalid Clash API port")
+		return fmt.Errorf("invalid Clash API port")
 	}
-	target := "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(portNumber)) + "/connections"
-	if err := requestClashAPI(http.MethodDelete, target, secret); err != nil {
-		return nil, fmt.Errorf("failed to close connections: %w", err)
+	target := "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(portNumber)) + path
+	if err := requestClashAPI(method, target, secret); err != nil {
+		return err
 	}
-	return &model.ActionResponse{Success: true, Message: "all connections closed"}, nil
+	return nil
 }
 
 func requestClashAPI(method, target, secret string) error {
@@ -364,6 +393,116 @@ func requestClashAPI(method, target, secret string) error {
 		return fmt.Errorf("Clash API returned HTTP %d", resp.StatusCode)
 	}
 	return nil
+}
+
+func (svc *SingboxService) NetworkCheck() (*model.MaintenanceCheckResponse, error) {
+	logging.Info("core.network_check", "running maintenance network checks")
+	return svc.networkCheck(), nil
+}
+
+func (svc *SingboxService) networkCheck() *model.MaintenanceCheckResponse {
+	checks := make([]model.MaintenanceCheck, 0, 5)
+	add := func(key, label, status, message string) {
+		checks = append(checks, model.MaintenanceCheck{Key: key, Label: label, Status: status, Message: message})
+	}
+
+	binaryReady := false
+	if _, err := os.Stat(svc.paths.BinaryPath); err != nil {
+		add("binary", "核心程序", "fail", "sing-box 核心程序不存在")
+	} else {
+		binaryReady = true
+		add("binary", "核心程序", "pass", "sing-box 核心程序可用")
+	}
+
+	if _, ok, err := svc.paths.ActiveConfigPath(); err != nil {
+		add("config", "配置文件", "fail", "无法读取当前配置状态")
+	} else if !ok {
+		add("config", "配置文件", "fail", "当前没有可用配置文件")
+	} else if !binaryReady {
+		add("config", "配置文件", "warn", "需要安装核心后才能校验配置")
+	} else if _, err := svc.validateActiveConfig(); err != nil {
+		add("config", "配置文件", "fail", "当前配置未通过 sing-box 校验")
+	} else {
+		add("config", "配置文件", "pass", "当前配置校验通过")
+	}
+
+	running := svc.IsRunning()
+	if running {
+		add("process", "核心进程", "pass", "sing-box 核心正在运行")
+		if err := svc.requestClashAPI(http.MethodGet, "/version"); err != nil {
+			add("clash_api", "Clash API 端口", "fail", "Clash API 不可访问，请检查端口和密钥设置")
+		} else {
+			add("clash_api", "Clash API 端口", "pass", "Clash API 可正常访问")
+		}
+	} else {
+		add("process", "核心进程", "warn", "sing-box 核心当前未运行")
+		add("clash_api", "Clash API 端口", "warn", "核心启动后才能检测 Clash API")
+	}
+
+	if goruntime.GOOS == "windows" {
+		if err := exec.Command("net", "session").Run(); err != nil {
+			add("administrator", "管理员权限", "warn", "当前进程可能没有管理员权限，TUN 和系统维护操作可能失败")
+		} else {
+			add("administrator", "管理员权限", "pass", "当前进程具有管理员权限")
+		}
+	}
+
+	success := true
+	for _, check := range checks {
+		if check.Status == "fail" {
+			success = false
+			break
+		}
+	}
+	return &model.MaintenanceCheckResponse{Success: success, Checks: checks}
+}
+
+func (svc *SingboxService) Diagnostics() (*model.CoreDiagnosticsResponse, error) {
+	logging.Info("core.diagnostics", "building redacted diagnostics report")
+	configPath, configPresent, err := svc.paths.ActiveConfigPath()
+	if err != nil {
+		return nil, fmt.Errorf("read active config path: %w", err)
+	}
+	network := svc.networkCheck()
+	configValid := false
+	for _, check := range network.Checks {
+		if check.Key == "config" {
+			configValid = check.Status == "pass"
+			break
+		}
+	}
+
+	logSummary := model.CoreLogSummary{}
+	if svc.coreLogs != nil {
+		for _, entry := range svc.coreLogs.List(defaultCoreLogLimit) {
+			logSummary.Total++
+			switch entry.Source {
+			case "stdout":
+				logSummary.Stdout++
+			case "stderr":
+				logSummary.Stderr++
+			}
+			line := strings.ToLower(entry.Line)
+			if strings.Contains(line, "error") || strings.Contains(line, "fatal") {
+				logSummary.ErrorLines++
+			}
+		}
+	}
+
+	return &model.CoreDiagnosticsResponse{
+		GeneratedAt:   time.Now().UnixMilli(),
+		Platform:      goruntime.GOOS,
+		Architecture:  goruntime.GOARCH,
+		Version:       svc.getVersion(),
+		Running:       svc.IsRunning(),
+		PID:           svc.GetPID(),
+		BinaryPath:    svc.paths.BinaryPath,
+		ConfigPath:    configPath,
+		ConfigPresent: configPresent,
+		ConfigValid:   configValid,
+		Network:       *network,
+		Logs:          logSummary,
+	}, nil
 }
 
 // ResetFirewall resets local firewall rules on Windows.

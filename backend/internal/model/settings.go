@@ -15,11 +15,13 @@ type UpdateSettingsResponse struct {
 }
 
 type LogSettings struct {
-	Timestamp bool `json:"timestamp"`
+	Level     string `json:"level"`
+	Timestamp bool   `json:"timestamp"`
 }
 
 type LogSettingsResponse struct {
-	Timestamp bool `json:"timestamp"`
+	Level     string `json:"level"`
+	Timestamp bool   `json:"timestamp"`
 }
 
 // NTPSettings NTP 时间同步设置

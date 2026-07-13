@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { Plus, ServerCog, Trash2 } from "lucide-vue-next";
+import { Plus, Save, ServerCog, Trash2 } from "lucide-vue-next";
 import PageHeader from "@/components/layout/PageHeader.vue";
 import Toast from "@/components/ui/Toast.vue";
 interface Server {
@@ -401,7 +401,12 @@ onMounted(load);
               v-model.number="global.cache_capacity"
               type="number" /></label
           ><label>Client Subnet<input v-model="global.client_subnet" /></label
-          ><button @click="saveGlobal">保存全局设置</button>
+          ><button
+            class="aw-action-button aw-action-success self-end justify-self-end px-4"
+            @click="saveGlobal"
+          >
+            <Save :size="13" />保存全局设置
+          </button>
         </div>
         <div class="mt-3 flex gap-4">
           <label

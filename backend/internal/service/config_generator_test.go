@@ -138,6 +138,35 @@ func TestSelectDNSBootstrapTagUsesIPServer(t *testing.T) {
 	}
 }
 
+func TestSafeNodeResolverFallsBackFromProxyDetour(t *testing.T) {
+	servers := []model.DNSServer{
+		{Tag: "dns_proxy", Enabled: true, ServerType: "https", Address: "https://dns.example.com/dns-query", Detour: "proxy"},
+		{Tag: "dns_direct", Enabled: true, ServerType: "udp", Address: "1.1.1.1"},
+	}
+	tags := enabledDNSServerTags(servers, false)
+	if got := safeNodeResolverTag("dns_proxy", servers, tags); got != "dns_direct" {
+		t.Fatalf("safe node resolver = %q, want dns_direct", got)
+	}
+}
+
+func TestSelectDNSBootstrapTagExcludesProxyDetour(t *testing.T) {
+	servers := []model.DNSServer{
+		{Tag: "dns_proxy", Enabled: true, ServerType: "udp", Address: "1.1.1.1", Detour: "proxy"},
+	}
+	if got := selectDNSBootstrapTag(servers); got != "" {
+		t.Fatalf("bootstrap tag = %q, want empty for proxy-detoured server", got)
+	}
+}
+
+func TestProxyDetouredDNSServerRequiresGeneratedBootstrap(t *testing.T) {
+	servers := []model.DNSServer{
+		{Tag: "dns_proxy", Enabled: true, ServerType: "udp", Address: "1.1.1.1", Detour: "proxy"},
+	}
+	if !hasProxyDetouredDNSServer(servers) {
+		t.Fatal("proxy-detoured DNS server should require a generated bootstrap when no direct server exists")
+	}
+}
+
 func TestNeedsGeneratedDNSBootstrapForUnresolvedDoH(t *testing.T) {
 	servers := []model.DNSServer{{Tag: "dns_doh", Enabled: true, ServerType: "https", Address: "https://dns.example.com/dns-query"}}
 	if !needsGeneratedDNSBootstrap(servers, enabledDNSServerTags(servers, false)) {
@@ -172,6 +201,90 @@ func TestRouteRuleDirectUsesRouteAction(t *testing.T) {
 	rule := singboxRouteRule("domain_suffix", []string{"example.com"}, "direct", false)
 	if rule["action"] != "route" || rule["outbound"] != "direct" {
 		t.Fatalf("route action = %+v, want action=route outbound=direct", rule)
+	}
+}
+
+func TestDefaultBypassProcessNamesIncludesAckwrapAndCore(t *testing.T) {
+	names := defaultBypassProcessNames(
+		filepath.Join("custom", "ackwrap-windows-amd64.exe"),
+		filepath.Join("bin", "sing-box.exe"),
+	)
+	for _, expected := range []string{"ackwrap", "ackwrap.exe", "ackwrap-windows-amd64.exe", "sing-box.exe"} {
+		found := false
+		for _, name := range names {
+			if name == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("process whitelist %v does not contain %q", names, expected)
+		}
+	}
+}
+
+func TestNodeServerBypassTargetsSeparatesDomainsAndIPs(t *testing.T) {
+	domains, ipCIDRs := nodeServerBypassTargets([]model.Node{
+		{Server: "Node.Example.COM."},
+		{Server: "node.example.com"},
+		{Server: "192.0.2.10"},
+		{Server: "[2001:db8::10]"},
+		{Server: "192.0.2.10"},
+	})
+	if len(domains) != 1 || domains[0] != "node.example.com" {
+		t.Fatalf("domains = %v, want [node.example.com]", domains)
+	}
+	if len(ipCIDRs) != 2 || ipCIDRs[0] != "192.0.2.10/32" || ipCIDRs[1] != "2001:db8::10/128" {
+		t.Fatalf("ip_cidr = %v, want IPv4 and IPv6 host routes", ipCIDRs)
+	}
+}
+
+func TestGenerateRouteIncludesDefaultLoopBypassRules(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	subscription, err := db.CreateSubscription(&model.SubscriptionRequest{
+		Name: "bypass-test", URL: "https://example.com/subscription",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReplaceSubscriptionNodes(subscription.ID, []model.ParsedNode{
+		{Name: "Domain Node", Type: "socks", Server: "node.example.com", ServerPort: 1080, RawJSON: `{"type":"socks"}`},
+		{Name: "IP Node", Type: "socks", Server: "192.0.2.20", ServerPort: 1080, RawJSON: `{"type":"socks"}`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	service := NewConfigGeneratorService(db, nil)
+	route, err := service.generateRoute("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route["find_process"] != true {
+		t.Fatalf("find_process = %v, want true", route["find_process"])
+	}
+	if route["default_http_client"] != defaultRuleSetHTTPClientTag {
+		t.Fatalf("default_http_client = %v, want %s", route["default_http_client"], defaultRuleSetHTTPClientTag)
+	}
+	rules, ok := route["rules"].([]map[string]interface{})
+	if !ok {
+		t.Fatalf("route rules type = %T", route["rules"])
+	}
+	var processRule, domainRule, ipRule bool
+	for _, rule := range rules {
+		if rule["outbound"] != "direct" {
+			continue
+		}
+		processRule = processRule || rule["process_name"] != nil
+		domainRule = domainRule || rule["domain"] != nil
+		ipRule = ipRule || rule["ip_cidr"] != nil
+	}
+	if !processRule || !domainRule || !ipRule {
+		t.Fatalf("missing loop bypass rule: %+v", rules)
 	}
 }
 
@@ -252,6 +365,7 @@ func TestEnsureRequiredOutboundTLS(t *testing.T) {
 	if _, exists := nodeData["tls"]; exists {
 		t.Fatal("optional TLS protocol should remain unchanged")
 	}
+
 }
 
 func TestGenerateNodeOutboundRemovesZeroVMessAlterID(t *testing.T) {
@@ -361,4 +475,78 @@ func TestGenerateOutboundsDoesNotApplyNodeListPageLimit(t *testing.T) {
 		return
 	}
 	t.Fatal("generated all-nodes group not found")
+}
+
+func TestGenerateInboundsDefaultsToLoopback(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	service := NewConfigGeneratorService(db, nil)
+	for _, item := range service.generateInbounds("", 0) {
+		inbound, ok := item.(map[string]interface{})
+		if !ok || inbound["type"] != "mixed" {
+			continue
+		}
+		if inbound["listen"] != "127.0.0.1" || inbound["listen_port"] != 7890 {
+			t.Fatalf("mixed inbound = %+v, want loopback:7890", inbound)
+		}
+		return
+	}
+	t.Fatal("generated mixed inbound not found")
+}
+
+func TestPreviewRequestPreservesStoredGenerationSettings(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	stored := &model.ConfigGenerateRequest{
+		DefaultOutbound: "proxy",
+		InboundListen:   "127.0.0.1",
+		InboundPort:     2080,
+		LogLevel:        "warn",
+	}
+	if err := db.SetConfigGenerateRequest(stored); err != nil {
+		t.Fatal(err)
+	}
+	service := NewConfigGeneratorService(db, nil)
+
+	preview, err := service.previewRequest("custom-proxy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.DefaultOutbound != "custom-proxy" || preview.InboundListen != stored.InboundListen || preview.InboundPort != stored.InboundPort || preview.LogLevel != stored.LogLevel {
+		t.Fatalf("preview request = %+v, want stored settings with overridden outbound", preview)
+	}
+	persisted, err := db.GetConfigGenerateRequest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *persisted != *stored {
+		t.Fatalf("stored generation settings changed: got %+v, want %+v", persisted, stored)
+	}
+}
+
+func TestGetGenerateRequestUsesPersistedLogLevelByDefault(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.SetLogSettings(&model.LogSettings{Level: "debug", Timestamp: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	request, err := NewConfigGeneratorService(db, nil).GetGenerateRequest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.LogLevel != "debug" {
+		t.Fatalf("default generation log level = %q, want debug", request.LogLevel)
+	}
 }

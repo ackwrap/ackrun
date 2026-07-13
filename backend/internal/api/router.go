@@ -63,6 +63,10 @@ func RegisterRoutes(
 		v1.POST("/core/restart", coreH.Restart)
 		v1.POST("/core/reload-config", coreH.ReloadConfig)
 		v1.POST("/core/close-connections", coreH.CloseConnections)
+		v1.POST("/core/flush-core-dns", coreH.FlushCoreDNS)
+		v1.POST("/core/flush-fakeip", coreH.FlushFakeIP)
+		v1.POST("/core/network-check", coreH.NetworkCheck)
+		v1.GET("/core/diagnostics", coreH.Diagnostics)
 		v1.POST("/core/reset-firewall", coreH.ResetFirewall)
 		v1.POST("/core/flush-dns", coreH.FlushDNS)
 		v1.POST("/core/check-update", coreH.CheckUpdate)
@@ -117,6 +121,7 @@ func RegisterRoutes(
 		v1.PUT("/collections/:id/enabled", proxyCollectionH.ToggleEnabled)
 		v1.POST("/collections/:id/test", proxyCollectionH.Test)
 
+		v1.GET("/config/generate", configGenH.GetGenerateRequest)
 		v1.POST("/config/generate", configGenH.Generate)
 		v1.GET("/config/preview", configGenH.Preview)
 		v1.POST("/config/apply", configGenH.Apply)

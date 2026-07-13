@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { Cloud, Link2 } from "lucide-vue-next";
+import { Cloud, FileJson2, Link2 } from "lucide-vue-next";
 import PageHeader from "@/components/layout/PageHeader.vue";
+import Modal from "@/components/ui/Modal.vue";
 import Toast from "@/components/ui/Toast.vue";
 import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
 import { api } from "@/services/api";
@@ -66,6 +67,15 @@ const show = (s: string, t: "success" | "error" = "success") => {
     () =>
       geoSyncing.value ||
       geoAssets.value.some((x) => x.sync_status === "syncing"),
+  ),
+  previewText = computed(
+    () =>
+      content.value?.content ||
+      JSON.stringify(
+        { rule_set: preview.value?.rule_sets, rules: preview.value?.rules },
+        null,
+        2,
+      ),
   );
 async function load() {
   try {
@@ -294,6 +304,7 @@ async function createRef(x: RouteRuleSubscription, o: string) {
 }
 async function previewSub(x: RouteRuleSubscription) {
   try {
+    actions.value = null;
     content.value = {
       title: `${x.name} 转换结果`,
       content: JSON.stringify(
@@ -537,34 +548,28 @@ onBeforeUnmount(() => clearInterval(poll));
       @edit="editSub"
       @remove="deleteSub"
     />
-    <div
-      v-if="preview || content"
-      class="aw-modal-backdrop"
-      @click="
+    <Modal
+      :open="!!(preview || content)"
+      :title="content?.title || '规则 JSON 预览'"
+      size="lg"
+      @close="
         preview = null;
         content = null;
       "
     >
-      <div class="aw-modal-panel max-w-3xl p-5" @click.stop>
-        <button
-          @click="
-            preview = null;
-            content = null;
-          "
-        >
-          ×
-        </button>
-        <h3>{{ content?.title || "规则 JSON 预览" }}</h3>
-        <pre>{{
-          content?.content ||
-          JSON.stringify(
-            { rule_set: preview?.rule_sets, rules: preview?.rules },
-            null,
-            2,
-          )
-        }}</pre>
-      </div>
-    </div>
+      <template #title>
+        <span class="flex items-center gap-2">
+          <FileJson2 :size="18" />{{ content?.title || "规则 JSON 预览" }}
+        </span>
+      </template>
+      <textarea
+        :value="previewText"
+        readonly
+        rows="22"
+        class="min-h-[480px] w-full resize-none font-mono text-xs leading-5"
+        spellcheck="false"
+      />
+    </Modal>
     <ConfirmDialog
       :open="!!pending"
       title="删除规则"

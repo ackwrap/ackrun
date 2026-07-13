@@ -65,12 +65,35 @@ func (s *Store) SetUpdateSettings(req *model.UpdateSettings) error {
 }
 
 func (s *Store) GetLogSettings() (*model.LogSettingsResponse, error) {
-	var value string
-	err := s.db.QueryRow(`SELECT value FROM app_settings WHERE key = 'log.timestamp'`).Scan(&value)
+	settings := &model.LogSettingsResponse{Level: "info", Timestamp: true}
+	rows, err := s.db.Query(`SELECT key, value FROM app_settings WHERE key IN ('log.level', 'log.timestamp')`)
 	if err != nil {
-		return &model.LogSettingsResponse{Timestamp: true}, nil
+		return nil, err
 	}
-	return &model.LogSettingsResponse{Timestamp: value == "true"}, nil
+	defer rows.Close()
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			return nil, err
+		}
+		switch key {
+		case "log.level":
+			if value != "" {
+				settings.Level = value
+			}
+		case "log.timestamp":
+			settings.Timestamp = value == "true"
+		}
+	}
+	return settings, rows.Err()
+}
+
+func (s *Store) GetLogLevel() string {
+	settings, err := s.GetLogSettings()
+	if err != nil || settings == nil || settings.Level == "" {
+		return "info"
+	}
+	return settings.Level
 }
 
 func (s *Store) GetLogTimestamp() bool {
@@ -83,12 +106,24 @@ func (s *Store) GetLogTimestamp() bool {
 
 func (s *Store) SetLogSettings(req *model.LogSettings) error {
 	now := time.Now().Unix()
-	_, err := s.db.Exec(`
-		INSERT INTO app_settings (key, value, updated_at)
-		VALUES (?, ?, ?)
-		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-	`, "log.timestamp", fmt.Sprintf("%t", req.Timestamp), now)
-	return err
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for key, value := range map[string]string{
+		"log.level":     req.Level,
+		"log.timestamp": fmt.Sprintf("%t", req.Timestamp),
+	} {
+		if _, err := tx.Exec(`
+			INSERT INTO app_settings (key, value, updated_at)
+			VALUES (?, ?, ?)
+			ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+		`, key, value, now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // GetNTPSettings 获取 NTP 设置

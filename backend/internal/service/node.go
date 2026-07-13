@@ -1,9 +1,13 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
+	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,7 +18,9 @@ import (
 )
 
 type NodeService struct {
-	store *store.Store
+	store        *store.Store
+	clashBaseURL string
+	httpClient   *http.Client
 }
 
 func NewNodeService(s *store.Store) *NodeService {
@@ -79,14 +85,16 @@ func (svc *NodeService) parseImportNodes(content string) ([]model.ParsedNode, er
 		return nil, fmt.Errorf("import content contains no supported nodes")
 	}
 
-	// 过滤不支持的协议
-	unsupportedTypes := map[string]bool{"ssr": true, "mieru": true}
+	// 过滤不支持的协议和无法安全等价转换的 Clash 协议变体。
 	supportedNodes := make([]model.ParsedNode, 0, len(nodes))
 	unsupportedCount := 0
 
 	for _, node := range nodes {
-		if unsupportedTypes[node.Type] {
+		if isUnsupportedNodeType(node.Type) || node.UnsupportedReason != "" {
 			unsupportedCount++
+			if node.UnsupportedReason != "" {
+				logging.Info("node.import", "filtered %s node: %s", node.Type, node.UnsupportedReason)
+			}
 		} else {
 			supportedNodes = append(supportedNodes, node)
 		}
@@ -97,7 +105,7 @@ func (svc *NodeService) parseImportNodes(content string) ([]model.ParsedNode, er
 	}
 
 	if len(supportedNodes) == 0 {
-		return nil, fmt.Errorf("all nodes are unsupported protocols (ssr/mieru)")
+		return nil, fmt.Errorf("all nodes use unsupported protocols or options")
 	}
 
 	return svc.applyNodeFilters(supportedNodes)
@@ -187,8 +195,14 @@ func (svc *NodeService) TCPing(uids []string) ([]model.NodeTCPingResult, error) 
 		return nil, err
 	}
 	results := make([]model.NodeTCPingResult, 0, len(nodes))
+	nodeTags := buildNodeOutboundTags(nodes)
 	for _, node := range nodes {
-		result := svc.tcpingNode(node)
+		var result model.NodeTCPingResult
+		if usesUDPTransport(node.Type) {
+			result = svc.urlTestNode(node, nodeTags[node.UID])
+		} else {
+			result = svc.tcpingNode(node)
+		}
 		results = append(results, result)
 		status := "unavailable"
 		latency := 0
@@ -201,6 +215,80 @@ func (svc *NodeService) TCPing(uids []string) ([]model.NodeTCPingResult, error) 
 		}
 	}
 	return results, nil
+}
+
+func usesUDPTransport(nodeType string) bool {
+	switch strings.ToLower(strings.TrimSpace(nodeType)) {
+	case "hysteria", "hysteria2", "tuic", "wireguard":
+		return true
+	default:
+		return false
+	}
+}
+
+func (svc *NodeService) urlTestNode(node model.Node, outboundTag string) model.NodeTCPingResult {
+	baseURL, secret, err := svc.nodeClashAPI()
+	if err != nil {
+		return model.NodeTCPingResult{UID: node.UID, Error: err.Error()}
+	}
+	endpoint := fmt.Sprintf(
+		"%s/proxies/%s/delay?timeout=10000&url=%s",
+		baseURL,
+		url.PathEscape(outboundTag),
+		url.QueryEscape("https://www.gstatic.com/generate_204"),
+	)
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return model.NodeTCPingResult{UID: node.UID, Error: err.Error()}
+	}
+	if secret != "" {
+		req.Header.Set("Authorization", "Bearer "+secret)
+	}
+	client := svc.httpClient
+	if client == nil {
+		client = &http.Client{Timeout: 12 * time.Second}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return model.NodeTCPingResult{UID: node.UID, Error: "无法连接 sing-box Clash API: " + err.Error()}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return model.NodeTCPingResult{UID: node.UID, Error: fmt.Sprintf("sing-box 协议测速返回 HTTP %d，节点可能未载入当前配置", resp.StatusCode)}
+	}
+	var payload struct {
+		Delay int `json:"delay"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return model.NodeTCPingResult{UID: node.UID, Error: "无法解析 sing-box 协议测速响应: " + err.Error()}
+	}
+	if payload.Delay <= 0 {
+		return model.NodeTCPingResult{UID: node.UID, Error: "sing-box 协议测速未返回有效延迟"}
+	}
+	return model.NodeTCPingResult{UID: node.UID, Success: true, LatencyMS: payload.Delay}
+}
+
+func (svc *NodeService) nodeClashAPI() (string, string, error) {
+	if svc.clashBaseURL != "" {
+		return strings.TrimRight(svc.clashBaseURL, "/"), "", nil
+	}
+	settings, err := svc.store.GetExperimentalSettings()
+	if err != nil {
+		return "", "", fmt.Errorf("读取 Clash API 设置失败: %w", err)
+	}
+	port := "9090"
+	secret := ""
+	if settings != nil {
+		if settings.ClashAPIPort != "" {
+			port = settings.ClashAPIPort
+		}
+		secret = settings.ClashAPISecret
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return "", "", fmt.Errorf("Clash API 端口无效")
+	}
+	return "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(portNumber)), secret, nil
 }
 
 func (svc *NodeService) tcpingNode(node model.Node) model.NodeTCPingResult {

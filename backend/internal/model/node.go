@@ -133,11 +133,12 @@ type NodeImportPreviewResponse struct {
 }
 
 type ParsedNode struct {
-	UID        string
-	Name       string
-	Type       string
-	Server     string
-	ServerPort int
-	Raw        string
-	RawJSON    string
+	UID               string
+	Name              string
+	Type              string
+	Server            string
+	ServerPort        int
+	Raw               string
+	RawJSON           string
+	UnsupportedReason string
 }
