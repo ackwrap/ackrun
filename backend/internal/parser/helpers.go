@@ -54,10 +54,15 @@ func normalizeToSingbox(cfg map[string]any, typ string) map[string]any {
 		switch typ {
 		case "vmess":
 			result["security"] = cipher
-		case "shadowsocks":
+		case "shadowsocks", "ssr":
 			result["method"] = cipher
 		}
 		delete(result, "cipher")
+	}
+	if typ == "ssr" {
+		moveKey(result, "obfs-param", "obfs_param")
+		moveKey(result, "protocol-param", "protocol_param")
+		delete(result, "group")
 	}
 
 	// AlterId 转换

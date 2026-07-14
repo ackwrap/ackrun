@@ -352,7 +352,7 @@ func TestSSRAdvancedParams(t *testing.T) {
 	obfsParam := base64.StdEncoding.EncodeToString([]byte("obfsparam_val"))
 	protoParam := base64.StdEncoding.EncodeToString([]byte("protoparam_val"))
 	group := base64.StdEncoding.EncodeToString([]byte("MyGroup"))
-	decoded := "ssr.example.com:8388:origin:aes-128-gcm:plain:" + password + "/?remarks=" + remarks + "&obfsparam=" + obfsParam + "&protoparam=" + protoParam + "&group=" + group
+	decoded := "ssr.example.com:8388:origin:aes-128-cfb:plain:" + password + "/?remarks=" + remarks + "&obfsparam=" + obfsParam + "&protoparam=" + protoParam + "&group=" + group
 	uri := "ssr://" + base64.StdEncoding.EncodeToString([]byte(decoded))
 	node, err := ParseProxyURI(uri)
 	if err != nil {
@@ -362,14 +362,66 @@ func TestSSRAdvancedParams(t *testing.T) {
 	if err := json.Unmarshal([]byte(node.RawJSON), &cfg); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if cfg["obfs-param"] != "obfsparam_val" {
-		t.Fatalf("expected obfs-param, got %v", cfg["obfs-param"])
+	if cfg["obfs_param"] != "obfsparam_val" {
+		t.Fatalf("expected obfs_param, got %v", cfg["obfs_param"])
 	}
-	if cfg["protocol-param"] != "protoparam_val" {
-		t.Fatalf("expected protocol-param, got %v", cfg["protocol-param"])
+	if cfg["protocol_param"] != "protoparam_val" {
+		t.Fatalf("expected protocol_param, got %v", cfg["protocol_param"])
 	}
-	if cfg["group"] != "MyGroup" {
-		t.Fatalf("expected group, got %v", cfg["group"])
+	if cfg["method"] != "aes-128-cfb" {
+		t.Fatalf("expected SSR method, got %+v", cfg)
+	}
+	if _, exists := cfg["group"]; exists {
+		t.Fatalf("SSR subscription metadata leaked into outbound config: %+v", cfg)
+	}
+}
+
+func TestClashSSRPreservesOutboundOptions(t *testing.T) {
+	body := []byte(`proxies:
+  - name: Clash-SSR
+    type: ssr
+    server: ssr.example.com
+    port: 8388
+    cipher: aes-256-cfb
+    password: redacted
+    protocol: auth_aes128_sha1
+    protocol-param: 1000:test
+    obfs: http_simple
+    obfs-param: cdn.example.com
+    udp: true
+  - name: Clash-SSR-TCP
+    type: ssr
+    server: ssr-tcp.example.com
+    port: 8388
+    cipher: aes-256-cfb
+    password: redacted
+    protocol: origin
+    obfs: plain
+    udp: false
+`)
+	nodes, err := ParseSubscriptionNodes(body)
+	if err != nil {
+		t.Fatalf("parse Clash SSR: %v", err)
+	}
+	if len(nodes) != 2 || nodes[0].Type != "ssr" || nodes[0].UnsupportedReason != "" {
+		t.Fatalf("unexpected SSR nodes: %+v", nodes)
+	}
+	var config map[string]any
+	if err := json.Unmarshal([]byte(nodes[0].RawJSON), &config); err != nil {
+		t.Fatalf("unmarshal Clash SSR: %v", err)
+	}
+	if config["method"] != "aes-256-cfb" || config["protocol"] != "auth_aes128_sha1" || config["protocol_param"] != "1000:test" || config["obfs"] != "http_simple" || config["obfs_param"] != "cdn.example.com" {
+		t.Fatalf("Clash SSR options were not preserved: %+v", config)
+	}
+	if _, exists := config["network"]; exists {
+		t.Fatalf("UDP-capable SSR must not be restricted to TCP: %+v", config)
+	}
+	var tcpConfig map[string]any
+	if err := json.Unmarshal([]byte(nodes[1].RawJSON), &tcpConfig); err != nil {
+		t.Fatalf("unmarshal TCP-only Clash SSR: %v", err)
+	}
+	if tcpConfig["network"] != "tcp" {
+		t.Fatalf("Clash SSR udp=false must map to TCP: %+v", tcpConfig)
 	}
 }
 

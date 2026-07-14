@@ -1,7 +1,6 @@
 package service
 
 var unsupportedNodeTypes = map[string]bool{
-	"ssr":   true,
 	"mieru": true,
 }
 

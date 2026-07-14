@@ -242,7 +242,7 @@ func clashIPVersionStrategy(value string) string {
 
 func clashSupportsNetworkField(protocol string) bool {
 	switch protocol {
-	case "vmess", "vless", "trojan", "shadowsocks", "socks", "hysteria", "hysteria2", "tuic", "snell":
+	case "vmess", "vless", "trojan", "shadowsocks", "ssr", "socks", "hysteria", "hysteria2", "tuic", "snell":
 		return true
 	default:
 		return false

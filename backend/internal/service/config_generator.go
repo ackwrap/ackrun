@@ -743,8 +743,19 @@ func normalizeLegacyOutboundFields(nodeData map[string]interface{}, outboundType
 			if _, hasMethod := nodeData["method"]; !hasMethod {
 				nodeData["method"] = cipher
 			}
+		case "ssr":
+			if _, hasMethod := nodeData["method"]; !hasMethod {
+				nodeData["method"] = cipher
+			}
 		}
 		delete(nodeData, "cipher")
+	}
+	if outboundType == "ssr" {
+		nodeData["type"] = "shadowsocksr"
+		moveConfigField(nodeData, "obfs-param", "obfs_param")
+		moveConfigField(nodeData, "protocol-param", "protocol_param")
+		delete(nodeData, "group")
+		return nil
 	}
 	if outboundType != "vmess" {
 		return nil
@@ -775,6 +786,15 @@ func normalizeLegacyOutboundFields(nodeData map[string]interface{}, outboundType
 		}
 	}
 	return fmt.Errorf("旧版 VMess alter_id 节点不受当前 sing-box 版本支持")
+}
+
+func moveConfigField(data map[string]interface{}, source, target string) {
+	if value, exists := data[source]; exists {
+		if _, targetExists := data[target]; !targetExists {
+			data[target] = value
+		}
+		delete(data, source)
+	}
 }
 
 func isSingboxUTLSFingerprint(value string) bool {

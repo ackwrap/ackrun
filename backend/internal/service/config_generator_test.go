@@ -390,6 +390,29 @@ func TestGenerateNodeOutboundRemovesZeroVMessAlterID(t *testing.T) {
 	}
 }
 
+func TestGenerateNodeOutboundMapsSSRToMaintainedCoreType(t *testing.T) {
+	service := NewConfigGeneratorService(nil, nil)
+	node := &model.Node{
+		Type:    "ssr",
+		RawJSON: `{"type":"ssr","server":"example.com","server_port":8388,"cipher":"aes-256-cfb","password":"redacted","protocol":"auth_aes128_sha1","protocol-param":"1000:test","obfs":"http_simple","obfs-param":"cdn.example.com","group":"legacy-subscription-group","udp":true}`,
+	}
+	outbound, err := service.generateNodeOutbound(node, "ssr-test", nil)
+	if err != nil {
+		t.Fatalf("generate SSR outbound: %v", err)
+	}
+	if outbound["type"] != "shadowsocksr" || outbound["method"] != "aes-256-cfb" || outbound["protocol_param"] != "1000:test" || outbound["obfs_param"] != "cdn.example.com" {
+		t.Fatalf("SSR outbound mapping is incomplete: %+v", outbound)
+	}
+	if _, exists := outbound["network"]; exists {
+		t.Fatalf("UDP-capable SSR must not be restricted to TCP: %+v", outbound)
+	}
+	for _, key := range []string{"cipher", "protocol-param", "obfs-param", "group", "udp"} {
+		if _, exists := outbound[key]; exists {
+			t.Fatalf("legacy SSR field %q leaked into outbound: %+v", key, outbound)
+		}
+	}
+}
+
 func TestGenerateNodeOutboundRemovesVLESSCipher(t *testing.T) {
 	service := &ConfigGeneratorService{}
 	node := &model.Node{

@@ -78,7 +78,7 @@ func normalizeClashProxy(proxy map[string]any, typ string) (map[string]any, stri
 		switch typ {
 		case "vmess":
 			result["security"] = cipher
-		case "shadowsocks":
+		case "shadowsocks", "ssr":
 			result["method"] = cipher
 		}
 	}
@@ -96,6 +96,16 @@ func normalizeClashProxy(proxy map[string]any, typ string) (map[string]any, stri
 				// 无 version，使用简化格式
 				result["udp_over_tcp"] = true
 			}
+		}
+	}
+	if typ == "ssr" {
+		copyClashField(result, proxy, "protocol")
+		copyClashField(result, proxy, "obfs")
+		if value := getString(proxy, "protocol-param"); value != "" {
+			result["protocol_param"] = value
+		}
+		if value := getString(proxy, "obfs-param"); value != "" {
+			result["obfs_param"] = value
 		}
 	}
 
