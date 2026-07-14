@@ -1,7 +1,10 @@
 package parser
 
 import (
+	"fmt"
 	"net/url"
+	"strconv"
+	"strings"
 
 	"github.com/ackwrap/ackwrap/internal/model"
 )
@@ -19,22 +22,40 @@ func parseSnell(raw string) (*model.ParsedNode, error) {
 		name = server
 	}
 	node := map[string]any{"name": name, "type": "snell", "server": server, "port": port, "psk": u.User.Username()}
-	for _, key := range []string{"version"} {
-		if value := query[key]; value != "" {
-			node[key] = decodeURLValue(value)
-		}
+	version, err := strconv.Atoi(query["version"])
+	if err != nil {
+		return nil, fmt.Errorf("snell: invalid version")
 	}
-	if obfs := query["obfs"]; obfs != "" {
-		node["obfs"] = obfs
-		obfsOpts := map[string]any{}
-		if host := query["obfs-host"]; host != "" {
-			obfsOpts["host"] = decodeURLValue(host)
+	// sing-box uses the v4 wire protocol for v5 clients because v5 QUIC mode is intentionally unsupported.
+	if version == 5 {
+		version = 4
+	}
+	if version != 4 && version != 6 {
+		return nil, fmt.Errorf("snell: unsupported version %d", version)
+	}
+	node["version"] = version
+	if userKey := firstQueryValue(query, "userkey", "user-key"); userKey != "" {
+		node["userkey"] = decodeURLValue(userKey)
+	}
+	if reuse := query["reuse"]; reuse == "1" || strings.EqualFold(reuse, "true") {
+		node["reuse"] = true
+	}
+	if network := query["network"]; network != "" {
+		node["network"] = network
+	}
+	if version == 4 {
+		if obfsMode := firstQueryValue(query, "obfs_mode", "obfs-mode", "obfs"); obfsMode != "" {
+			node["obfs_mode"] = obfsMode
 		}
-		if obfsParam := query["obfs-param"]; obfsParam != "" {
-			obfsOpts["obfs-param"] = decodeURLValue(obfsParam)
+		if obfsHost := firstQueryValue(query, "obfs_host", "obfs-host"); obfsHost != "" {
+			node["obfs_host"] = decodeURLValue(obfsHost)
 		}
-		if len(obfsOpts) > 0 {
-			node["obfs-opts"] = obfsOpts
+	} else if mode := query["mode"]; mode != "" {
+		node["mode"] = mode
+	}
+	if version == 6 {
+		if psk, _ := node["psk"].(string); len(psk) < 12 {
+			return nil, fmt.Errorf("snell: version 6 psk must be at least 12 bytes")
 		}
 	}
 	return parsedNodeFromMap(raw, node)

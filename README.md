@@ -10,7 +10,7 @@ Ackwrap is currently in active development. Many features, protocol mappings, si
 
 Use it for experimentation and development first. Production use is not recommended yet.
 
-The project is designed for iterative testing on desktop, Linux, and OpenWrt-like environments. It includes a Go backend, a React frontend, SQLite storage, WebSocket status events, and an installer that downloads Ackwrap's customized sing-box build from `ackwrap/sing-box-wrap` releases.
+The project is designed for iterative testing on desktop, Linux, and OpenWrt-like environments. It includes a Go backend, a Vue frontend, SQLite storage, WebSocket status events, and an installer that downloads Ackwrap's customized sing-box build from `ackwrap/sing-box-wrap` releases.
 
 ## Features
 
@@ -27,7 +27,7 @@ The project is designed for iterative testing on desktop, Linux, and OpenWrt-lik
 ## Tech Stack
 
 - Backend: Go, Gin, SQLite (`modernc.org/sqlite`), Gorilla WebSocket, robfig/cron.
-- Frontend: React 18, TypeScript, Vite, Tailwind CSS.
+- Frontend: Vue 3, TypeScript, Vite, Vue Router, Tailwind CSS 4, DaisyUI.
 - Runtime: sing-box-compatible JSON configuration.
 - Storage: local SQLite database and filesystem cache under the Ackwrap data directory.
 
@@ -35,7 +35,7 @@ The project is designed for iterative testing on desktop, Linux, and OpenWrt-lik
 
 ```text
 backend/                 Go backend and embedded frontend output
-frontend/                React frontend
+frontend/                Vue frontend
 docs/                    Project documentation
 sing-box-wrap/           Ackwrap-maintained sing-box fork/subtree
 mihomo-Alpha/            Local reference source used for protocol research

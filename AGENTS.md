@@ -36,9 +36,17 @@ npm run build
 
 如果不能，不要进入下一步。
 
+## devel 与子模块保护规则
+
+- 主仓库 `devel` 是功能开发与分支合并交界，`sing-box-wrap/devel` 同时承接 `sync -> devel -> main`。合并、拉取、rebase、切换分支或更新子模块都可能移动子模块工作树并覆盖未提交文件。
+- 执行上述操作前必须先运行 `git -C sing-box-wrap status --short` 和 `git diff --submodule=log -- sing-box-wrap`；子模块非干净状态时禁止直接执行更新。
+- 子模块存在功能修改时，必须先在 `sing-box-wrap` 内完成验证、提交并推送，再回主仓库提交新的子模块指针；禁止只提交主仓库映射而不提交对应核心实现。
+- 禁止对脏子模块执行 `git submodule update --force`、reset、clean 或会隐式切换子模块提交的脚本。确需更新时先提交，或在获得用户明确同意后建立可恢复的 stash。
+- 合并或更新完成后必须再次核对 `git -C sing-box-wrap rev-parse HEAD`、子模块状态和关键新增文件，确认工作树没有被远端 `devel` 覆盖。
+
 ## 文档查询规则
 
-遇到不确定的库、框架、SDK、CLI、配置字段或协议字段问题时，必须先通过 Context7 查询对应官方文档，再决定实现或映射方式。尤其是 sing-box / Mihomo / React / Vite / Gin / SQLite 等第三方 API 和配置 schema，不允许只凭经验或错误信息直接判断。
+遇到不确定的库、框架、SDK、CLI、配置字段或协议字段问题时，必须先通过 Context7 查询对应官方文档，再决定实现或映射方式。尤其是 sing-box / Mihomo / Vue / Vite / Gin / SQLite 等第三方 API 和配置 schema，不允许只凭经验或错误信息直接判断。
 
 ## 协议支持验证规则
 
@@ -92,7 +100,7 @@ npm run build
 | SQLite Driver | modernc.org/sqlite |
 | WebSocket | Gorilla WebSocket |
 | 定时任务 | github.com/robfig/cron/v3 |
-| 前端 | React 18 + TypeScript + Vite + Tailwind CSS |
+| 前端 | Vue 3 + TypeScript + Vite + Tailwind CSS 4 + DaisyUI |
 | 配置格式 | JSON |
 | 日志 | internal/logging 包装 log.Printf |
 | API 格式 | REST + JSON |
@@ -487,15 +495,17 @@ UID 生成规则：
 
 ## 节点测速规则
 
-当前“节点测速”是 TCPing，不是完整代理测速。
+当前节点测速按协议分流：TCP 类协议使用 TCPing，UDP/QUIC 类协议复用 sing-box Clash API 真实出站测速。
 
 行为：
-- 使用 `net.Dialer{Timeout: 5s}` 连接 `server:server_port`
-- 必须使用 `net.JoinHostPort()`，兼容 IPv6
+- `hysteria/hysteria2/tuic/wireguard` 必须使用 `/proxies/:tag/delay`，不能用 TCPing 或无响应语义的 UDP Dial
+- UDP/QUIC 节点必须已载入活动配置；未载入时返回明确错误，不回退 TCPing
+- 其他协议使用 `net.Dialer{Timeout: 5s}` 连接 `server:server_port`
+- TCPing 必须使用 `net.JoinHostPort()`，兼容 IPv6
 - 成功写 `latency_ms` 和 `status=available`
 - 失败写 `latency_ms=0` 和 `status=unavailable`
 
-不验证：
+TCPing 不验证：
 - 协议握手
 - UUID/password
 - TLS/Reality 参数
@@ -559,7 +569,7 @@ Geo 数据库存 `geo_assets` 表。
 - 规则订阅内容缓存到 `<data>/rules/`，`/rules/subscriptions/:id/content` 优先返回本地缓存，无缓存时才拉取上游并写缓存
 - 规则订阅 URL 为 `.yml/.yaml` 时自动按 Clash rule-provider YAML 处理，预览生成 sing-box `format=source`，`url` 指向后端转换接口 `/rules/subscriptions/:id/content`
 - Clash YAML 转换支持 `payload`/`rules`，支持 classical 行如 `DOMAIN-SUFFIX,example.com`，也支持无 `behavior` 的纯域名或纯 CIDR payload
-- 预览中的 remote rule_set `url` 统一指向本机后端转换/缓存接口，`download_detour=direct`
+- 预览中的 remote rule_set `url` 统一指向本机后端转换/缓存接口；sing-box 1.14+ 不生成已弃用的 `download_detour`，本机请求使用默认 HTTP transport
 - 后端拉取上游规则订阅时按 `use_proxy` 决定是否走本地代理
 - Geo 数据库默认包含 `geoip.db` 和 `geosite.db` 两项，下载到 `<data>/geo/`，支持手动同步单个/全部和 `daily/weekly` 定时同步
 - 还未确认出站策略生成前，不直接写入正式 sing-box 配置
@@ -574,6 +584,8 @@ Geo 数据库存 `geo_assets` 表。
 - 必须执行 `sing-box check -c config.tmp.json`
 - 校验通过后才覆盖正式配置
 - 第一版默认配置目标是能启动、能校验、能开本地 mixed 代理
+- 默认配置必须在用户规则前生成 Ackwrap/sing-box 进程和全部启用节点服务器的 direct 白名单，启用 `route.find_process`，避免 TUN/全局模式代理回环
+- 节点域名使用 `domain`，IPv4/IPv6 使用 `/32`、`/128` 的 `ip_cidr`，不得把节点敏感地址写入日志
 
 runtime 状态机：
 

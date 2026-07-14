@@ -1,7 +1,9 @@
 package service
 
 import (
+	"encoding/json"
 	"os"
+	"runtime"
 
 	"github.com/ackwrap/ackwrap/internal/logging"
 	"github.com/ackwrap/ackwrap/internal/model"
@@ -22,7 +24,7 @@ func NewRuntimeService(p *paths.Paths, s *store.Store, sb *SingboxService) *Runt
 func (svc *RuntimeService) GetStatus() (*model.RuntimeResponse, error) {
 	logging.Info("runtime.check", "checking runtime status")
 
-	resp := &model.RuntimeResponse{}
+	resp := &model.RuntimeResponse{Platform: runtime.GOOS}
 
 	if _, err := os.Stat(svc.paths.BinaryPath); os.IsNotExist(err) {
 		logging.Info("runtime.check", "binary not found: %s", svc.paths.BinaryPath)
@@ -32,12 +34,14 @@ func (svc *RuntimeService) GetStatus() (*model.RuntimeResponse, error) {
 
 	resp.Version = svc.getVersion()
 
-	if _, ok, err := svc.paths.ActiveConfigPath(); err != nil {
+	if configPath, ok, err := svc.paths.ActiveConfigPath(); err != nil {
 		return nil, err
 	} else if !ok {
 		logging.Info("runtime.check", "config not found in: %s", svc.paths.ConfigDir)
 		resp.Status = model.RuntimeNoConfig
 		return resp, nil
+	} else {
+		resp.ProxyPort = readMixedInboundPort(configPath)
 	}
 
 	pid := svc.singbox.GetPID()
@@ -49,6 +53,28 @@ func (svc *RuntimeService) GetStatus() (*model.RuntimeResponse, error) {
 
 	resp.Status = model.RuntimeStopped
 	return resp, nil
+}
+
+func readMixedInboundPort(configPath string) int {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return 0
+	}
+	var config struct {
+		Inbounds []struct {
+			Type       string `json:"type"`
+			ListenPort int    `json:"listen_port"`
+		} `json:"inbounds"`
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return 0
+	}
+	for _, inbound := range config.Inbounds {
+		if inbound.Type == "mixed" && inbound.ListenPort > 0 {
+			return inbound.ListenPort
+		}
+	}
+	return 0
 }
 
 var cachedVersion string

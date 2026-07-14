@@ -10,7 +10,7 @@ Ackwrap 当前仍处于快速开发阶段。很多功能、协议映射、sing-b
 
 当前更适合作为实验和开发测试使用，暂不建议直接用于生产环境。
 
-项目目标是方便在桌面、Linux、OpenWrt 类环境中迭代测试 sing-box 配置。项目包含 Go 后端、React 前端、SQLite 本地存储、WebSocket 实时事件，以及从 `ackwrap/sing-box-wrap` Release 下载 Ackwrap 定制版 sing-box 的安装器。
+项目目标是方便在桌面、Linux、OpenWrt 类环境中迭代测试 sing-box 配置。项目包含 Go 后端、Vue 前端、SQLite 本地存储、WebSocket 实时事件，以及从 `ackwrap/sing-box-wrap` Release 下载 Ackwrap 定制版 sing-box 的安装器。
 
 ## 功能
 
@@ -27,7 +27,7 @@ Ackwrap 当前仍处于快速开发阶段。很多功能、协议映射、sing-b
 ## 技术栈
 
 - 后端：Go、Gin、SQLite（`modernc.org/sqlite`）、Gorilla WebSocket、robfig/cron。
-- 前端：React 18、TypeScript、Vite、Tailwind CSS。
+- 前端：Vue 3、TypeScript、Vite、Vue Router、Tailwind CSS 4、DaisyUI。
 - 运行核心：兼容 sing-box JSON 配置。
 - 存储：本地 SQLite 数据库和 Ackwrap 数据目录下的文件缓存。
 
@@ -35,7 +35,7 @@ Ackwrap 当前仍处于快速开发阶段。很多功能、协议映射、sing-b
 
 ```text
 backend/                 Go 后端和前端构建产物
-frontend/                React 前端
+frontend/                Vue 前端
 docs/                    项目文档
 sing-box-wrap/           Ackwrap 维护的 sing-box fork/subtree
 mihomo-Alpha/            用于协议研究的本地参考源码

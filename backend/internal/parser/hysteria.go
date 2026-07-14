@@ -73,11 +73,36 @@ func parseHysteriaGeneric(raw string, typ string) (*model.ParsedNode, error) {
 		}
 	}
 	if typ == "hysteria2" {
-		if obfs, ok := query["obfs"]; ok && obfs != "" {
+		if obfsType := query["obfs"]; obfsType != "" {
+			obfs := map[string]any{"type": obfsType}
+			if password := query["obfs-password"]; password != "" {
+				obfs["password"] = decodeURLValue(password)
+			}
+			if obfsType == "gecko" {
+				if size, parseErr := strconv.Atoi(firstQueryValue(query, "min_packet_size", "min-packet-size")); parseErr == nil && size > 0 {
+					obfs["min_packet_size"] = size
+				}
+				if size, parseErr := strconv.Atoi(firstQueryValue(query, "max_packet_size", "max-packet-size")); parseErr == nil && size > 0 {
+					obfs["max_packet_size"] = size
+				}
+			}
 			node["obfs"] = obfs
 		}
-		if obfsParam, ok := query["obfs-password"]; ok && obfsParam != "" {
-			node["obfs-password"] = decodeURLValue(obfsParam)
+		if ports := firstQueryValue(query, "server_ports", "server-ports", "mport"); ports != "" {
+			node["server_ports"] = ports
+		}
+		for _, field := range []string{"hop_interval", "hop_interval_max", "bbr_profile"} {
+			if value := firstQueryValue(query, field, strings.ReplaceAll(field, "_", "-")); value != "" {
+				node[field] = value
+			}
+		}
+		for queryKey, outputKey := range map[string]string{"up": "up_mbps", "down": "down_mbps"} {
+			if value, parseErr := strconv.Atoi(query[queryKey]); parseErr == nil && value > 0 {
+				node[outputKey] = value
+			}
+		}
+		if value := query["brutal_debug"]; value == "1" || strings.EqualFold(value, "true") {
+			node["brutal_debug"] = true
 		}
 	}
 	return parsedNodeFromMap(raw, node)

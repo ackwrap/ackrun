@@ -16,6 +16,9 @@ type Node struct {
 	Preferred        bool   `json:"preferred"`
 	LatencyMS        int    `json:"latency_ms"`
 	Status           string `json:"status"`
+	LastTestAt       int64  `json:"last_test_at"`
+	TestLatencyMS    int    `json:"test_latency_ms"`
+	TestSuccess      bool   `json:"test_success"`
 	CreatedAt        int64  `json:"created_at"`
 	UpdatedAt        int64  `json:"updated_at"`
 }
@@ -130,11 +133,12 @@ type NodeImportPreviewResponse struct {
 }
 
 type ParsedNode struct {
-	UID        string
-	Name       string
-	Type       string
-	Server     string
-	ServerPort int
-	Raw        string
-	RawJSON    string
+	UID               string
+	Name              string
+	Type              string
+	Server            string
+	ServerPort        int
+	Raw               string
+	RawJSON           string
+	UnsupportedReason string
 }

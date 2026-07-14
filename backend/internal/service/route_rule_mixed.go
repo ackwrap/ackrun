@@ -77,7 +77,7 @@ func isRouteRuleType(ruleType string) bool {
 }
 
 func singboxRouteRule(ruleType string, values []string, outbound string, invert bool) map[string]interface{} {
-	ruleMap := map[string]interface{}{"outbound": outbound}
+	ruleMap := routeRuleAction(outbound)
 	switch ruleType {
 	case "geoip", "geosite":
 		ruleMap["rule_set"] = generatedGeoRuleSetTags(ruleType, values)
@@ -90,6 +90,13 @@ func singboxRouteRule(ruleType string, values []string, outbound string, invert 
 		ruleMap["invert"] = true
 	}
 	return ruleMap
+}
+
+func routeRuleAction(outbound string) map[string]interface{} {
+	if outbound == "block" {
+		return map[string]interface{}{"action": "reject"}
+	}
+	return map[string]interface{}{"action": "route", "outbound": outbound}
 }
 
 func mixedSingboxRouteRules(values []string, outbound string, invert bool) ([]map[string]interface{}, error) {
@@ -106,7 +113,8 @@ func mixedSingboxRouteRules(values []string, outbound string, invert bool) ([]ma
 			rules[index][key] = append(existing, value)
 			return
 		}
-		rule := map[string]interface{}{"outbound": outbound, key: []string{value}}
+		rule := routeRuleAction(outbound)
+		rule[key] = []string{value}
 		if invert {
 			rule["invert"] = true
 		}
@@ -129,14 +137,14 @@ func mixedSingboxRouteRules(values []string, outbound string, invert bool) ([]ma
 	return rules, nil
 }
 
-func addMixedGeneratedRuleSets(ruleSets []map[string]interface{}, seen map[string]bool, values []string) []map[string]interface{} {
+func addMixedGeneratedRuleSets(ruleSets []map[string]interface{}, seen map[string]bool, values []string, baseURL string) []map[string]interface{} {
 	items, err := parseMixedRouteRuleValues(values)
 	if err != nil {
 		return ruleSets
 	}
 	for _, item := range items {
 		if item.RuleType == "geoip" || item.RuleType == "geosite" {
-			ruleSets = appendGeneratedGeoRuleSets(ruleSets, seen, item.RuleType, []string{item.Value})
+			ruleSets = appendGeneratedGeoRuleSets(ruleSets, seen, item.RuleType, []string{item.Value}, baseURL)
 		}
 	}
 	return ruleSets

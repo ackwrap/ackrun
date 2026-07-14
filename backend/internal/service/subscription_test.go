@@ -69,6 +69,37 @@ func TestFetchAndParseEmptySubscriptionFails(t *testing.T) {
 	}
 }
 
+func TestFetchAndParseFiltersUnsupportedClashVariants(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`proxies:
+  - name: Valid-AnyTLS
+    type: anytls
+    server: anytls.example.com
+    port: 443
+    password: redacted
+  - name: Unsupported-XHTTP
+    type: vless
+    server: vless.example.com
+    port: 443
+    uuid: 33333333-3333-4333-8333-333333333333
+    network: xhttp
+`))
+	}))
+	defer server.Close()
+
+	svc := NewSubscriptionService(nil, nil)
+	result, err := svc.fetchAndParse(server.URL, "clash-meta/2.4.0", 5)
+	if err != nil {
+		t.Fatalf("fetch and parse: %v", err)
+	}
+	if result.NodeCount != 1 || len(result.Nodes) != 1 || result.Nodes[0].Type != "anytls" {
+		t.Fatalf("unexpected supported nodes: %+v", result.Nodes)
+	}
+	if result.UnsupportedCount["vless"] != 1 {
+		t.Fatalf("unsupported VLESS count = %d, want 1", result.UnsupportedCount["vless"])
+	}
+}
+
 func TestApplyNodeFilters(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {

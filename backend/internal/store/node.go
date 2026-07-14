@@ -168,7 +168,7 @@ type nodeState struct {
 
 func (s *Store) ListNodesBySubscription(subscriptionID int64) ([]model.Node, error) {
 	rows, err := s.db.Query(`
-		SELECT id, uid, subscription_id, '' AS subscription_name, name, name_overridden, type, server, server_port, raw, raw_json, enabled, preferred, latency_ms, status, created_at, updated_at
+		SELECT id, uid, subscription_id, '' AS subscription_name, name, name_overridden, type, server, server_port, raw, raw_json, enabled, preferred, latency_ms, status, last_test_at, test_latency_ms, test_success, created_at, updated_at
 		FROM nodes WHERE subscription_id = ? ORDER BY id ASC
 	`, subscriptionID)
 	if err != nil {
@@ -204,7 +204,7 @@ func (s *Store) ListNodes(req model.NodeListRequest) (*model.NodeListResponse, e
 	query := `
 		SELECT n.id, n.uid, n.subscription_id, COALESCE(s.name, '') AS subscription_name,
 			n.name, n.name_overridden, n.type, n.server, n.server_port, n.raw, n.raw_json, n.enabled, n.preferred,
-			n.latency_ms, n.status, n.created_at, n.updated_at
+			n.latency_ms, n.status, n.last_test_at, n.test_latency_ms, n.test_success, n.created_at, n.updated_at
 		FROM nodes n LEFT JOIN subscriptions s ON s.id = n.subscription_id` + where + `
 		ORDER BY n.updated_at DESC, n.id DESC LIMIT ? OFFSET ?`
 	queryArgs := append(args, limit, req.Offset)
@@ -253,7 +253,7 @@ func (s *Store) ListNodesByUIDs(uids []string) ([]model.Node, error) {
 	rows, err := s.db.Query(`
 		SELECT n.id, n.uid, n.subscription_id, COALESCE(s.name, '') AS subscription_name,
 			n.name, n.name_overridden, n.type, n.server, n.server_port, n.raw, n.raw_json, n.enabled, n.preferred,
-			n.latency_ms, n.status, n.created_at, n.updated_at
+			n.latency_ms, n.status, n.last_test_at, n.test_latency_ms, n.test_success, n.created_at, n.updated_at
 		FROM nodes n LEFT JOIN subscriptions s ON s.id = n.subscription_id WHERE n.uid IN (`+placeholders+`)`, args...)
 	if err != nil {
 		return nil, err
@@ -289,6 +289,11 @@ func (s *Store) UpdateNodeName(uid string, name string) error {
 func (s *Store) UpdateNodeTCPing(uid string, latencyMS int, status string) error {
 	now := time.Now().UnixMilli()
 	_, err := s.db.Exec(`UPDATE nodes SET latency_ms = ?, status = ?, updated_at = ? WHERE uid = ?`, latencyMS, status, now, uid)
+	return err
+}
+
+func (s *Store) UpdateNodeHealthCheck(uid string, latencyMS int, success bool, testedAt int64) error {
+	_, err := s.db.Exec(`UPDATE nodes SET test_latency_ms = ?, test_success = ?, last_test_at = ?, updated_at = ? WHERE uid = ?`, latencyMS, boolToInt(success), testedAt, testedAt, uid)
 	return err
 }
 
@@ -389,14 +394,15 @@ type nodeScanner interface {
 }
 
 func scanNode(scanner nodeScanner, item *model.Node) error {
-	var enabled, preferred int
+	var enabled, preferred, testSuccess int
 	var nameOverridden int
-	if err := scanner.Scan(&item.ID, &item.UID, &item.SubscriptionID, &item.SubscriptionName, &item.Name, &nameOverridden, &item.Type, &item.Server, &item.ServerPort, &item.Raw, &item.RawJSON, &enabled, &preferred, &item.LatencyMS, &item.Status, &item.CreatedAt, &item.UpdatedAt); err != nil {
+	if err := scanner.Scan(&item.ID, &item.UID, &item.SubscriptionID, &item.SubscriptionName, &item.Name, &nameOverridden, &item.Type, &item.Server, &item.ServerPort, &item.Raw, &item.RawJSON, &enabled, &preferred, &item.LatencyMS, &item.Status, &item.LastTestAt, &item.TestLatencyMS, &testSuccess, &item.CreatedAt, &item.UpdatedAt); err != nil {
 		return err
 	}
 	item.Enabled = enabled != 0
 	item.Preferred = preferred != 0
 	item.NameOverridden = nameOverridden != 0
+	item.TestSuccess = testSuccess != 0
 	return nil
 }
 

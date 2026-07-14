@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -29,6 +30,10 @@ func (h *ProxyCollectionHandler) Create(c *gin.Context) {
 
 	result, err := h.service.Create(req)
 	if err != nil {
+		if errors.Is(err, service.ErrSystemProxyCollectionProtected) {
+			c.JSON(http.StatusForbidden, model.ErrorResponse{Error: model.APIError{Code: "SYSTEM_COLLECTION_PROTECTED", Message: err.Error()}})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Error: model.APIError{Code: "CREATE_FAILED", Message: err.Error()}})
 		return
 	}
@@ -79,6 +84,10 @@ func (h *ProxyCollectionHandler) Update(c *gin.Context) {
 	}
 
 	if err := h.service.Update(id, req); err != nil {
+		if errors.Is(err, service.ErrSystemProxyCollectionProtected) {
+			c.JSON(http.StatusForbidden, model.ErrorResponse{Error: model.APIError{Code: "SYSTEM_COLLECTION_PROTECTED", Message: err.Error()}})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Error: model.APIError{Code: "UPDATE_FAILED", Message: err.Error()}})
 		return
 	}
@@ -95,6 +104,10 @@ func (h *ProxyCollectionHandler) Delete(c *gin.Context) {
 	}
 
 	if err := h.service.Delete(id); err != nil {
+		if errors.Is(err, service.ErrSystemProxyCollectionProtected) {
+			c.JSON(http.StatusForbidden, model.ErrorResponse{Error: model.APIError{Code: "SYSTEM_COLLECTION_PROTECTED", Message: err.Error()}})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Error: model.APIError{Code: "DELETE_FAILED", Message: err.Error()}})
 		return
 	}
@@ -111,9 +124,27 @@ func (h *ProxyCollectionHandler) ToggleEnabled(c *gin.Context) {
 	}
 
 	if err := h.service.ToggleEnabled(id); err != nil {
+		if errors.Is(err, service.ErrSystemProxyCollectionProtected) {
+			c.JSON(http.StatusForbidden, model.ErrorResponse{Error: model.APIError{Code: "SYSTEM_COLLECTION_PROTECTED", Message: err.Error()}})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Error: model.APIError{Code: "TOGGLE_FAILED", Message: err.Error()}})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "状态已更新"})
+}
+
+func (h *ProxyCollectionHandler) Test(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "INVALID_ID", Message: "无效的集合 ID"}})
+		return
+	}
+	result, err := h.service.Test(id)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "COLLECTION_TEST_FAILED", Message: err.Error()}})
+		return
+	}
+	c.JSON(http.StatusOK, result)
 }

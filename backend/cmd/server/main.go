@@ -1,7 +1,17 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"log"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -13,7 +23,45 @@ import (
 	"github.com/ackwrap/ackwrap/internal/store"
 )
 
+const defaultListenAddr = "127.0.0.1:8080"
+
+type serverConfig struct {
+	ListenAddr string
+	APIToken   string
+}
+
+func loadServerConfig() (serverConfig, error) {
+	config := serverConfig{
+		ListenAddr: strings.TrimSpace(os.Getenv("ACKWRAP_LISTEN_ADDR")),
+		APIToken:   strings.TrimSpace(os.Getenv("ACKWRAP_API_TOKEN")),
+	}
+	if config.ListenAddr == "" {
+		config.ListenAddr = defaultListenAddr
+	}
+
+	host, port, err := net.SplitHostPort(config.ListenAddr)
+	if err != nil || port == "" {
+		return serverConfig{}, fmt.Errorf("ACKWRAP_LISTEN_ADDR 必须是 host:port 格式: %q", config.ListenAddr)
+	}
+	if host == "localhost" {
+		return config, nil
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return serverConfig{}, fmt.Errorf("ACKWRAP_LISTEN_ADDR 主机必须是 IP 地址或 localhost: %q", host)
+	}
+	if !ip.IsLoopback() && config.APIToken == "" {
+		return serverConfig{}, errors.New("非回环地址监听必须设置 ACKWRAP_API_TOKEN")
+	}
+	return config, nil
+}
+
 func main() {
+	serverCfg, err := loadServerConfig()
+	if err != nil {
+		log.Fatalf("server config: %v", err)
+	}
+
 	p := paths.Default()
 	if err := p.EnsureDirs(); err != nil {
 		log.Fatalf("ensure dirs: %v", err)
@@ -27,10 +75,20 @@ func main() {
 	defer db.Close()
 
 	realtimeSvc := service.NewRealtimeService()
-	singboxSvc := service.NewSingboxService(p, realtimeSvc, db)
+	coreLogSvc := service.NewCoreLogService()
+	singboxSvc := service.NewSingboxService(p, realtimeSvc, coreLogSvc, db)
 	runtimeSvc := service.NewRuntimeService(p, db, singboxSvc)
 	installerSvc := service.NewInstallerService(db, p, realtimeSvc)
 	configSvc := service.NewConfigService(p, db, realtimeSvc)
+	if migrated, err := configSvc.MigrateCompatibility(""); err != nil {
+		logging.Error("config.migrate", "启动时配置兼容迁移失败: %v", err)
+	} else if migrated {
+		logging.Info("config.migrate", "启动时配置兼容迁移完成")
+	}
+	installerSvc.SetPostInstallHook(func(version string) error {
+		_, err := configSvc.MigrateCompatibility(version)
+		return err
+	})
 	settingsSvc := service.NewSettingsService(db)
 
 	// 初始化实验性功能默认配置（如果未设置）
@@ -38,9 +96,10 @@ func main() {
 	if expSettings == nil || expSettings.ClashAPIPort == "" {
 		logging.Info("main", "初始化实验性功能默认配置")
 		defaultSettings := &model.ExperimentalSettings{
-			ClashAPIEnabled:  true,
-			ClashAPIPort:     "9090",
-			CacheFileEnabled: true,
+			ClashAPIEnabled:   true,
+			ClashAPIPort:      "9090",
+			CacheFileEnabled:  true,
+			CacheFileStoreDNS: true,
 		}
 		if err := settingsSvc.SetExperimentalSettings(defaultSettings); err != nil {
 			logging.Info("main", "初始化实验性功能默认配置失败: %v", err)
@@ -50,25 +109,29 @@ func main() {
 	subscriptionSvc := service.NewSubscriptionService(db, realtimeSvc)
 	nodeSvc := service.NewNodeService(db)
 	routeRuleSvc := service.NewRouteRuleService(db, p, realtimeSvc)
-	proxyCollectionSvc := service.NewProxyCollectionService(db)
+	proxyCollectionSvc := service.NewProxyCollectionService(db, realtimeSvc)
 	configGenSvc := service.NewConfigGeneratorService(db, p, singboxSvc)
+	settingsSvc.SetModeDependencies(singboxSvc, configGenSvc)
+	reconcileSvc := service.NewConfigReconcileService(configGenSvc, realtimeSvc)
+	defer reconcileSvc.Close()
 	dnsSvc := service.NewDNSService(db)
 	nodeGroupSvc := service.NewNodeGroupService(db)
 
-	// 延迟注入依赖（避免循环依赖）
-	subscriptionSvc.SetConfigService(configSvc)
-	subscriptionSvc.SetSingBoxService(singboxSvc)
+	subscriptionSvc.SetConfigReconciler(reconcileSvc)
 
 	subscriptionSvc.StartScheduler()
 	routeRuleSvc.StartScheduler()
+	proxyCollectionSvc.StartScheduler()
 	defer subscriptionSvc.StopScheduler()
 	defer routeRuleSvc.StopScheduler()
+	defer proxyCollectionSvc.StopScheduler()
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
 
+	r.Use(api.SecurityMiddleware(serverCfg.APIToken))
 	r.Static("/assets", "./ui/assets")
-	api.RegisterRoutes(r, runtimeSvc, installerSvc, singboxSvc, configSvc, settingsSvc, subscriptionSvc, nodeSvc, routeRuleSvc, proxyCollectionSvc, configGenSvc, realtimeSvc, dnsSvc, nodeGroupSvc)
+	api.RegisterRoutes(r, runtimeSvc, installerSvc, singboxSvc, configSvc, settingsSvc, subscriptionSvc, nodeSvc, routeRuleSvc, proxyCollectionSvc, configGenSvc, realtimeSvc, coreLogSvc, dnsSvc, nodeGroupSvc, reconcileSvc)
 
 	r.NoRoute(func(c *gin.Context) {
 		if len(c.Request.URL.Path) >= 4 && c.Request.URL.Path[:4] == "/api" {
@@ -81,8 +144,32 @@ func main() {
 		c.File("./ui/index.html")
 	})
 
-	logging.Info("main", "starting server on :8080")
-	if err := r.Run(":8080"); err != nil {
-		log.Fatalf("server error: %v", err)
+	server := &http.Server{
+		Addr:              serverCfg.ListenAddr,
+		Handler:           r,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	serverErrors := make(chan error, 1)
+	go func() {
+		logging.Info("main", "starting server on %s", serverCfg.ListenAddr)
+		serverErrors <- server.ListenAndServe()
+	}()
+
+	shutdownSignal, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+	select {
+	case err := <-serverErrors:
+		if !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("server error: %v", err)
+		}
+		return
+	case <-shutdownSignal.Done():
+		logging.Info("main", "shutdown signal received")
+	}
+
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelShutdown()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Printf("server shutdown: %v", err)
 	}
 }

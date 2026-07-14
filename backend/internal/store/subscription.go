@@ -166,6 +166,12 @@ func (s *Store) SetSubscriptionSyncState(id int64, status string, progress float
 	return err
 }
 
+// ResetInterruptedSubscriptionSyncs clears jobs that could not survive a process restart.
+func (s *Store) ResetInterruptedSubscriptionSyncs() error {
+	_, err := s.db.Exec(`UPDATE subscriptions SET sync_status = 'failed', sync_progress = 0 WHERE sync_status = 'syncing'`)
+	return err
+}
+
 func (s *Store) UpdateSubscriptionSyncResult(id int64, nodeCount int, usedBytes int64, totalBytes int64, expireAt int64) (*model.Subscription, error) {
 	now := time.Now().UnixMilli()
 	_, err := s.db.Exec(`

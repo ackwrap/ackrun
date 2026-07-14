@@ -53,3 +53,45 @@ func TestImportManualNodes(t *testing.T) {
 		t.Fatalf("expected upsert to keep 1 node, got %+v", nodes)
 	}
 }
+
+func TestManualImportFiltersUnsupportedClashVariants(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+
+	content := `proxies:
+  - name: Valid-AnyTLS
+    type: anytls
+    server: valid.example.com
+    port: 443
+    password: redacted
+  - name: Unsupported-XHTTP
+    type: vless
+    server: unsupported.example.com
+    port: 443
+    uuid: 33333333-3333-4333-8333-333333333333
+    network: xhttp
+`
+	svc := NewNodeService(db)
+	preview, err := svc.ImportPreview(model.NodeImportRequest{Content: content})
+	if err != nil {
+		t.Fatalf("preview nodes: %v", err)
+	}
+	if preview.Count != 1 || len(preview.Items) != 1 || preview.Items[0].Type != "anytls" {
+		t.Fatalf("unexpected preview items: %+v", preview.Items)
+	}
+
+	response, err := svc.Import(model.NodeImportRequest{Content: content})
+	if err != nil {
+		t.Fatalf("import nodes: %v", err)
+	}
+	nodes, err := db.ListNodesBySubscription(response.SubscriptionID)
+	if err != nil {
+		t.Fatalf("list imported nodes: %v", err)
+	}
+	if response.Imported != 1 || len(nodes) != 1 || nodes[0].Type != "anytls" {
+		t.Fatalf("unsupported variant reached manual subscription: response=%+v nodes=%+v", response, nodes)
+	}
+}

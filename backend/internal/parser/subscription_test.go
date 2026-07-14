@@ -3,6 +3,7 @@ package parser
 import (
 	"encoding/base64"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -191,7 +192,7 @@ func TestHysteriaAdvancedFields(t *testing.T) {
 }
 
 func TestHysteria2AdvancedFields(t *testing.T) {
-	node, err := ParseProxyURI("hy2://pass@hy2.example.com:443?sni=hy2.example.com&alpn=h3&fp=chrome&insecure=1&obfs=salamander&obfs-password=obfspass#HY2-Adv")
+	node, err := ParseProxyURI("hy2://pass@hy2.example.com:443?sni=hy2.example.com&alpn=h3&fp=chrome&insecure=1&obfs=gecko&obfs-password=obfspass&min_packet_size=100&max_packet_size=1200&hop_interval=30s&hop_interval_max=45s&bbr_profile=mobile&up=20&down=100#HY2-Adv")
 	if err != nil {
 		t.Fatalf("parse hysteria2: %v", err)
 	}
@@ -201,8 +202,12 @@ func TestHysteria2AdvancedFields(t *testing.T) {
 	}
 	assertTLSEnabled(t, cfg)
 	assertUTLSFingerprint(t, cfg, "chrome")
-	if cfg["obfs-password"] != "obfspass" {
-		t.Fatalf("expected obfs-password, got %v", cfg["obfs-password"])
+	obfs, ok := cfg["obfs"].(map[string]any)
+	if !ok || obfs["type"] != "gecko" || obfs["password"] != "obfspass" || obfs["min_packet_size"] != float64(100) || obfs["max_packet_size"] != float64(1200) {
+		t.Fatalf("unexpected obfs options: %v", cfg["obfs"])
+	}
+	if cfg["hop_interval"] != "30s" || cfg["hop_interval_max"] != "45s" || cfg["bbr_profile"] != "mobile" {
+		t.Fatalf("unexpected Hysteria2 options: %+v", cfg)
 	}
 }
 
@@ -248,7 +253,7 @@ func TestNaiveTLSFields(t *testing.T) {
 }
 
 func TestAnytlsTLSFields(t *testing.T) {
-	node, err := ParseProxyURI("anytls://pass@anytls.example.com:443?sni=anytls.example.com&alpn=h2&fp=chrome&insecure=1#AnyTLS-Adv")
+	node, err := ParseProxyURI("anytls://pass@anytls.example.com:443?sni=anytls.example.com&alpn=h2&fp=chrome&insecure=1&idle_session_check_interval=20s&idle_session_timeout=40s&min_idle_session=3#AnyTLS-Adv")
 	if err != nil {
 		t.Fatalf("parse anytls: %v", err)
 	}
@@ -262,6 +267,9 @@ func TestAnytlsTLSFields(t *testing.T) {
 		t.Fatalf("expected tls.server_name=anytls.example.com, got %v", tlsMap)
 	}
 	assertUTLSFingerprint(t, cfg, "chrome")
+	if cfg["idle_session_check_interval"] != "20s" || cfg["idle_session_timeout"] != "40s" || cfg["min_idle_session"] != float64(3) {
+		t.Fatalf("unexpected AnyTLS session options: %+v", cfg)
+	}
 }
 
 func TestSocksTLSAndVersion(t *testing.T) {
@@ -344,7 +352,7 @@ func TestSSRAdvancedParams(t *testing.T) {
 	obfsParam := base64.StdEncoding.EncodeToString([]byte("obfsparam_val"))
 	protoParam := base64.StdEncoding.EncodeToString([]byte("protoparam_val"))
 	group := base64.StdEncoding.EncodeToString([]byte("MyGroup"))
-	decoded := "ssr.example.com:8388:origin:aes-128-gcm:plain:" + password + "/?remarks=" + remarks + "&obfsparam=" + obfsParam + "&protoparam=" + protoParam + "&group=" + group
+	decoded := "ssr.example.com:8388:origin:aes-128-cfb:plain:" + password + "/?remarks=" + remarks + "&obfsparam=" + obfsParam + "&protoparam=" + protoParam + "&group=" + group
 	uri := "ssr://" + base64.StdEncoding.EncodeToString([]byte(decoded))
 	node, err := ParseProxyURI(uri)
 	if err != nil {
@@ -354,19 +362,71 @@ func TestSSRAdvancedParams(t *testing.T) {
 	if err := json.Unmarshal([]byte(node.RawJSON), &cfg); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if cfg["obfs-param"] != "obfsparam_val" {
-		t.Fatalf("expected obfs-param, got %v", cfg["obfs-param"])
+	if cfg["obfs_param"] != "obfsparam_val" {
+		t.Fatalf("expected obfs_param, got %v", cfg["obfs_param"])
 	}
-	if cfg["protocol-param"] != "protoparam_val" {
-		t.Fatalf("expected protocol-param, got %v", cfg["protocol-param"])
+	if cfg["protocol_param"] != "protoparam_val" {
+		t.Fatalf("expected protocol_param, got %v", cfg["protocol_param"])
 	}
-	if cfg["group"] != "MyGroup" {
-		t.Fatalf("expected group, got %v", cfg["group"])
+	if cfg["method"] != "aes-128-cfb" {
+		t.Fatalf("expected SSR method, got %+v", cfg)
+	}
+	if _, exists := cfg["group"]; exists {
+		t.Fatalf("SSR subscription metadata leaked into outbound config: %+v", cfg)
+	}
+}
+
+func TestClashSSRPreservesOutboundOptions(t *testing.T) {
+	body := []byte(`proxies:
+  - name: Clash-SSR
+    type: ssr
+    server: ssr.example.com
+    port: 8388
+    cipher: aes-256-cfb
+    password: redacted
+    protocol: auth_aes128_sha1
+    protocol-param: 1000:test
+    obfs: http_simple
+    obfs-param: cdn.example.com
+    udp: true
+  - name: Clash-SSR-TCP
+    type: ssr
+    server: ssr-tcp.example.com
+    port: 8388
+    cipher: aes-256-cfb
+    password: redacted
+    protocol: origin
+    obfs: plain
+    udp: false
+`)
+	nodes, err := ParseSubscriptionNodes(body)
+	if err != nil {
+		t.Fatalf("parse Clash SSR: %v", err)
+	}
+	if len(nodes) != 2 || nodes[0].Type != "ssr" || nodes[0].UnsupportedReason != "" {
+		t.Fatalf("unexpected SSR nodes: %+v", nodes)
+	}
+	var config map[string]any
+	if err := json.Unmarshal([]byte(nodes[0].RawJSON), &config); err != nil {
+		t.Fatalf("unmarshal Clash SSR: %v", err)
+	}
+	if config["method"] != "aes-256-cfb" || config["protocol"] != "auth_aes128_sha1" || config["protocol_param"] != "1000:test" || config["obfs"] != "http_simple" || config["obfs_param"] != "cdn.example.com" {
+		t.Fatalf("Clash SSR options were not preserved: %+v", config)
+	}
+	if _, exists := config["network"]; exists {
+		t.Fatalf("UDP-capable SSR must not be restricted to TCP: %+v", config)
+	}
+	var tcpConfig map[string]any
+	if err := json.Unmarshal([]byte(nodes[1].RawJSON), &tcpConfig); err != nil {
+		t.Fatalf("unmarshal TCP-only Clash SSR: %v", err)
+	}
+	if tcpConfig["network"] != "tcp" {
+		t.Fatalf("Clash SSR udp=false must map to TCP: %+v", tcpConfig)
 	}
 }
 
 func TestSnellObfsOpts(t *testing.T) {
-	node, err := ParseProxyURI("snell://psk@snell.example.com:440?version=3&obfs=tls&obfs-host=snell.example.com&obfs-param=obfsparamval#Snell-Adv")
+	node, err := ParseProxyURI("snell://psk@snell.example.com:440?version=4&obfs=http&obfs-host=snell.example.com&reuse=true#Snell-Adv")
 	if err != nil {
 		t.Fatalf("parse snell: %v", err)
 	}
@@ -374,18 +434,37 @@ func TestSnellObfsOpts(t *testing.T) {
 	if err := json.Unmarshal([]byte(node.RawJSON), &cfg); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if cfg["version"] != "3" {
-		t.Fatalf("expected version=3, got %v", cfg["version"])
+	if cfg["version"] != float64(4) {
+		t.Fatalf("expected version=4, got %v", cfg["version"])
 	}
-	if cfg["obfs"] != "tls" {
-		t.Fatalf("expected obfs=tls, got %v", cfg["obfs"])
+	if cfg["obfs_mode"] != "http" || cfg["obfs_host"] != "snell.example.com" || cfg["reuse"] != true {
+		t.Fatalf("unexpected Snell options: %+v", cfg)
 	}
-	obfsOpts, ok := cfg["obfs-opts"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected obfs-opts map, got %v", cfg["obfs-opts"])
+}
+
+func TestSnellVersionMapping(t *testing.T) {
+	v5, err := ParseProxyURI("snell://redacted@snell.example.com:440?version=5#Snell-v5")
+	if err != nil {
+		t.Fatalf("parse Snell v5: %v", err)
 	}
-	if obfsOpts["host"] != "snell.example.com" {
-		t.Fatalf("expected obfs-opts.host, got %v", obfsOpts)
+	var v5Config map[string]any
+	if err := json.Unmarshal([]byte(v5.RawJSON), &v5Config); err != nil {
+		t.Fatalf("unmarshal Snell v5: %v", err)
+	}
+	if v5Config["version"] != float64(4) {
+		t.Fatalf("Snell v5 version = %v, want wire-compatible v4", v5Config["version"])
+	}
+
+	v6, err := ParseProxyURI("snell://long-redacted-psk@snell.example.com:440?version=6&mode=unshaped#Snell-v6")
+	if err != nil {
+		t.Fatalf("parse Snell v6: %v", err)
+	}
+	var v6Config map[string]any
+	if err := json.Unmarshal([]byte(v6.RawJSON), &v6Config); err != nil {
+		t.Fatalf("unmarshal Snell v6: %v", err)
+	}
+	if v6Config["version"] != float64(6) || v6Config["mode"] != "unshaped" {
+		t.Fatalf("unexpected Snell v6 config: %+v", v6Config)
 	}
 }
 
@@ -536,6 +615,9 @@ func TestClashNormalized(t *testing.T) {
 	if cfg["security"] != "auto" {
 		t.Fatalf("expected security=auto, got %v", cfg["security"])
 	}
+	if _, exists := cfg["alter_id"]; exists {
+		t.Fatalf("zero alterId must not be persisted in normalized VMess config: %+v", cfg)
+	}
 	if nodes[2].Type != "socks" {
 		t.Fatalf("expected socks5 alias normalized to socks, got %+v", nodes[2])
 	}
@@ -554,6 +636,369 @@ func TestClashNormalized(t *testing.T) {
 	tlsMap, ok = cfg["tls"].(map[string]any)
 	if !ok || tlsMap["enabled"] != true || tlsMap["server_name"] != "tuic.example.com" {
 		t.Fatalf("expected TUIC tls enabled with server_name, got %+v", cfg["tls"])
+	}
+}
+
+func TestClashVLESSCipherIsNotEmitted(t *testing.T) {
+	body := []byte(`proxies:
+  - name: Clash-VLESS
+    type: vless
+    server: clash.example.com
+    port: 443
+    uuid: test-uuid
+    cipher: auto
+`)
+	nodes, err := ParseSubscriptionNodes(body)
+	if err != nil {
+		t.Fatalf("parse clash yaml: %v", err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("parsed node count = %d, want 1", len(nodes))
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal([]byte(nodes[0].RawJSON), &cfg); err != nil {
+		t.Fatalf("unmarshal VLESS node: %v", err)
+	}
+	if _, exists := cfg["cipher"]; exists {
+		t.Fatalf("normalized VLESS node contains unsupported cipher: %+v", cfg)
+	}
+	if _, exists := cfg["method"]; exists {
+		t.Fatalf("normalized VLESS node contains unsupported method: %+v", cfg)
+	}
+}
+
+func TestClashAnyTLSPreservesTLSOptions(t *testing.T) {
+	body := []byte(`proxies:
+  - name: Clash-AnyTLS
+    type: anytls
+    server: anytls.example.com
+    port: 8443
+    password: redacted
+    skip-cert-verify: true
+    sni: tls.example.com
+    udp: true
+`)
+	nodes, err := ParseSubscriptionNodes(body)
+	if err != nil {
+		t.Fatalf("parse clash AnyTLS: %v", err)
+	}
+	if len(nodes) != 1 || nodes[0].Type != "anytls" {
+		t.Fatalf("parsed AnyTLS nodes = %+v", nodes)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal([]byte(nodes[0].RawJSON), &cfg); err != nil {
+		t.Fatalf("unmarshal AnyTLS node: %v", err)
+	}
+	tlsOptions, ok := cfg["tls"].(map[string]any)
+	if !ok || tlsOptions["enabled"] != true || tlsOptions["insecure"] != true || tlsOptions["server_name"] != "tls.example.com" {
+		t.Fatalf("AnyTLS TLS options were not preserved: %+v", cfg["tls"])
+	}
+	if _, exists := cfg["udp"]; exists {
+		t.Fatalf("Clash udp capability flag must not leak into sing-box config: %+v", cfg)
+	}
+}
+
+func TestClashPreservesMTLSAndECHOptions(t *testing.T) {
+	body := []byte(`proxies:
+  - name: Clash-AnyTLS-Advanced-TLS
+    type: anytls
+    server: anytls.example.com
+    port: 8443
+    password: redacted
+    certificate: client.pem
+    private-key: client.key
+    client-fingerprint: chrome
+    ech-opts:
+      enable: true
+      config: AEn+DQBFKwAgACABWIHUGj4u+PIggYXcR5JF0gYk3dCRioBW8uJq9H4mKAAIAAEAAQABAANAEnB1YmxpYy50bHMtZWNoLmRldgAA
+      query-server-name: ech.example.com
+`)
+	nodes, err := ParseSubscriptionNodes(body)
+	if err != nil {
+		t.Fatalf("parse Clash TLS extensions: %v", err)
+	}
+	if len(nodes) != 1 || nodes[0].UnsupportedReason != "" {
+		t.Fatalf("unexpected parsed nodes: %+v", nodes)
+	}
+	var config map[string]any
+	if err := json.Unmarshal([]byte(nodes[0].RawJSON), &config); err != nil {
+		t.Fatalf("unmarshal Clash TLS extensions: %v", err)
+	}
+	tlsOptions, ok := config["tls"].(map[string]any)
+	if !ok || tlsOptions["client_certificate_path"] != "client.pem" || tlsOptions["client_key_path"] != "client.key" {
+		t.Fatalf("mTLS options were not preserved: %+v", config["tls"])
+	}
+	utls, ok := tlsOptions["utls"].(map[string]any)
+	if !ok || utls["enabled"] != true || utls["fingerprint"] != "chrome" {
+		t.Fatalf("uTLS options were not preserved: %+v", tlsOptions["utls"])
+	}
+	ech, ok := tlsOptions["ech"].(map[string]any)
+	if !ok || ech["enabled"] != true || ech["query_server_name"] != "ech.example.com" {
+		t.Fatalf("ECH options were not preserved: %+v", tlsOptions["ech"])
+	}
+	echConfig, ok := ech["config"].([]any)
+	if !ok || len(echConfig) != 1 || !strings.Contains(echConfig[0].(string), "-----BEGIN ECH CONFIGS-----") {
+		t.Fatalf("ECH config was not converted to sing-box PEM: %+v", ech["config"])
+	}
+}
+
+func TestClashHysteria2PreservesProtocolOptions(t *testing.T) {
+	body := []byte(`proxies:
+  - name: Clash-Hysteria2-Ports
+    type: hysteria2
+    server: hy2.example.com
+    port: 60000
+    ports: 60000-65530
+    password: redacted
+    skip-cert-verify: true
+    sni: tls.example.com
+    alpn:
+      - h3
+    udp: true
+  - name: Clash-Hysteria2-MPort
+    type: hysteria2
+    server: hy2-obfs.example.com
+    port: 23065
+    mport: 23065-23100
+    hop-interval: 15-30
+    password: redacted
+    skip-cert-verify: true
+    sni: tls-obfs.example.com
+    obfs: salamander
+    obfs-password: redacted
+    obfs-min-packet-size: 512
+    obfs-max-packet-size: 1200
+`)
+	nodes, err := ParseSubscriptionNodes(body)
+	if err != nil {
+		t.Fatalf("parse clash Hysteria2: %v", err)
+	}
+	if len(nodes) != 2 {
+		t.Fatalf("parsed Hysteria2 node count = %d, want 2", len(nodes))
+	}
+
+	var portsConfig map[string]any
+	if err := json.Unmarshal([]byte(nodes[0].RawJSON), &portsConfig); err != nil {
+		t.Fatalf("unmarshal Hysteria2 ports node: %v", err)
+	}
+	ports, ok := portsConfig["server_ports"].([]any)
+	if !ok || len(ports) != 1 || ports[0] != "60000:65530" {
+		t.Fatalf("Hysteria2 ports were not preserved: %+v", portsConfig["server_ports"])
+	}
+	tlsOptions, ok := portsConfig["tls"].(map[string]any)
+	if !ok || tlsOptions["enabled"] != true || tlsOptions["insecure"] != true || tlsOptions["server_name"] != "tls.example.com" {
+		t.Fatalf("Hysteria2 TLS options were not preserved: %+v", portsConfig["tls"])
+	}
+	if _, exists := portsConfig["udp"]; exists {
+		t.Fatalf("Clash udp capability flag must not leak into sing-box config: %+v", portsConfig)
+	}
+
+	var obfsConfig map[string]any
+	if err := json.Unmarshal([]byte(nodes[1].RawJSON), &obfsConfig); err != nil {
+		t.Fatalf("unmarshal Hysteria2 obfs node: %v", err)
+	}
+	ports, ok = obfsConfig["server_ports"].([]any)
+	if !ok || len(ports) != 1 || ports[0] != "23065:23100" {
+		t.Fatalf("Hysteria2 mport alias was not preserved: %+v", obfsConfig["server_ports"])
+	}
+	if obfsConfig["hop_interval"] != "15s" || obfsConfig["hop_interval_max"] != "30s" {
+		t.Fatalf("Hysteria2 hop interval range was not preserved: min=%v max=%v", obfsConfig["hop_interval"], obfsConfig["hop_interval_max"])
+	}
+	obfs, ok := obfsConfig["obfs"].(map[string]any)
+	if !ok || obfs["type"] != "salamander" || obfs["password"] != "redacted" || obfs["min_packet_size"] != float64(512) || obfs["max_packet_size"] != float64(1200) {
+		t.Fatalf("Hysteria2 obfs options were not preserved: %+v", obfsConfig["obfs"])
+	}
+}
+
+func TestClashProtocolSpecificMappings(t *testing.T) {
+	body := []byte(`proxies:
+  - name: Clash-Hysteria
+    type: hysteria
+    server: hy.example.com
+    port: 443
+    ports: 20000-20010
+    hop-interval: 10
+    auth-str: redacted
+    up: 100 Mbps
+    down: 1 Gbps
+    recv-window-conn: 1048576
+    recv-window: 2097152
+    disable-mtu-discovery: true
+    sni: tls.example.com
+  - name: Clash-AnyTLS
+    type: anytls
+    server: anytls.example.com
+    port: 443
+    password: redacted
+    idle-session-check-interval: 30
+    idle-session-timeout: 45
+    min-idle-session: 2
+  - name: Clash-TUIC
+    type: tuic
+    server: tuic.example.com
+    port: 443
+    uuid: 33333333-3333-4333-8333-333333333333
+    password: redacted
+    heartbeat-interval: 10000
+    udp-over-stream: true
+    max-open-streams: 64
+    recv-window-conn: 1048576
+    recv-window: 2097152
+  - name: Clash-SOCKS4
+    type: socks4
+    server: socks.example.com
+    port: 1080
+  - name: Clash-HTTP
+    type: http
+    server: http.example.com
+    port: 443
+    tls: true
+    headers:
+      User-Agent: AckWrap-Test
+  - name: Clash-Snell
+    type: snell
+    server: snell.example.com
+    port: 443
+    psk: redacted
+    version: 5
+    obfs-opts:
+      mode: tls
+      host: cover.example.com
+  - name: Clash-Naive
+    type: naive
+    server: naive.example.com
+    port: 443
+    username: user
+    password: redacted
+    insecure-concurrency: 4
+`)
+	nodes, err := ParseSubscriptionNodes(body)
+	if err != nil {
+		t.Fatalf("parse Clash protocol mappings: %v", err)
+	}
+	if len(nodes) != 7 {
+		t.Fatalf("parsed node count = %d, want 7", len(nodes))
+	}
+	configs := make(map[string]map[string]any, len(nodes))
+	for _, node := range nodes {
+		if node.UnsupportedReason != "" {
+			t.Fatalf("unexpected unsupported %s node: %s", node.Type, node.UnsupportedReason)
+		}
+		var config map[string]any
+		if err := json.Unmarshal([]byte(node.RawJSON), &config); err != nil {
+			t.Fatalf("unmarshal %s node: %v", node.Type, err)
+		}
+		configs[node.Type] = config
+	}
+
+	hysteria := configs["hysteria"]
+	if hysteria["auth_str"] != "redacted" || hysteria["up_mbps"] != float64(100) || hysteria["down_mbps"] != float64(1000) {
+		t.Fatalf("Hysteria authentication or bandwidth mapping is incomplete: %+v", hysteria)
+	}
+	if ports, ok := hysteria["server_ports"].([]any); !ok || len(ports) != 1 || ports[0] != "20000:20010" {
+		t.Fatalf("Hysteria port hopping mapping is incomplete: %+v", hysteria["server_ports"])
+	}
+	if hysteria["recv_window_conn"] != float64(1048576) || hysteria["recv_window"] != float64(2097152) || hysteria["disable_mtu_discovery"] != true {
+		t.Fatalf("Hysteria QUIC compatibility fields are incomplete: %+v", hysteria)
+	}
+
+	anyTLS := configs["anytls"]
+	if anyTLS["idle_session_check_interval"] != "30s" || anyTLS["idle_session_timeout"] != "45s" || anyTLS["min_idle_session"] != float64(2) {
+		t.Fatalf("AnyTLS session options are incomplete: %+v", anyTLS)
+	}
+
+	tuic := configs["tuic"]
+	if tuic["heartbeat"] != "10000ms" || tuic["udp_over_stream"] != true || tuic["max_concurrent_streams"] != float64(64) {
+		t.Fatalf("TUIC options are incomplete: %+v", tuic)
+	}
+	if configs["socks"]["version"] != "4" {
+		t.Fatalf("SOCKS version was not preserved: %+v", configs["socks"])
+	}
+	if _, ok := configs["http"]["headers"].(map[string]any); !ok {
+		t.Fatalf("HTTP headers were not preserved: %+v", configs["http"])
+	}
+	if configs["snell"]["version"] != float64(4) || configs["snell"]["obfs_mode"] != "tls" {
+		t.Fatalf("Snell options are incomplete: %+v", configs["snell"])
+	}
+	if configs["naive"]["insecure_concurrency"] != float64(4) {
+		t.Fatalf("Naive options are incomplete: %+v", configs["naive"])
+	}
+}
+
+func TestClashUnsupportedProtocolVariantsAreMarked(t *testing.T) {
+	body := []byte(`proxies:
+  - name: TUIC-v4
+    type: tuic
+    server: tuic.example.com
+    port: 443
+    token: redacted
+  - name: VLESS-XHTTP
+    type: vless
+    server: vless.example.com
+    port: 443
+    uuid: 33333333-3333-4333-8333-333333333333
+    network: xhttp
+  - name: SOCKS-TLS
+    type: socks5
+    server: socks.example.com
+    port: 1080
+    tls: true
+  - name: Hysteria-FakeTCP
+    type: hysteria
+    server: hy.example.com
+    port: 443
+    protocol: faketcp
+  - name: Trojan-SS
+    type: trojan
+    server: trojan.example.com
+    port: 443
+    password: redacted
+    ss-opts:
+      enabled: true
+  - name: Snell-v3
+    type: snell
+    server: snell.example.com
+    port: 443
+    psk: redacted
+    version: 3
+  - name: Hysteria2-Certificate-Fingerprint
+    type: hysteria2
+    server: hy2.example.com
+    port: 443
+    password: redacted
+    fingerprint: 95b89cf256ca58006f8d2f090bc8a6ca89b385f424852e82b59f2af384b142d7
+  - name: Hysteria2-Invalid-Ports
+    type: hysteria2
+    server: hy2-invalid.example.com
+    port: 443
+    ports: 65535-60000
+    password: redacted
+  - name: Hysteria2-Invalid-Hop
+    type: hysteria2
+    server: hy2-invalid-hop.example.com
+    port: 443
+    hop-interval: 30-bad
+    password: redacted
+  - name: AnyTLS-Invalid-ECH
+    type: anytls
+    server: anytls-invalid-ech.example.com
+    port: 443
+    password: redacted
+    ech-opts:
+      enable: true
+      config: not-valid-base64!
+`)
+	nodes, err := ParseSubscriptionNodes(body)
+	if err != nil {
+		t.Fatalf("parse unsupported Clash variants: %v", err)
+	}
+	if len(nodes) != 10 {
+		t.Fatalf("parsed node count = %d, want 10", len(nodes))
+	}
+	for _, node := range nodes {
+		if node.UnsupportedReason == "" {
+			t.Fatalf("%s variant was not marked unsupported", node.Name)
+		}
 	}
 }
 
@@ -588,7 +1033,7 @@ func TestParseRemainingProxyURIs(t *testing.T) {
 		{name: "wireguard", uri: "wireguard://wg.example.com:51820?public-key=pub&private-key=priv#WG-01", typ: "wireguard", server: "wg.example.com", port: 51820},
 		{name: "naive", uri: "naive+https://user:pass@naive.example.com:443#Naive-01", typ: "naive", server: "naive.example.com", port: 443},
 		{name: "mieru", uri: "mieru://user:pass@mieru.example.com:2999?protocol=TCP#Mieru-01", typ: "mieru", server: "mieru.example.com", port: 2999},
-		{name: "snell", uri: "snell://psk@snell.example.com:440?version=3#Snell-01", typ: "snell", server: "snell.example.com", port: 440},
+		{name: "snell", uri: "snell://psk@snell.example.com:440?version=4#Snell-01", typ: "snell", server: "snell.example.com", port: 440},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

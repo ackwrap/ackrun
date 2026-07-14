@@ -25,9 +25,9 @@ type ConfigApplyRequest struct {
 type SingboxOutbound struct {
 	Type      string   `json:"type"`
 	Tag       string   `json:"tag"`
-	Outbounds []string `json:"outbounds,omitempty"` // selector/urltest/fallback
-	URL       string   `json:"url,omitempty"`       // urltest/fallback
-	Interval  string   `json:"interval,omitempty"`  // urltest/fallback
+	Outbounds []string `json:"outbounds,omitempty"` // selector/urltest
+	URL       string   `json:"url,omitempty"`       // urltest
+	Interval  string   `json:"interval,omitempty"`  // urltest
 	Tolerance int      `json:"tolerance,omitempty"` // urltest
 	// 节点详细配置（从 Node 转换）
 	Server    string                 `json:"server,omitempty"`

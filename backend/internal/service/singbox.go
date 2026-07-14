@@ -1,11 +1,18 @@
 package service
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"regexp"
+	goruntime "runtime"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,24 +25,31 @@ import (
 type SingboxService struct {
 	paths     *paths.Paths
 	realtime  *RealtimeService
+	coreLogs  *CoreLogService
 	store     *store.Store
 	cmd       *exec.Cmd
 	pid       int
 	mu        sync.Mutex
 	cancel    context.CancelFunc
+	done      chan struct{}
+	stopping  bool
 	cachedVer string
+	lastError string
 }
 
 var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
 
-func NewSingboxService(p *paths.Paths, rt *RealtimeService, s *store.Store) *SingboxService {
-	return &SingboxService{paths: p, realtime: rt, store: s}
+func NewSingboxService(p *paths.Paths, rt *RealtimeService, logs *CoreLogService, s *store.Store) *SingboxService {
+	return &SingboxService{paths: p, realtime: rt, coreLogs: logs, store: s}
 }
 
 func (svc *SingboxService) Start() (*model.ActionResponse, error) {
 	svc.mu.Lock()
 	defer svc.mu.Unlock()
 
+	if svc.stopping {
+		return nil, fmt.Errorf("sing-box is stopping")
+	}
 	if svc.isRunning() {
 		return nil, fmt.Errorf("sing-box is already running (pid=%d)", svc.pid)
 	}
@@ -44,12 +58,14 @@ func (svc *SingboxService) Start() (*model.ActionResponse, error) {
 		return nil, fmt.Errorf("sing-box binary not found")
 	}
 
-	configPath, ok, err := svc.paths.ActiveConfigPath()
+	configPath, err := svc.validateActiveConfig()
 	if err != nil {
+		svc.realtime.Broadcast("core.status", map[string]any{
+			"status": "error",
+			"pid":    0,
+			"error":  err.Error(),
+		})
 		return nil, err
-	}
-	if !ok {
-		return nil, fmt.Errorf("config file not found")
 	}
 
 	logging.Info("core.start", "starting sing-box")
@@ -61,11 +77,22 @@ func (svc *SingboxService) Start() (*model.ActionResponse, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	svc.cancel = cancel
+	svc.lastError = ""
 
-	cmd := exec.CommandContext(ctx, svc.paths.BinaryPath, "run", "-c", configPath)
+	cmd := exec.CommandContext(ctx, svc.paths.BinaryPath, "run", "-c", configPath, "--disable-color")
 
-	stdout, _ := cmd.StdoutPipe()
-	stderr, _ := cmd.StderrPipe()
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		svc.cancel = nil
+		return nil, fmt.Errorf("capture sing-box stdout: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		cancel()
+		svc.cancel = nil
+		return nil, fmt.Errorf("capture sing-box stderr: %w", err)
+	}
 
 	if err := cmd.Start(); err != nil {
 		cancel()
@@ -80,6 +107,9 @@ func (svc *SingboxService) Start() (*model.ActionResponse, error) {
 
 	svc.cmd = cmd
 	svc.pid = cmd.Process.Pid
+	svc.done = make(chan struct{})
+	svc.stopping = false
+	done := svc.done
 
 	logging.Info("core.start", "sing-box started, pid=%d", svc.pid)
 	svc.realtime.Broadcast("core.status", map[string]any{
@@ -88,55 +118,43 @@ func (svc *SingboxService) Start() (*model.ActionResponse, error) {
 	})
 	svc.broadcastRuntimeStatus(model.RuntimeRunning, svc.pid)
 
+	var logWG sync.WaitGroup
+	logWG.Add(2)
 	go func() {
-		buf := make([]byte, 4096)
-		for {
-			n, err := stdout.Read(buf)
-			if n > 0 {
-				svc.realtime.Broadcast("core.log", map[string]any{
-					"line": cleanLogLine(string(buf[:n])),
-				})
-			}
-			if err != nil {
-				break
-			}
-		}
+		defer logWG.Done()
+		svc.captureCoreLog(stdout, "stdout")
 	}()
-
 	go func() {
-		buf := make([]byte, 4096)
-		for {
-			n, err := stderr.Read(buf)
-			if n > 0 {
-				svc.realtime.Broadcast("core.log", map[string]any{
-					"line": cleanLogLine(string(buf[:n])),
-				})
-			}
-			if err != nil {
-				break
-			}
-		}
+		defer logWG.Done()
+		svc.captureCoreLog(stderr, "stderr")
 	}()
 
 	go func() {
 		err := cmd.Wait()
+		logWG.Wait()
 		svc.mu.Lock()
-		svc.pid = 0
-		svc.cmd = nil
-		svc.cancel = nil
+		intentionalStop := svc.cmd == cmd && svc.stopping
+		if svc.cmd == cmd {
+			svc.stopping = true
+			svc.pid = 0
+			svc.cmd = nil
+			svc.cancel = nil
+			svc.done = nil
+		}
 		svc.mu.Unlock()
 
-		statusMsg := "stopped"
-		if err != nil {
-			statusMsg = "error"
-		}
+		statusMsg, runtimeStatus, errorMessage := coreExitState(err, intentionalStop, svc.lastError)
 		logging.Info("core.start", "sing-box exited: %v", err)
 		svc.realtime.Broadcast("core.status", map[string]any{
 			"status": statusMsg,
 			"pid":    0,
-			"error":  "",
+			"error":  errorMessage,
 		})
-		svc.broadcastRuntimeStatus(model.RuntimeStopped, 0)
+		svc.broadcastRuntimeStatus(runtimeStatus, 0)
+		svc.mu.Lock()
+		svc.stopping = false
+		svc.mu.Unlock()
+		close(done)
 	}()
 
 	return &model.ActionResponse{Success: true, Message: "service started"}, nil
@@ -144,51 +162,79 @@ func (svc *SingboxService) Start() (*model.ActionResponse, error) {
 
 func (svc *SingboxService) Stop() (*model.ActionResponse, error) {
 	svc.mu.Lock()
-	defer svc.mu.Unlock()
-
 	if !svc.isRunning() {
+		svc.mu.Unlock()
 		return nil, fmt.Errorf("sing-box is not running")
 	}
 
-	logging.Info("core.stop", "stopping sing-box, pid=%d", svc.pid)
+	pid := svc.pid
+	cmd := svc.cmd
+	cancel := svc.cancel
+	done := svc.done
+	svc.stopping = true
+	svc.mu.Unlock()
 
-	if svc.cancel != nil {
-		svc.cancel()
-	}
+	logging.Info("core.stop", "stopping sing-box, pid=%d", pid)
 
 	svc.realtime.Broadcast("core.status", map[string]any{
 		"status": "stopping",
-		"pid":    svc.pid,
+		"pid":    pid,
 	})
 
-	time.AfterFunc(10*time.Second, func() {
-		svc.mu.Lock()
-		defer svc.mu.Unlock()
-		if svc.isRunning() {
-			logging.Info("core.stop", "force killing sing-box, pid=%d", svc.pid)
-			cmd := svc.cmd
+	if cancel != nil {
+		cancel()
+	}
+	if done != nil {
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			logging.Info("core.stop", "force killing sing-box, pid=%d", pid)
 			if cmd != nil && cmd.Process != nil {
-				cmd.Process.Kill()
+				_ = cmd.Process.Kill()
+			}
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				return nil, fmt.Errorf("sing-box process did not exit after force kill (pid=%d)", pid)
 			}
 		}
-	})
+	}
 
 	return &model.ActionResponse{Success: true, Message: "service stopped"}, nil
 }
 
 func (svc *SingboxService) Restart() (*model.ActionResponse, error) {
+	if _, err := svc.validateActiveConfig(); err != nil {
+		return nil, err
+	}
 	if _, err := svc.Stop(); err != nil {
 		return nil, err
 	}
 
-	time.Sleep(500 * time.Millisecond)
-
 	return svc.Start()
+}
+
+func (svc *SingboxService) validateActiveConfig() (string, error) {
+	configPath, ok, err := svc.paths.ActiveConfigPath()
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", fmt.Errorf("config file not found")
+	}
+	if output, err := exec.Command(svc.paths.BinaryPath, "check", "-c", configPath).CombinedOutput(); err != nil {
+		message := strings.TrimSpace(cleanLogLine(string(output)))
+		if message == "" {
+			message = err.Error()
+		}
+		return "", fmt.Errorf("config check failed: %s", message)
+	}
+	return configPath, nil
 }
 
 func (svc *SingboxService) ReloadConfig() (*model.ActionResponse, error) {
 	logging.Info("core.reload_config", "reloading sing-box config")
-	if !svc.isRunning() {
+	if !svc.IsRunning() {
 		return &model.ActionResponse{Success: true, Message: "core is stopped; config will be used on next start"}, nil
 	}
 	return svc.Restart()
@@ -196,6 +242,12 @@ func (svc *SingboxService) ReloadConfig() (*model.ActionResponse, error) {
 
 func (svc *SingboxService) isRunning() bool {
 	return svc.pid > 0 && svc.cmd != nil && svc.cmd.Process != nil
+}
+
+func (svc *SingboxService) IsRunning() bool {
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
+	return svc.isRunning()
 }
 
 func (svc *SingboxService) GetPID() int {
@@ -228,67 +280,282 @@ func cleanLogLine(line string) string {
 	return ansiEscapePattern.ReplaceAllString(line, "")
 }
 
-// CloseConnections closes all active connections by restarting the service
+func (svc *SingboxService) captureCoreLog(reader io.Reader, source string) {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := cleanLogLine(scanner.Text())
+		if line == "" {
+			continue
+		}
+		now := time.Now().UnixMilli()
+		entry := svc.coreLogs.Append(source, now, line)
+		svc.realtime.Broadcast("core.log", entry)
+		if source == "stderr" && strings.Contains(line, "FATAL") {
+			svc.mu.Lock()
+			svc.lastError = line
+			svc.mu.Unlock()
+		}
+	}
+}
+
+func coreExitErrorMessage(lastError string, processErr error) string {
+	lower := strings.ToLower(lastError)
+	if strings.Contains(lower, "configure tun interface") && strings.Contains(lower, "access is denied") {
+		return "TUN 模式启动失败：Windows 拒绝创建 TUN 网卡，请以管理员身份运行 AckWrap"
+	}
+	if lastError != "" {
+		return lastError
+	}
+	return processErr.Error()
+}
+
+func coreExitState(processErr error, intentionalStop bool, lastError string) (string, model.RuntimeStatus, string) {
+	if processErr != nil && !intentionalStop {
+		return "error", model.RuntimeError, coreExitErrorMessage(lastError, processErr)
+	}
+	return "stopped", model.RuntimeStopped, ""
+}
+
+// CloseConnections closes active connections through sing-box's Clash API.
 func (svc *SingboxService) CloseConnections() (*model.ActionResponse, error) {
 	logging.Info("core.close_connections", "closing all connections")
-
-	if !svc.isRunning() {
+	if !svc.IsRunning() {
 		return nil, fmt.Errorf("sing-box is not running")
 	}
-
-	// Restart to close all connections
-	_, err := svc.Restart()
-	if err != nil {
+	if err := svc.requestClashAPI(http.MethodDelete, "/connections"); err != nil {
 		return nil, fmt.Errorf("failed to close connections: %w", err)
 	}
-
 	return &model.ActionResponse{Success: true, Message: "all connections closed"}, nil
 }
 
-// ResetFirewall resets firewall rules (platform-specific implementation)
+func (svc *SingboxService) FlushCoreDNS() (*model.ActionResponse, error) {
+	logging.Info("core.flush_core_dns", "flushing sing-box DNS cache")
+	if !svc.IsRunning() {
+		return nil, fmt.Errorf("sing-box is not running")
+	}
+	if err := svc.requestClashAPI(http.MethodPost, "/cache/dns/flush"); err != nil {
+		return nil, fmt.Errorf("failed to flush sing-box DNS cache: %w", err)
+	}
+	return &model.ActionResponse{Success: true, Message: "sing-box DNS cache flushed"}, nil
+}
+
+func (svc *SingboxService) FlushFakeIP() (*model.ActionResponse, error) {
+	logging.Info("core.flush_fakeip", "flushing sing-box FakeIP cache")
+	if !svc.IsRunning() {
+		return nil, fmt.Errorf("sing-box is not running")
+	}
+	if err := svc.requestClashAPI(http.MethodPost, "/cache/fakeip/flush"); err != nil {
+		return nil, fmt.Errorf("failed to flush FakeIP cache: %w", err)
+	}
+	return &model.ActionResponse{Success: true, Message: "FakeIP cache flushed"}, nil
+}
+
+func (svc *SingboxService) requestClashAPI(method, path string) error {
+	settings, err := svc.store.GetExperimentalSettings()
+	if err != nil {
+		return fmt.Errorf("read Clash API settings: %w", err)
+	}
+	port := "9090"
+	secret := ""
+	if settings != nil {
+		if settings.ClashAPIPort != "" {
+			port = settings.ClashAPIPort
+		}
+		secret = settings.ClashAPISecret
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return fmt.Errorf("invalid Clash API port")
+	}
+	target := "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(portNumber)) + path
+	if err := requestClashAPI(method, target, secret); err != nil {
+		return err
+	}
+	return nil
+}
+
+func requestClashAPI(method, target, secret string) error {
+	req, err := http.NewRequest(method, target, nil)
+	if err != nil {
+		return err
+	}
+	if secret != "" {
+		req.Header.Set("Authorization", "Bearer "+secret)
+	}
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("Clash API returned HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func (svc *SingboxService) NetworkCheck() (*model.MaintenanceCheckResponse, error) {
+	logging.Info("core.network_check", "running maintenance network checks")
+	return svc.networkCheck(), nil
+}
+
+func (svc *SingboxService) networkCheck() *model.MaintenanceCheckResponse {
+	checks := make([]model.MaintenanceCheck, 0, 5)
+	add := func(key, label, status, message string) {
+		checks = append(checks, model.MaintenanceCheck{Key: key, Label: label, Status: status, Message: message})
+	}
+
+	binaryReady := false
+	if _, err := os.Stat(svc.paths.BinaryPath); err != nil {
+		add("binary", "核心程序", "fail", "sing-box 核心程序不存在")
+	} else {
+		binaryReady = true
+		add("binary", "核心程序", "pass", "sing-box 核心程序可用")
+	}
+
+	if _, ok, err := svc.paths.ActiveConfigPath(); err != nil {
+		add("config", "配置文件", "fail", "无法读取当前配置状态")
+	} else if !ok {
+		add("config", "配置文件", "fail", "当前没有可用配置文件")
+	} else if !binaryReady {
+		add("config", "配置文件", "warn", "需要安装核心后才能校验配置")
+	} else if _, err := svc.validateActiveConfig(); err != nil {
+		add("config", "配置文件", "fail", "当前配置未通过 sing-box 校验")
+	} else {
+		add("config", "配置文件", "pass", "当前配置校验通过")
+	}
+
+	running := svc.IsRunning()
+	if running {
+		add("process", "核心进程", "pass", "sing-box 核心正在运行")
+		if err := svc.requestClashAPI(http.MethodGet, "/version"); err != nil {
+			add("clash_api", "Clash API 端口", "fail", "Clash API 不可访问，请检查端口和密钥设置")
+		} else {
+			add("clash_api", "Clash API 端口", "pass", "Clash API 可正常访问")
+		}
+	} else {
+		add("process", "核心进程", "warn", "sing-box 核心当前未运行")
+		add("clash_api", "Clash API 端口", "warn", "核心启动后才能检测 Clash API")
+	}
+
+	if goruntime.GOOS == "windows" {
+		if err := exec.Command("net", "session").Run(); err != nil {
+			add("administrator", "管理员权限", "warn", "当前进程可能没有管理员权限，TUN 和系统维护操作可能失败")
+		} else {
+			add("administrator", "管理员权限", "pass", "当前进程具有管理员权限")
+		}
+	}
+
+	success := true
+	for _, check := range checks {
+		if check.Status == "fail" {
+			success = false
+			break
+		}
+	}
+	return &model.MaintenanceCheckResponse{Success: success, Checks: checks}
+}
+
+func (svc *SingboxService) Diagnostics() (*model.CoreDiagnosticsResponse, error) {
+	logging.Info("core.diagnostics", "building redacted diagnostics report")
+	configPath, configPresent, err := svc.paths.ActiveConfigPath()
+	if err != nil {
+		return nil, fmt.Errorf("read active config path: %w", err)
+	}
+	network := svc.networkCheck()
+	configValid := false
+	for _, check := range network.Checks {
+		if check.Key == "config" {
+			configValid = check.Status == "pass"
+			break
+		}
+	}
+
+	logSummary := model.CoreLogSummary{}
+	if svc.coreLogs != nil {
+		for _, entry := range svc.coreLogs.List(defaultCoreLogLimit) {
+			logSummary.Total++
+			switch entry.Source {
+			case "stdout":
+				logSummary.Stdout++
+			case "stderr":
+				logSummary.Stderr++
+			}
+			line := strings.ToLower(entry.Line)
+			if strings.Contains(line, "error") || strings.Contains(line, "fatal") {
+				logSummary.ErrorLines++
+			}
+		}
+	}
+
+	return &model.CoreDiagnosticsResponse{
+		GeneratedAt:   time.Now().UnixMilli(),
+		Platform:      goruntime.GOOS,
+		Architecture:  goruntime.GOARCH,
+		Version:       svc.getVersion(),
+		Running:       svc.IsRunning(),
+		PID:           svc.GetPID(),
+		BinaryPath:    svc.paths.BinaryPath,
+		ConfigPath:    configPath,
+		ConfigPresent: configPresent,
+		ConfigValid:   configValid,
+		Network:       *network,
+		Logs:          logSummary,
+	}, nil
+}
+
+// ResetFirewall resets local firewall rules on Windows.
 func (svc *SingboxService) ResetFirewall() (*model.ActionResponse, error) {
 	logging.Info("core.reset_firewall", "resetting firewall rules")
-
-	// For Windows
+	if goruntime.GOOS != "windows" {
+		return nil, fmt.Errorf("reset firewall is only supported on Windows")
+	}
 	cmd := exec.Command("netsh", "advfirewall", "reset")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		logging.Info("core.reset_firewall", "failed: %v, output: %s", err, string(output))
 		return nil, fmt.Errorf("failed to reset firewall: %w", err)
 	}
-
 	logging.Info("core.reset_firewall", "firewall reset successful")
 	return &model.ActionResponse{Success: true, Message: "firewall rules reset"}, nil
 }
 
-// FlushDNS clears the DNS cache (platform-specific implementation)
+// FlushDNS clears the local DNS cache on Windows.
 func (svc *SingboxService) FlushDNS() (*model.ActionResponse, error) {
 	logging.Info("core.flush_dns", "flushing DNS cache")
-
-	// For Windows
+	if goruntime.GOOS != "windows" {
+		return nil, fmt.Errorf("flush DNS is only supported on Windows")
+	}
 	cmd := exec.Command("ipconfig", "/flushdns")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		logging.Info("core.flush_dns", "failed: %v, output: %s", err, string(output))
 		return nil, fmt.Errorf("failed to flush DNS cache: %w", err)
 	}
-
 	logging.Info("core.flush_dns", "DNS cache flushed successfully")
 	return &model.ActionResponse{Success: true, Message: "DNS cache flushed"}, nil
 }
 
-// CheckUpdate checks for available updates
 func (svc *SingboxService) CheckUpdate() (*model.ActionResponse, error) {
 	logging.Info("core.check_update", "checking for updates")
-
 	currentVersion := svc.getVersion()
 	if currentVersion == "" {
 		return nil, fmt.Errorf("failed to get current version")
 	}
-
-	// TODO: Implement actual version checking logic
-	// For now, just return current version info
-	message := fmt.Sprintf("current version: %s (update check not yet implemented)", currentVersion)
-
-	return &model.ActionResponse{Success: true, Message: message}, nil
+	settings, err := svc.store.GetUpdateSettings()
+	if err != nil {
+		return nil, fmt.Errorf("读取更新设置失败: %w", err)
+	}
+	latestVersion, err := fetchLatestSingboxVersionWithSettings(settings, singboxVersionURL)
+	if err != nil {
+		logging.Error("core.check_update", "检查更新失败: %v", err)
+		return nil, fmt.Errorf("检查最新版本失败: %w", err)
+	}
+	if compareSingboxVersions(currentVersion, latestVersion) < 0 {
+		logging.Info("core.check_update", "发现新版本 current=%s latest=%s", currentVersion, latestVersion)
+		return &model.ActionResponse{Success: true, Message: fmt.Sprintf("发现新版本 %s（当前版本 %s），可通过核心安装器更新", latestVersion, currentVersion)}, nil
+	}
+	logging.Info("core.check_update", "当前已是最新版本: %s", currentVersion)
+	return &model.ActionResponse{Success: true, Message: fmt.Sprintf("当前已是最新版本: %s", currentVersion)}, nil
 }

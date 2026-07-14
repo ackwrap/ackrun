@@ -5,34 +5,54 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ackwrap/ackwrap/internal/model"
+	"github.com/ackwrap/ackwrap/internal/service"
 	"github.com/gin-gonic/gin"
 )
 
 type ClashProxyHandler struct {
-	clashURL string
-	secret   string
+	settingsSvc *service.SettingsService
 }
 
-func NewClashProxyHandler(clashURL string, secret string) *ClashProxyHandler {
+func NewClashProxyHandler(settingsSvc *service.SettingsService) *ClashProxyHandler {
 	return &ClashProxyHandler{
-		clashURL: clashURL,
-		secret:   secret,
+		settingsSvc: settingsSvc,
 	}
+}
+
+func (h *ClashProxyHandler) targetBase() (string, string) {
+	port := "9090"
+	secret := ""
+	if h.settingsSvc != nil {
+		if settings, err := h.settingsSvc.GetExperimentalSettings(); err == nil && settings != nil {
+			if portNumber, parseErr := strconv.Atoi(settings.ClashAPIPort); parseErr == nil && portNumber > 0 && portNumber <= 65535 {
+				port = settings.ClashAPIPort
+			}
+			secret = settings.ClashAPISecret
+		}
+	}
+	return "http://127.0.0.1:" + port, secret
 }
 
 // Proxy 代理所有 Clash API 请求
 func (h *ClashProxyHandler) Proxy(c *gin.Context) {
+	if strings.EqualFold(c.GetHeader("Upgrade"), "websocket") {
+		h.ProxyWebSocket(c)
+		return
+	}
+
 	// 构建目标 URL
 	targetPath := strings.TrimPrefix(c.Request.URL.Path, "/api/v1/clash")
 	if targetPath == "" {
 		targetPath = "/"
 	}
 
-	targetURL, err := url.Parse(h.clashURL + targetPath)
+	clashURL, secret := h.targetBase()
+	targetURL, err := url.Parse(clashURL + targetPath)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
 			Error: model.APIError{Code: "CLASH_PROXY_ERROR", Message: "Invalid Clash API URL"},
@@ -60,8 +80,8 @@ func (h *ClashProxyHandler) Proxy(c *gin.Context) {
 	}
 
 	// 添加 Clash API 认证
-	if h.secret != "" {
-		proxyReq.Header.Set("Authorization", "Bearer "+h.secret)
+	if secret != "" {
+		proxyReq.Header.Set("Authorization", "Bearer "+secret)
 	}
 
 	// 设置超时
@@ -73,7 +93,7 @@ func (h *ClashProxyHandler) Proxy(c *gin.Context) {
 	resp, err := client.Do(proxyReq)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, model.ErrorResponse{
-			Error: model.APIError{Code: "CLASH_PROXY_ERROR", Message: "Failed to connect to Clash API: " + err.Error()},
+			Error: model.APIError{Code: "CLASH_PROXY_ERROR", Message: "Failed to connect to Clash API (" + clashURL + "): " + err.Error()},
 		})
 		return
 	}
@@ -96,7 +116,8 @@ func (h *ClashProxyHandler) Proxy(c *gin.Context) {
 // ProxyWebSocket 代理 WebSocket 连接
 func (h *ClashProxyHandler) ProxyWebSocket(c *gin.Context) {
 	// WebSocket 代理使用反向代理
-	targetURL, _ := url.Parse(h.clashURL)
+	clashURL, secret := h.targetBase()
+	targetURL, _ := url.Parse(clashURL)
 
 	proxy := httputil.NewSingleHostReverseProxy(targetURL)
 	proxy.ModifyResponse = func(resp *http.Response) error {
@@ -111,8 +132,8 @@ func (h *ClashProxyHandler) ProxyWebSocket(c *gin.Context) {
 	}
 
 	// 添加认证
-	if h.secret != "" {
-		c.Request.Header.Set("Authorization", "Bearer "+h.secret)
+	if secret != "" {
+		c.Request.Header.Set("Authorization", "Bearer "+secret)
 	}
 
 	proxy.ServeHTTP(c.Writer, c.Request)
@@ -121,9 +142,10 @@ func (h *ClashProxyHandler) ProxyWebSocket(c *gin.Context) {
 // GetClashStatus 获取 Clash API 状态
 func (h *ClashProxyHandler) GetClashStatus(c *gin.Context) {
 	client := &http.Client{Timeout: 5 * time.Second}
-	req, _ := http.NewRequest("GET", h.clashURL+"/version", nil)
-	if h.secret != "" {
-		req.Header.Set("Authorization", "Bearer "+h.secret)
+	clashURL, secret := h.targetBase()
+	req, _ := http.NewRequest("GET", clashURL+"/version", nil)
+	if secret != "" {
+		req.Header.Set("Authorization", "Bearer "+secret)
 	}
 
 	resp, err := client.Do(req)
@@ -131,6 +153,7 @@ func (h *ClashProxyHandler) GetClashStatus(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"connected": false,
 			"error":     err.Error(),
+			"target":    clashURL,
 		})
 		return
 	}
@@ -139,5 +162,6 @@ func (h *ClashProxyHandler) GetClashStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"connected": resp.StatusCode == http.StatusOK,
 		"status":    resp.StatusCode,
+		"target":    clashURL,
 	})
 }

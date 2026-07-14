@@ -1,12 +1,19 @@
 import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
+import vue from '@vitejs/plugin-vue'
 import path from 'path'
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [vue()],
   build: {
     outDir: '../backend/ui',
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules/echarts')) return 'echarts'
+        },
+      },
+    },
   },
   resolve: {
     alias: {

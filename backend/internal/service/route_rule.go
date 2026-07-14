@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -27,6 +28,31 @@ import (
 	"github.com/ackwrap/ackwrap/internal/store"
 )
 
+// SystemAdBlockRouteRuleName 系统默认广告拦截规则名称。
+// 智能快速配置时自动创建，配置生成时独立转换为 action=reject。
+const SystemAdBlockRouteRuleName = "广告拦截"
+
+// SystemRuleAdBlockKey 系统默认广告拦截规则内部标识。
+const SystemRuleAdBlockKey = "ad_block"
+
+// ErrSystemRouteRuleProtected 系统默认规则不可删除或修改名称/匹配，仅允许启停。
+var ErrSystemRouteRuleProtected = errors.New("系统默认规则不可删除或编辑，只能启用或停用")
+
+// IsSystemRouteRuleKey 判断规则是否为系统默认规则。
+func IsSystemRouteRuleKey(systemKey string) bool {
+	switch strings.TrimSpace(systemKey) {
+	case SystemRuleAdBlockKey:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsSystemRouteRuleName 仅用于阻止用户创建占用系统默认显示名的普通规则。
+func IsSystemRouteRuleName(name string) bool {
+	return strings.TrimSpace(name) == SystemAdBlockRouteRuleName
+}
+
 type RouteRuleService struct {
 	store       *store.Store
 	paths       *paths.Paths
@@ -35,6 +61,7 @@ type RouteRuleService struct {
 	ruleEntries map[int64]cron.EntryID
 	geoEntries  map[int64]cron.EntryID
 	mu          sync.Mutex
+	cacheMu     sync.Mutex
 }
 
 func NewRouteRuleService(s *store.Store, p *paths.Paths, rt *RealtimeService) *RouteRuleService {
@@ -186,6 +213,9 @@ func (svc *RouteRuleService) List() ([]model.RouteRule, error) {
 }
 
 func (svc *RouteRuleService) Create(req *model.RouteRuleRequest) (*model.RouteRule, error) {
+	if IsSystemRouteRuleName(req.Name) {
+		return nil, ErrSystemRouteRuleProtected
+	}
 	if err := svc.validateRouteRule(req); err != nil {
 		return nil, err
 	}
@@ -194,6 +224,36 @@ func (svc *RouteRuleService) Create(req *model.RouteRuleRequest) (*model.RouteRu
 }
 
 func (svc *RouteRuleService) Update(id int64, req *model.RouteRuleRequest) (*model.RouteRule, error) {
+	existing, err := svc.store.GetRouteRule(id)
+	if err != nil {
+		return nil, err
+	}
+	if existing == nil {
+		return nil, fmt.Errorf("route rule not found")
+	}
+	// 系统默认规则只允许启停，其余字段强制保持原值。
+	if IsSystemRouteRuleKey(existing.SystemKey) {
+		logging.Info("route_rule.update", "updating system route rule enabled only: %d (%s)", id, existing.Name)
+		item, err := svc.store.UpdateRouteRule(id, &model.RouteRuleRequest{
+			Name:     existing.Name,
+			Enabled:  req.Enabled,
+			Priority: existing.Priority,
+			RuleType: existing.RuleType,
+			Values:   existing.Values,
+			Outbound: existing.Outbound,
+			Invert:   existing.Invert,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if item == nil {
+			return nil, fmt.Errorf("route rule not found")
+		}
+		return item, nil
+	}
+	if IsSystemRouteRuleName(req.Name) {
+		return nil, ErrSystemRouteRuleProtected
+	}
 	if err := svc.validateRouteRule(req); err != nil {
 		return nil, err
 	}
@@ -210,6 +270,13 @@ func (svc *RouteRuleService) Update(id int64, req *model.RouteRuleRequest) (*mod
 
 func (svc *RouteRuleService) Delete(id int64) (*model.ActionResponse, error) {
 	logging.Info("route_rule.delete", "deleting route rule: %d", id)
+	existing, err := svc.store.GetRouteRule(id)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil && IsSystemRouteRuleKey(existing.SystemKey) {
+		return nil, ErrSystemRouteRuleProtected
+	}
 	if err := svc.store.DeleteRouteRule(id); err != nil {
 		return nil, err
 	}
@@ -252,16 +319,14 @@ func (svc *RouteRuleService) PreviewWithBaseURL(baseURL string) (*model.RouteRul
 		}
 		format := item.Format
 		ruleURL := routeRuleSubscriptionContentURL(baseURL, item.ID)
-		downloadDetour := "direct"
 		if item.Format == "clash" {
 			format = "source"
 		}
 		ruleSet := map[string]any{
-			"tag":             item.Tag,
-			"type":            "remote",
-			"format":          format,
-			"url":             ruleURL,
-			"download_detour": downloadDetour,
+			"tag":    item.Tag,
+			"type":   "remote",
+			"format": format,
+			"url":    ruleURL,
 		}
 		ruleSetTags[item.Tag] = true
 		ruleSets = append(ruleSets, ruleSet)
@@ -279,13 +344,13 @@ func (svc *RouteRuleService) PreviewWithBaseURL(baseURL string) (*model.RouteRul
 				return nil, err
 			}
 			rules = append(rules, mixedRules...)
-			ruleSets = addMixedGeneratedRuleSets(ruleSets, ruleSetTags, item.Values)
+			ruleSets = addMixedGeneratedRuleSets(ruleSets, ruleSetTags, item.Values, baseURL)
 			continue
 		}
 		if item.RuleType == "geoip" || item.RuleType == "geosite" {
 			key = "rule_set"
 			values = generatedGeoRuleSetTags(item.RuleType, item.Values)
-			ruleSets = appendGeneratedGeoRuleSets(ruleSets, ruleSetTags, item.RuleType, item.Values)
+			ruleSets = appendGeneratedGeoRuleSets(ruleSets, ruleSetTags, item.RuleType, item.Values, baseURL)
 		}
 		rule := map[string]any{key: values, "outbound": item.Outbound}
 		if item.Invert {
@@ -369,8 +434,20 @@ func (svc *RouteRuleService) SyncAllSubscriptions() (*model.ActionResponse, erro
 		return nil, err
 	}
 	go func() {
+		failed := 0
 		for _, item := range items {
 			svc.runRuleSubscriptionSync(item.ID)
+			updated, getErr := svc.store.GetRouteRuleSubscription(item.ID)
+			if getErr != nil || updated == nil || updated.SyncStatus != "updated" {
+				failed++
+			}
+		}
+		if svc.realtime != nil {
+			svc.realtime.Broadcast("route_rule_subscription.sync_all", map[string]any{
+				"status": "completed",
+				"total":  len(items),
+				"failed": failed,
+			})
 		}
 	}()
 	return &model.ActionResponse{Success: true, Message: "route rule subscriptions sync started"}, nil
@@ -420,8 +497,20 @@ func (svc *RouteRuleService) SyncAllGeoAssets() (*model.ActionResponse, error) {
 		return nil, err
 	}
 	go func() {
+		failed := 0
 		for _, item := range items {
 			svc.runGeoAssetSync(item.ID)
+			updated, getErr := svc.store.GetGeoAsset(item.ID)
+			if getErr != nil || updated == nil || updated.SyncStatus != "updated" {
+				failed++
+			}
+		}
+		if svc.realtime != nil {
+			svc.realtime.Broadcast("geo.sync_all", map[string]any{
+				"status": "completed",
+				"total":  len(items),
+				"failed": failed,
+			})
 		}
 	}()
 	return &model.ActionResponse{Success: true, Message: "geo assets sync started"}, nil
@@ -879,6 +968,7 @@ func (svc *RouteRuleService) runGeoAssetSync(id int64) {
 	}
 	if _, err := svc.store.UpdateGeoAssetSyncResult(id, localPath); err != nil {
 		logging.Error("geo.sync", "update geo sync result failed: %v", err)
+		_ = svc.store.SetGeoAssetSyncState(id, "failed", err.Error())
 	}
 }
 
@@ -921,6 +1011,7 @@ func (svc *RouteRuleService) SubscriptionContent(id int64) ([]byte, string, erro
 	}
 	if _, err := svc.store.UpdateRouteRuleSubscriptionSyncResult(id, cachedPath); err != nil {
 		logging.Error("route_rule_subscription.sync", "update sync result failed: %v", err)
+		_ = svc.store.SetRouteRuleSubscriptionSyncState(id, "failed", 0, err.Error())
 	}
 	return data, contentType, nil
 }
@@ -994,6 +1085,54 @@ func (svc *RouteRuleService) routeRuleSubscriptionCachePath(item *model.RouteRul
 		name = fmt.Sprintf("rule-%d", item.ID)
 	}
 	return filepath.Join(svc.paths.RulesDir, fmt.Sprintf("%d-%s%s", item.ID, name, ext))
+}
+
+func (svc *RouteRuleService) GeneratedGeoRuleSetContent(tag string) ([]byte, string, error) {
+	return svc.generatedGeoRuleSetContent(tag, generatedGeoRuleSetURL(tag))
+}
+
+func (svc *RouteRuleService) generatedGeoRuleSetContent(tag, upstreamURL string) ([]byte, string, error) {
+	tag = strings.ToLower(strings.TrimSpace(tag))
+	if (!strings.HasPrefix(tag, "geoip-") && !strings.HasPrefix(tag, "geosite-")) || !isRouteRuleSubscriptionTag(tag) {
+		return nil, "", fmt.Errorf("invalid generated geo rule set tag")
+	}
+	if svc.paths == nil || svc.paths.RulesDir == "" {
+		return nil, "", fmt.Errorf("rules directory is not configured")
+	}
+
+	svc.cacheMu.Lock()
+	defer svc.cacheMu.Unlock()
+
+	cacheDir := filepath.Join(svc.paths.RulesDir, "geo")
+	cachePath := filepath.Join(cacheDir, tag+".srs")
+	if data, err := os.ReadFile(cachePath); err == nil {
+		logging.Info("route_rule_geo.cache", "使用 Geo 规则集缓存: %s", tag)
+		return data, "application/octet-stream", nil
+	} else if !os.IsNotExist(err) {
+		return nil, "", fmt.Errorf("read generated geo rule set cache: %w", err)
+	}
+
+	data, err := fetchRouteRuleSubscriptionContent(upstreamURL, false)
+	if err != nil {
+		logging.Error("route_rule_geo.cache", "下载 Geo 规则集失败 %s: %v", tag, err)
+		return nil, "", fmt.Errorf("download generated geo rule set %s: %w", tag, err)
+	}
+	if len(data) == 0 {
+		return nil, "", fmt.Errorf("downloaded generated geo rule set %s is empty", tag)
+	}
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		return nil, "", fmt.Errorf("create generated geo rule set cache dir: %w", err)
+	}
+	tmpPath := cachePath + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return nil, "", fmt.Errorf("write generated geo rule set cache: %w", err)
+	}
+	if err := os.Rename(tmpPath, cachePath); err != nil {
+		_ = os.Remove(tmpPath)
+		return nil, "", fmt.Errorf("commit generated geo rule set cache: %w", err)
+	}
+	logging.Info("route_rule_geo.cache", "Geo 规则集已缓存: %s", tag)
+	return data, "application/octet-stream", nil
 }
 
 func routeRuleSubscriptionContentType(format string) string {

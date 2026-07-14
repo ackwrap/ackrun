@@ -8,7 +8,7 @@ This is a monorepo containing multiple proxy subscription management and proxy t
 
 - **miaomiaowu**: Go-based subscription management server with web UI (primary application)
 - **backend**: Separate Go backend service using Gin framework
-- **frontend**: React + TypeScript web application (Vite)
+- **frontend**: Vue 3 + TypeScript web application (Vite)
 - **mihomo-Alpha**: Fork of Clash Meta proxy tool
 - **sing-box**: Alternative proxy implementation
 
@@ -115,13 +115,13 @@ Uses **Gin framework** for HTTP routing. Appears to be a separate API service.
 
 ### Frontend Architecture
 
-**Tech Stack**: React 18 + TypeScript + Vite + React Router + TailwindCSS
+**Tech Stack**: Vue 3 + TypeScript + Vite + Vue Router + Tailwind CSS 4 + DaisyUI
 
 **Structure**:
 - `src/components/`: Reusable UI components
 - `src/pages/`: Page-level components
 - `src/services/`: API client layer
-- `src/hooks/`: Custom React hooks
+- `src/composables/`: Vue composables
 - `src/utils/`: Utility functions
 
 ## Key Design Patterns
@@ -223,11 +223,11 @@ Rule templates in `rule_templates/` directory:
 
 ### Frontend
 
-- React 18.3, React Router 6.26
-- TypeScript 5.5
-- Vite 5.4 (build tool)
-- TailwindCSS 3.4 (styling)
-- lucide-react (icons)
+- Vue 3.5, Vue Router 5
+- TypeScript 6
+- Vite 7 (build tool)
+- Tailwind CSS 4 + DaisyUI 5 (styling)
+- lucide-vue-next (icons)
 
 ## Common Tasks
 

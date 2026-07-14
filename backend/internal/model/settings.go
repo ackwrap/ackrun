@@ -4,20 +4,24 @@ type UpdateSettings struct {
 	Acceleration    string `json:"acceleration"`
 	CustomMirrorURL string `json:"custom_mirror_url,omitempty"`
 	GithubToken     string `json:"github_token,omitempty"`
+	ProxyURL        string `json:"proxy_url,omitempty"`
 }
 
 type UpdateSettingsResponse struct {
 	Acceleration    string `json:"acceleration"`
 	CustomMirrorURL string `json:"custom_mirror_url"`
 	GithubToken     string `json:"github_token"`
+	ProxyURL        string `json:"proxy_url"`
 }
 
 type LogSettings struct {
-	Timestamp bool `json:"timestamp"`
+	Level     string `json:"level"`
+	Timestamp bool   `json:"timestamp"`
 }
 
 type LogSettingsResponse struct {
-	Timestamp bool `json:"timestamp"`
+	Level     string `json:"level"`
+	Timestamp bool   `json:"timestamp"`
 }
 
 // NTPSettings NTP 时间同步设置
@@ -91,8 +95,7 @@ type ExperimentalSettings struct {
 	ClashAPIExternalUIDownloadURL string `json:"clash_api_external_ui_download_url,omitempty"`
 	CacheFileEnabled              bool   `json:"cache_file_enabled"`
 	CacheFileStoreFakeIP          bool   `json:"cache_file_store_fakeip"`
-	CacheFileStoreRDRC            bool   `json:"cache_file_store_rdrc"`
-	CacheFileRDRCTimeout          string `json:"cache_file_rdrc_timeout"`
+	CacheFileStoreDNS             bool   `json:"cache_file_store_dns"`
 }
 
 // ExperimentalSettingsResponse 实验性功能设置响应
@@ -104,8 +107,7 @@ type ExperimentalSettingsResponse struct {
 	ClashAPIExternalUIDownloadURL string `json:"clash_api_external_ui_download_url,omitempty"`
 	CacheFileEnabled              bool   `json:"cache_file_enabled"`
 	CacheFileStoreFakeIP          bool   `json:"cache_file_store_fakeip"`
-	CacheFileStoreRDRC            bool   `json:"cache_file_store_rdrc"`
-	CacheFileRDRCTimeout          string `json:"cache_file_rdrc_timeout"`
+	CacheFileStoreDNS             bool   `json:"cache_file_store_dns"`
 }
 
 type NodeFilter struct {

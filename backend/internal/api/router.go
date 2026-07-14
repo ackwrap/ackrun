@@ -20,8 +20,10 @@ func RegisterRoutes(
 	proxyCollectionSvc *service.ProxyCollectionService,
 	configGenSvc *service.ConfigGeneratorService,
 	realtimeSvc *service.RealtimeService,
+	coreLogSvc *service.CoreLogService,
 	dnsSvc *service.DNSService,
 	nodeGroupSvc *service.NodeGroupService,
+	reconcileSvc *service.ConfigReconcileService,
 ) {
 	runtimeH := handler.NewRuntimeHandler(runtimeSvc)
 	installerH := handler.NewInstallerHandler(installerSvc)
@@ -34,22 +36,14 @@ func RegisterRoutes(
 	proxyCollectionH := handler.NewProxyCollectionHandler(proxyCollectionSvc)
 	configGenH := handler.NewConfigGeneratorHandler(configGenSvc)
 	realtimeH := handler.NewRealtimeHandler(realtimeSvc, runtimeSvc, installerSvc, configSvc, singboxSvc)
+	logH := handler.NewLogHandler(coreLogSvc)
 	dnsH := handler.NewDNSHandler(dnsSvc)
 	nodeGroupH := handler.NewNodeGroupHandler(nodeGroupSvc)
 
-	// 获取实验性功能设置以配置 Clash API 代理
-	expSettings, _ := settingsSvc.GetExperimentalSettings()
-	clashPort := "9090"
-	if expSettings != nil && expSettings.ClashAPIPort != "" {
-		clashPort = expSettings.ClashAPIPort
-	}
-	clashSecret := ""
-	if expSettings != nil {
-		clashSecret = expSettings.ClashAPISecret
-	}
-	clashProxyH := handler.NewClashProxyHandler("http://127.0.0.1:"+clashPort, clashSecret)
+	clashProxyH := handler.NewClashProxyHandler(settingsSvc)
 
 	v1 := r.Group("/api/v1")
+	v1.Use(configMutationMiddleware(reconcileSvc))
 	{
 		v1.GET("/runtime", runtimeH.GetStatus)
 
@@ -69,9 +63,15 @@ func RegisterRoutes(
 		v1.POST("/core/restart", coreH.Restart)
 		v1.POST("/core/reload-config", coreH.ReloadConfig)
 		v1.POST("/core/close-connections", coreH.CloseConnections)
+		v1.POST("/core/flush-core-dns", coreH.FlushCoreDNS)
+		v1.POST("/core/flush-fakeip", coreH.FlushFakeIP)
+		v1.POST("/core/network-check", coreH.NetworkCheck)
+		v1.GET("/core/diagnostics", coreH.Diagnostics)
 		v1.POST("/core/reset-firewall", coreH.ResetFirewall)
 		v1.POST("/core/flush-dns", coreH.FlushDNS)
 		v1.POST("/core/check-update", coreH.CheckUpdate)
+		v1.GET("/logs/core", logH.ListCore)
+		v1.DELETE("/logs/core", logH.ClearCore)
 
 		v1.GET("/settings/update", settingsH.GetUpdateSettings)
 		v1.PUT("/settings/update", settingsH.SetUpdateSettings)
@@ -83,6 +83,8 @@ func RegisterRoutes(
 		v1.PUT("/settings/dns", settingsH.SetDNSSettings)
 		v1.GET("/settings/inbound-mode", settingsH.GetInboundMode)
 		v1.PUT("/settings/inbound-mode", settingsH.SetInboundMode)
+		v1.GET("/settings/proxy-mode", settingsH.GetProxyMode)
+		v1.PUT("/settings/proxy-mode", settingsH.SetProxyMode)
 		v1.GET("/settings/experimental", settingsH.GetExperimentalSettings)
 		v1.PUT("/settings/experimental", settingsH.SetExperimentalSettings)
 		v1.GET("/settings/node-filters", settingsH.ListNodeFilters)
@@ -117,7 +119,9 @@ func RegisterRoutes(
 		v1.PUT("/collections/:id", proxyCollectionH.Update)
 		v1.DELETE("/collections/:id", proxyCollectionH.Delete)
 		v1.PUT("/collections/:id/enabled", proxyCollectionH.ToggleEnabled)
+		v1.POST("/collections/:id/test", proxyCollectionH.Test)
 
+		v1.GET("/config/generate", configGenH.GetGenerateRequest)
 		v1.POST("/config/generate", configGenH.Generate)
 		v1.GET("/config/preview", configGenH.Preview)
 		v1.POST("/config/apply", configGenH.Apply)
@@ -135,6 +139,7 @@ func RegisterRoutes(
 		v1.GET("/rules/geo/tags", routeRuleH.GeoTags)
 		v1.GET("/rules/geo/domains", routeRuleH.GeoDomains)
 		v1.GET("/rules/geo/lookup", routeRuleH.GeoLookup)
+		v1.GET("/rules/geo/rule-sets/:tag/content", routeRuleH.GeneratedGeoRuleSetContent)
 		v1.POST("/rules/geo/sync", routeRuleH.SyncAllGeoAssets)
 		v1.PUT("/rules/geo/:id", routeRuleH.UpdateGeoAsset)
 		v1.POST("/rules/geo/:id/sync", routeRuleH.SyncGeoAsset)

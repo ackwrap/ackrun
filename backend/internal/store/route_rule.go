@@ -11,7 +11,7 @@ import (
 )
 
 func (s *Store) ListRouteRules() ([]model.RouteRule, error) {
-	rows, err := s.db.Query(`SELECT id, name, enabled, priority, rule_type, values_json, outbound, invert, created_at, updated_at FROM route_rules ORDER BY priority ASC, id ASC`)
+	rows, err := s.db.Query(`SELECT id, name, enabled, priority, rule_type, values_json, outbound, invert, system_key, created_at, updated_at FROM route_rules ORDER BY priority ASC, id ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -37,7 +37,7 @@ func (s *Store) CreateRouteRule(req *model.RouteRuleRequest) (*model.RouteRule, 
 		return nil, err
 	}
 	now := time.Now().UnixMilli()
-	res, err := s.db.Exec(`INSERT INTO route_rules (name, enabled, priority, rule_type, values_json, outbound, invert, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, req.Name, boolToInt(req.Enabled), priority, req.RuleType, string(valuesJSON), req.Outbound, boolToInt(req.Invert), now, now)
+	res, err := s.db.Exec(`INSERT INTO route_rules (name, enabled, priority, rule_type, values_json, outbound, invert, system_key, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, req.Name, boolToInt(req.Enabled), priority, req.RuleType, string(valuesJSON), req.Outbound, boolToInt(req.Invert), req.SystemKey, now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -49,7 +49,7 @@ func (s *Store) CreateRouteRule(req *model.RouteRuleRequest) (*model.RouteRule, 
 }
 
 func (s *Store) GetRouteRule(id int64) (*model.RouteRule, error) {
-	row := s.db.QueryRow(`SELECT id, name, enabled, priority, rule_type, values_json, outbound, invert, created_at, updated_at FROM route_rules WHERE id = ?`, id)
+	row := s.db.QueryRow(`SELECT id, name, enabled, priority, rule_type, values_json, outbound, invert, system_key, created_at, updated_at FROM route_rules WHERE id = ?`, id)
 	item, err := scanRouteRule(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -58,6 +58,12 @@ func (s *Store) GetRouteRule(id int64) (*model.RouteRule, error) {
 		return nil, err
 	}
 	return item, nil
+}
+
+func (s *Store) SetRouteRuleSystemKey(id int64, systemKey string) error {
+	now := time.Now().UnixMilli()
+	_, err := s.db.Exec(`UPDATE route_rules SET system_key = ?, updated_at = ? WHERE id = ?`, systemKey, now, id)
+	return err
 }
 
 func (s *Store) UpdateRouteRule(id int64, req *model.RouteRuleRequest) (*model.RouteRule, error) {
@@ -111,7 +117,7 @@ func scanRouteRule(scanner routeRuleScanner) (*model.RouteRule, error) {
 	var item model.RouteRule
 	var enabled, invert int
 	var valuesJSON string
-	if err := scanner.Scan(&item.ID, &item.Name, &enabled, &item.Priority, &item.RuleType, &valuesJSON, &item.Outbound, &invert, &item.CreatedAt, &item.UpdatedAt); err != nil {
+	if err := scanner.Scan(&item.ID, &item.Name, &enabled, &item.Priority, &item.RuleType, &valuesJSON, &item.Outbound, &invert, &item.SystemKey, &item.CreatedAt, &item.UpdatedAt); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal([]byte(valuesJSON), &item.Values); err != nil {
@@ -119,6 +125,7 @@ func scanRouteRule(scanner routeRuleScanner) (*model.RouteRule, error) {
 	}
 	item.Enabled = enabled != 0
 	item.Invert = invert != 0
+	item.IsSystem = item.SystemKey != ""
 	return &item, nil
 }
 

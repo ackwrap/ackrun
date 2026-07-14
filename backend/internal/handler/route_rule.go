@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -35,6 +36,10 @@ func (h *RouteRuleHandler) Create(c *gin.Context) {
 	}
 	item, err := h.svc.Create(&req)
 	if err != nil {
+		if errors.Is(err, service.ErrSystemRouteRuleProtected) {
+			c.JSON(http.StatusForbidden, model.ErrorResponse{Error: model.APIError{Code: "SYSTEM_RULE_PROTECTED", Message: err.Error()}})
+			return
+		}
 		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "ROUTE_RULE_CREATE_FAILED", Message: err.Error()}})
 		return
 	}
@@ -53,6 +58,10 @@ func (h *RouteRuleHandler) Update(c *gin.Context) {
 	}
 	item, err := h.svc.Update(id, &req)
 	if err != nil {
+		if errors.Is(err, service.ErrSystemRouteRuleProtected) {
+			c.JSON(http.StatusForbidden, model.ErrorResponse{Error: model.APIError{Code: "SYSTEM_RULE_PROTECTED", Message: err.Error()}})
+			return
+		}
 		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "ROUTE_RULE_UPDATE_FAILED", Message: err.Error()}})
 		return
 	}
@@ -66,6 +75,10 @@ func (h *RouteRuleHandler) Delete(c *gin.Context) {
 	}
 	resp, err := h.svc.Delete(id)
 	if err != nil {
+		if errors.Is(err, service.ErrSystemRouteRuleProtected) {
+			c.JSON(http.StatusForbidden, model.ErrorResponse{Error: model.APIError{Code: "SYSTEM_RULE_PROTECTED", Message: err.Error()}})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Error: model.APIError{Code: "ROUTE_RULE_DELETE_FAILED", Message: err.Error()}})
 		return
 	}
@@ -179,6 +192,15 @@ func (h *RouteRuleHandler) SubscriptionContent(c *gin.Context) {
 	data, contentType, err := h.svc.SubscriptionContent(id)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "ROUTE_RULE_SUBSCRIPTION_CONTENT_FAILED", Message: err.Error()}})
+		return
+	}
+	c.Data(http.StatusOK, contentType, data)
+}
+
+func (h *RouteRuleHandler) GeneratedGeoRuleSetContent(c *gin.Context) {
+	data, contentType, err := h.svc.GeneratedGeoRuleSetContent(c.Param("tag"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "GEO_RULE_SET_CONTENT_FAILED", Message: err.Error()}})
 		return
 	}
 	c.Data(http.StatusOK, contentType, data)

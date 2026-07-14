@@ -35,6 +35,17 @@ func (h *ConfigGeneratorHandler) Generate(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
+func (h *ConfigGeneratorHandler) GetGenerateRequest(c *gin.Context) {
+	request, err := h.service.GetGenerateRequest()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
+			Error: model.APIError{Code: "CONFIG_GENERATE_SETTINGS_ERROR", Message: err.Error()},
+		})
+		return
+	}
+	c.JSON(http.StatusOK, request)
+}
+
 // Preview 预览配置
 func (h *ConfigGeneratorHandler) Preview(c *gin.Context) {
 	defaultOutbound := c.Query("default_outbound")
