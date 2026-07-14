@@ -39,4 +39,5 @@ Thumbs.db
 
 # Data
 *.tmp
+/tmp/
 ackwrap.db
