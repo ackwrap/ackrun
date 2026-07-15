@@ -108,6 +108,8 @@ func main() {
 
 	subscriptionSvc := service.NewSubscriptionService(db, realtimeSvc)
 	nodeSvc := service.NewNodeService(db)
+	nodeSvc.SetRealtimeService(realtimeSvc)
+	nodeSvc.SetPaths(p)
 	routeRuleSvc := service.NewRouteRuleService(db, p, realtimeSvc)
 	proxyCollectionSvc := service.NewProxyCollectionService(db, realtimeSvc)
 	configGenSvc := service.NewConfigGeneratorService(db, p, singboxSvc)

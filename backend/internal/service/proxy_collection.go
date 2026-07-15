@@ -45,7 +45,7 @@ func NewProxyCollectionService(store *store.Store, realtime *RealtimeService) *P
 // Create 创建代理集合
 func (s *ProxyCollectionService) Create(req model.ProxyCollectionRequest) (*model.ProxyCollectionWithNodes, error) {
 	logging.Info("proxy_collection.create", "创建代理集合: %s", req.Name)
-	if IsSystemProxyCollectionName(req.Name) {
+	if IsReservedProxyCollectionName(req.Name) {
 		return nil, ErrSystemProxyCollectionProtected
 	}
 
@@ -115,7 +115,7 @@ func (s *ProxyCollectionService) Update(id int, req model.ProxyCollectionRequest
 	if err != nil {
 		return err
 	}
-	if IsSystemProxyCollectionName(existing.Name) || IsSystemProxyCollectionName(req.Name) {
+	if IsSystemProxyCollectionName(existing.Name) || IsReservedProxyCollectionName(req.Name) {
 		return ErrSystemProxyCollectionProtected
 	}
 
@@ -228,10 +228,14 @@ func normalizeCollectionHealthSettings(req *model.ProxyCollectionRequest) error 
 }
 
 func IsSystemProxyCollectionName(name string) bool {
-	switch name {
+	switch strings.TrimSpace(name) {
 	case "全球直连":
 		return true
 	default:
 		return false
 	}
+}
+
+func IsReservedProxyCollectionName(name string) bool {
+	return IsSystemProxyCollectionName(name) || strings.TrimSpace(name) == nodeCheckOutboundTag
 }

@@ -4,7 +4,9 @@ import { useRoute, useRouter } from "vue-router";
 import {
   Edit3,
   Eye,
+  Globe2,
   RefreshCw,
+  Route as RouteIcon,
   Smile,
   Star,
   Tags,
@@ -16,6 +18,8 @@ import Toast from "@/components/ui/Toast.vue";
 import Modal from "@/components/ui/Modal.vue";
 import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
 import Pagination from "@/components/ui/Pagination.vue";
+import NodeTracerouteModal from "@/pages/nodes/NodeTracerouteModal.vue";
+import NodeExitIPModal from "@/pages/nodes/NodeExitIPModal.vue";
 import { api } from "@/services/api";
 import type { NodeFacetItem, NodeItem, Subscription } from "@/services/types";
 import { defaultFlag, getFlagImageURL } from "@/utils/nodeFlags";
@@ -40,6 +44,8 @@ const total = ref(0),
   enabledFilter = ref(""),
   preferredFilter = ref("");
 const detail = ref<NodeItem | null>(null),
+  traceNode = ref<NodeItem | null>(null),
+  exitIPNode = ref<NodeItem | null>(null),
   selected = ref(new Set<string>()),
   tcping = ref(new Set<string>()),
   tcpingLoading = ref(false),
@@ -509,10 +515,29 @@ onMounted(async () => {
                     : "--"
                 }}
               </td>
-              <td>
-                <button @click="detail = n">
-                  <Eye :size="13" class="inline" />详情
-                </button>
+              <td class="whitespace-nowrap">
+                <div class="flex items-center gap-1.5">
+                  <button
+                    class="aw-action-button aw-action-neutral"
+                    title="追踪到节点服务器的网络路由"
+                    @click="traceNode = n"
+                  >
+                    <RouteIcon :size="13" />路由追踪
+                  </button>
+                  <button
+                    class="aw-action-button aw-action-neutral"
+                    title="通过当前节点查询出口 IP"
+                    @click="exitIPNode = n"
+                  >
+                    <Globe2 :size="13" />出口 IP
+                  </button>
+                  <button
+                    class="aw-action-button aw-action-neutral"
+                    @click="detail = n"
+                  >
+                    <Eye :size="13" />详情
+                  </button>
+                </div>
               </td>
             </tr>
           </tbody>
@@ -545,6 +570,8 @@ onMounted(async () => {
           >{{ pretty(detail.raw_json) }}</pre>
       </template></Modal
     >
+    <NodeTracerouteModal :node="traceNode" @close="traceNode = null" />
+    <NodeExitIPModal :node="exitIPNode" @close="exitIPNode = null" />
     <Modal
       :open="renameOpen"
       :title="`批量修改名称 (${selectedNodes.length})`"

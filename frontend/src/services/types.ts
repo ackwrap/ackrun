@@ -313,6 +313,85 @@ export interface NodeTCPingResult {
   error?: string;
 }
 
+export interface NodeExitIPResponse {
+  uid: string;
+  node_name: string;
+  node_ip: string;
+  exit_ip: string;
+  matched: boolean;
+  resolution: "literal" | "alidns_doh";
+}
+
+export interface NodeTracerouteAttempt {
+  success: boolean;
+  ip?: string;
+  hostname?: string;
+  rtt_ms?: number;
+  reached?: boolean;
+  geo?: NodeTracerouteGeo;
+  geo_error?: string;
+}
+
+export interface NodeTracerouteGeo {
+  asnumber?: string;
+  country?: string;
+  country_en?: string;
+  prov?: string;
+  prov_en?: string;
+  city?: string;
+  city_en?: string;
+  district?: string;
+  owner?: string;
+  isp?: string;
+  domain?: string;
+  whois?: string;
+  lat?: number;
+  lng?: number;
+  prefix?: string;
+  source?: string;
+}
+
+export interface NodeTracerouteHop {
+  ttl: number;
+  attempts: NodeTracerouteAttempt[];
+}
+
+export interface NodeTracerouteResponse {
+  uid: string;
+  node_name: string;
+  target: string;
+  resolved_ip: string;
+  protocol: string;
+  ip_version: number;
+  reached: boolean;
+  duration_ms: number;
+  geo_provider: string;
+  hops: NodeTracerouteHop[];
+}
+
+export interface NodeTracerouteStartResponse {
+  trace_id: string;
+  uid: string;
+  status: "started";
+  geo_provider: string;
+}
+
+export interface NodeTracerouteEvent {
+  trace_id: string;
+  uid: string;
+  node_name: string;
+  status: "started" | "hop" | "completed" | "failed" | "canceled";
+  target: string;
+  resolved_ip?: string;
+  protocol?: string;
+  ip_version?: number;
+  reached: boolean;
+  duration_ms: number;
+  geo_provider?: string;
+  hop?: NodeTracerouteHop;
+  error?: string;
+}
+
 export interface NodeFlagRequest {
   name: string;
   server?: string;

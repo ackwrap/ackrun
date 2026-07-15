@@ -1,30 +1,60 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ackwrap/ackwrap/internal/logging"
 	"github.com/ackwrap/ackwrap/internal/model"
 	"github.com/ackwrap/ackwrap/internal/parser"
+	"github.com/ackwrap/ackwrap/internal/paths"
 	"github.com/ackwrap/ackwrap/internal/store"
+	"github.com/ackwrap/ackwrap/internal/traceroute"
 )
+
+var ErrNodeNotFound = errors.New("node not found")
+var ErrTracerouteInvalid = errors.New("invalid traceroute request")
+
+var tracerouteIDPattern = regexp.MustCompile(`^[A-Za-z0-9-]{8,64}$`)
+
+type nodeTracerouteTask struct {
+	uid    string
+	cancel context.CancelFunc
+}
 
 type NodeService struct {
 	store        *store.Store
 	clashBaseURL string
 	httpClient   *http.Client
+	realtime     *RealtimeService
+	paths        *paths.Paths
+	exitIPLookup func(context.Context, *url.URL, bool) (net.IP, error)
+	exitIPMu     sync.Mutex
+	traceMu      sync.Mutex
+	traces       map[string]nodeTracerouteTask
 }
 
 func NewNodeService(s *store.Store) *NodeService {
-	return &NodeService{store: s}
+	return &NodeService{store: s, traces: make(map[string]nodeTracerouteTask)}
+}
+
+func (svc *NodeService) SetRealtimeService(realtime *RealtimeService) {
+	svc.realtime = realtime
+}
+
+func (svc *NodeService) SetPaths(appPaths *paths.Paths) {
+	svc.paths = appPaths
 }
 
 func (svc *NodeService) List(req model.NodeListRequest) (*model.NodeListResponse, error) {
@@ -215,6 +245,163 @@ func (svc *NodeService) TCPing(uids []string) ([]model.NodeTCPingResult, error) 
 		}
 	}
 	return results, nil
+}
+
+func (svc *NodeService) StartTraceroute(uid string, traceID string, geoProvider string) (*model.NodeTracerouteStartResponse, error) {
+	traceID = strings.TrimSpace(traceID)
+	if !tracerouteIDPattern.MatchString(traceID) {
+		return nil, fmt.Errorf("%w: invalid trace id", ErrTracerouteInvalid)
+	}
+	geoProvider, err := traceroute.ValidateGeoProvider(geoProvider)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrTracerouteInvalid, err)
+	}
+	nodes, err := svc.store.ListNodesByUIDs([]string{uid})
+	if err != nil {
+		return nil, err
+	}
+	if len(nodes) == 0 {
+		return nil, ErrNodeNotFound
+	}
+	if svc.realtime == nil {
+		return nil, fmt.Errorf("realtime service is unavailable")
+	}
+	node := nodes[0]
+	ctx, cancel := context.WithCancel(context.Background())
+	svc.traceMu.Lock()
+	if _, exists := svc.traces[traceID]; exists {
+		svc.traceMu.Unlock()
+		cancel()
+		return nil, fmt.Errorf("%w: trace id is already running", ErrTracerouteInvalid)
+	}
+	svc.traces[traceID] = nodeTracerouteTask{uid: uid, cancel: cancel}
+	svc.traceMu.Unlock()
+
+	logging.Info("node.traceroute", "starting trace uid=%s trace_id=%s geo_provider=%s", uid, traceID, geoProvider)
+	svc.broadcastTraceroute(model.NodeTracerouteEvent{
+		TraceID:     traceID,
+		UID:         uid,
+		NodeName:    node.Name,
+		Status:      "started",
+		Target:      node.Server,
+		Protocol:    "ICMP",
+		GeoProvider: geoProvider,
+	})
+	go svc.runTraceroute(ctx, traceID, node, geoProvider)
+	return &model.NodeTracerouteStartResponse{TraceID: traceID, UID: uid, Status: "started", GeoProvider: geoProvider}, nil
+}
+
+func (svc *NodeService) runTraceroute(ctx context.Context, traceID string, node model.Node, geoProvider string) {
+	started := time.Now()
+	defer func() {
+		svc.traceMu.Lock()
+		delete(svc.traces, traceID)
+		svc.traceMu.Unlock()
+	}()
+
+	options := traceroute.DefaultOptions()
+	options.GeoProvider = geoProvider
+	result, err := traceroute.TraceWithProgress(ctx, node.Server, options, func(partial traceroute.Result, hop traceroute.Hop) {
+		converted := convertTracerouteHop(hop)
+		svc.broadcastTraceroute(model.NodeTracerouteEvent{
+			TraceID:     traceID,
+			UID:         node.UID,
+			NodeName:    node.Name,
+			Status:      "hop",
+			Target:      node.Server,
+			ResolvedIP:  partial.ResolvedIP,
+			Protocol:    partial.Protocol,
+			IPVersion:   partial.IPVersion,
+			Reached:     partial.Reached,
+			DurationMS:  time.Since(started).Milliseconds(),
+			GeoProvider: partial.GeoProvider,
+			Hop:         &converted,
+		})
+	})
+	if err != nil {
+		status := "failed"
+		message := err.Error()
+		if errors.Is(err, context.Canceled) {
+			status = "canceled"
+			message = ""
+			logging.Info("node.traceroute", "trace canceled uid=%s trace_id=%s", node.UID, traceID)
+		} else {
+			logging.Error("node.traceroute", "trace failed uid=%s trace_id=%s: %v", node.UID, traceID, err)
+		}
+		svc.broadcastTraceroute(model.NodeTracerouteEvent{
+			TraceID: traceID, UID: node.UID, NodeName: node.Name, Status: status,
+			Target: node.Server, DurationMS: time.Since(started).Milliseconds(), GeoProvider: geoProvider, Error: message,
+		})
+		return
+	}
+	svc.broadcastTraceroute(model.NodeTracerouteEvent{
+		TraceID:     traceID,
+		UID:         node.UID,
+		NodeName:    node.Name,
+		Status:      "completed",
+		Target:      node.Server,
+		ResolvedIP:  result.ResolvedIP,
+		Protocol:    result.Protocol,
+		IPVersion:   result.IPVersion,
+		Reached:     result.Reached,
+		DurationMS:  result.Duration.Milliseconds(),
+		GeoProvider: result.GeoProvider,
+	})
+	logging.Info("node.traceroute", "trace completed uid=%s trace_id=%s hops=%d reached=%v", node.UID, traceID, len(result.Hops), result.Reached)
+}
+
+func (svc *NodeService) CancelTraceroute(uid string, traceID string) (*model.ActionResponse, error) {
+	svc.traceMu.Lock()
+	task, exists := svc.traces[traceID]
+	svc.traceMu.Unlock()
+	if !exists || task.uid != uid {
+		return nil, fmt.Errorf("traceroute task not found")
+	}
+	task.cancel()
+	return &model.ActionResponse{Success: true, Message: "traceroute canceled"}, nil
+}
+
+func (svc *NodeService) broadcastTraceroute(event model.NodeTracerouteEvent) {
+	if svc.realtime != nil {
+		svc.realtime.Broadcast("node.traceroute", event)
+	}
+}
+
+func convertTracerouteHop(hop traceroute.Hop) model.NodeTracerouteHop {
+	attempts := make([]model.NodeTracerouteAttempt, len(hop.Attempts))
+	for index, attempt := range hop.Attempts {
+		var geo *model.NodeTracerouteGeo
+		if attempt.Success {
+			geo = &model.NodeTracerouteGeo{
+				ASN:        attempt.Geo.ASN,
+				Country:    attempt.Geo.Country,
+				CountryEn:  attempt.Geo.CountryEn,
+				Province:   attempt.Geo.Province,
+				ProvinceEn: attempt.Geo.ProvinceEn,
+				City:       attempt.Geo.City,
+				CityEn:     attempt.Geo.CityEn,
+				District:   attempt.Geo.District,
+				Owner:      attempt.Geo.Owner,
+				ISP:        attempt.Geo.ISP,
+				Domain:     attempt.Geo.Domain,
+				Whois:      attempt.Geo.Whois,
+				Latitude:   attempt.Geo.Latitude,
+				Longitude:  attempt.Geo.Longitude,
+				Prefix:     attempt.Geo.Prefix,
+				Source:     attempt.Geo.Source,
+			}
+		}
+		attempts[index] = model.NodeTracerouteAttempt{
+			Success:  attempt.Success,
+			IP:       attempt.IP,
+			Hostname: attempt.Hostname,
+			RTTMS:    math.Round(float64(attempt.RTT)/float64(time.Millisecond)*100) / 100,
+			Reached:  attempt.Reached,
+			Geo:      geo,
+			GeoError: attempt.GeoError,
+		}
+	}
+	return model.NodeTracerouteHop{TTL: hop.TTL, Attempts: attempts}
 }
 
 func usesUDPTransport(nodeType string) bool {

@@ -24,6 +24,8 @@ import type {
   NodeBatchRenameRequest,
   NodeBatchResult,
   NodeTCPingResult,
+  NodeExitIPResponse,
+  NodeTracerouteStartResponse,
   NodeFlagRequest,
   NodeFlagResponse,
   NodeFlagBatchItem,
@@ -225,6 +227,26 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ uids }),
     }),
+  checkNodeExitIP: (uid: string) =>
+    request<NodeExitIPResponse>(`/nodes/${encodeURIComponent(uid)}/exit-ip`, {
+      method: "POST",
+    }),
+  startNodeTraceroute: (uid: string, traceID: string, geoProvider: string) =>
+    request<NodeTracerouteStartResponse>(
+      `/nodes/${encodeURIComponent(uid)}/traceroute`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          trace_id: traceID,
+          geo_provider: geoProvider,
+        }),
+      },
+    ),
+  cancelNodeTraceroute: (uid: string, traceID: string) =>
+    request<ActionResponse>(
+      `/nodes/${encodeURIComponent(uid)}/traceroute/${encodeURIComponent(traceID)}`,
+      { method: "DELETE" },
+    ),
   addNodeEmoji: (uids: string[]) =>
     request<NodeBatchResult>("/nodes/add-emoji", {
       method: "POST",

@@ -23,7 +23,12 @@ import (
 
 var outboundTagUnsafePattern = regexp.MustCompile(`[^A-Za-z0-9_.\-\p{Han}]+`)
 
-const defaultRuleSetHTTPClientTag = "ackwrap-rule-set-direct"
+const (
+	defaultRuleSetHTTPClientTag = "ackwrap-rule-set-direct"
+	nodeCheckOutboundTag        = "ackwrap-internal-node-check"
+	nodeCheckIPv4CIDR           = "1.1.1.1/32"
+	nodeCheckIPv6CIDR           = "2606:4700:4700::1111/128"
+)
 
 // ConfigGeneratorService 配置生成服务
 type ConfigGeneratorService struct {
@@ -289,6 +294,9 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface
 		if !group.Enabled {
 			continue
 		}
+		if strings.TrimSpace(group.Name) == nodeCheckOutboundTag {
+			return nil, nil, fmt.Errorf("节点组名称 %s 与系统保留 outbound 冲突，请先重命名", group.Name)
+		}
 		if !isSupportedGroupType(group.Type) {
 			return nil, nil, fmt.Errorf("节点组 %s 使用 sing-box 不支持的类型 %s", group.Name, group.Type)
 		}
@@ -322,6 +330,9 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface
 		if !col.Enabled {
 			continue
 		}
+		if strings.TrimSpace(col.Name) == nodeCheckOutboundTag {
+			return nil, nil, fmt.Errorf("策略组名称 %s 与系统保留 outbound 冲突，请先重命名", col.Name)
+		}
 		if !isSupportedGroupType(col.Type) {
 			return nil, nil, fmt.Errorf("策略组 %s 使用 sing-box 不支持的类型 %s，请改为 selector 或 urltest", col.Name, col.Type)
 		}
@@ -334,13 +345,24 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface
 			usedNodeUIDs[uid] = true
 		}
 	}
-	nodeDomainResolvers := collectionNodeDomainResolverBindings(collections, groupNodeUIDs, usedNodeUIDs, domainResolverBindings)
-
-	// 5. 为集合和节点组使用的节点生成 outbound
 	nodes, err := s.store.ListEnabledNodes()
 	if err != nil {
 		return nil, nil, err
 	}
+	// 出口 IP 检测需要通过隐藏 selector 精确选择任一启用节点。
+	for _, node := range nodes {
+		usedNodeUIDs[node.UID] = true
+	}
+	nodeDomainResolvers := collectionNodeDomainResolverBindings(collections, groupNodeUIDs, usedNodeUIDs, domainResolverBindings)
+	if resolver := domainResolverBindings["proxy"]; len(resolver) > 0 {
+		for _, node := range nodes {
+			if len(nodeDomainResolvers[node.UID]) == 0 {
+				nodeDomainResolvers[node.UID] = resolver
+			}
+		}
+	}
+
+	// 5. 为所有启用节点生成 outbound，供策略组和内部出口检测 selector 复用。
 	nodeTags := buildNodeOutboundTags(nodes)
 	generatedNodeTags := make(map[string]string, len(nodeTags))
 
@@ -368,6 +390,20 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface
 		outbounds = append(outbounds, nodeOutbound)
 		generatedNodeTags[node.UID] = nodeTags[node.UID]
 	}
+	nodeCheckOutbounds := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		if tag := generatedNodeTags[node.UID]; tag != "" {
+			nodeCheckOutbounds = append(nodeCheckOutbounds, tag)
+		}
+	}
+	if len(nodeCheckOutbounds) == 0 {
+		nodeCheckOutbounds = []string{"direct"}
+	}
+	outbounds = append(outbounds, map[string]interface{}{
+		"tag":       nodeCheckOutboundTag,
+		"type":      "selector",
+		"outbounds": nodeCheckOutbounds,
+	})
 
 	// 6. 生成节点组 outbound
 	for _, group := range nodeGroups {
@@ -1054,6 +1090,15 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 			route["default_domain_resolver"] = resolver
 		}
 	}
+
+	// 仅 mixed-in 到固定出口检测地址的请求使用隐藏 selector，不改变用户策略组。
+	routeRules = append(routeRules, map[string]interface{}{
+		"inbound":  []string{"mixed-in"},
+		"ip_cidr":  []string{nodeCheckIPv4CIDR, nodeCheckIPv6CIDR},
+		"port":     []int{443},
+		"action":   "route",
+		"outbound": nodeCheckOutboundTag,
+	})
 
 	// AckWrap、sing-box 和节点服务器必须优先直连，避免 TUN/全局模式形成代理回环。
 	bypassRules, err := s.defaultBypassRules()

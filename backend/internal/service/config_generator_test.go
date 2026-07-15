@@ -500,6 +500,62 @@ func TestGenerateOutboundsDoesNotApplyNodeListPageLimit(t *testing.T) {
 	t.Fatal("generated all-nodes group not found")
 }
 
+func TestGenerateOutboundsIncludesInternalNodeCheckSelector(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	subscription, err := db.CreateSubscription(&model.SubscriptionRequest{Name: "exit-check", URL: "https://example.com/subscription"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReplaceSubscriptionNodes(subscription.ID, []model.ParsedNode{{
+		Name: "Node A", Type: "socks", Server: "node.example.com", ServerPort: 1080,
+		RawJSON: `{"type":"socks","server":"node.example.com","server_port":1080}`,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	outbounds, _, err := NewConfigGeneratorService(db, nil).generateOutbounds()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range outbounds {
+		outbound, ok := item.(map[string]interface{})
+		if !ok || outbound["tag"] != nodeCheckOutboundTag {
+			continue
+		}
+		members, ok := outbound["outbounds"].([]string)
+		if !ok || len(members) != 1 || members[0] == "direct" {
+			t.Fatalf("internal selector members = %#v", outbound["outbounds"])
+		}
+		return
+	}
+	t.Fatal("internal node-check selector not found")
+}
+
+func TestGenerateRouteIncludesInternalNodeCheckRule(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	route, err := NewConfigGeneratorService(db, nil).generateRoute("direct")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules, _ := route["rules"].([]map[string]interface{})
+	for _, rule := range rules {
+		if rule["outbound"] == nodeCheckOutboundTag {
+			if fmt.Sprint(rule["ip_cidr"]) != "["+nodeCheckIPv4CIDR+" "+nodeCheckIPv6CIDR+"]" {
+				t.Fatalf("internal node-check rule = %+v", rule)
+			}
+			return
+		}
+	}
+	t.Fatal("internal node-check route rule not found")
+}
+
 func TestGenerateInboundsDefaultsToLoopback(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {

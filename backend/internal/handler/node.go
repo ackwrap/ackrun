@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -97,6 +98,69 @@ func (h *NodeHandler) TCPing(c *gin.Context) {
 	resp, err := h.svc.TCPing(req.UIDs)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Error: model.APIError{Code: "NODE_TCPING_FAILED", Message: err.Error()}})
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+func (h *NodeHandler) ExitIP(c *gin.Context) {
+	uid := c.Param("uid")
+	if uid == "" {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "NODE_UID_INVALID", Message: "node uid is required"}})
+		return
+	}
+	response, err := h.svc.ExitIP(c.Request.Context(), uid)
+	if err != nil {
+		status := http.StatusBadGateway
+		code := "NODE_EXIT_IP_FAILED"
+		if errors.Is(err, service.ErrNodeNotFound) {
+			status = http.StatusNotFound
+			code = "NODE_NOT_FOUND"
+		}
+		c.JSON(status, model.ErrorResponse{Error: model.APIError{Code: code, Message: err.Error()}})
+		return
+	}
+	c.JSON(http.StatusOK, response)
+}
+
+func (h *NodeHandler) Traceroute(c *gin.Context) {
+	uid := c.Param("uid")
+	if uid == "" {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "NODE_UID_INVALID", Message: "node uid is required"}})
+		return
+	}
+	var req model.NodeTracerouteStartRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "NODE_TRACEROUTE_INVALID", Message: err.Error()}})
+		return
+	}
+	resp, err := h.svc.StartTraceroute(uid, req.TraceID, req.GeoProvider)
+	if err != nil {
+		status := http.StatusInternalServerError
+		code := "NODE_TRACEROUTE_FAILED"
+		if errors.Is(err, service.ErrNodeNotFound) {
+			status = http.StatusNotFound
+			code = "NODE_NOT_FOUND"
+		} else if errors.Is(err, service.ErrTracerouteInvalid) {
+			status = http.StatusBadRequest
+			code = "NODE_TRACEROUTE_INVALID"
+		}
+		c.JSON(status, model.ErrorResponse{Error: model.APIError{Code: code, Message: err.Error()}})
+		return
+	}
+	c.JSON(http.StatusAccepted, resp)
+}
+
+func (h *NodeHandler) CancelTraceroute(c *gin.Context) {
+	uid := c.Param("uid")
+	traceID := c.Param("traceID")
+	if uid == "" || traceID == "" {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "NODE_TRACEROUTE_INVALID", Message: "node uid and trace id are required"}})
+		return
+	}
+	resp, err := h.svc.CancelTraceroute(uid, traceID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, model.ErrorResponse{Error: model.APIError{Code: "NODE_TRACEROUTE_NOT_FOUND", Message: err.Error()}})
 		return
 	}
 	c.JSON(http.StatusOK, resp)

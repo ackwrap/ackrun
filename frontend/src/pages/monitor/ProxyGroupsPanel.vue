@@ -30,32 +30,37 @@ const emit = defineEmits<{
 
 const filter = ref<GroupFilter>("all");
 const groupSearch = ref<Record<string, string>>({});
+const publicProxyGroups = computed(() =>
+  props.proxyGroups.filter(
+    (group) => group.name !== "ackwrap-internal-node-check",
+  ),
+);
 
 const filters = computed(() => [
   {
     value: "all" as const,
     label: "全部",
     icon: LayoutGrid,
-    count: props.proxyGroups.length,
+    count: publicProxyGroups.value.length,
   },
   {
     value: "selector" as const,
     label: "手动组",
     icon: Folder,
-    count: props.proxyGroups.filter((group) => group.type === "Selector")
+    count: publicProxyGroups.value.filter((group) => group.type === "Selector")
       .length,
   },
   {
     value: "automatic" as const,
     label: "自动组",
     icon: Bolt,
-    count: props.proxyGroups.filter((group) => group.type !== "Selector")
+    count: publicProxyGroups.value.filter((group) => group.type !== "Selector")
       .length,
   },
 ]);
 
 const groups = computed(() =>
-  props.proxyGroups.filter(
+  publicProxyGroups.value.filter(
     (group) =>
       filter.value === "all" ||
       (filter.value === "selector"
