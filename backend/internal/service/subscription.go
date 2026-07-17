@@ -36,6 +36,13 @@ type subscriptionSyncResult struct {
 	ExpireAt          int64
 	Nodes             []model.ParsedNode
 	UnsupportedCount  map[string]int
+	ExcludedNodes     []excludedSubscriptionNode
+}
+
+type excludedSubscriptionNode struct {
+	Name   string
+	Type   string
+	Reason string
 }
 
 type SubscriptionService struct {
@@ -301,12 +308,14 @@ func (svc *SubscriptionService) runSync(id int64) {
 		warningMsg = fmt.Sprintf("已忽略 %d 个不支持的节点 (%s)", totalUnsupported, strings.Join(parts, ", "))
 	}
 
-	if err := svc.applyNodeFilters(result); err != nil {
-		logging.Error("subscription.sync", "apply node filters for subscription %d failed: %v", id, err)
+	filterErr := svc.applyNodeFilters(result)
+	svc.logExcludedNodes(item, result.ExcludedNodes)
+	if filterErr != nil {
+		logging.Error("subscription.sync", "apply node filters for subscription %d failed: %v", id, filterErr)
 		if setErr := svc.store.SetSubscriptionSyncState(id, "failed", 0); setErr != nil {
 			logging.Error("subscription.sync", "set failed state failed: %v", setErr)
 		}
-		svc.broadcastSync(id, "failed", 0, err.Error())
+		svc.broadcastSync(id, "failed", 0, filterErr.Error())
 		return
 	}
 	if !svc.updateSyncProgress(id, 65) {
@@ -427,7 +436,12 @@ func (svc *SubscriptionService) applyNodeFilters(result *subscriptionSyncResult)
 	}
 	kept := make([]model.ParsedNode, 0, len(result.Nodes))
 	for _, node := range result.Nodes {
-		if nodeFiltered(node, compiled) {
+		if matched := matchedNodeFilter(node, compiled); matched != nil {
+			result.ExcludedNodes = append(result.ExcludedNodes, excludedSubscriptionNode{
+				Name:   node.Name,
+				Type:   node.Type,
+				Reason: fmt.Sprintf("命中节点过滤规则 %q (target=%s)", matched.Name, matched.Target),
+			})
 			continue
 		}
 		kept = append(kept, node)
@@ -445,13 +459,30 @@ type compiledNodeFilter struct {
 	regex  *regexp.Regexp
 }
 
-func nodeFiltered(node model.ParsedNode, filters []compiledNodeFilter) bool {
-	for _, filter := range filters {
-		if filter.regex.MatchString(nodeFilterValue(node, filter.filter.Target)) {
-			return true
+func matchedNodeFilter(node model.ParsedNode, filters []compiledNodeFilter) *model.NodeFilter {
+	for i := range filters {
+		if filters[i].regex.MatchString(nodeFilterValue(node, filters[i].filter.Target)) {
+			return &filters[i].filter
 		}
 	}
-	return false
+	return nil
+}
+
+func (svc *SubscriptionService) logExcludedNodes(subscription *model.Subscription, nodes []excludedSubscriptionNode) {
+	if subscription == nil {
+		return
+	}
+	for _, node := range nodes {
+		logging.Info(
+			"subscription.sync",
+			"排除节点 subscription_id=%d subscription=%q node=%q type=%q reason=%q",
+			subscription.ID,
+			subscription.Name,
+			node.Name,
+			node.Type,
+			node.Reason,
+		)
+	}
 }
 
 func nodeFilterValue(node model.ParsedNode, target string) string {
@@ -563,9 +594,11 @@ func (svc *SubscriptionService) fetchAndParse(rawURL string, userAgent string, t
 	for _, node := range nodes {
 		if isUnsupportedNodeType(node.Type) || node.UnsupportedReason != "" {
 			unsupportedCount[node.Type]++
-			if node.UnsupportedReason != "" {
-				logging.Info("subscription.parse", "filtered %s node: %s", node.Type, node.UnsupportedReason)
+			reason := node.UnsupportedReason
+			if reason == "" {
+				reason = "当前核心不支持该协议"
 			}
+			result.ExcludedNodes = append(result.ExcludedNodes, excludedSubscriptionNode{Name: node.Name, Type: node.Type, Reason: reason})
 		} else {
 			supportedNodes = append(supportedNodes, node)
 		}
