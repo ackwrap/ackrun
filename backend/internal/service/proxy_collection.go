@@ -237,5 +237,5 @@ func IsSystemProxyCollectionName(name string) bool {
 }
 
 func IsReservedProxyCollectionName(name string) bool {
-	return IsSystemProxyCollectionName(name) || strings.TrimSpace(name) == nodeCheckOutboundTag
+	return IsSystemProxyCollectionName(name)
 }

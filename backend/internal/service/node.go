@@ -18,7 +18,6 @@ import (
 	"github.com/ackwrap/ackwrap/internal/logging"
 	"github.com/ackwrap/ackwrap/internal/model"
 	"github.com/ackwrap/ackwrap/internal/parser"
-	"github.com/ackwrap/ackwrap/internal/paths"
 	"github.com/ackwrap/ackwrap/internal/store"
 	"github.com/ackwrap/ackwrap/internal/traceroute"
 )
@@ -38,9 +37,6 @@ type NodeService struct {
 	clashBaseURL string
 	httpClient   *http.Client
 	realtime     *RealtimeService
-	paths        *paths.Paths
-	exitIPLookup func(context.Context, *url.URL, bool) (net.IP, error)
-	exitIPMu     sync.Mutex
 	traceMu      sync.Mutex
 	traces       map[string]nodeTracerouteTask
 }
@@ -51,10 +47,6 @@ func NewNodeService(s *store.Store) *NodeService {
 
 func (svc *NodeService) SetRealtimeService(realtime *RealtimeService) {
 	svc.realtime = realtime
-}
-
-func (svc *NodeService) SetPaths(appPaths *paths.Paths) {
-	svc.paths = appPaths
 }
 
 func (svc *NodeService) List(req model.NodeListRequest) (*model.NodeListResponse, error) {

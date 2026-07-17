@@ -176,8 +176,8 @@ func TestHysteriaAdvancedFields(t *testing.T) {
 	if tlsMap["server_name"] != "hy.example.com" {
 		t.Fatalf("expected tls.server_name=hy.example.com, got %v", tlsMap)
 	}
-	if cfg["skip-cert-verify"] != true {
-		t.Fatalf("expected skip-cert-verify, got %v", cfg["skip-cert-verify"])
+	if tlsMap["insecure"] != true {
+		t.Fatalf("expected tls.insecure, got %v", tlsMap["insecure"])
 	}
 	if cfg["obfs"] != "salamander" {
 		t.Fatalf("expected obfs, got %v", cfg["obfs"])
@@ -185,14 +185,15 @@ func TestHysteriaAdvancedFields(t *testing.T) {
 	if cfg["obfs-param"] != "obfsval" {
 		t.Fatalf("expected obfs-param, got %v", cfg["obfs-param"])
 	}
-	alpn, ok := cfg["alpn"].([]any)
+	alpn, ok := tlsMap["alpn"].([]any)
 	if !ok || len(alpn) != 2 {
-		t.Fatalf("expected alpn with 2 entries, got %v", cfg["alpn"])
+		t.Fatalf("expected tls.alpn with 2 entries, got %v", tlsMap["alpn"])
 	}
 }
 
 func TestHysteria2AdvancedFields(t *testing.T) {
-	node, err := ParseProxyURI("hy2://pass@hy2.example.com:443?sni=hy2.example.com&alpn=h3&fp=chrome&insecure=1&obfs=gecko&obfs-password=obfspass&min_packet_size=100&max_packet_size=1200&hop_interval=30s&hop_interval_max=45s&bbr_profile=mobile&up=20&down=100#HY2-Adv")
+	const certificateFingerprint = "95b89cf256ca58006f8d2f090bc8a6ca89b385f424852e82b59f2af384b142d7"
+	node, err := ParseProxyURI("hy2://pass@hy2.example.com:443?sni=hy2.example.com&alpn=h3&fp=chrome&pinSHA256=" + certificateFingerprint + "&insecure=1&obfs=gecko&obfs-password=obfspass&min_packet_size=100&max_packet_size=1200&hop_interval=30s&hop_interval_max=45s&bbr_profile=mobile&up=20&down=100#HY2-Adv")
 	if err != nil {
 		t.Fatalf("parse hysteria2: %v", err)
 	}
@@ -202,12 +203,27 @@ func TestHysteria2AdvancedFields(t *testing.T) {
 	}
 	assertTLSEnabled(t, cfg)
 	assertUTLSFingerprint(t, cfg, "chrome")
+	tlsMap := cfg["tls"].(map[string]any)
+	if tlsMap["insecure"] != true {
+		t.Fatalf("expected tls.insecure, got %v", tlsMap["insecure"])
+	}
+	pins, ok := tlsMap["certificate_sha256"].([]any)
+	if !ok || len(pins) != 1 || pins[0] != certificateFingerprint {
+		t.Fatalf("expected Hysteria2 certificate pin, got %+v", tlsMap["certificate_sha256"])
+	}
 	obfs, ok := cfg["obfs"].(map[string]any)
 	if !ok || obfs["type"] != "gecko" || obfs["password"] != "obfspass" || obfs["min_packet_size"] != float64(100) || obfs["max_packet_size"] != float64(1200) {
 		t.Fatalf("unexpected obfs options: %v", cfg["obfs"])
 	}
 	if cfg["hop_interval"] != "30s" || cfg["hop_interval_max"] != "45s" || cfg["bbr_profile"] != "mobile" {
 		t.Fatalf("unexpected Hysteria2 options: %+v", cfg)
+	}
+}
+
+func TestHysteria2RejectsInvalidCertificatePin(t *testing.T) {
+	_, err := ParseProxyURI("hy2://pass@hy2.example.com:443?pinSHA256=invalid#HY2-Invalid-Pin")
+	if err == nil || !strings.Contains(err.Error(), "pinSHA256") {
+		t.Fatalf("expected invalid pinSHA256 error, got %v", err)
 	}
 }
 
@@ -247,8 +263,8 @@ func TestNaiveTLSFields(t *testing.T) {
 	if tlsMap["server_name"] != "naive.example.com" {
 		t.Fatalf("expected tls.server_name=naive.example.com, got %v", tlsMap)
 	}
-	if cfg["skip-cert-verify"] != true {
-		t.Fatalf("expected skip-cert-verify=true")
+	if tlsMap["insecure"] != true {
+		t.Fatalf("expected tls.insecure=true")
 	}
 }
 
@@ -325,9 +341,9 @@ func TestTLSCertificateFingerprintIsNotUTLS(t *testing.T) {
 	if _, exists := tlsMap["utls"]; exists {
 		t.Fatalf("certificate fingerprint must not be mapped to uTLS: %+v", tlsMap)
 	}
-	pins, ok := tlsMap["certificate_public_key_sha256"].([]any)
+	pins, ok := tlsMap["certificate_sha256"].([]any)
 	if !ok || len(pins) != 1 || pins[0] != fingerprint {
-		t.Fatalf("expected certificate_public_key_sha256 pin, got %+v", tlsMap["certificate_public_key_sha256"])
+		t.Fatalf("expected certificate_sha256 pin, got %+v", tlsMap["certificate_sha256"])
 	}
 }
 
@@ -996,6 +1012,21 @@ func TestClashUnsupportedProtocolVariantsAreMarked(t *testing.T) {
 		t.Fatalf("parsed node count = %d, want 10", len(nodes))
 	}
 	for _, node := range nodes {
+		if node.Name == "Hysteria2-Certificate-Fingerprint" {
+			if node.UnsupportedReason != "" {
+				t.Fatalf("certificate fingerprint variant was marked unsupported: %s", node.UnsupportedReason)
+			}
+			var config map[string]any
+			if err := json.Unmarshal([]byte(node.RawJSON), &config); err != nil {
+				t.Fatalf("unmarshal certificate fingerprint variant: %v", err)
+			}
+			tlsMap := config["tls"].(map[string]any)
+			pins := tlsMap["certificate_sha256"].([]any)
+			if len(pins) != 1 || pins[0] != "95b89cf256ca58006f8d2f090bc8a6ca89b385f424852e82b59f2af384b142d7" {
+				t.Fatalf("certificate fingerprint was not preserved: %+v", pins)
+			}
+			continue
+		}
 		if node.UnsupportedReason == "" {
 			t.Fatalf("%s variant was not marked unsupported", node.Name)
 		}

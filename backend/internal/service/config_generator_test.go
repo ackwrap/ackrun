@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ackwrap/ackwrap/internal/model"
@@ -290,20 +291,37 @@ func TestGenerateRouteIncludesDefaultLoopBypassRules(t *testing.T) {
 
 func TestMapTLSFingerprintFields(t *testing.T) {
 	const fingerprint = "dd9dd03d942400ad4c1400879bda98f4fa097183aa9a91a1423cdd42a3e183d7"
+	legacyFingerprint := fingerprint[:2] + ":" + fingerprint[2:]
 	nodeData := map[string]interface{}{
+		"skip-cert-verify": true,
+		"alpn":             []string{"h3"},
 		"tls": map[string]interface{}{
 			"enabled": true,
-			"utls":    map[string]interface{}{"enabled": true, "fingerprint": fingerprint},
+			"utls":    map[string]interface{}{"enabled": true, "fingerprint": legacyFingerprint},
 		},
 	}
-	mapTLSFingerprintFields(nodeData)
+	if err := mapTLSFingerprintFields(nodeData); err != nil {
+		t.Fatal(err)
+	}
 	tlsMap := nodeData["tls"].(map[string]interface{})
 	if _, exists := tlsMap["utls"]; exists {
 		t.Fatalf("invalid uTLS fingerprint should be removed: %+v", tlsMap)
 	}
-	pins, ok := tlsMap["certificate_public_key_sha256"].([]string)
+	pins, ok := tlsMap["certificate_sha256"].([]string)
 	if !ok || len(pins) != 1 || pins[0] != fingerprint {
-		t.Fatalf("expected certificate pin, got %+v", tlsMap["certificate_public_key_sha256"])
+		t.Fatalf("expected certificate pin, got %+v", tlsMap["certificate_sha256"])
+	}
+	if tlsMap["insecure"] != true {
+		t.Fatalf("expected legacy insecure field to move into TLS: %+v", nodeData)
+	}
+	if _, exists := nodeData["skip-cert-verify"]; exists {
+		t.Fatalf("legacy insecure field was not removed: %+v", nodeData)
+	}
+	if _, exists := nodeData["alpn"]; exists {
+		t.Fatalf("legacy ALPN field was not removed: %+v", nodeData)
+	}
+	if alpn, ok := tlsMap["alpn"].([]string); !ok || len(alpn) != 1 || alpn[0] != "h3" {
+		t.Fatalf("expected legacy ALPN field to move into TLS: %+v", nodeData)
 	}
 
 	nodeData = map[string]interface{}{
@@ -312,11 +330,57 @@ func TestMapTLSFingerprintFields(t *testing.T) {
 			"utls":    map[string]interface{}{"enabled": true, "fingerprint": "chrome"},
 		},
 	}
-	mapTLSFingerprintFields(nodeData)
+	if err := mapTLSFingerprintFields(nodeData); err != nil {
+		t.Fatal(err)
+	}
 	tlsMap = nodeData["tls"].(map[string]interface{})
 	utlsMap := tlsMap["utls"].(map[string]interface{})
 	if utlsMap["fingerprint"] != "chrome" {
 		t.Fatalf("valid uTLS fingerprint should be preserved: %+v", tlsMap)
+	}
+
+	nodeData = map[string]interface{}{
+		"tls": map[string]interface{}{
+			"enabled":                       true,
+			"certificate_public_key_sha256": []interface{}{legacyFingerprint},
+		},
+	}
+	if err := mapTLSFingerprintFields(nodeData); err != nil {
+		t.Fatal(err)
+	}
+	tlsMap = nodeData["tls"].(map[string]interface{})
+	if _, exists := tlsMap["certificate_public_key_sha256"]; exists {
+		t.Fatalf("legacy certificate pin field was not removed: %+v", tlsMap)
+	}
+	pins, ok = tlsMap["certificate_sha256"].([]string)
+	if !ok || len(pins) != 1 || pins[0] != fingerprint {
+		t.Fatalf("legacy certificate pin was not migrated: %+v", tlsMap)
+	}
+
+	nodeData = map[string]interface{}{
+		"tls": map[string]interface{}{
+			"enabled":            true,
+			"certificate_sha256": []string{strings.Repeat("a", 64)},
+			"utls":               map[string]interface{}{"enabled": true, "fingerprint": legacyFingerprint},
+		},
+	}
+	if err := mapTLSFingerprintFields(nodeData); err != nil {
+		t.Fatal(err)
+	}
+	tlsMap = nodeData["tls"].(map[string]interface{})
+	pins = tlsMap["certificate_sha256"].([]string)
+	if len(pins) != 2 || pins[0] != strings.Repeat("a", 64) || pins[1] != fingerprint {
+		t.Fatalf("legacy certificate pin did not merge with existing pins: %+v", pins)
+	}
+
+	nodeData = map[string]interface{}{
+		"tls": map[string]interface{}{
+			"enabled": true,
+			"utls":    map[string]interface{}{"enabled": true, "fingerprint": "unknown-client"},
+		},
+	}
+	if err := mapTLSFingerprintFields(nodeData); err == nil {
+		t.Fatal("expected unknown legacy TLS fingerprint error")
 	}
 }
 
@@ -500,7 +564,7 @@ func TestGenerateOutboundsDoesNotApplyNodeListPageLimit(t *testing.T) {
 	t.Fatal("generated all-nodes group not found")
 }
 
-func TestGenerateOutboundsIncludesInternalNodeCheckSelector(t *testing.T) {
+func TestGenerateOutboundsIncludesEnabledNodesForCoreExitIP(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -520,21 +584,30 @@ func TestGenerateOutboundsIncludesInternalNodeCheckSelector(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	nodes, err := db.ListEnabledNodes()
+	if err != nil || len(nodes) != 1 {
+		t.Fatalf("enabled nodes: %d, %v", len(nodes), err)
+	}
+	expectedTag := buildNodeOutboundTags(nodes)[nodes[0].UID]
+	foundNode := false
 	for _, item := range outbounds {
 		outbound, ok := item.(map[string]interface{})
-		if !ok || outbound["tag"] != nodeCheckOutboundTag {
+		if !ok {
 			continue
 		}
-		members, ok := outbound["outbounds"].([]string)
-		if !ok || len(members) != 1 || members[0] == "direct" {
-			t.Fatalf("internal selector members = %#v", outbound["outbounds"])
+		if outbound["tag"] == "ackwrap-internal-node-check" {
+			t.Fatal("legacy internal selector must not be generated")
 		}
-		return
+		if outbound["tag"] == expectedTag {
+			foundNode = true
+		}
 	}
-	t.Fatal("internal node-check selector not found")
+	if !foundNode {
+		t.Fatal("enabled node outbound required by core exit IP API was not generated")
+	}
 }
 
-func TestGenerateRouteIncludesInternalNodeCheckRule(t *testing.T) {
+func TestGenerateRouteOmitsLegacyInternalNodeCheckRule(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -546,14 +619,10 @@ func TestGenerateRouteIncludesInternalNodeCheckRule(t *testing.T) {
 	}
 	rules, _ := route["rules"].([]map[string]interface{})
 	for _, rule := range rules {
-		if rule["outbound"] == nodeCheckOutboundTag {
-			if fmt.Sprint(rule["ip_cidr"]) != "["+nodeCheckIPv4CIDR+" "+nodeCheckIPv6CIDR+"]" {
-				t.Fatalf("internal node-check rule = %+v", rule)
-			}
-			return
+		if rule["outbound"] == "ackwrap-internal-node-check" {
+			t.Fatalf("legacy internal node-check rule = %+v", rule)
 		}
 	}
-	t.Fatal("internal node-check route rule not found")
 }
 
 func TestGenerateInboundsDefaultsToLoopback(t *testing.T) {

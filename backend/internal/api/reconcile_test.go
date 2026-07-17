@@ -20,6 +20,8 @@ func TestShouldReconcileRequest(t *testing.T) {
 		{http.MethodDelete, "/api/v1/subscriptions/1", true},
 		{http.MethodPost, "/api/v1/subscriptions/1/sync", false},
 		{http.MethodPost, "/api/v1/nodes/tcping", false},
+		{http.MethodPost, "/api/v1/nodes/uid/exit-ip", false},
+		{http.MethodPost, "/api/v1/nodes/uid/traceroute", false},
 		{http.MethodPost, "/api/v1/config/generate", false},
 		{http.MethodPost, "/api/v1/core/restart", false},
 		{http.MethodGet, "/api/v1/rules", false},

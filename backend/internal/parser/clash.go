@@ -459,7 +459,12 @@ func normalizeClashProxy(proxy map[string]any, typ string) (map[string]any, stri
 		if clientFingerprint == "" && isKnownUTLSFingerprint(certificateFingerprint) {
 			clientFingerprint = certificateFingerprint
 		} else if certificateFingerprint != "" && !isKnownUTLSFingerprint(certificateFingerprint) {
-			unsupportedReason = "certificate SHA-256 fingerprint cannot be safely converted to a sing-box public-key pin"
+			normalizedFingerprint, ok := normalizeSHA256Hex(certificateFingerprint)
+			if !ok {
+				unsupportedReason = "certificate SHA-256 fingerprint is invalid"
+			} else {
+				tls["certificate_sha256"] = []string{normalizedFingerprint}
+			}
 		}
 		if clientFingerprint != "" {
 			tls["utls"] = map[string]any{"enabled": true, "fingerprint": clientFingerprint}

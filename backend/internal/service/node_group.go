@@ -27,9 +27,6 @@ func (svc *NodeGroupService) Get(id int64) (*model.NodeGroup, error) {
 }
 
 func (svc *NodeGroupService) Create(req *model.NodeGroupRequest) (*model.NodeGroup, error) {
-	if strings.TrimSpace(req.Name) == nodeCheckOutboundTag {
-		return nil, fmt.Errorf("节点组名称 %s 为系统保留名称", nodeCheckOutboundTag)
-	}
 	if err := validateNodeGroupType(req.Type); err != nil {
 		return nil, err
 	}
@@ -37,9 +34,6 @@ func (svc *NodeGroupService) Create(req *model.NodeGroupRequest) (*model.NodeGro
 }
 
 func (svc *NodeGroupService) Update(id int64, req *model.NodeGroupRequest) error {
-	if strings.TrimSpace(req.Name) == nodeCheckOutboundTag {
-		return fmt.Errorf("节点组名称 %s 为系统保留名称", nodeCheckOutboundTag)
-	}
 	if err := validateNodeGroupType(req.Type); err != nil {
 		return err
 	}

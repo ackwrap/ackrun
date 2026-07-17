@@ -114,14 +114,33 @@ func normalizeToSingbox(cfg map[string]any, typ string) map[string]any {
 			delete(result, key)
 		}
 	}
+	if alpn, ok := result["alpn"]; ok {
+		if !tlsIsMap {
+			result["tls"] = map[string]any{"enabled": true}
+			tlsObj = result["tls"].(map[string]any)
+			tlsIsMap = true
+		}
+		tlsObj["alpn"] = alpn
+		delete(result, "alpn")
+	}
+	if insecure, ok := result["skip-cert-verify"]; ok {
+		if !tlsIsMap {
+			result["tls"] = map[string]any{"enabled": true}
+			tlsObj = result["tls"].(map[string]any)
+			tlsIsMap = true
+		}
+		tlsObj["insecure"] = boolOrString(insecure)
+		delete(result, "skip-cert-verify")
+	}
 
 	clientFingerprint := getString(result, "client-fingerprint")
-	certFingerprint := getString(result, "fingerprint")
+	certFingerprint := firstNonEmpty(getString(result, "certificate-sha256"), getString(result, "fingerprint"))
 	if clientFingerprint == "" && isKnownUTLSFingerprint(certFingerprint) {
 		clientFingerprint = certFingerprint
 		certFingerprint = ""
 	}
-	if clientFingerprint != "" || isSHA256Hex(certFingerprint) {
+	normalizedCertificateFingerprint, hasCertificateFingerprint := normalizeSHA256Hex(certFingerprint)
+	if clientFingerprint != "" || hasCertificateFingerprint {
 		if !tlsIsMap {
 			result["tls"] = map[string]any{"enabled": true}
 			tlsObj = result["tls"].(map[string]any)
@@ -130,12 +149,13 @@ func normalizeToSingbox(cfg map[string]any, typ string) map[string]any {
 		if clientFingerprint != "" {
 			tlsObj["utls"] = map[string]any{"enabled": true, "fingerprint": clientFingerprint}
 		}
-		if isSHA256Hex(certFingerprint) {
-			tlsObj["certificate_public_key_sha256"] = []string{certFingerprint}
+		if hasCertificateFingerprint {
+			tlsObj["certificate_sha256"] = []string{normalizedCertificateFingerprint}
 		}
 	}
 	delete(result, "client-fingerprint")
 	delete(result, "fingerprint")
+	delete(result, "certificate-sha256")
 
 	return result
 }
@@ -156,13 +176,13 @@ func isKnownUTLSFingerprint(value string) bool {
 	}
 }
 
-func isSHA256Hex(value string) bool {
-	value = strings.TrimSpace(value)
+func normalizeSHA256Hex(value string) (string, bool) {
+	value = strings.ToLower(strings.NewReplacer(":", "", "-", "").Replace(strings.TrimSpace(value)))
 	if len(value) != 64 {
-		return false
+		return "", false
 	}
 	_, err := hex.DecodeString(value)
-	return err == nil
+	return value, err == nil
 }
 
 func base64DecodeURLSafe(value string) (string, error) {

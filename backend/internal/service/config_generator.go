@@ -25,9 +25,6 @@ var outboundTagUnsafePattern = regexp.MustCompile(`[^A-Za-z0-9_.\-\p{Han}]+`)
 
 const (
 	defaultRuleSetHTTPClientTag = "ackwrap-rule-set-direct"
-	nodeCheckOutboundTag        = "ackwrap-internal-node-check"
-	nodeCheckIPv4CIDR           = "1.1.1.1/32"
-	nodeCheckIPv6CIDR           = "2606:4700:4700::1111/128"
 )
 
 // ConfigGeneratorService 配置生成服务
@@ -294,9 +291,6 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface
 		if !group.Enabled {
 			continue
 		}
-		if strings.TrimSpace(group.Name) == nodeCheckOutboundTag {
-			return nil, nil, fmt.Errorf("节点组名称 %s 与系统保留 outbound 冲突，请先重命名", group.Name)
-		}
 		if !isSupportedGroupType(group.Type) {
 			return nil, nil, fmt.Errorf("节点组 %s 使用 sing-box 不支持的类型 %s", group.Name, group.Type)
 		}
@@ -330,9 +324,6 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface
 		if !col.Enabled {
 			continue
 		}
-		if strings.TrimSpace(col.Name) == nodeCheckOutboundTag {
-			return nil, nil, fmt.Errorf("策略组名称 %s 与系统保留 outbound 冲突，请先重命名", col.Name)
-		}
 		if !isSupportedGroupType(col.Type) {
 			return nil, nil, fmt.Errorf("策略组 %s 使用 sing-box 不支持的类型 %s，请改为 selector 或 urltest", col.Name, col.Type)
 		}
@@ -349,7 +340,7 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface
 	if err != nil {
 		return nil, nil, err
 	}
-	// 出口 IP 检测需要通过隐藏 selector 精确选择任一启用节点。
+	// 核心出口检测 API 需要按 tag 直接取得任一启用节点。
 	for _, node := range nodes {
 		usedNodeUIDs[node.UID] = true
 	}
@@ -362,7 +353,7 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface
 		}
 	}
 
-	// 5. 为所有启用节点生成 outbound，供策略组和内部出口检测 selector 复用。
+	// 5. 为所有启用节点生成 outbound，供策略组和核心出口检测 API 复用。
 	nodeTags := buildNodeOutboundTags(nodes)
 	generatedNodeTags := make(map[string]string, len(nodeTags))
 
@@ -390,21 +381,6 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface
 		outbounds = append(outbounds, nodeOutbound)
 		generatedNodeTags[node.UID] = nodeTags[node.UID]
 	}
-	nodeCheckOutbounds := make([]string, 0, len(nodes))
-	for _, node := range nodes {
-		if tag := generatedNodeTags[node.UID]; tag != "" {
-			nodeCheckOutbounds = append(nodeCheckOutbounds, tag)
-		}
-	}
-	if len(nodeCheckOutbounds) == 0 {
-		nodeCheckOutbounds = []string{"direct"}
-	}
-	outbounds = append(outbounds, map[string]interface{}{
-		"tag":       nodeCheckOutboundTag,
-		"type":      "selector",
-		"outbounds": nodeCheckOutbounds,
-	})
-
 	// 6. 生成节点组 outbound
 	for _, group := range nodeGroups {
 		uids := groupNodeUIDs[group.ID]
@@ -574,7 +550,9 @@ func (s *ConfigGeneratorService) generateNodeOutbound(node *model.Node, tag stri
 	// 移除可能存在的非 sing-box 字段
 	delete(nodeData, "name")
 	mapMihomoUDPFlagToSingboxNetwork(nodeData)
-	mapTLSFingerprintFields(nodeData)
+	if err := mapTLSFingerprintFields(nodeData); err != nil {
+		return nil, err
+	}
 	ensureRequiredOutboundTLS(nodeData, node.Type)
 	if err := normalizeLegacyOutboundFields(nodeData, node.Type); err != nil {
 		return nil, err
@@ -730,26 +708,47 @@ func intValue(value interface{}) int {
 	}
 }
 
-func mapTLSFingerprintFields(nodeData map[string]interface{}) {
+func mapTLSFingerprintFields(nodeData map[string]interface{}) error {
 	tlsMap, ok := nodeData["tls"].(map[string]interface{})
 	if !ok {
-		return
+		return nil
+	}
+	if insecure, exists := nodeData["skip-cert-verify"]; exists {
+		tlsMap["insecure"] = configBoolValue(insecure)
+		delete(nodeData, "skip-cert-verify")
+	}
+	if alpn, exists := nodeData["alpn"]; exists {
+		tlsMap["alpn"] = alpn
+		delete(nodeData, "alpn")
+	}
+	if legacyPins, exists := tlsMap["certificate_public_key_sha256"]; exists {
+		if normalizedPins, ok := normalizeSHA256HexValues(legacyPins); ok {
+			if err := mergeCertificateSHA256Pins(tlsMap, normalizedPins); err != nil {
+				return err
+			}
+			delete(tlsMap, "certificate_public_key_sha256")
+		}
 	}
 	utlsMap, ok := tlsMap["utls"].(map[string]interface{})
 	if !ok {
-		return
+		return nil
 	}
 	fingerprint, _ := utlsMap["fingerprint"].(string)
 	if fingerprint == "" || isSingboxUTLSFingerprint(fingerprint) {
-		return
+		return nil
 	}
-	if isSHA256HexString(fingerprint) {
-		tlsMap["certificate_public_key_sha256"] = []string{fingerprint}
+	normalizedFingerprint, ok := normalizeSHA256HexString(fingerprint)
+	if !ok {
+		return fmt.Errorf("无法识别旧节点的 TLS fingerprint")
+	}
+	if err := mergeCertificateSHA256Pins(tlsMap, []string{normalizedFingerprint}); err != nil {
+		return err
 	}
 	delete(utlsMap, "fingerprint")
 	if len(utlsMap) == 1 && configBoolValue(utlsMap["enabled"]) {
 		delete(tlsMap, "utls")
 	}
+	return nil
 }
 
 func ensureRequiredOutboundTLS(nodeData map[string]interface{}, outboundType string) {
@@ -842,17 +841,74 @@ func isSingboxUTLSFingerprint(value string) bool {
 	}
 }
 
-func isSHA256HexString(value string) bool {
-	value = strings.TrimSpace(value)
+func normalizeSHA256HexString(value string) (string, bool) {
+	value = strings.ToLower(strings.NewReplacer(":", "", "-", "").Replace(strings.TrimSpace(value)))
 	if len(value) != 64 {
-		return false
+		return "", false
 	}
 	for _, r := range value {
 		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
-			return false
+			return "", false
 		}
 	}
-	return true
+	return value, true
+}
+
+func normalizeSHA256HexValues(value interface{}) ([]string, bool) {
+	var values []string
+	switch typed := value.(type) {
+	case string:
+		values = []string{typed}
+	case []string:
+		values = typed
+	case []interface{}:
+		values = make([]string, 0, len(typed))
+		for _, item := range typed {
+			stringValue, ok := item.(string)
+			if !ok {
+				return nil, false
+			}
+			values = append(values, stringValue)
+		}
+	default:
+		return nil, false
+	}
+	if len(values) == 0 {
+		return nil, false
+	}
+	normalized := make([]string, 0, len(values))
+	for _, item := range values {
+		normalizedItem, ok := normalizeSHA256HexString(item)
+		if !ok {
+			return nil, false
+		}
+		normalized = append(normalized, normalizedItem)
+	}
+	return normalized, true
+}
+
+func mergeCertificateSHA256Pins(tlsMap map[string]interface{}, migratedPins []string) error {
+	combined := make([]string, 0, len(migratedPins))
+	if existingValue, exists := tlsMap["certificate_sha256"]; exists {
+		existingPins, ok := normalizeSHA256HexValues(existingValue)
+		if !ok {
+			return fmt.Errorf("无法识别旧节点的 certificate_sha256")
+		}
+		combined = append(combined, existingPins...)
+	}
+	seen := make(map[string]struct{}, len(combined)+len(migratedPins))
+	for _, pin := range combined {
+		seen[pin] = struct{}{}
+	}
+	for _, pin := range migratedPins {
+		if _, exists := seen[pin]; exists {
+			continue
+		}
+		seen[pin] = struct{}{}
+		combined = append(combined, pin)
+	}
+	tlsMap["certificate_sha256"] = combined
+	return nil
 }
 
 func mapMihomoUDPFlagToSingboxNetwork(nodeData map[string]interface{}) {
@@ -1013,7 +1069,6 @@ func configBoolValue(value interface{}) bool {
 
 func buildNodeOutboundTags(nodes []model.Node) map[string]string {
 	result := make(map[string]string, len(nodes))
-	used := make(map[string]bool)
 	for _, node := range nodes {
 		base := sanitizeOutboundTag(node.Name)
 		if base == "" {
@@ -1022,16 +1077,7 @@ func buildNodeOutboundTags(nodes []model.Node) map[string]string {
 		if base == "" {
 			base = "node"
 		}
-		shortUID := node.UID
-		if len(shortUID) > 8 {
-			shortUID = shortUID[:8]
-		}
-		tag := fmt.Sprintf("%s-%s", base, shortUID)
-		if used[tag] {
-			tag = fmt.Sprintf("%s-%s", tag, node.UID)
-		}
-		used[tag] = true
-		result[node.UID] = tag
+		result[node.UID] = fmt.Sprintf("%s-%s", base, node.UID)
 	}
 	return result
 }
@@ -1090,15 +1136,6 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 			route["default_domain_resolver"] = resolver
 		}
 	}
-
-	// 仅 mixed-in 到固定出口检测地址的请求使用隐藏 selector，不改变用户策略组。
-	routeRules = append(routeRules, map[string]interface{}{
-		"inbound":  []string{"mixed-in"},
-		"ip_cidr":  []string{nodeCheckIPv4CIDR, nodeCheckIPv6CIDR},
-		"port":     []int{443},
-		"action":   "route",
-		"outbound": nodeCheckOutboundTag,
-	})
 
 	// AckWrap、sing-box 和节点服务器必须优先直连，避免 TUN/全局模式形成代理回环。
 	bypassRules, err := s.defaultBypassRules()

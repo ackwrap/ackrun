@@ -134,7 +134,7 @@ watch(
               '节点地址解析',
               result.resolution === 'alidns_doh' ? 'AliDNS DoH' : 'IP 字面量',
             ],
-            ['检测路径', '当前节点 → Cloudflare Trace'],
+            ['检测路径', '核心直接通过当前节点 → Cloudflare Trace'],
           ]"
           :key="item[0]"
           class="rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--bg-base)] p-3"
@@ -145,8 +145,8 @@ watch(
       </div>
 
       <p class="mt-4 text-xs text-[var(--text-tertiary)]">
-        检测只临时切换内部 selector，不会修改当前策略组；Cloudflare
-        会看到本次请求的出口
+        核心直接使用该节点发起独立请求，不切换任何 selector
+        或当前策略组；Cloudflare 会看到本次请求的出口
         IP。结果不一致不一定表示异常，也可能由中转、NAT、Anycast
         或独立落地出口造成。
       </p>

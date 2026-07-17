@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
@@ -38,6 +39,15 @@ func parseHysteriaGeneric(raw string, typ string) (*model.ParsedNode, error) {
 	}
 	node["tls"] = true
 	applyTLSOptions(node, query, "sni")
+	if typ == "hysteria2" {
+		if pin := firstQueryValue(query, "pinSHA256", "pinsha256", "pin-sha256", "pin_sha256"); pin != "" {
+			normalizedPin, ok := normalizeSHA256Hex(pin)
+			if !ok {
+				return nil, fmt.Errorf("invalid Hysteria2 pinSHA256")
+			}
+			node["certificate-sha256"] = normalizedPin
+		}
+	}
 	if typ == "hysteria" {
 		if up := query["up"]; up != "" {
 			if val, err := strconv.Atoi(up); err == nil {

@@ -105,11 +105,9 @@ func main() {
 			logging.Info("main", "初始化实验性功能默认配置失败: %v", err)
 		}
 	}
-
 	subscriptionSvc := service.NewSubscriptionService(db, realtimeSvc)
 	nodeSvc := service.NewNodeService(db)
 	nodeSvc.SetRealtimeService(realtimeSvc)
-	nodeSvc.SetPaths(p)
 	routeRuleSvc := service.NewRouteRuleService(db, p, realtimeSvc)
 	proxyCollectionSvc := service.NewProxyCollectionService(db, realtimeSvc)
 	configGenSvc := service.NewConfigGeneratorService(db, p, singboxSvc)
