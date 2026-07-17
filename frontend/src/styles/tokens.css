@@ -22,6 +22,7 @@
   --bg-elevated: #171E28;
   --bg-sidebar: #0E141C;
   --bg-sidebar-hover: rgba(47, 129, 247, 0.12);
+  --table-row-hover: rgba(47, 129, 247, 0.16);
   --bg-sidebar-active: #1F6FEB;
   --bg-overlay: rgba(0, 0, 0, 0.45);
   --text-primary: #F8FAFC;
@@ -71,6 +72,7 @@
   --bg-elevated: #FFFFFF;
   --bg-sidebar: #FFFFFF;
   --bg-sidebar-hover: rgba(37, 99, 235, 0.10);
+  --table-row-hover: rgba(37, 99, 235, 0.08);
   --bg-sidebar-active: #2563EB;
   --bg-overlay: rgba(15, 23, 42, 0.28);
   --text-primary: #0F172A;

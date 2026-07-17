@@ -1,13 +1,32 @@
 <script setup lang="ts">
 import { AlertTriangle, Check, Info } from "lucide-vue-next";
-import { computed } from "vue";
+import { computed, onBeforeUnmount, watch } from "vue";
 const p = withDefaults(
-  defineProps<{ message: string; type?: "success" | "error" | "info" }>(),
+  defineProps<{
+    message: string;
+    type?: "success" | "error" | "info";
+    duration?: number;
+  }>(),
   { type: "info" },
 );
+const emit = defineEmits<{ dismiss: [] }>();
 const icon = computed(() =>
   p.type === "success" ? Check : p.type === "error" ? AlertTriangle : Info,
 );
+const dismissAfter = computed(
+  () => p.duration ?? (p.type === "error" ? 5000 : 3000),
+);
+let timer: number | undefined;
+watch(
+  () => [p.message, p.type, p.duration] as const,
+  ([message]) => {
+    window.clearTimeout(timer);
+    if (message && dismissAfter.value > 0)
+      timer = window.setTimeout(() => emit("dismiss"), dismissAfter.value);
+  },
+  { immediate: true },
+);
+onBeforeUnmount(() => window.clearTimeout(timer));
 </script>
 <template>
   <div

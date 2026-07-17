@@ -252,6 +252,8 @@ async function remove() {
   }
 }
 const address = (n: NodeItem) => `${n.server}:${n.server_port}`,
+  formatUpdatedAt = (value: number) =>
+    value > 0 ? new Date(value).toLocaleString() : "--",
   pretty = (s: string) => {
     try {
       return JSON.stringify(JSON.parse(s || "{}"), null, 2);
@@ -289,6 +291,7 @@ onMounted(async () => {
     <PageHeader title="节点管理" /><Toast
       :message="message"
       :type="toastType"
+      @dismiss="message = ''"
     />
     <section
       class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
@@ -429,7 +432,21 @@ onMounted(async () => {
         </div>
       </div>
       <div class="aw-data-table-wrap">
-        <table class="aw-data-table min-w-[1120px]">
+        <table class="aw-data-table min-w-[1384px] table-fixed">
+          <colgroup>
+            <col class="w-10" />
+            <col class="w-44" />
+            <col class="w-20" />
+            <col class="w-40" />
+            <col class="w-20" />
+            <col class="w-28" />
+            <col class="w-20" />
+            <col class="w-24" />
+            <col class="w-20" />
+            <col class="w-24" />
+            <col class="w-36" />
+            <col class="w-60" />
+          </colgroup>
           <thead>
             <tr>
               <th>
@@ -454,6 +471,11 @@ onMounted(async () => {
                   '操作',
                 ]"
                 :key="c"
+                :class="
+                  c === '操作'
+                    ? 'sticky right-0 z-20 bg-[var(--bg-surface)]'
+                    : ''
+                "
               >
                 {{ c }}
               </th>
@@ -473,17 +495,24 @@ onMounted(async () => {
                   @change="toggle(n.uid)"
                 />
               </td>
-              <td class="max-w-[240px] truncate">
+              <td class="truncate" :title="n.name">
                 <img
                   :src="getFlagImageURL(flags[n.uid] || defaultFlag)"
                   alt=""
                   class="mr-2 inline h-4 w-4"
                 />{{ n.name }}
               </td>
-              <td>{{ n.type }}</td>
-              <td class="max-w-[220px] truncate">{{ address(n) }}</td>
-              <td>{{ n.subscription_name || n.subscription_id }}</td>
-              <td class="font-mono">{{ n.uid.slice(0, 12) }}…</td>
+              <td class="truncate" :title="n.type">{{ n.type }}</td>
+              <td class="truncate" :title="address(n)">{{ address(n) }}</td>
+              <td
+                class="truncate"
+                :title="String(n.subscription_name || n.subscription_id)"
+              >
+                {{ n.subscription_name || n.subscription_id }}
+              </td>
+              <td class="truncate font-mono" :title="n.uid">
+                {{ n.uid.slice(0, 12) }}…
+              </td>
               <td>
                 <button @click="ping([n.uid])">
                   {{
@@ -495,7 +524,7 @@ onMounted(async () => {
                   }}
                 </button>
               </td>
-              <td>{{ n.status }}</td>
+              <td class="truncate" :title="n.status">{{ n.status }}</td>
               <td>
                 <button @click="enabled(n)">
                   {{ n.enabled ? "启用" : "禁用" }}
@@ -508,14 +537,12 @@ onMounted(async () => {
                   }}
                 </button>
               </td>
-              <td>
-                {{
-                  n.updated_at > 0
-                    ? new Date(n.updated_at).toLocaleString()
-                    : "--"
-                }}
+              <td class="truncate" :title="formatUpdatedAt(n.updated_at)">
+                {{ formatUpdatedAt(n.updated_at) }}
               </td>
-              <td class="whitespace-nowrap">
+              <td
+                class="sticky right-0 z-[1] whitespace-nowrap bg-[var(--bg-surface)]"
+              >
                 <div class="flex items-center gap-1.5">
                   <button
                     class="aw-action-button aw-action-neutral"

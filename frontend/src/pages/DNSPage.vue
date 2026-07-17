@@ -117,7 +117,6 @@ async function request(url: string, init?: RequestInit) {
 const show = (s: string, t: "success" | "error" = "success") => {
   message.value = s;
   messageType.value = t;
-  setTimeout(() => (message.value = ""), t === "error" ? 5000 : 3000);
 };
 async function load() {
   try {
@@ -368,6 +367,7 @@ onMounted(load);
     <PageHeader title="DNS 管理" /><Toast
       :message="message"
       :type="messageType"
+      @dismiss="message = ''"
     />
     <div v-if="loading" class="py-20 text-center">加载中...</div>
     <template v-else

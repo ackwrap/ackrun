@@ -115,21 +115,12 @@ const updateAvailable = computed(() =>
     downloaded_bytes: installProgress.value?.downloaded_bytes || 0,
     total_bytes: installProgress.value?.total_bytes || 0,
   }));
-let toastTimer: number,
-  installTimer: number,
+let installTimer: number,
   cancelled = false;
 function notify(v: string, t: "success" | "error" | "info" = "success") {
   message.value = v;
   messageType.value = t;
 }
-watch([message, messageType], () => {
-  clearTimeout(toastTimer);
-  if (message.value)
-    toastTimer = window.setTimeout(
-      () => (message.value = ""),
-      messageType.value === "error" ? 5000 : 3000,
-    );
-});
 async function initial() {
   try {
     runtime.value = await api.getRuntime();
@@ -327,7 +318,11 @@ onBeforeUnmount(() => {
 </script>
 <template>
   <div class="flex h-full flex-col">
-    <Toast :message="message" :type="messageType" /><ConfirmDialog
+    <Toast
+      :message="message"
+      :type="messageType"
+      @dismiss="message = ''"
+    /><ConfirmDialog
       :open="confirmFirewallReset"
       title="重置 Windows 防火墙"
       message="此操作会清除并恢复系统防火墙规则，可能影响其他应用的网络访问。确认继续吗？"

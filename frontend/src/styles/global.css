@@ -425,8 +425,9 @@ button:disabled {
     color: var(--text-secondary);
   }
 
-  .aw-data-table tbody tr:hover {
-    background: var(--bg-sidebar-hover);
+  .aw-data-table tbody tr:hover,
+  .aw-data-table tbody tr:hover > td {
+    background-color: var(--table-row-hover) !important;
   }
 
   .aw-data-table .aw-action-button,
@@ -588,8 +589,9 @@ button:disabled {
   color: #334155 !important;
 }
 
-:root[data-theme='light'] .aw-data-table tbody tr:hover {
-  background-color: #f8fafc !important;
+:root[data-theme='light'] .aw-data-table tbody tr:hover,
+:root[data-theme='light'] .aw-data-table tbody tr:hover > td {
+  background-color: var(--table-row-hover) !important;
 }
 
 :root[data-theme='light'] .aw-toast {

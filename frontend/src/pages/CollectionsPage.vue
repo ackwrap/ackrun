@@ -480,7 +480,7 @@ onMounted(load);
 <template>
   <div class="space-y-4">
     <PageHeader title="策略组管理" />
-    <Toast :message="message" :type="messageType" />
+    <Toast :message="message" :type="messageType" @dismiss="message = ''" />
     <div class="flex gap-2 border-b border-[var(--border-default)]">
       <button
         :class="[
@@ -850,29 +850,51 @@ onMounted(load);
       </div>
     </Modal>
     <Modal :open="quickOpen" title="智能快速配置" @close="quickOpen = false">
-      <div>
-        <b>按订阅筛选</b>
-        <div>
-          <label v-for="x in facets.subscriptions" :key="x.value"
-            ><input
-              type="checkbox"
-              :checked="quickSubscriptions.includes(x.value)"
-              @change="quickSubscriptions = toggle(quickSubscriptions, x.value)"
-            />
-            {{ x.label }}
-          </label>
-        </div>
-        <b>按协议筛选</b>
-        <div>
-          <label v-for="x in facets.protocols" :key="x.value"
-            ><input
-              type="checkbox"
-              :checked="quickProtocols.includes(x.value)"
-              @change="quickProtocols = toggle(quickProtocols, x.value)"
-            />
-            {{ x.label }}
-          </label>
-        </div>
+      <div class="grid gap-5">
+        <fieldset class="grid gap-2">
+          <legend
+            class="mb-1 text-xs font-semibold text-[var(--text-secondary)]"
+          >
+            按订阅筛选
+          </legend>
+          <div class="grid gap-2 sm:grid-cols-2">
+            <label
+              v-for="x in facets.subscriptions"
+              :key="x.value"
+              class="flex min-w-0 cursor-pointer items-center gap-2 rounded-[var(--radius-md)] border border-[var(--border-light)] bg-[var(--button-secondary-bg)] px-3 py-2 text-xs text-[var(--text-secondary)] transition-colors hover:border-[var(--button-primary-border)] hover:bg-[var(--button-secondary-hover)]"
+              ><input
+                type="checkbox"
+                class="h-4 w-4 shrink-0"
+                :checked="quickSubscriptions.includes(x.value)"
+                @change="
+                  quickSubscriptions = toggle(quickSubscriptions, x.value)
+                "
+              />
+              <span class="min-w-0 truncate">{{ x.label }}</span>
+            </label>
+          </div>
+        </fieldset>
+        <fieldset class="grid gap-2">
+          <legend
+            class="mb-1 text-xs font-semibold text-[var(--text-secondary)]"
+          >
+            按协议筛选
+          </legend>
+          <div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            <label
+              v-for="x in facets.protocols"
+              :key="x.value"
+              class="flex min-w-0 cursor-pointer items-center gap-2 rounded-[var(--radius-md)] border border-[var(--border-light)] bg-[var(--button-secondary-bg)] px-3 py-2 text-xs text-[var(--text-secondary)] transition-colors hover:border-[var(--button-primary-border)] hover:bg-[var(--button-secondary-hover)]"
+              ><input
+                type="checkbox"
+                class="h-4 w-4 shrink-0"
+                :checked="quickProtocols.includes(x.value)"
+                @change="quickProtocols = toggle(quickProtocols, x.value)"
+              />
+              <span class="min-w-0 truncate">{{ x.label }}</span>
+            </label>
+          </div>
+        </fieldset>
       </div>
       <template #footer
         ><button

@@ -17,7 +17,7 @@ const tabs = [
     <button
       v-for="t in tabs"
       :key="t[0]"
-      class="relative flex items-center gap-2 px-4 py-2.5 text-sm font-medium"
+      class="relative flex items-center gap-2 px-4 py-2.5 text-sm font-medium outline-none"
       :class="
         activeTab === t[0]
           ? 'text-[var(--color-primary)]'

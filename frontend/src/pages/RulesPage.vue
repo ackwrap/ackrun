@@ -53,7 +53,6 @@ let poll: number | undefined;
 const show = (s: string, t: "success" | "error" = "success") => {
     message.value = s;
     messageType.value = t;
-    setTimeout(() => (message.value = ""), t === "error" ? 5000 : 3000);
   },
   values = computed(() => [
     ...new Set(
@@ -351,6 +350,7 @@ onBeforeUnmount(() => clearInterval(poll));
     <PageHeader title="规则管理" /><Toast
       :message="message"
       :type="messageType"
+      @dismiss="message = ''"
     />
     <div v-if="loading" class="py-20 text-center">加载中...</div>
     <template v-else

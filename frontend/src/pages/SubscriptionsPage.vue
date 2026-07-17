@@ -345,6 +345,7 @@ const pretty = (s: string) => {
     <PageHeader title="订阅管理" /><Toast
       :message="message"
       :type="toastType"
+      @dismiss="message = ''"
     />
     <section
       class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"

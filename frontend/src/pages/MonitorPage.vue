@@ -35,7 +35,7 @@ const activeTab = ref<MonitorTab>("overview"),
   messageType = ref<"success" | "error" | "info">("info"),
   proxies = ref<Record<string, ProxyGroup | ProxyNode>>({}),
   loadingProxies = ref(false),
-  selectedGroup = ref<string | null>(null),
+  testingNodes = ref(new Set<string>()),
   connections = ref<Connection[]>([]),
   loadingConnections = ref(false),
   rules = ref<Rule[]>([]),
@@ -55,7 +55,6 @@ const client = getClashClient(),
   show = (s: string, t: "success" | "error" | "info" = "error") => {
     message.value = s;
     messageType.value = t;
-    setTimeout(() => (message.value = ""), t === "error" ? 5000 : 3000);
   },
   unavailable = (e: any) => {
     connected.value = false;
@@ -272,6 +271,8 @@ async function selectProxy(g: string, n: string) {
   }
 }
 async function testDelay(n: string) {
+  if (!n || testingNodes.value.has(n)) return;
+  testingNodes.value = new Set(testingNodes.value).add(n);
   try {
     const result = await client.delayTest(n);
     const current = proxies.value[n];
@@ -288,6 +289,10 @@ async function testDelay(n: string) {
     };
   } catch (e: any) {
     show(`测速失败: ${e.message}`);
+  } finally {
+    const next = new Set(testingNodes.value);
+    next.delete(n);
+    testingNodes.value = next;
   }
 }
 async function closeConnection(id: string) {
@@ -330,9 +335,14 @@ function returnToControl() {
     正在检查 sing-box 运行状态...
   </div>
   <div v-else-if="!runtimeBlocked" class="flex h-full flex-col space-y-2">
-    <Toast :message="message" :type="messageType" /><PageHeader
-      title="仪表盘"
-    /><MonitorTabs :active-tab="activeTab" @change="activeTab = $event" />
+    <Toast
+      :message="message"
+      :type="messageType"
+      @dismiss="message = ''"
+    /><PageHeader title="仪表盘" /><MonitorTabs
+      :active-tab="activeTab"
+      @change="activeTab = $event"
+    />
     <div class="flex-1 overflow-auto">
       <OverviewPanel
         v-if="activeTab === 'overview'"
@@ -358,10 +368,9 @@ function returnToControl() {
         v-else-if="activeTab === 'proxies'"
         :proxies="proxies"
         :proxy-groups="groups"
-        :selected-group="selectedGroup"
         :loading="loadingProxies"
+        :testing-nodes="testingNodes"
         @refresh="loadProxies"
-        @select-group="selectedGroup = $event"
         @select-proxy="selectProxy"
         @test-delay="testDelay"
       /><ConnectionsPanel

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from "vue";
+import { onMounted, ref } from "vue";
 import { api } from "@/services/api";
 import Button from "@/components/ui/Button.vue";
 import PageHeader from "@/components/layout/PageHeader.vue";
@@ -24,19 +24,10 @@ const clashApiPort = ref("9090"),
   ntpServerPort = ref(123),
   ntpInterval = ref("30m"),
   ntpDetour = ref("direct");
-let timer: number;
 function notify(v: string, t: "success" | "error" | "info" = "success") {
   message.value = v;
   messageType.value = t;
 }
-watch([message, messageType], () => {
-  clearTimeout(timer);
-  if (message.value)
-    timer = window.setTimeout(
-      () => (message.value = ""),
-      messageType.value === "error" ? 5000 : 3000,
-    );
-});
 onMounted(() => {
   api
     .getUpdateSettings()
@@ -139,7 +130,7 @@ const input =
     "rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[linear-gradient(180deg,rgba(20,33,52,0.92),rgba(16,27,43,0.74))] p-5 shadow-[var(--shadow-card)]";
 </script>
 <template>
-  <Toast :message="message" :type="messageType" />
+  <Toast :message="message" :type="messageType" @dismiss="message = ''" />
   <div class="space-y-4">
     <PageHeader title="设置" />
     <div class="grid grid-cols-1 items-stretch gap-4 lg:grid-cols-2">

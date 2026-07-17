@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, ref } from "vue";
 import {
   CheckCircle2,
   ChevronDown,
@@ -116,19 +116,10 @@ const moduleItems = computed(() => {
     },
   ];
 });
-let toastTimer: number | undefined;
 function showMessage(v: string, t: "success" | "error" = "error") {
   message.value = v;
   messageType.value = t;
 }
-watch([message, messageType], () => {
-  clearTimeout(toastTimer);
-  if (message.value)
-    toastTimer = window.setTimeout(
-      () => (message.value = ""),
-      messageType.value === "error" ? 5000 : 3000,
-    );
-});
 async function generate() {
   try {
     generating.value = true;
@@ -218,7 +209,7 @@ onMounted(async () => {
         </button>
       </div>
     </div>
-    <Toast :message="message" :type="messageType" />
+    <Toast :message="message" :type="messageType" @dismiss="message = ''" />
     <section
       class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
     >
