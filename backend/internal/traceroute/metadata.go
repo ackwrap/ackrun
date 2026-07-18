@@ -38,6 +38,8 @@ type metadataClient struct {
 	cache    map[string]geoCacheEntry
 }
 
+type GeoLookupFunc func(context.Context, net.IP) (GeoData, error)
+
 func newMetadataClient(providerName string) (*metadataClient, error) {
 	provider, err := newGeoProvider(providerName)
 	if err != nil {
@@ -47,6 +49,18 @@ func newMetadataClient(providerName string) (*metadataClient, error) {
 		provider: provider,
 		cache:    make(map[string]geoCacheEntry),
 	}, nil
+}
+
+func newMetadataClientWithLookup(providerName string, lookup GeoLookupFunc) *metadataClient {
+	return &metadataClient{
+		provider: geoProviderFunc{
+			name: providerName,
+			lookup: func(ctx context.Context, ip string) (GeoData, error) {
+				return lookup(ctx, net.ParseIP(ip))
+			},
+		},
+		cache: make(map[string]geoCacheEntry),
+	}
 }
 
 func LookupGeo(ctx context.Context, ip net.IP, providerName string) (GeoData, error) {

@@ -32,13 +32,15 @@ const (
 )
 
 type Options struct {
-	Queries       int
-	MaxHops       int
-	Timeout       time.Duration
-	ProbeInterval time.Duration
-	TTLInterval   time.Duration
-	RDNSTimeout   time.Duration
-	GeoProvider   string
+	Queries         int
+	MaxHops         int
+	Timeout         time.Duration
+	ProbeInterval   time.Duration
+	TTLInterval     time.Duration
+	RDNSTimeout     time.Duration
+	GeoProvider     string
+	GeoProviderName string
+	GeoLookup       GeoLookupFunc
 }
 
 type Result struct {
@@ -131,9 +133,18 @@ func TraceWithProgress(ctx context.Context, target string, options Options, prog
 	if err != nil {
 		return nil, err
 	}
-	metadata, err := newMetadataClient(options.GeoProvider)
-	if err != nil {
-		return nil, fmt.Errorf("configure Geo provider: %w", err)
+	var metadata *metadataClient
+	if options.GeoLookup != nil {
+		providerName := strings.TrimSpace(options.GeoProviderName)
+		if providerName == "" {
+			providerName = options.GeoProvider
+		}
+		metadata = newMetadataClientWithLookup(providerName, options.GeoLookup)
+	} else {
+		metadata, err = newMetadataClient(options.GeoProvider)
+		if err != nil {
+			return nil, fmt.Errorf("configure Geo provider: %w", err)
+		}
 	}
 	defer metadata.Close()
 	prober, err := newICMPProber(dstIP, options.Timeout, options.ProbeInterval)

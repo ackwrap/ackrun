@@ -2,10 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { Bolt, Folder, LayoutGrid, RefreshCw } from "lucide-vue-next";
 import type { ProxyGroup } from "@/services/clash";
-import {
-  connectivityTestTargets,
-  connectivityTestTargetValues,
-} from "@/utils/connectivityTargets";
+import type { ConnectivityTarget } from "@/services/types";
 import ProxyGroupCard from "./ProxyGroupCard.vue";
 import type { ProxyMap } from "./proxyGroupUtils";
 
@@ -19,6 +16,7 @@ const props = withDefaults(
     testingNodes?: Set<string>;
     testingGroups?: Set<string>;
     delayTestUrl: string;
+    connectivityTargets: ConnectivityTarget[];
     nodeFlags: Record<string, string>;
   }>(),
   {
@@ -38,24 +36,11 @@ const emit = defineEmits<{
 const filter = ref<GroupFilter>("all");
 const expandedGroups = ref(new Set<string>());
 const groupSearch = ref<Record<string, string>>({});
-const delayTargetMode = ref(
-  connectivityTestTargetValues.has(props.delayTestUrl)
-    ? props.delayTestUrl
-    : "custom",
-);
-const customDelayTestURL = ref(
-  connectivityTestTargetValues.has(props.delayTestUrl)
-    ? ""
-    : props.delayTestUrl,
-);
+const delayTargetMode = ref(props.delayTestUrl);
 watch(
   () => props.delayTestUrl,
   (value) => {
-    if (connectivityTestTargetValues.has(value)) delayTargetMode.value = value;
-    else {
-      delayTargetMode.value = "custom";
-      customDelayTestURL.value = value;
-    }
+    delayTargetMode.value = value;
   },
 );
 const publicProxyGroups = computed(() =>
@@ -114,11 +99,7 @@ function selectProxy(group: string, node: string) {
 
 function selectDelayTarget(value: string) {
   delayTargetMode.value = value;
-  if (value !== "custom") emit("update:delayTestUrl", value);
-}
-
-function saveCustomDelayTarget() {
-  emit("update:delayTestUrl", customDelayTestURL.value);
+  emit("update:delayTestUrl", value);
 }
 </script>
 
@@ -160,21 +141,13 @@ function saveCustomDelayTarget() {
           "
         >
           <option
-            v-for="target in connectivityTestTargets"
-            :key="target.value"
-            :value="target.value"
+            v-for="target in connectivityTargets"
+            :key="target.id"
+            :value="target.url"
           >
-            {{ target.label }}
+            {{ target.name }}
           </option>
-          <option value="custom">自定义地址</option>
         </select>
-        <input
-          v-if="delayTargetMode === 'custom'"
-          v-model="customDelayTestURL"
-          class="h-8 min-w-0 flex-1 rounded-[10px] border border-[var(--border-light)] bg-[var(--button-secondary-bg)] px-2 text-xs text-[var(--text-secondary)] outline-none focus:border-[var(--color-primary)] sm:w-48"
-          placeholder="https://example.com/generate_204"
-          @change="saveCustomDelayTarget"
-        />
         <button
           type="button"
           class="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-sidebar-hover)]"

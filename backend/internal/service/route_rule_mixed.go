@@ -69,7 +69,7 @@ func parseMixedRouteRuleValues(values []string) ([]mixedRouteRuleValue, error) {
 
 func isRouteRuleType(ruleType string) bool {
 	switch ruleType {
-	case "domain", "domain_suffix", "domain_keyword", "ip_cidr", "geoip", "geosite", "rule_set", "mixed":
+	case "domain", "domain_suffix", "domain_keyword", "ip_cidr", "process_name", "geoip", "geosite", "rule_set", "mixed":
 		return true
 	default:
 		return false

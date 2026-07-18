@@ -43,8 +43,16 @@ const targets = [
   ["GitHub", "https://github.com/favicon.ico"],
   ["YouTube", "https://www.youtube.com/favicon.ico"],
 ];
-const ips = ref<IPProbe[]>([]),
-  access = ref<AccessProbe[]>([]),
+const ips = ref<IPProbe[]>(
+    ipSources.map((source) => ({ label: source.label, value: "", error: "" })),
+  ),
+  access = ref<AccessProbe[]>(
+    targets.map((target) => ({
+      label: target[0],
+      latency: 0,
+      status: "checking",
+    })),
+  ),
   refreshingIPs = ref(false),
   refreshingAccess = ref(false),
   stats = ref({
@@ -61,9 +69,12 @@ const ips = ref<IPProbe[]>([]),
   trafficError = ref("");
 let ipTimer: number,
   accessTimer: number,
+  ipStartupTimer: number | undefined,
+  accessStartupTimer: number | undefined,
   statsTimer: number | undefined,
   startupTimer: number | undefined,
   cancelled = false,
+  probesCancelled = false,
   lastStats = "",
   lastTraffic = "";
 async function timed(url: string, options: RequestInit = {}) {
@@ -80,8 +91,10 @@ async function timed(url: string, options: RequestInit = {}) {
   }
 }
 async function refreshIPs() {
+  if (refreshingIPs.value || probesCancelled) return;
+  clearTimeout(ipStartupTimer);
   refreshingIPs.value = true;
-  ips.value = await Promise.all(
+  const next = await Promise.all(
     ipSources.map(async (s) => {
       try {
         const r = await timed(s.url);
@@ -98,16 +111,21 @@ async function refreshIPs() {
       }
     }),
   );
-  refreshingIPs.value = false;
+  if (!probesCancelled) {
+    ips.value = next;
+    refreshingIPs.value = false;
+  }
 }
 async function refreshAccess() {
+  if (refreshingAccess.value || probesCancelled) return;
+  clearTimeout(accessStartupTimer);
   refreshingAccess.value = true;
   access.value = targets.map((t) => ({
     label: t[0],
     latency: 0,
     status: "checking",
   }));
-  access.value = await Promise.all(
+  const next = await Promise.all(
     targets.map(async (t) => {
       const start = performance.now();
       try {
@@ -122,7 +140,10 @@ async function refreshAccess() {
       }
     }),
   );
-  refreshingAccess.value = false;
+  if (!probesCancelled) {
+    access.value = next;
+    refreshingAccess.value = false;
+  }
 }
 function stopStats() {
   cancelled = true;
@@ -233,13 +254,18 @@ async function copy(p: IPProbe) {
 }
 watch(() => [props.isRunning, props.proxyPort], startStats);
 onMounted(() => {
-  void refreshIPs();
-  void refreshAccess();
+  probesCancelled = false;
+  // Give same-origin control-plane requests a head start before external probes.
+  ipStartupTimer = window.setTimeout(() => void refreshIPs(), 1200);
+  accessStartupTimer = window.setTimeout(() => void refreshAccess(), 2000);
   ipTimer = window.setInterval(refreshIPs, 60000);
   accessTimer = window.setInterval(refreshAccess, 60000);
   startStats();
 });
 onBeforeUnmount(() => {
+  probesCancelled = true;
+  clearTimeout(ipStartupTimer);
+  clearTimeout(accessStartupTimer);
   clearInterval(ipTimer);
   clearInterval(accessTimer);
   stopStats();
@@ -284,7 +310,7 @@ onBeforeUnmount(() => {
       <h3 class="flex gap-2 text-sm font-semibold">
         <Wifi :size="15" />访问检查
       </h3>
-      <button @click="refreshAccess">
+      <button :disabled="refreshingAccess" @click="refreshAccess">
         <RefreshCw :size="13" :class="{ 'animate-spin': refreshingAccess }" />
       </button>
     </div>

@@ -8,10 +8,12 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
 
+	"github.com/ackwrap/ackwrap/internal/geoquery"
 	"github.com/ackwrap/ackwrap/internal/logging"
 	"github.com/ackwrap/ackwrap/internal/model"
 	"github.com/ackwrap/ackwrap/internal/traceroute"
@@ -20,16 +22,12 @@ import (
 const (
 	nodeExitIPMaxResponse          = 64 << 10
 	nodeExitIPProxyListMaxResponse = 4 << 20
-	defaultExitIPGeoProvider       = "ipapi.is"
 )
 
 var ErrNodeExitIPInvalid = errors.New("invalid node exit IP request")
 
 func (svc *NodeService) ExitIP(ctx context.Context, uid string, geoProvider string) (*model.NodeExitIPResponse, error) {
-	if strings.TrimSpace(geoProvider) == "" {
-		geoProvider = defaultExitIPGeoProvider
-	}
-	geoProvider, err := traceroute.ValidateGeoProvider(geoProvider)
+	resolvedProvider, err := svc.resolveNodeGeoProvider(geoProvider)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrNodeExitIPInvalid, err)
 	}
@@ -77,20 +75,69 @@ func (svc *NodeService) ExitIP(ctx context.Context, uid string, geoProvider stri
 	matched := nodeIP.Equal(exitIP)
 	response := &model.NodeExitIPResponse{
 		UID: node.UID, NodeName: node.Name, NodeIP: nodeIP.String(), ExitIP: exitIP.String(),
-		Matched: matched, Resolution: resolution, GeoProvider: geoProvider,
+		Matched: matched, Resolution: resolution, GeoProvider: resolvedProvider.Key,
 	}
-	if geoProvider != traceroute.DefaultGeoProvider {
+	if resolvedProvider.Key != traceroute.DefaultGeoProvider {
 		geoCtx, geoCancel := context.WithTimeout(ctx, 10*time.Second)
-		geo, geoErr := traceroute.LookupGeo(geoCtx, exitIP, geoProvider)
+		geo, geoErr := resolvedProvider.lookup(geoCtx, exitIP)
 		geoCancel()
 		if geoErr != nil {
-			response.GeoError = geoErr.Error()
+			logging.Info("node.exit_ip", "online Geo lookup failed, trying local fallback uid=%s provider=%s", node.UID, resolvedProvider.Key)
+			localGeo, localErr := svc.lookupLocalExitGeo(exitIP)
+			if localErr != nil {
+				response.GeoError = fmt.Sprintf("%s；%v", onlineGeoErrorMessage(geoErr), localErr)
+			} else {
+				response.Geo = convertTracerouteGeo(localGeo)
+				logging.Info("node.exit_ip", "local Geo fallback succeeded uid=%s provider=%s", node.UID, resolvedProvider.Key)
+			}
 		} else {
 			response.Geo = convertTracerouteGeo(geo)
 		}
 	}
-	logging.Info("node.exit_ip", "exit IP check completed uid=%s matched=%v geo_provider=%s geo_success=%v", node.UID, matched, geoProvider, response.Geo != nil)
+	logging.Info("node.exit_ip", "exit IP check completed uid=%s matched=%v geo_provider=%s geo_success=%v", node.UID, matched, resolvedProvider.Key, response.Geo != nil)
 	return response, nil
+}
+
+func (svc *NodeService) lookupLocalExitGeo(ip net.IP) (traceroute.GeoData, error) {
+	if svc.localGeoLookup != nil {
+		return svc.localGeoLookup(ip)
+	}
+	assets, err := svc.store.ListGeoAssets()
+	if err != nil {
+		return traceroute.GeoData{}, errors.New("读取本地 GeoIP 状态失败")
+	}
+	for _, asset := range assets {
+		if asset.Type != "geoip" || strings.TrimSpace(asset.LocalPath) == "" {
+			continue
+		}
+		reader, err := geoquery.OpenGeoIP(asset.LocalPath)
+		if err != nil {
+			return traceroute.GeoData{}, errors.New("本地 GeoIP 数据库无法读取，请重新同步")
+		}
+		address, parseErr := netip.ParseAddr(ip.String())
+		if parseErr != nil {
+			reader.Close()
+			return traceroute.GeoData{}, errors.New("本地 GeoIP 查询地址无效")
+		}
+		countryCode := reader.Lookup(address.Unmap())
+		reader.Close()
+		if countryCode == "unknown" {
+			return traceroute.GeoData{}, errors.New("本地 GeoIP 数据库未匹配到归属")
+		}
+		return traceroute.GeoDataFromCountryCode(countryCode, "geoip.db（本地回退）"), nil
+	}
+	return traceroute.GeoData{}, errors.New("本地 GeoIP 数据库不可用，请先在规则管理中同步 GeoIP")
+}
+
+func onlineGeoErrorMessage(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "在线 Geo 查询超时"
+	}
+	var networkError net.Error
+	if errors.As(err, &networkError) && networkError.Timeout() {
+		return "在线 Geo 查询超时"
+	}
+	return "在线 Geo 查询失败"
 }
 
 func (svc *NodeService) resolveActiveNodeOutboundTag(ctx context.Context, node model.Node, expectedTag string) (string, error) {

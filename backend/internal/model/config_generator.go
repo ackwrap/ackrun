@@ -1,5 +1,7 @@
 package model
 
+const DefaultMixedInboundPort = 7890
+
 // ConfigGenerateRequest 配置生成请求
 type ConfigGenerateRequest struct {
 	DefaultOutbound string `json:"default_outbound"` // 默认出站（代理集合名称）
@@ -18,7 +20,8 @@ type ConfigGenerateResponse struct {
 
 // ConfigApplyRequest 配置应用请求
 type ConfigApplyRequest struct {
-	RestartCore bool `json:"restart_core"` // 是否重启核心
+	FileName    string `json:"file_name"`    // 保存到配置目录的文件名
+	RestartCore bool   `json:"restart_core"` // 是否重启核心
 }
 
 // SingboxOutbound sing-box outbound 配置
@@ -64,7 +67,7 @@ func DefaultInbounds() []SingboxInbound {
 			Type:   "mixed",
 			Tag:    "mixed-in",
 			Listen: "127.0.0.1",
-			Port:   7890,
+			Port:   DefaultMixedInboundPort,
 		},
 	}
 }

@@ -22,7 +22,6 @@ import type {
   WSEvent,
 } from "@/services/types";
 import { defaultFlag, getFlagImageURL } from "@/utils/nodeFlags";
-import { defaultConnectivityTestURL } from "@/utils/connectivityTargets";
 interface NG {
   id: number;
   name: string;
@@ -129,7 +128,7 @@ const editingCol = ref<Col | null>(null),
   colTolerance = ref(100),
   colGroupSearch = ref(""),
   connectivitySettings = ref({
-    test_url: defaultConnectivityTestURL,
+    test_url: "",
     interval_seconds: 300,
   }),
   previewCol = ref<Col | null>(null),

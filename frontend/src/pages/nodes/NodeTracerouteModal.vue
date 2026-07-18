@@ -13,10 +13,7 @@ import type {
   NodeTracerouteResponse,
   WSEvent,
 } from "@/services/types";
-import {
-  defaultTracerouteGeoProvider,
-  geoProviderOptions,
-} from "./geoProviders";
+import { loadGeoProviderOptions, type GeoProviderOption } from "./geoProviders";
 
 type TracePhase = "waiting" | "starting" | "running" | "completed" | "failed";
 
@@ -30,7 +27,10 @@ const error = ref("");
 const phase = ref<TracePhase>("waiting");
 const traceID = ref("");
 const activeUID = ref("");
-const geoProvider = ref(defaultTracerouteGeoProvider);
+const geoProvider = ref("disable-geoip");
+const geoProviderOptions = ref<GeoProviderOption[]>([
+  { value: "disable-geoip", label: "关闭 Geo 查询" },
+]);
 let cancelRequested = false;
 
 function handleRealtime(event: WSEvent) {
@@ -145,6 +145,18 @@ function reset(node: NodeItem | null) {
   result.value = node ? initialResult(node) : null;
 }
 
+async function loadGeoProviders() {
+  try {
+    const loaded = await loadGeoProviderOptions(true);
+    geoProviderOptions.value = loaded.options;
+    if (!loaded.options.some((option) => option.value === geoProvider.value)) {
+      geoProvider.value = "disable-geoip";
+    }
+  } catch (cause: any) {
+    error.value = cause?.message || "GeoIP Provider 加载失败";
+  }
+}
+
 function restart() {
   cancelActive();
   reset(props.node);
@@ -182,7 +194,9 @@ watch(
   () => {
     cancelActive();
     reset(props.node);
+    if (props.node) void loadGeoProviders();
   },
+  { immediate: true },
 );
 watch(connected, (value) => {
   if (!value && active.value) {

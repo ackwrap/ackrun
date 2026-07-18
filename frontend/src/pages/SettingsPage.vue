@@ -4,24 +4,20 @@ import { api } from "@/services/api";
 import Button from "@/components/ui/Button.vue";
 import PageHeader from "@/components/layout/PageHeader.vue";
 import Toast from "@/components/ui/Toast.vue";
-import {
-  connectivityTestTargets,
-  connectivityTestTargetValues,
-  defaultConnectivityTestURL,
-} from "@/utils/connectivityTargets";
+import ConnectivityResourcesPanel from "./settings/ConnectivityResourcesPanel.vue";
+import GeoIPProvidersPanel from "./settings/GeoIPProvidersPanel.vue";
 import {
   Clock3,
   Download,
   FileText,
   FlaskConical,
-  Gauge,
   Settings,
 } from "lucide-vue-next";
 type SettingsTab = "general" | "experimental";
 const acceleration = ref(""),
   customMirror = ref(""),
   githubToken = ref(""),
-  proxyURL = ref("http://127.0.0.1:2080"),
+  proxyURL = ref("http://127.0.0.1:9901"),
   message = ref(""),
   messageType = ref<"success" | "error" | "info">("success");
 const activeTab = ref<SettingsTab>("general"),
@@ -34,9 +30,6 @@ const activeTab = ref<SettingsTab>("general"),
   cacheFileStoreDNS = ref(true),
   logLevel = ref("info"),
   logTimestamp = ref(true),
-  connectivityTargetMode = ref(defaultConnectivityTestURL),
-  connectivityCustomURL = ref(""),
-  connectivityInterval = ref(300),
   ntpEnabled = ref(true),
   ntpServer = ref("time.apple.com"),
   ntpServerPort = ref(123),
@@ -53,7 +46,7 @@ onMounted(() => {
       acceleration.value = d.acceleration || "";
       customMirror.value = d.custom_mirror_url || "";
       githubToken.value = d.github_token || "";
-      proxyURL.value = d.proxy_url || "http://127.0.0.1:2080";
+      proxyURL.value = d.proxy_url || "http://127.0.0.1:9901";
     })
     .catch(() => {});
   api
@@ -76,19 +69,6 @@ onMounted(() => {
       logTimestamp.value = d.timestamp !== false;
     })
     .catch(() => {});
-  api
-    .getConnectivitySettings()
-    .then((d) => {
-      if (connectivityTestTargetValues.has(d.test_url)) {
-        connectivityTargetMode.value = d.test_url;
-        connectivityCustomURL.value = "";
-      } else {
-        connectivityTargetMode.value = "custom";
-        connectivityCustomURL.value = d.test_url;
-      }
-      connectivityInterval.value = d.interval_seconds;
-    })
-    .catch((e: any) => notify(`加载连通性测速设置失败: ${e.message}`, "error"));
   api
     .getNTPSettings()
     .then((d) => {
@@ -137,37 +117,6 @@ async function saveLog() {
       timestamp: logTimestamp.value,
     });
     notify("日志配置已保存（下次生成配置时生效）");
-  } catch (e: any) {
-    notify(`保存失败: ${e.message}`, "error");
-  }
-}
-async function saveConnectivity() {
-  const testURL =
-    connectivityTargetMode.value === "custom"
-      ? connectivityCustomURL.value.trim()
-      : connectivityTargetMode.value;
-  try {
-    const parsed = new URL(testURL);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      throw new Error("unsupported protocol");
-    }
-  } catch {
-    notify("连通性地址必须是完整的 HTTP/HTTPS URL", "error");
-    return;
-  }
-  if (connectivityInterval.value < 60 || connectivityInterval.value > 3600) {
-    notify("连通间隔必须在 60 到 3600 秒之间", "error");
-    return;
-  }
-  try {
-    await api.setConnectivitySettings({
-      test_url: testURL,
-      interval_seconds: connectivityInterval.value,
-    });
-    if (connectivityTargetMode.value === "custom") {
-      connectivityCustomURL.value = testURL;
-    }
-    notify("连通性测速设置已保存，配置将自动生成并应用");
   } catch (e: any) {
     notify(`保存失败: ${e.message}`, "error");
   }
@@ -233,55 +182,9 @@ const input =
       class="grid grid-cols-1 items-stretch gap-4 lg:grid-cols-2"
       role="tabpanel"
     >
-      <section :class="panel" class="flex h-full flex-col">
-        <div class="mb-4 flex items-center gap-2">
-          <Gauge :size="18" class="text-[var(--color-primary)]" />
-          <h2 class="font-semibold">连通性测速</h2>
-        </div>
-        <div class="flex flex-1 flex-col gap-4">
-          <label class="block text-sm">
-            连通性地址
-            <select v-model="connectivityTargetMode" :class="input">
-              <option
-                v-for="target in connectivityTestTargets"
-                :key="target.value"
-                :value="target.value"
-              >
-                {{ target.label }} · {{ target.value }}
-              </option>
-              <option value="custom">自定义地址</option>
-            </select>
-          </label>
-          <label
-            v-if="connectivityTargetMode === 'custom'"
-            class="block text-sm"
-          >
-            自定义地址
-            <input
-              v-model.trim="connectivityCustomURL"
-              :class="input"
-              placeholder="http://example.com/generate_204"
-            />
-          </label>
-          <label class="block text-sm"
-            >连通间隔（秒）<input
-              v-model.number="connectivityInterval"
-              type="number"
-              min="60"
-              max="3600"
-              :class="input"
-          /></label>
-          <p
-            class="rounded-[var(--radius-md)] bg-[var(--color-primary-bg)] p-2 text-xs text-[var(--text-secondary)]"
-          >
-            统一用于节点组、策略组的自动 URLTest 与后台健康检查。HTTP 默认使用
-            80 端口，HTTPS 默认使用 443 端口。
-          </p>
-          <Button class="mt-auto self-start" size="sm" @click="saveConnectivity"
-            >保存测速设置</Button
-          >
-        </div>
-      </section>
+      <ConnectivityResourcesPanel @notify="notify" />
+
+      <GeoIPProvidersPanel @notify="notify" />
 
       <section :class="panel" class="flex h-full flex-col">
         <div class="mb-4 flex items-center justify-between gap-3">

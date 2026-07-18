@@ -28,3 +28,13 @@ func TestCoreExitStateReportsIntentionalStop(t *testing.T) {
 		t.Fatalf("unexpected intentional stop state: status=%s runtime=%s message=%q", status, runtimeStatus, message)
 	}
 }
+
+func TestCoreExitStateReportsUnexpectedCleanExit(t *testing.T) {
+	status, runtimeStatus, message := coreExitState(nil, false, "")
+	if status != "error" || runtimeStatus != model.RuntimeError {
+		t.Fatalf("unexpected exit state: status=%s runtime=%s", status, runtimeStatus)
+	}
+	if !strings.Contains(message, "without an error status") {
+		t.Fatalf("unexpected clean-exit message: %s", message)
+	}
+}

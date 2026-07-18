@@ -24,6 +24,7 @@ func RegisterRoutes(
 	dnsSvc *service.DNSService,
 	nodeGroupSvc *service.NodeGroupService,
 	reconcileSvc *service.ConfigReconcileService,
+	coreRestartSvc *service.CoreRestartScheduler,
 ) {
 	runtimeH := handler.NewRuntimeHandler(runtimeSvc)
 	installerH := handler.NewInstallerHandler(installerSvc)
@@ -39,6 +40,7 @@ func RegisterRoutes(
 	logH := handler.NewLogHandler(coreLogSvc)
 	dnsH := handler.NewDNSHandler(dnsSvc)
 	nodeGroupH := handler.NewNodeGroupHandler(nodeGroupSvc)
+	coreRestartH := handler.NewCoreRestartHandler(coreRestartSvc)
 
 	clashProxyH := handler.NewClashProxyHandler(settingsSvc)
 
@@ -52,6 +54,8 @@ func RegisterRoutes(
 
 		v1.GET("/config/status", configH.GetStatus)
 		v1.GET("/config/files", configH.ListFiles)
+		v1.GET("/config/backups", configH.ListBackups)
+		v1.PUT("/config/active", configH.SetActive)
 		v1.POST("/config/default", configH.GenerateDefault)
 		v1.POST("/config/validate", configH.Validate)
 		v1.POST("/config/rules/update", configH.UpdateRules)
@@ -70,8 +74,12 @@ func RegisterRoutes(
 		v1.POST("/core/reset-firewall", coreH.ResetFirewall)
 		v1.POST("/core/flush-dns", coreH.FlushDNS)
 		v1.POST("/core/check-update", coreH.CheckUpdate)
+		v1.GET("/settings/core-restart", coreRestartH.GetSettings)
+		v1.PUT("/settings/core-restart", coreRestartH.UpdateSettings)
 		v1.GET("/logs/core", logH.ListCore)
 		v1.DELETE("/logs/core", logH.ClearCore)
+		v1.GET("/logs/tool", logH.ListTool)
+		v1.DELETE("/logs/tool", logH.ClearTool)
 
 		v1.GET("/settings/update", settingsH.GetUpdateSettings)
 		v1.PUT("/settings/update", settingsH.SetUpdateSettings)
@@ -79,6 +87,14 @@ func RegisterRoutes(
 		v1.PUT("/settings/log", settingsH.SetLogSettings)
 		v1.GET("/settings/connectivity", settingsH.GetConnectivitySettings)
 		v1.PUT("/settings/connectivity", settingsH.SetConnectivitySettings)
+		v1.GET("/settings/connectivity-targets", settingsH.ListConnectivityTargets)
+		v1.POST("/settings/connectivity-targets", settingsH.CreateConnectivityTarget)
+		v1.PUT("/settings/connectivity-targets/:id", settingsH.UpdateConnectivityTarget)
+		v1.DELETE("/settings/connectivity-targets/:id", settingsH.DeleteConnectivityTarget)
+		v1.GET("/settings/geoip-providers", settingsH.ListGeoIPProviders)
+		v1.POST("/settings/geoip-providers", settingsH.CreateGeoIPProvider)
+		v1.PUT("/settings/geoip-providers/:id", settingsH.UpdateGeoIPProvider)
+		v1.DELETE("/settings/geoip-providers/:id", settingsH.DeleteGeoIPProvider)
 		v1.GET("/settings/ntp", settingsH.GetNTPSettings)
 		v1.PUT("/settings/ntp", settingsH.SetNTPSettings)
 		v1.GET("/settings/dns", settingsH.GetDNSSettings)

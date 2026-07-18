@@ -39,6 +39,26 @@ func TestSetProxyModePersistsSupportedMode(t *testing.T) {
 	}
 }
 
+func TestSetUpdateSettingsDefaultsToDedicatedProxy(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	svc := NewSettingsService(db)
+	if err := svc.SetUpdateSettings(&model.UpdateSettings{Acceleration: "proxy"}); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := db.GetUpdateSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.ProxyURL != store.DefaultUpdateProxyURL {
+		t.Fatalf("update proxy = %q, want %q", settings.ProxyURL, store.DefaultUpdateProxyURL)
+	}
+}
+
 func TestSetProxyModeReconcilesConfig(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {
@@ -151,7 +171,11 @@ func TestConnectivitySettingsPersistAndNotifyScheduler(t *testing.T) {
 	}
 	hookCalled := false
 	svc.SetConnectivitySettingsHook(func() { hookCalled = true })
-	request := &model.ConnectivitySettings{TestURL: "http://connectivity.example/generate_204", IntervalSeconds: 120}
+	target, err := svc.CreateConnectivityTarget(&model.ConnectivityTargetRequest{Name: "Test target", URL: "http://connectivity.example/generate_204", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := &model.ConnectivitySettings{TestURL: target.URL, IntervalSeconds: 120}
 	if err := svc.SetConnectivitySettings(request); err != nil {
 		t.Fatal(err)
 	}

@@ -211,6 +211,60 @@ func (s *Store) migrate() error {
 		`ALTER TABLE node_groups ADD COLUMN node_uids TEXT NOT NULL DEFAULT '[]'`,
 		`UPDATE node_groups SET node_uids = '[]' WHERE node_uids = '' OR node_uids = 'null'`,
 		`UPDATE node_groups SET filter_exclude = '' WHERE name = '全部节点' AND filter_include = '.*' AND filter_exclude = '免费|过期|流量|官网|到期|剩余'`,
+		`CREATE TABLE IF NOT EXISTS geoip_providers (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL,
+			provider_key TEXT NOT NULL UNIQUE,
+			template TEXT NOT NULL DEFAULT 'builtin',
+			url TEXT NOT NULL DEFAULT '',
+			ip_parameter TEXT NOT NULL DEFAULT '',
+			mapping_json TEXT NOT NULL DEFAULT '{}',
+			enabled INTEGER NOT NULL DEFAULT 1,
+			is_default INTEGER NOT NULL DEFAULT 0,
+			builtin INTEGER NOT NULL DEFAULT 0,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_geoip_providers_default ON geoip_providers(is_default) WHERE is_default = 1`,
+		`INSERT OR IGNORE INTO geoip_providers (name, provider_key, template, enabled, is_default, builtin, created_at, updated_at) VALUES
+			('松子 IP', 'songzixian', 'builtin', 1, 1, 1, unixepoch(), unixepoch()),
+			('ipapi.is', 'ipapi.is', 'builtin', 1, 0, 1, unixepoch(), unixepoch()),
+			('LeoMoeAPI', 'leomoeapi', 'builtin', 1, 0, 1, unixepoch(), unixepoch()),
+			('IP.SB', 'ip.sb', 'builtin', 1, 0, 1, unixepoch(), unixepoch()),
+			('IPInfo', 'ipinfo', 'builtin', 1, 0, 1, unixepoch(), unixepoch()),
+			('IP-API.com', 'ip-api.com', 'builtin', 1, 0, 1, unixepoch(), unixepoch()),
+			('百度 IP', 'baidu', 'builtin', 1, 0, 1, unixepoch(), unixepoch())`,
+		`UPDATE geoip_providers SET is_default = 1, enabled = 1, updated_at = unixepoch()
+			WHERE id = (SELECT id FROM geoip_providers ORDER BY CASE WHEN provider_key = 'songzixian' THEN 0 ELSE 1 END, id ASC LIMIT 1)
+			AND NOT EXISTS (SELECT 1 FROM geoip_providers WHERE is_default = 1)`,
+		`CREATE TABLE IF NOT EXISTS connectivity_targets (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL,
+			url TEXT NOT NULL UNIQUE,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			builtin INTEGER NOT NULL DEFAULT 0,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		)`,
+		`INSERT OR IGNORE INTO connectivity_targets (name, url, enabled, builtin, created_at, updated_at) VALUES
+			('Google HTTP', 'http://www.gstatic.com/generate_204', 1, 1, unixepoch(), unixepoch()),
+			('Cloudflare HTTP', 'http://cp.cloudflare.com/generate_204', 1, 1, unixepoch(), unixepoch()),
+			('Apple HTTP', 'http://captive.apple.com/generate_204', 1, 1, unixepoch(), unixepoch()),
+			('Google HTTPS', 'https://www.gstatic.com/generate_204', 1, 1, unixepoch(), unixepoch()),
+			('Cloudflare HTTPS', 'https://cp.cloudflare.com/generate_204', 1, 1, unixepoch(), unixepoch())`,
+		`INSERT OR IGNORE INTO connectivity_targets (name, url, enabled, builtin, created_at, updated_at)
+			SELECT '现有连通性地址', value, 1, 0, unixepoch(), unixepoch()
+			FROM app_settings WHERE key = 'connectivity.test_url' AND value <> ''`,
+		`CREATE TABLE IF NOT EXISTS config_backups (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			config_name TEXT NOT NULL,
+			file_name TEXT NOT NULL,
+			path TEXT NOT NULL,
+			backup_date TEXT NOT NULL,
+			size_bytes INTEGER NOT NULL DEFAULT 0,
+			created_at INTEGER NOT NULL,
+			UNIQUE(config_name, backup_date)
+		)`,
 	}
 
 	for _, m := range migrations {

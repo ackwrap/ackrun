@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -31,6 +32,8 @@ import (
 // SystemAdBlockRouteRuleName 系统默认广告拦截规则名称。
 // 智能快速配置时自动创建，配置生成时独立转换为 action=reject。
 const SystemAdBlockRouteRuleName = "广告拦截"
+
+const routeRuleSubscriptionContentMaxSize int64 = 16 * 1024 * 1024
 
 // SystemRuleAdBlockKey 系统默认广告拦截规则内部标识。
 const SystemRuleAdBlockKey = "ad_block"
@@ -54,14 +57,16 @@ func IsSystemRouteRuleName(name string) bool {
 }
 
 type RouteRuleService struct {
-	store       *store.Store
-	paths       *paths.Paths
-	realtime    *RealtimeService
-	cron        *cron.Cron
-	ruleEntries map[int64]cron.EntryID
-	geoEntries  map[int64]cron.EntryID
-	mu          sync.Mutex
-	cacheMu     sync.Mutex
+	store            *store.Store
+	paths            *paths.Paths
+	realtime         *RealtimeService
+	cron             *cron.Cron
+	ruleEntries      map[int64]cron.EntryID
+	geoEntries       map[int64]cron.EntryID
+	mu               sync.Mutex
+	cacheMu          sync.Mutex
+	cacheLocks       map[string]*sync.Mutex
+	ruleSetValidator func(context.Context, string) error
 }
 
 func NewRouteRuleService(s *store.Store, p *paths.Paths, rt *RealtimeService) *RouteRuleService {
@@ -72,6 +77,7 @@ func NewRouteRuleService(s *store.Store, p *paths.Paths, rt *RealtimeService) *R
 		cron:        cron.New(cron.WithSeconds()),
 		ruleEntries: make(map[int64]cron.EntryID),
 		geoEntries:  make(map[int64]cron.EntryID),
+		cacheLocks:  make(map[string]*sync.Mutex),
 	}
 }
 
@@ -1088,10 +1094,18 @@ func (svc *RouteRuleService) routeRuleSubscriptionCachePath(item *model.RouteRul
 }
 
 func (svc *RouteRuleService) GeneratedGeoRuleSetContent(tag string) ([]byte, string, error) {
-	return svc.generatedGeoRuleSetContent(tag, generatedGeoRuleSetURL(tag))
+	return svc.GeneratedGeoRuleSetContentContext(context.Background(), tag)
+}
+
+func (svc *RouteRuleService) GeneratedGeoRuleSetContentContext(ctx context.Context, tag string) ([]byte, string, error) {
+	return svc.generatedGeoRuleSetContentContext(ctx, tag, generatedGeoRuleSetURL(tag))
 }
 
 func (svc *RouteRuleService) generatedGeoRuleSetContent(tag, upstreamURL string) ([]byte, string, error) {
+	return svc.generatedGeoRuleSetContentContext(context.Background(), tag, upstreamURL)
+}
+
+func (svc *RouteRuleService) generatedGeoRuleSetContentContext(ctx context.Context, tag, upstreamURL string) ([]byte, string, error) {
 	tag = strings.ToLower(strings.TrimSpace(tag))
 	if (!strings.HasPrefix(tag, "geoip-") && !strings.HasPrefix(tag, "geosite-")) || !isRouteRuleSubscriptionTag(tag) {
 		return nil, "", fmt.Errorf("invalid generated geo rule set tag")
@@ -1100,59 +1114,133 @@ func (svc *RouteRuleService) generatedGeoRuleSetContent(tag, upstreamURL string)
 		return nil, "", fmt.Errorf("rules directory is not configured")
 	}
 
-	svc.cacheMu.Lock()
-	defer svc.cacheMu.Unlock()
+	unlock := svc.lockGeneratedGeoRuleSet(tag)
+	defer unlock()
 
 	cacheDir := filepath.Join(svc.paths.RulesDir, "geo")
 	cachePath := filepath.Join(cacheDir, tag+".srs")
-	if data, err := os.ReadFile(cachePath); err == nil {
-		logging.Info("route_rule_geo.cache", "使用 Geo 规则集缓存: %s", tag)
-		return data, "application/octet-stream", nil
-	} else if !os.IsNotExist(err) {
-		return nil, "", fmt.Errorf("read generated geo rule set cache: %w", err)
+	cachedData, cacheErr := os.ReadFile(cachePath)
+	if cacheErr != nil && !os.IsNotExist(cacheErr) {
+		return nil, "", fmt.Errorf("read generated geo rule set cache: %w", cacheErr)
+	}
+	hasValidCache := cacheErr == nil
+	if hasValidCache {
+		if err := validateGeneratedGeoRuleSet(cachedData); err != nil {
+			hasValidCache = false
+			logging.Error("route_rule_geo.cache", "忽略无效的 Geo 规则集缓存 %s: %v", tag, err)
+		} else if err := svc.validateGeneratedGeoRuleSetFile(ctx, cachePath); err != nil {
+			hasValidCache = false
+			logging.Error("route_rule_geo.cache", "忽略核心无法解析的 Geo 规则集缓存 %s: %v", tag, err)
+		}
+	}
+	useCachedOnRefreshError := func(action string, refreshErr error) ([]byte, string, error) {
+		if hasValidCache {
+			logging.Error("route_rule_geo.cache", "%s，继续使用旧缓存 %s: %v", action, tag, refreshErr)
+			return cachedData, "application/octet-stream", nil
+		}
+		return nil, "", fmt.Errorf("%s: %w", action, refreshErr)
+	}
+	if hasValidCache {
+		info, err := os.Stat(cachePath)
+		if err != nil {
+			return nil, "", fmt.Errorf("stat generated geo rule set cache: %w", err)
+		}
+		if time.Since(info.ModTime()) < generatedGeoRuleSetUpdateInterval {
+			logging.Info("route_rule_geo.cache", "使用 Geo 规则集缓存: %s", tag)
+			return cachedData, "application/octet-stream", nil
+		}
+		logging.Info("route_rule_geo.cache", "Geo 规则集缓存已过期，准备刷新: %s", tag)
 	}
 
-	data, err := svc.fetchGeneratedGeoRuleSetContent(upstreamURL)
+	data, err := svc.fetchGeneratedGeoRuleSetContent(ctx, upstreamURL)
 	if err != nil {
-		logging.Error("route_rule_geo.cache", "下载 Geo 规则集失败 %s: %v", tag, err)
-		return nil, "", fmt.Errorf("download generated geo rule set %s: %w", tag, err)
+		return useCachedOnRefreshError("下载 Geo 规则集失败 "+tag, err)
 	}
 	if len(data) == 0 {
-		return nil, "", fmt.Errorf("downloaded generated geo rule set %s is empty", tag)
+		return useCachedOnRefreshError("下载的 Geo 规则集为空 "+tag, fmt.Errorf("empty response"))
+	}
+	if err := validateGeneratedGeoRuleSet(data); err != nil {
+		return useCachedOnRefreshError("Geo 规则集校验失败 "+tag, err)
 	}
 	if err := os.MkdirAll(cacheDir, 0755); err != nil {
-		return nil, "", fmt.Errorf("create generated geo rule set cache dir: %w", err)
+		return useCachedOnRefreshError("创建 Geo 规则集缓存目录失败", err)
 	}
-	tmpPath := cachePath + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return nil, "", fmt.Errorf("write generated geo rule set cache: %w", err)
+	tmpFile, err := os.CreateTemp(cacheDir, "."+tag+"-*.tmp")
+	if err != nil {
+		return useCachedOnRefreshError("创建 Geo 规则集临时文件失败", err)
 	}
-	if err := os.Rename(tmpPath, cachePath); err != nil {
-		_ = os.Remove(tmpPath)
-		return nil, "", fmt.Errorf("commit generated geo rule set cache: %w", err)
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		return useCachedOnRefreshError("写入 Geo 规则集缓存失败", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return useCachedOnRefreshError("关闭 Geo 规则集缓存失败", err)
+	}
+	if err := svc.validateGeneratedGeoRuleSetFile(ctx, tmpPath); err != nil {
+		return useCachedOnRefreshError("sing-box 无法解析 Geo 规则集 "+tag, err)
+	}
+	if err := atomicReplaceFile(tmpPath, cachePath); err != nil {
+		return useCachedOnRefreshError("替换 Geo 规则集缓存失败", err)
 	}
 	logging.Info("route_rule_geo.cache", "Geo 规则集已缓存: %s", tag)
 	return data, "application/octet-stream", nil
 }
 
-func (svc *RouteRuleService) fetchGeneratedGeoRuleSetContent(upstreamURL string) ([]byte, error) {
+func (svc *RouteRuleService) validateGeneratedGeoRuleSetFile(ctx context.Context, filePath string) error {
+	if svc.ruleSetValidator != nil {
+		return svc.ruleSetValidator(ctx, filePath)
+	}
+	if svc.paths == nil || strings.TrimSpace(svc.paths.BinaryPath) == "" {
+		return fmt.Errorf("sing-box 未安装，无法验证规则集")
+	}
+	validationCtx, cancel := context.WithTimeout(ctx, generatedGeoRuleSetValidationTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(validationCtx, svc.paths.BinaryPath, "rule-set", "match", filePath, "ackwrap.invalid", "--format", "binary")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		message := strings.TrimSpace(cleanLogLine(string(output)))
+		if message == "" {
+			message = err.Error()
+		}
+		return fmt.Errorf("sing-box rule-set validation failed: %s", message)
+	}
+	return nil
+}
+
+func (svc *RouteRuleService) lockGeneratedGeoRuleSet(tag string) func() {
+	svc.cacheMu.Lock()
+	lock := svc.cacheLocks[tag]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		svc.cacheLocks[tag] = lock
+	}
+	svc.cacheMu.Unlock()
+	lock.Lock()
+	return lock.Unlock
+}
+
+func (svc *RouteRuleService) fetchGeneratedGeoRuleSetContent(ctx context.Context, upstreamURL string) ([]byte, error) {
 	settings, err := svc.store.GetUpdateSettings()
 	if err != nil {
 		return nil, fmt.Errorf("read update acceleration settings: %w", err)
 	}
-	attempts, err := buildUpdateRequestAttempts(settings, upstreamURL)
-	if err != nil {
-		return nil, err
-	}
+	attempts := buildGitHubDownloadAttempts(settings, upstreamURL)
+	downloadCtx, cancel := context.WithTimeout(ctx, generatedGeoRuleSetDownloadTimeout)
+	defer cancel()
 	var lastErr error
 	for _, attempt := range attempts {
 		logging.Info("route_rule_geo.download", "download attempt: %s", attempt.name)
-		data, err := fetchRouteRuleSubscriptionContentWithClient(attempt.client, attempt.url)
+		data, err := fetchRouteRuleSubscriptionContentWithClientContext(downloadCtx, attempt.client, attempt.url)
 		if err == nil {
 			return data, nil
 		}
 		lastErr = err
 		logging.Info("route_rule_geo.download", "download attempt failed: %s: %v", attempt.name, err)
+		if downloadCtx.Err() != nil {
+			break
+		}
 	}
 	return nil, lastErr
 }
@@ -1355,7 +1443,7 @@ func validateGeoAssetRequest(req *model.GeoAssetRequest) error {
 func fetchRouteRuleSubscriptionContent(rawURL string, useProxy bool) ([]byte, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	if useProxy {
-		proxyURL, _ := url.Parse("http://127.0.0.1:2080")
+		proxyURL, _ := url.Parse(store.DefaultUpdateProxyURL)
 		transport.Proxy = http.ProxyURL(proxyURL)
 	}
 	client := &http.Client{Timeout: 60 * time.Second, Transport: transport}
@@ -1363,7 +1451,11 @@ func fetchRouteRuleSubscriptionContent(rawURL string, useProxy bool) ([]byte, er
 }
 
 func fetchRouteRuleSubscriptionContentWithClient(client *http.Client, rawURL string) ([]byte, error) {
-	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	return fetchRouteRuleSubscriptionContentWithClientContext(context.Background(), client, rawURL)
+}
+
+func fetchRouteRuleSubscriptionContentWithClientContext(ctx context.Context, client *http.Client, rawURL string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create rule subscription request: %w", err)
 	}
@@ -1376,12 +1468,15 @@ func fetchRouteRuleSubscriptionContentWithClient(client *http.Client, rawURL str
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("fetch rule subscription failed: http %d", resp.StatusCode)
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 16*1024*1024))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, routeRuleSubscriptionContentMaxSize+1))
 	if err != nil {
 		return nil, fmt.Errorf("read rule subscription: %w", err)
 	}
 	if len(data) == 0 {
 		return nil, fmt.Errorf("rule subscription response is empty")
+	}
+	if int64(len(data)) > routeRuleSubscriptionContentMaxSize {
+		return nil, fmt.Errorf("rule subscription response exceeds %d bytes", routeRuleSubscriptionContentMaxSize)
 	}
 	return data, nil
 }

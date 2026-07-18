@@ -22,6 +22,7 @@ import {
 import { useRealtimeSocket } from "@/composables/useRealtimeSocket";
 import { api } from "@/services/api";
 import type {
+  ConfigFileItem,
   MaintenanceCheckResponse,
   RuntimeResponse,
   WSEvent,
@@ -33,9 +34,13 @@ import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
 import Modal from "@/components/ui/Modal.vue";
 import ControlOverview from "./ControlOverview.vue";
 import ControlNetworkOverview from "./ControlNetworkOverview.vue";
+import ControlRestartSchedule from "./ControlRestartSchedule.vue";
 const runtime = ref<RuntimeResponse | null>(null),
   installStatus = ref<any>(null),
   configStatus = ref<any>(null),
+  configFiles = ref<ConfigFileItem[]>([]),
+  selectedConfig = ref(""),
+  configChanging = ref(false),
   installProgress = ref<any>(null),
   guideDismissed = ref(false),
   inboundMode = ref("tun_mixed"),
@@ -116,22 +121,90 @@ const updateAvailable = computed(() =>
     total_bytes: installProgress.value?.total_bytes || 0,
   }));
 let installTimer: number,
+  initialRun = 0,
   cancelled = false;
 function notify(v: string, t: "success" | "error" | "info" = "success") {
   message.value = v;
   messageType.value = t;
 }
 async function initial() {
+  const run = ++initialRun;
+  const initialResults = await Promise.allSettled([
+    api.getRuntime(),
+    api.getInstallerStatus(),
+  ]);
+  if (cancelled || run !== initialRun) return;
+  if (initialResults[0].status === "fulfilled")
+    runtime.value = initialResults[0].value;
+  if (initialResults[1].status === "fulfilled")
+    installStatus.value = initialResults[1].value;
+  const initialLabels = ["运行状态", "安装状态"];
+  const initialFailures = initialResults
+    .map((result, index) =>
+      result.status === "rejected"
+        ? `${initialLabels[index]}: ${result.reason?.message || "请求失败"}`
+        : "",
+    )
+    .filter(Boolean);
+  if (initialFailures.length)
+    notify(`控制面板部分状态加载失败: ${initialFailures.join("；")}`, "error");
+  if (!runtime.value || runtime.value.status === "not_installed") return;
+
+  const localResults = await Promise.allSettled([
+    api.getConfigStatus().then((value) => {
+      if (!cancelled && run === initialRun) configStatus.value = value;
+    }),
+    api.getConfigFiles().then((value) => {
+      if (cancelled || run !== initialRun) return;
+      configFiles.value = value;
+      selectedConfig.value = value.find((item) => item.active)?.name || "";
+    }),
+    api.getInboundMode().then((value) => {
+      if (!cancelled && run === initialRun) inboundMode.value = value.mode;
+    }),
+    api.getProxyMode().then((value) => {
+      if (!cancelled && run === initialRun) proxyMode.value = value.mode;
+    }),
+  ]);
+  if (cancelled || run !== initialRun) return;
+  const labels = ["配置状态", "配置文件", "运行模式", "代理模式"];
+  const failures = localResults
+    .map((result, index) =>
+      result.status === "rejected"
+        ? `${labels[index]}: ${result.reason?.message || "请求失败"}`
+        : "",
+    )
+    .filter(Boolean);
+  if (failures.length)
+    notify(`控制面板部分数据加载失败: ${failures.join("；")}`, "error");
+}
+async function changeActiveConfig() {
+  const previous = configFiles.value.find((item) => item.active)?.name || "";
+  const next = selectedConfig.value;
+  if (!next || next === previous || configChanging.value) return;
+  const wasRunning = isRunning.value;
+  configChanging.value = true;
   try {
-    runtime.value = await api.getRuntime();
-    installStatus.value = await api.getInstallerStatus();
-    if (runtime.value.status === "not_installed") return;
-    configStatus.value = await api.getConfigStatus();
-    inboundMode.value = (await api.getInboundMode()).mode;
-    proxyMode.value = (await api.getProxyMode()).mode;
+    configStatus.value = await api.setActiveConfig(next);
+    configFiles.value = configFiles.value.map((item) => ({
+      ...item,
+      active: item.name === next,
+    }));
+    api
+      .getRuntime()
+      .then((value) => (runtime.value = value))
+      .catch(() => {});
+    notify(
+      wasRunning
+        ? `当前配置已切换为 ${next}，点击“重载配置”后生效`
+        : `当前配置已切换为 ${next}`,
+      wasRunning ? "info" : "success",
+    );
   } catch (e: any) {
-    if (!cancelled)
-      notify(`控制面板初始化失败: ${e?.message || "请求失败"}`, "error");
+    selectedConfig.value = previous;
+    notify(`切换配置失败: ${e.message}`, "error");
+  } finally {
+    configChanging.value = false;
   }
 }
 async function action(fn: () => Promise<any>, label: string) {
@@ -258,8 +331,14 @@ useRealtimeSocket((e: WSEvent) => {
     } as RuntimeResponse;
     if (d.status === "error" && d.error)
       notify(`核心异常: ${d.error}`, "error");
-  } else if (e.type === "config.status") configStatus.value = d;
-  else if (
+  } else if (e.type === "config.status") {
+    configStatus.value = d;
+    if (d.file_name) selectedConfig.value = d.file_name;
+  } else if (e.type === "core.restart_schedule") {
+    if (d.status === "succeeded") notify("核心定时重启完成");
+    else if (d.status === "failed")
+      notify(`核心定时重启失败: ${d.error || "未知错误"}`, "error");
+  } else if (
     e.type === "subscription.sync" &&
     ["updated", "failed"].includes(d?.status)
   )
@@ -457,13 +536,43 @@ onBeforeUnmount(() => {
       <section
         class="flex h-full flex-col rounded-[var(--radius-xl)] border bg-[var(--bg-surface)] p-5 xl:col-span-4"
       >
-        <div class="flex gap-3">
-          <Power :size="19" />
-          <div>
-            <h2 class="font-semibold">
-              核心控制 <span class="text-xs">{{ labels[rt] }}</span>
-            </h2>
-            <small>sing-box 进程管理</small>
+        <div class="flex items-start justify-between gap-3">
+          <div class="flex min-w-0 gap-3">
+            <Power :size="19" class="shrink-0" />
+            <div class="min-w-0">
+              <h2 class="font-semibold">
+                核心控制 <span class="text-xs">{{ labels[rt] }}</span>
+              </h2>
+              <small>sing-box 进程管理</small>
+            </div>
+          </div>
+          <div class="flex min-w-0 max-w-56 flex-1 items-end gap-2 sm:flex-none">
+            <ControlRestartSchedule @notify="notify" />
+            <label class="min-w-0 flex-1">
+            <span class="sr-only">当前配置文件</span>
+            <select
+              v-model="selectedConfig"
+              class="aw-input w-full min-w-32"
+              title="选择当前配置文件"
+              :disabled="
+                configChanging ||
+                !!runtimeAction ||
+                notInstalled ||
+                !configFiles.length
+              "
+              @change="changeActiveConfig"
+            >
+              <option value="" disabled>选择配置文件</option>
+              <option
+                v-for="item in configFiles"
+                :key="item.path"
+                :value="item.name"
+                :disabled="!item.valid"
+              >
+                {{ item.name }}{{ item.valid ? "" : "（校验失败）" }}
+              </option>
+            </select>
+            </label>
           </div>
         </div>
         <div class="mt-3 grid grid-cols-3 gap-2">

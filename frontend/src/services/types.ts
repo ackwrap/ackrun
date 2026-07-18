@@ -46,6 +46,16 @@ export interface ConfigFileItem {
   error?: string;
 }
 
+export interface ConfigBackup {
+  id: number;
+  config_name: string;
+  file_name: string;
+  path: string;
+  backup_date: string;
+  size_bytes: number;
+  created_at: number;
+}
+
 export interface CoreStatus {
   status: "starting" | "running" | "stopping" | "stopped" | "error";
   pid: number;
@@ -57,6 +67,14 @@ export interface CoreLogEntry {
   time: number;
   source: "stdout" | "stderr" | string;
   line: string;
+}
+
+export interface ToolLogEntry {
+  id: number;
+  time: number;
+  level: "info" | "error" | string;
+  tag: string;
+  message: string;
 }
 
 export interface MaintenanceCheck {
@@ -118,6 +136,79 @@ export interface LogSettingsResponse {
 export interface ConnectivitySettings {
   test_url: string;
   interval_seconds: number;
+}
+
+export interface ConnectivityTarget {
+  id: number;
+  name: string;
+  url: string;
+  enabled: boolean;
+  builtin: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface ConnectivityTargetRequest {
+  name: string;
+  url: string;
+  enabled: boolean;
+}
+
+export interface GeoIPFieldMapping {
+  asnumber?: string;
+  country?: string;
+  country_code?: string;
+  country_en?: string;
+  prov?: string;
+  prov_en?: string;
+  city?: string;
+  city_en?: string;
+  district?: string;
+  owner?: string;
+  isp?: string;
+  domain?: string;
+  whois?: string;
+  lat?: string;
+  lng?: string;
+  prefix?: string;
+}
+
+export interface GeoIPProvider {
+  id: number;
+  name: string;
+  key: string;
+  template: string;
+  url?: string;
+  ip_parameter?: string;
+  mapping: GeoIPFieldMapping;
+  enabled: boolean;
+  is_default: boolean;
+  builtin: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface GeoIPProviderRequest {
+  name: string;
+  template: string;
+  url?: string;
+  ip_parameter?: string;
+  mapping: GeoIPFieldMapping;
+  enabled: boolean;
+  is_default: boolean;
+}
+
+export interface GeoIPProviderTemplate {
+  key: string;
+  name: string;
+  url?: string;
+  ip_parameter?: string;
+  mapping: GeoIPFieldMapping;
+}
+
+export interface GeoIPProviderListResponse {
+  items: GeoIPProvider[];
+  templates: GeoIPProviderTemplate[];
 }
 
 export interface NTPSettings {
@@ -651,5 +742,12 @@ export interface ConfigGenerateResponse {
 }
 
 export interface ConfigApplyRequest {
+  file_name: string;
   restart_core: boolean;
+}
+
+export interface CoreRestartSettings {
+  mode: "off" | "daily" | "weekly";
+  time: string;
+  weekday: number;
 }

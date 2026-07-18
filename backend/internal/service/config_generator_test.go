@@ -309,16 +309,26 @@ func TestGenerateRouteIncludesDefaultLoopBypassRules(t *testing.T) {
 	if !ok {
 		t.Fatalf("route rules type = %T", route["rules"])
 	}
-	var processRule, domainRule, ipRule bool
+	if len(rules) == 0 || rules[0]["outbound"] != "proxy" || !stringListContains(rules[0]["inbound"], updateProxyInboundTag) {
+		t.Fatalf("update proxy rule must be first: %+v", rules)
+	}
+	var updateProxyRule, processRule, processRuleScoped, domainRule, ipRule bool
 	for _, rule := range rules {
+		if inbound, ok := rule["inbound"].([]string); ok && len(inbound) == 1 && inbound[0] == updateProxyInboundTag && rule["outbound"] == "proxy" {
+			updateProxyRule = true
+		}
 		if rule["outbound"] != "direct" {
 			continue
 		}
-		processRule = processRule || rule["process_name"] != nil
+		if rule["process_name"] != nil {
+			processRule = true
+			inbound, ok := rule["inbound"].([]string)
+			processRuleScoped = ok && len(inbound) == 1 && inbound[0] == "tun-in"
+		}
 		domainRule = domainRule || rule["domain"] != nil
 		ipRule = ipRule || rule["ip_cidr"] != nil
 	}
-	if !processRule || !domainRule || !ipRule {
+	if !updateProxyRule || !processRule || !processRuleScoped || !domainRule || !ipRule {
 		t.Fatalf("missing loop bypass rule: %+v", rules)
 	}
 }
@@ -702,6 +712,37 @@ func TestGenerateOutboundsIncludesEnabledNodesForCoreExitIP(t *testing.T) {
 	}
 }
 
+func TestGenerateOutboundsFallsBackWhenProxyCollectionIsEmpty(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.CreateProxyCollection(&model.ProxyCollection{
+		Name: "proxy", Type: "selector", SourceType: "manual",
+		ReferencedGroupIDs: "[]", RouteRuleIDs: "[]", NodeUIDs: "[]", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	outbounds, _, err := NewConfigGeneratorService(db, nil).generateOutbounds()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range outbounds {
+		outbound, ok := item.(map[string]interface{})
+		if !ok || outbound["tag"] != "proxy" {
+			continue
+		}
+		members, ok := outbound["outbounds"].([]string)
+		if outbound["type"] != "selector" || !ok || len(members) != 1 || members[0] != "direct" {
+			t.Fatalf("empty proxy fallback = %+v", outbound)
+		}
+		return
+	}
+	t.Fatal("proxy fallback outbound not found")
+}
+
 func TestGenerateRouteOmitsLegacyInternalNodeCheckRule(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {
@@ -728,17 +769,46 @@ func TestGenerateInboundsDefaultsToLoopback(t *testing.T) {
 	defer db.Close()
 
 	service := NewConfigGeneratorService(db, nil)
-	for _, item := range service.generateInbounds("", 0) {
+	inbounds, err := service.generateInbounds("", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundMixed := false
+	foundUpdateProxy := false
+	for _, item := range inbounds {
 		inbound, ok := item.(map[string]interface{})
 		if !ok || inbound["type"] != "mixed" {
 			continue
 		}
-		if inbound["listen"] != "127.0.0.1" || inbound["listen_port"] != 7890 {
-			t.Fatalf("mixed inbound = %+v, want loopback:7890", inbound)
+		switch inbound["tag"] {
+		case "mixed-in":
+			foundMixed = true
+			if inbound["listen"] != "127.0.0.1" || inbound["listen_port"] != model.DefaultMixedInboundPort {
+				t.Fatalf("mixed inbound = %+v, want loopback:%d", inbound, model.DefaultMixedInboundPort)
+			}
+		case updateProxyInboundTag:
+			foundUpdateProxy = true
+			if inbound["listen"] != "127.0.0.1" || inbound["listen_port"] != updateProxyListenPort {
+				t.Fatalf("update proxy inbound = %+v, want loopback:%d", inbound, updateProxyListenPort)
+			}
 		}
-		return
 	}
-	t.Fatal("generated mixed inbound not found")
+	if !foundMixed || !foundUpdateProxy {
+		t.Fatalf("generated inbounds missing mixed=%t update_proxy=%t: %+v", foundMixed, foundUpdateProxy, inbounds)
+	}
+}
+
+func TestGenerateInboundsRejectsReservedUpdateProxyPort(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	service := NewConfigGeneratorService(db, nil)
+	if _, err := service.generateInbounds("127.0.0.1", updateProxyListenPort); err == nil || !strings.Contains(err.Error(), "保留") {
+		t.Fatalf("reserved port error = %v", err)
+	}
 }
 
 func TestPreviewRequestPreservesStoredGenerationSettings(t *testing.T) {
@@ -751,7 +821,7 @@ func TestPreviewRequestPreservesStoredGenerationSettings(t *testing.T) {
 	stored := &model.ConfigGenerateRequest{
 		DefaultOutbound: "proxy",
 		InboundListen:   "127.0.0.1",
-		InboundPort:     2080,
+		InboundPort:     8888,
 		LogLevel:        "warn",
 	}
 	if err := db.SetConfigGenerateRequest(stored); err != nil {

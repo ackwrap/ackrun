@@ -17,7 +17,7 @@ func TestConfigGenerateRequestRoundTrip(t *testing.T) {
 	request := &model.ConfigGenerateRequest{
 		DefaultOutbound: "proxy",
 		InboundListen:   "127.0.0.1",
-		InboundPort:     2080,
+		InboundPort:     8888,
 		LogLevel:        "warn",
 	}
 	if err := db.SetConfigGenerateRequest(request); err != nil {

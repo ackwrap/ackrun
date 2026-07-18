@@ -1,6 +1,9 @@
 package service
 
 import (
+	"bytes"
+	"compress/zlib"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ackwrap/ackwrap/internal/model"
 	"github.com/ackwrap/ackwrap/internal/paths"
@@ -20,7 +24,41 @@ func newTestRouteRuleService(t *testing.T, db *store.Store) *RouteRuleService {
 	t.Helper()
 	dir := t.TempDir()
 	p := &paths.Paths{DataDir: dir, RulesDir: filepath.Join(dir, "rules"), GeoDir: filepath.Join(dir, "geo")}
-	return NewRouteRuleService(db, p, nil)
+	svc := NewRouteRuleService(db, p, nil)
+	svc.ruleSetValidator = func(_ context.Context, filePath string) error {
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			return err
+		}
+		return validateGeneratedGeoRuleSet(data)
+	}
+	return svc
+}
+
+func testBinaryRuleSet(t *testing.T, version byte) []byte {
+	return testCompressedRuleSet(t, version, []byte{0})
+}
+
+func testCompressedRuleSet(t *testing.T, version byte, payload []byte) []byte {
+	t.Helper()
+	var output bytes.Buffer
+	_, _ = output.Write(generatedGeoRuleSetMagic[:])
+	_ = output.WriteByte(version)
+	writer := zlib.NewWriter(&output)
+	if _, err := writer.Write(payload); err != nil {
+		t.Fatalf("write test rule set: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close test rule set: %v", err)
+	}
+	return output.Bytes()
+}
+
+func TestValidateGeneratedGeoRuleSetRejectsExpandedPayload(t *testing.T) {
+	data := testCompressedRuleSet(t, 1, bytes.Repeat([]byte{0}, 65))
+	if err := validateGeneratedGeoRuleSetSize(data, 64); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("expected expanded payload error, got %v", err)
+	}
 }
 
 func TestRouteRuleServicePreview(t *testing.T) {
@@ -43,6 +81,35 @@ func TestRouteRuleServicePreview(t *testing.T) {
 	}
 	if len(preview.Rules) != 1 || preview.Rules[0]["outbound"] != "proxy" {
 		t.Fatalf("unexpected preview: %+v", preview)
+	}
+}
+
+func TestProcessNameRouteRuleGeneration(t *testing.T) {
+	req := &model.RouteRuleRequest{
+		Name:     "Browser Proxy",
+		Enabled:  true,
+		RuleType: "process_name",
+		Values:   []string{"chrome.exe", "curl"},
+		Outbound: "proxy",
+	}
+	if err := validateRouteRule(req); err != nil {
+		t.Fatalf("validate process_name rule: %v", err)
+	}
+	rule := singboxRouteRule(req.RuleType, req.Values, req.Outbound, false)
+	names, ok := rule["process_name"].([]string)
+	if !ok || len(names) != 2 || names[0] != "chrome.exe" || names[1] != "curl" {
+		t.Fatalf("unexpected process_name rule: %+v", rule)
+	}
+	if rule["action"] != "route" || rule["outbound"] != "proxy" {
+		t.Fatalf("unexpected process_name action: %+v", rule)
+	}
+
+	mixed, err := mixedSingboxRouteRules([]string{"process_name:chrome.exe", "domain_suffix:example.com"}, "direct", false)
+	if err != nil {
+		t.Fatalf("generate mixed process_name rule: %v", err)
+	}
+	if len(mixed) != 2 || mixed[0]["process_name"] == nil {
+		t.Fatalf("unexpected mixed process_name rules: %+v", mixed)
 	}
 }
 
@@ -216,7 +283,7 @@ func TestRouteRuleSubscriptionContentConvertsClashYAML(t *testing.T) {
 }
 
 func TestGeneratedGeoRuleSetContentCachesDownload(t *testing.T) {
-	payload := []byte("compiled-rule-set")
+	payload := testBinaryRuleSet(t, 1)
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
@@ -236,7 +303,7 @@ func TestGeneratedGeoRuleSetContentCachesDownload(t *testing.T) {
 		if err != nil {
 			t.Fatalf("generated geo content: %v", err)
 		}
-		if string(data) != string(payload) || contentType != "application/octet-stream" {
+		if !bytes.Equal(data, payload) || contentType != "application/octet-stream" {
 			t.Fatalf("unexpected content: type=%s data=%q", contentType, data)
 		}
 	}
@@ -244,13 +311,317 @@ func TestGeneratedGeoRuleSetContentCachesDownload(t *testing.T) {
 		t.Fatalf("upstream requests = %d, want 1", requests)
 	}
 	cachePath := filepath.Join(svc.paths.RulesDir, "geo", "geosite-test.srs")
-	if data, err := os.ReadFile(cachePath); err != nil || string(data) != string(payload) {
+	if data, err := os.ReadFile(cachePath); err != nil || !bytes.Equal(data, payload) {
 		t.Fatalf("unexpected cache: data=%q err=%v", data, err)
 	}
 }
 
+func TestGeneratedGeoRuleSetContentRefreshesExpiredCache(t *testing.T) {
+	payloads := [][]byte{testBinaryRuleSet(t, 1), testBinaryRuleSet(t, 2)}
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		_, _ = w.Write(payloads[requests-1])
+	}))
+	defer server.Close()
+
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+	svc := newTestRouteRuleService(t, db)
+	if _, _, err := svc.generatedGeoRuleSetContent("geosite-test", server.URL); err != nil {
+		t.Fatalf("initial generated geo content: %v", err)
+	}
+	cachePath := filepath.Join(svc.paths.RulesDir, "geo", "geosite-test.srs")
+	expiredAt := time.Now().Add(-generatedGeoRuleSetUpdateInterval - time.Minute)
+	if err := os.Chtimes(cachePath, expiredAt, expiredAt); err != nil {
+		t.Fatalf("expire generated geo cache: %v", err)
+	}
+
+	data, _, err := svc.generatedGeoRuleSetContent("geosite-test", server.URL)
+	if err != nil {
+		t.Fatalf("refresh generated geo content: %v", err)
+	}
+	if !bytes.Equal(data, payloads[1]) || requests != 2 {
+		t.Fatalf("unexpected refreshed content: data=%q requests=%d", data, requests)
+	}
+}
+
+func TestGeneratedGeoRuleSetContentKeepsExpiredCacheOnRefreshFailure(t *testing.T) {
+	payload := testBinaryRuleSet(t, 1)
+	fail := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if fail {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+	svc := newTestRouteRuleService(t, db)
+	if _, _, err := svc.generatedGeoRuleSetContent("geoip-test", server.URL); err != nil {
+		t.Fatalf("initial generated geo content: %v", err)
+	}
+	cachePath := filepath.Join(svc.paths.RulesDir, "geo", "geoip-test.srs")
+	expiredAt := time.Now().Add(-generatedGeoRuleSetUpdateInterval - time.Minute)
+	if err := os.Chtimes(cachePath, expiredAt, expiredAt); err != nil {
+		t.Fatalf("expire generated geo cache: %v", err)
+	}
+	fail = true
+
+	data, _, err := svc.generatedGeoRuleSetContent("geoip-test", server.URL)
+	if err != nil {
+		t.Fatalf("serve stale generated geo content: %v", err)
+	}
+	if !bytes.Equal(data, payload) {
+		t.Fatalf("unexpected stale content: %q", data)
+	}
+}
+
+func TestGeneratedGeoRuleSetContentRejectsInvalidSuccessfulRefresh(t *testing.T) {
+	payload := testBinaryRuleSet(t, 1)
+	invalid := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if invalid {
+			_, _ = w.Write([]byte("<html>mirror error</html>"))
+			return
+		}
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+	svc := newTestRouteRuleService(t, db)
+	if _, _, err := svc.generatedGeoRuleSetContent("geoip-test", server.URL); err != nil {
+		t.Fatalf("initial generated geo content: %v", err)
+	}
+	cachePath := filepath.Join(svc.paths.RulesDir, "geo", "geoip-test.srs")
+	expiredAt := time.Now().Add(-generatedGeoRuleSetUpdateInterval - time.Minute)
+	if err := os.Chtimes(cachePath, expiredAt, expiredAt); err != nil {
+		t.Fatalf("expire generated geo cache: %v", err)
+	}
+	invalid = true
+
+	data, _, err := svc.generatedGeoRuleSetContent("geoip-test", server.URL)
+	if err != nil {
+		t.Fatalf("serve cache after invalid refresh: %v", err)
+	}
+	if !bytes.Equal(data, payload) {
+		t.Fatalf("invalid refresh replaced cached content: %q", data)
+	}
+	cached, err := os.ReadFile(cachePath)
+	if err != nil || !bytes.Equal(cached, payload) {
+		t.Fatalf("unexpected cache after invalid refresh: data=%q err=%v", cached, err)
+	}
+}
+
+func TestGeneratedGeoRuleSetContentKeepsCacheWhenCoreRejectsRefresh(t *testing.T) {
+	oldPayload := testBinaryRuleSet(t, 1)
+	newPayload := testBinaryRuleSet(t, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(newPayload)
+	}))
+	defer server.Close()
+
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+	svc := newTestRouteRuleService(t, db)
+	cacheDir := filepath.Join(svc.paths.RulesDir, "geo")
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatalf("create cache dir: %v", err)
+	}
+	cachePath := filepath.Join(cacheDir, "geoip-test.srs")
+	if err := os.WriteFile(cachePath, oldPayload, 0644); err != nil {
+		t.Fatalf("write old cache: %v", err)
+	}
+	expiredAt := time.Now().Add(-generatedGeoRuleSetUpdateInterval - time.Minute)
+	if err := os.Chtimes(cachePath, expiredAt, expiredAt); err != nil {
+		t.Fatalf("expire old cache: %v", err)
+	}
+	svc.ruleSetValidator = func(_ context.Context, filePath string) error {
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			return err
+		}
+		if bytes.Equal(data, oldPayload) {
+			return nil
+		}
+		return errors.New("invalid internal rule encoding")
+	}
+
+	data, _, err := svc.generatedGeoRuleSetContent("geoip-test", server.URL)
+	if err != nil {
+		t.Fatalf("serve cache after core validation failure: %v", err)
+	}
+	if !bytes.Equal(data, oldPayload) {
+		t.Fatalf("core-rejected refresh replaced cached content: %q", data)
+	}
+	cached, err := os.ReadFile(cachePath)
+	if err != nil || !bytes.Equal(cached, oldPayload) {
+		t.Fatalf("unexpected cache after core validation failure: data=%q err=%v", cached, err)
+	}
+}
+
+func TestGeneratedGeoRuleSetContentReplacesInvalidCache(t *testing.T) {
+	payload := testBinaryRuleSet(t, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+	svc := newTestRouteRuleService(t, db)
+	cacheDir := filepath.Join(svc.paths.RulesDir, "geo")
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatalf("create cache dir: %v", err)
+	}
+	cachePath := filepath.Join(cacheDir, "geosite-test.srs")
+	if err := os.WriteFile(cachePath, []byte("<html>old mirror error</html>"), 0644); err != nil {
+		t.Fatalf("write invalid cache: %v", err)
+	}
+
+	data, _, err := svc.generatedGeoRuleSetContent("geosite-test", server.URL)
+	if err != nil {
+		t.Fatalf("replace invalid cache: %v", err)
+	}
+	if !bytes.Equal(data, payload) {
+		t.Fatalf("unexpected replacement content: %q", data)
+	}
+	cached, err := os.ReadFile(cachePath)
+	if err != nil || !bytes.Equal(cached, payload) {
+		t.Fatalf("unexpected replaced cache: data=%q err=%v", cached, err)
+	}
+}
+
+func TestGeneratedGeoRuleSetRefreshDoesNotBlockOtherTags(t *testing.T) {
+	payload := testBinaryRuleSet(t, 1)
+	refreshedPayload := testBinaryRuleSet(t, 2)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(started)
+		<-release
+		_, _ = w.Write(refreshedPayload)
+	}))
+	defer server.Close()
+
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+	svc := newTestRouteRuleService(t, db)
+	cacheDir := filepath.Join(svc.paths.RulesDir, "geo")
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatalf("create cache dir: %v", err)
+	}
+	stalePath := filepath.Join(cacheDir, "geoip-stale.srs")
+	freshPath := filepath.Join(cacheDir, "geosite-fresh.srs")
+	if err := os.WriteFile(stalePath, payload, 0644); err != nil {
+		t.Fatalf("write stale cache: %v", err)
+	}
+	if err := os.WriteFile(freshPath, payload, 0644); err != nil {
+		t.Fatalf("write fresh cache: %v", err)
+	}
+	expiredAt := time.Now().Add(-generatedGeoRuleSetUpdateInterval - time.Minute)
+	if err := os.Chtimes(stalePath, expiredAt, expiredAt); err != nil {
+		t.Fatalf("expire stale cache: %v", err)
+	}
+
+	refreshDone := make(chan error, 1)
+	go func() {
+		_, _, err := svc.generatedGeoRuleSetContent("geoip-stale", server.URL)
+		refreshDone <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stale cache refresh did not start")
+	}
+
+	start := time.Now()
+	data, _, err := svc.generatedGeoRuleSetContent("geosite-fresh", server.URL)
+	if err != nil {
+		t.Fatalf("read unrelated fresh cache: %v", err)
+	}
+	if !bytes.Equal(data, payload) {
+		t.Fatalf("unexpected unrelated cache: %q", data)
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("unrelated cache blocked for %s", elapsed)
+	}
+	close(release)
+	if err := <-refreshDone; err != nil {
+		t.Fatalf("refresh stale cache: %v", err)
+	}
+}
+
+func TestRouteRuleSubscriptionContentRejectsOversizedResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(bytes.Repeat([]byte{'x'}, int(routeRuleSubscriptionContentMaxSize)+1))
+	}))
+	defer server.Close()
+	client := &http.Client{Timeout: 5 * time.Second}
+	if _, err := fetchRouteRuleSubscriptionContentWithClient(client, server.URL); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("expected oversized response error, got %v", err)
+	}
+}
+
+func TestBuildGitHubDownloadAttemptsUsesAllAcceleratorsAndOfficialFallback(t *testing.T) {
+	upstream := "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs"
+	attempts := buildGitHubDownloadAttempts(&model.UpdateSettingsResponse{Acceleration: "ghproxy_vip"}, upstream)
+	wantNames := []string{
+		"ghproxy_vip",
+		"ghproxy",
+		"jsdelivr_fastly",
+		"jsdelivr_testingcf",
+		"jsdelivr_cdn",
+		"official_direct",
+	}
+	if len(attempts) != len(wantNames) {
+		t.Fatalf("attempt count = %d, want %d: %+v", len(attempts), len(wantNames), attempts)
+	}
+	for index, name := range wantNames {
+		if attempts[index].name != name {
+			t.Fatalf("attempt %d name = %q, want %q", index, attempts[index].name, name)
+		}
+		if attempts[index].client.Timeout != generatedGeoRuleSetAttemptTimeout {
+			t.Fatalf("attempt %d timeout = %s, want %s", index, attempts[index].client.Timeout, generatedGeoRuleSetAttemptTimeout)
+		}
+	}
+	if attempts[len(attempts)-1].url != upstream {
+		t.Fatalf("official fallback url = %q, want %q", attempts[len(attempts)-1].url, upstream)
+	}
+}
+
 func TestGeneratedGeoRuleSetContentUsesConfiguredMirror(t *testing.T) {
-	payload := []byte("mirrored-rule-set")
+	payload := testBinaryRuleSet(t, 1)
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
@@ -274,12 +645,13 @@ func TestGeneratedGeoRuleSetContentUsesConfiguredMirror(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generated geo content: %v", err)
 	}
-	if string(data) != string(payload) || requests != 1 {
+	if !bytes.Equal(data, payload) || requests != 1 {
 		t.Fatalf("unexpected mirror result: data=%q requests=%d", data, requests)
 	}
 }
 
 func TestGeneratedGeoRuleSetContentFallsBackToOfficialURL(t *testing.T) {
+	payload := testBinaryRuleSet(t, 1)
 	mirrorRequests := 0
 	mirror := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		mirrorRequests++
@@ -289,7 +661,7 @@ func TestGeneratedGeoRuleSetContentFallsBackToOfficialURL(t *testing.T) {
 	officialRequests := 0
 	official := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		officialRequests++
-		_, _ = w.Write([]byte("official-rule-set"))
+		_, _ = w.Write(payload)
 	}))
 	defer official.Close()
 
@@ -306,7 +678,7 @@ func TestGeneratedGeoRuleSetContentFallsBackToOfficialURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generated geo content: %v", err)
 	}
-	if string(data) != "official-rule-set" || mirrorRequests != 1 || officialRequests != 1 {
+	if !bytes.Equal(data, payload) || mirrorRequests != 1 || officialRequests != 1 {
 		t.Fatalf("unexpected fallback result: data=%q mirror=%d official=%d", data, mirrorRequests, officialRequests)
 	}
 }
@@ -337,7 +709,7 @@ func TestPreviewUsesGeneratedGeoRuleSetCacheEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("preview: %v", err)
 	}
-	if len(preview.RuleSets) != 1 || preview.RuleSets[0]["url"] != "http://127.0.0.1:8080/api/v1/rules/geo/rule-sets/geoip-cn/content" {
+	if len(preview.RuleSets) != 1 || preview.RuleSets[0]["url"] != "http://127.0.0.1:8080/api/v1/rules/geo/rule-sets/geoip-cn/content" || preview.RuleSets[0]["update_interval"] != "24h" {
 		t.Fatalf("unexpected generated geo rule set: %+v", preview.RuleSets)
 	}
 }

@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/ackwrap/ackwrap/internal/logging"
 	"github.com/ackwrap/ackwrap/internal/model"
@@ -23,8 +25,12 @@ import (
 
 var outboundTagUnsafePattern = regexp.MustCompile(`[^A-Za-z0-9_.\-\p{Han}]+`)
 
+var ErrInvalidConfigFileName = errors.New("配置文件名无效")
+
 const (
 	defaultRuleSetHTTPClientTag = "ackwrap-rule-set-direct"
+	updateProxyInboundTag       = "ackwrap-update-in"
+	updateProxyListenPort       = 9901
 )
 
 // ConfigGeneratorService 配置生成服务
@@ -91,7 +97,7 @@ func (s *ConfigGeneratorService) ReconcileCurrent() (*model.ConfigGenerateRespon
 	if err != nil || !result.Valid {
 		return result, err
 	}
-	if err := s.applyLocked(true); err != nil {
+	if err := s.applyLocked("", true); err != nil {
 		return result, err
 	}
 	return result, nil
@@ -106,7 +112,7 @@ func (s *ConfigGeneratorService) generateCurrentLocked() (*model.ConfigGenerateR
 		req = &model.ConfigGenerateRequest{
 			DefaultOutbound: "proxy",
 			InboundListen:   "127.0.0.1",
-			InboundPort:     7890,
+			InboundPort:     model.DefaultMixedInboundPort,
 			LogLevel:        s.store.GetLogLevel(),
 		}
 	}
@@ -126,7 +132,10 @@ func (s *ConfigGeneratorService) generateLockedTo(req *model.ConfigGenerateReque
 	logging.Info("config_generator.generate", "开始生成配置，默认出站: %s", req.DefaultOutbound)
 
 	// 1. 生成 inbounds
-	inbounds := s.generateInbounds(req.InboundListen, req.InboundPort)
+	inbounds, err := s.generateInbounds(req.InboundListen, req.InboundPort)
+	if err != nil {
+		return nil, fmt.Errorf("生成 inbounds 失败: %w", err)
+	}
 
 	// 2. 生成 outbounds / endpoints
 	outbounds, endpoints, err := s.generateOutbounds()
@@ -427,7 +436,15 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface
 		effectiveCollection.TestInterval = connectivitySettings.IntervalSeconds
 		outbound, err := s.generateCollectionOutbound(&effectiveCollection, validGroupTags, generatedNodeTags, groupNodeUIDs)
 		if err != nil {
-			return nil, nil, fmt.Errorf("策略组 %s 生成失败: %w", col.Name, err)
+			if col.Name != "proxy" {
+				return nil, nil, fmt.Errorf("策略组 %s 生成失败: %w", col.Name, err)
+			}
+			logging.Info("config_generator.outbound", "proxy 策略组没有可用节点，降级为 direct: %v", err)
+			outbound = map[string]interface{}{
+				"tag":       "proxy",
+				"type":      "selector",
+				"outbounds": []string{"direct"},
+			}
 		}
 
 		if col.Name == "proxy" {
@@ -1144,6 +1161,13 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 	var ruleSets []map[string]interface{}
 	ruleSetTags := make(map[string]bool)
 
+	// 更新入口必须位于所有可能终止路由的规则之前，确保显式代理不会被进程或用户规则改为直连。
+	routeRules = append(routeRules, map[string]interface{}{
+		"inbound":  []string{updateProxyInboundTag},
+		"action":   "route",
+		"outbound": "proxy",
+	})
+
 	// sing-box 1.13 已移除 inbound sniff 字段，嗅探和 DNS 劫持必须使用 rule action。
 	routeRules = append(routeRules, map[string]interface{}{
 		"action": "sniff",
@@ -1277,6 +1301,7 @@ func (s *ConfigGeneratorService) defaultBypassRules() ([]map[string]interface{},
 	rules := []map[string]interface{}{
 		{
 			"process_name": processNames,
+			"inbound":      []string{"tun-in"},
 			"action":       "route",
 			"outbound":     "direct",
 		},
@@ -1791,26 +1816,40 @@ func (s *ConfigGeneratorService) validateConfig(configPath string) (bool, string
 	return true, ""
 }
 
-// Apply 应用配置
-func (s *ConfigGeneratorService) Apply(restartCore bool) error {
+// Apply 将最近生成并校验通过的配置保存为命名文件并设为当前配置。
+func (s *ConfigGeneratorService) Apply(fileName string, restartCore bool) error {
+	fileName, err := normalizeConfigFileName(fileName)
+	if err != nil {
+		return err
+	}
 	s.configMu.Lock()
 	defer s.configMu.Unlock()
-	return s.applyLocked(restartCore)
+	return s.applyLocked(fileName, restartCore)
 }
 
-func (s *ConfigGeneratorService) applyLocked(restartCore bool) error {
+func (s *ConfigGeneratorService) applyLocked(fileName string, restartCore bool) error {
 	configFileMu.Lock()
 	defer configFileMu.Unlock()
 
-	logging.Info("config_generator.apply", "应用配置，重启核心: %v", restartCore)
+	logging.Info("config_generator.apply", "应用配置，文件名: %s，重启核心: %v", fileName, restartCore)
 
 	tmpPath := filepath.Join(s.paths.DataDir, "config.tmp.json")
-	targetPath, exists, err := s.paths.ActiveConfigPath()
-	if err != nil {
-		return fmt.Errorf("获取配置路径失败: %w", err)
+	if err := os.MkdirAll(s.paths.ConfigDir, 0755); err != nil {
+		return fmt.Errorf("创建配置目录失败: %w", err)
 	}
-	if !exists {
-		targetPath = s.paths.ConfigPath
+	targetPath := ""
+	if fileName != "" {
+		targetPath = filepath.Join(s.paths.ConfigDir, fileName)
+	} else {
+		var exists bool
+		var err error
+		targetPath, exists, err = s.paths.ActiveConfigPath()
+		if err != nil {
+			return fmt.Errorf("获取配置路径失败: %w", err)
+		}
+		if !exists {
+			targetPath = s.paths.ConfigPath
+		}
 	}
 
 	// 1. 检查临时配置是否存在
@@ -1838,19 +1877,23 @@ func (s *ConfigGeneratorService) applyLocked(restartCore bool) error {
 
 	// 3. 先复制旧配置作为备份，再原子替换正式配置。
 	// 替换失败时原配置仍位于正式路径，不需要二次回滚。
-	backupPath := ""
 	if _, err := os.Stat(targetPath); err == nil {
-		backupPath = filepath.Join(s.paths.ConfigDir, fmt.Sprintf("config.backup.%d.json", time.Now().UnixNano()))
-		if err := copyFile(targetPath, backupPath); err != nil {
+		backup, created, err := ensureDailyConfigBackup(s.paths, s.store, targetPath, time.Now())
+		if err != nil {
 			return fmt.Errorf("备份当前配置失败: %w", err)
 		}
-		logging.Info("config_generator.apply", "配置已备份到: %s", backupPath)
+		if created {
+			logging.Info("config_generator.apply", "已创建今日配置备份: %s", backup.FileName)
+		}
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("检查当前配置失败: %w", err)
 	}
 
 	if err := atomicReplaceFile(stagedPath, targetPath); err != nil {
 		return fmt.Errorf("应用配置失败，旧配置保持不变: %w", err)
+	}
+	if err := writeActiveConfigMarker(s.paths, targetPath); err != nil {
+		return fmt.Errorf("配置已保存，但设置为当前配置失败: %w", err)
 	}
 
 	logging.Info("config_generator.apply", "配置已应用到: %s", targetPath)
@@ -1869,17 +1912,66 @@ func (s *ConfigGeneratorService) applyLocked(restartCore bool) error {
 	return nil
 }
 
+func normalizeConfigFileName(fileName string) (string, error) {
+	fileName = strings.TrimSpace(fileName)
+	if fileName == "" {
+		return "", fmt.Errorf("%w: 文件名不能为空", ErrInvalidConfigFileName)
+	}
+	if filepath.Ext(fileName) == "" {
+		fileName += ".json"
+	}
+	if len([]rune(fileName)) > 128 || filepath.Base(fileName) != fileName || strings.IndexFunc(fileName, unicode.IsControl) >= 0 ||
+		strings.ContainsAny(fileName, `<>:"/\|?*`) || !strings.EqualFold(filepath.Ext(fileName), ".json") {
+		return "", fmt.Errorf("%w: 仅支持配置目录内的 .json 文件", ErrInvalidConfigFileName)
+	}
+	extension := filepath.Ext(fileName)
+	stem := strings.TrimSuffix(fileName, extension)
+	if stem == "" || strings.HasSuffix(stem, ".") || strings.HasSuffix(stem, " ") {
+		return "", fmt.Errorf("%w: 文件名格式不正确", ErrInvalidConfigFileName)
+	}
+	reservedStem := strings.ToUpper(strings.SplitN(stem, ".", 2)[0])
+	if reservedStem == "CON" || reservedStem == "PRN" || reservedStem == "AUX" || reservedStem == "NUL" ||
+		(len(reservedStem) == 4 && (strings.HasPrefix(reservedStem, "COM") || strings.HasPrefix(reservedStem, "LPT")) && reservedStem[3] >= '1' && reservedStem[3] <= '9') {
+		return "", fmt.Errorf("%w: 文件名为系统保留名称", ErrInvalidConfigFileName)
+	}
+	fileName = stem + ".json"
+	if paths.IsConfigBackupName(fileName) {
+		return "", fmt.Errorf("%w: 文件名不能使用备份格式", ErrInvalidConfigFileName)
+	}
+	return fileName, nil
+}
+
+func writeActiveConfigMarker(p *paths.Paths, targetPath string) error {
+	markerFile, err := os.CreateTemp(p.ConfigDir, ".active-config-*.tmp")
+	if err != nil {
+		return err
+	}
+	markerPath := markerFile.Name()
+	defer os.Remove(markerPath)
+	if _, err := markerFile.WriteString(filepath.Base(targetPath)); err != nil {
+		markerFile.Close()
+		return err
+	}
+	if err := markerFile.Close(); err != nil {
+		return err
+	}
+	return atomicReplaceFile(markerPath, p.ActiveConfigMarkerPath())
+}
+
 // generateInbounds 生成入站配置
-func (s *ConfigGeneratorService) generateInbounds(listen string, port int) []interface{} {
+func (s *ConfigGeneratorService) generateInbounds(listen string, port int) ([]interface{}, error) {
 	if listen == "" {
 		listen = "127.0.0.1"
 	}
 	if port == 0 {
-		port = 7890
+		port = model.DefaultMixedInboundPort
 	}
 
 	// 获取运行模式设置
 	mode := s.store.GetInboundMode()
+	if port == updateProxyListenPort && mode != "tun" {
+		return nil, fmt.Errorf("端口 %d 保留给 Ackwrap 更新代理，请选择其他 mixed 端口", updateProxyListenPort)
+	}
 
 	var inbounds []interface{}
 
@@ -1930,7 +2022,14 @@ func (s *ConfigGeneratorService) generateInbounds(listen string, port int) []int
 		}
 	}
 
-	return inbounds
+	inbounds = append(inbounds, map[string]interface{}{
+		"type":        "mixed",
+		"tag":         updateProxyInboundTag,
+		"listen":      "127.0.0.1",
+		"listen_port": updateProxyListenPort,
+	})
+
+	return inbounds, nil
 }
 
 // Preview 预览生成的配置
@@ -1969,7 +2068,7 @@ func (s *ConfigGeneratorService) previewRequest(defaultOutbound string) (*model.
 		stored = &model.ConfigGenerateRequest{
 			DefaultOutbound: "proxy",
 			InboundListen:   "127.0.0.1",
-			InboundPort:     7890,
+			InboundPort:     model.DefaultMixedInboundPort,
 			LogLevel:        s.store.GetLogLevel(),
 		}
 	}

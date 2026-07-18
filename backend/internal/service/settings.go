@@ -1,6 +1,7 @@
 package service
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/url"
@@ -55,7 +56,7 @@ func (svc *SettingsService) SetUpdateSettings(req *model.UpdateSettings) error {
 	}
 	if req.Acceleration == "proxy" {
 		if req.ProxyURL == "" {
-			req.ProxyURL = "http://127.0.0.1:2080"
+			req.ProxyURL = store.DefaultUpdateProxyURL
 		}
 		if err := validateUpdateURL(req.ProxyURL, "代理 URL"); err != nil {
 			return err
@@ -113,6 +114,16 @@ func (svc *SettingsService) SetConnectivitySettings(req *model.ConnectivitySetti
 	req.TestURL = strings.TrimSpace(req.TestURL)
 	if err := validateUpdateURL(req.TestURL, "连通性地址"); err != nil {
 		return fmt.Errorf("%w: %v", ErrConnectivitySettingsInvalid, err)
+	}
+	target, err := svc.store.GetConnectivityTargetByURL(req.TestURL)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: 请先在连通性地址列表中添加该 URL", ErrConnectivitySettingsInvalid)
+	}
+	if err != nil {
+		return err
+	}
+	if !target.Enabled {
+		return fmt.Errorf("%w: 所选连通性地址已停用", ErrConnectivitySettingsInvalid)
 	}
 	if req.IntervalSeconds < 60 || req.IntervalSeconds > 3600 {
 		return fmt.Errorf("%w: 连通间隔必须在 60 到 3600 秒之间", ErrConnectivitySettingsInvalid)

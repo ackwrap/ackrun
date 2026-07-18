@@ -58,6 +58,10 @@ func NormalizeGeoProvider(name string) (string, error) {
 		return "ipinsight", nil
 	case "ipapi.com", "ip-api.com", "ipapi":
 		return "ip-api.com", nil
+	case "baidu", "baidu-ip":
+		return "baidu", nil
+	case "songzixian", "songzi":
+		return "songzixian", nil
 	case "ipinfolocal":
 		return "ipinfolocal", nil
 	case "chunzhen":
@@ -106,6 +110,10 @@ func newGeoProvider(name string) (geoProvider, error) {
 		return newIPInsightProvider(), nil
 	case "ip-api.com":
 		return newIPAPIComProvider(), nil
+	case "baidu":
+		return newBaiduIPProvider(), nil
+	case "songzixian":
+		return newSongzixianIPProvider(), nil
 	case "ipinfolocal":
 		return newIPInfoLocalProvider()
 	case "chunzhen":
@@ -353,6 +361,78 @@ func newIPAPIComProvider() geoProvider {
 	}}
 }
 
+func newBaiduIPProvider() geoProvider {
+	client := newGeoHTTPClient()
+	endpoint := endpointFromEnv("NEXTTRACE_BAIDU_IP_BASE", "https://opendata.baidu.com/api.php")
+	return geoProviderFunc{name: "百度 IP", lookup: func(ctx context.Context, ip string) (GeoData, error) {
+		rawURL, err := url.Parse(endpoint)
+		if err != nil {
+			return GeoData{}, err
+		}
+		query := rawURL.Query()
+		query.Set("query", ip)
+		query.Set("resource_id", "6006")
+		query.Set("oe", "utf8")
+		rawURL.RawQuery = query.Encode()
+		var body struct {
+			Status string `json:"status"`
+			Data   []struct {
+				Location string `json:"location"`
+			} `json:"data"`
+		}
+		if err := fetchJSON(ctx, client, rawURL.String(), browserHeaders(), &body); err != nil {
+			return GeoData{}, err
+		}
+		if body.Status != "0" || len(body.Data) == 0 || strings.TrimSpace(body.Data[0].Location) == "" {
+			return GeoData{}, errors.New("百度 IP 未返回归属信息")
+		}
+		return GeoData{Country: body.Data[0].Location, Source: "百度 IP"}, nil
+	}}
+}
+
+func newSongzixianIPProvider() geoProvider {
+	client := newDirectGeoHTTPClient()
+	endpoint := endpointFromEnv("NEXTTRACE_SONGZIXIAN_IP_BASE", "https://api.songzixian.com/api/ip")
+	return geoProviderFunc{name: "松子 IP", lookup: func(ctx context.Context, ip string) (GeoData, error) {
+		rawURL, err := url.Parse(endpoint)
+		if err != nil {
+			return GeoData{}, err
+		}
+		query := rawURL.Query()
+		query.Set("ip", ip)
+		rawURL.RawQuery = query.Encode()
+		var body struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+			Data    struct {
+				CountryCode string  `json:"countryCode"`
+				Country     string  `json:"country"`
+				Region      string  `json:"region"`
+				Province    string  `json:"province"`
+				City        string  `json:"city"`
+				District    string  `json:"district"`
+				Longitude   float64 `json:"longitude"`
+				Latitude    float64 `json:"latitude"`
+				ISP         string  `json:"isp"`
+			} `json:"data"`
+		}
+		if err := fetchJSON(ctx, client, rawURL.String(), browserHeaders(), &body); err != nil {
+			return GeoData{}, err
+		}
+		if body.Code != http.StatusOK || strings.TrimSpace(body.Data.Country) == "" {
+			return GeoData{}, fmt.Errorf("松子 IP 查询失败: %s", body.Message)
+		}
+		province := firstNonEmpty(body.Data.Province, body.Data.Region)
+		return GeoData{
+			Country: localizeLocation(body.Data.CountryCode, body.Data.Country), CountryEn: body.Data.Country,
+			Province: localizeLocation("", province), ProvinceEn: province,
+			City: localizeLocation("", body.Data.City), CityEn: body.Data.City,
+			District: body.Data.District, Owner: body.Data.ISP, ISP: body.Data.ISP,
+			Latitude: body.Data.Latitude, Longitude: body.Data.Longitude, Source: "松子 IP",
+		}, nil
+	}}
+}
+
 func newLeoMoeProvider() geoProvider {
 	return newLegacyLeoProvider()
 }
@@ -486,6 +566,12 @@ func newGeoHTTPClient() *http.Client {
 	return &http.Client{Timeout: 3 * time.Second}
 }
 
+func newDirectGeoHTTPClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	return &http.Client{Transport: transport, Timeout: 3 * time.Second}
+}
+
 func fetchJSON(ctx context.Context, client *http.Client, rawURL string, headers map[string]string, target any) error {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
@@ -567,6 +653,16 @@ func countryNameFromCode(code string) string {
 		return value
 	}
 	return code
+}
+
+func GeoDataFromCountryCode(code, source string) GeoData {
+	code = strings.ToUpper(strings.TrimSpace(code))
+	country := countryNameFromCode(code)
+	return GeoData{
+		Country:   localizeLocation(code, country),
+		CountryEn: country,
+		Source:    source,
+	}
 }
 
 func anyString(value any) string {

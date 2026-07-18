@@ -12,7 +12,7 @@ import Modal from "@/components/ui/Modal.vue";
 import NodeFlagName from "@/components/NodeFlagName.vue";
 import { api } from "@/services/api";
 import type { NodeExitIPResponse, NodeItem } from "@/services/types";
-import { defaultExitIPGeoProvider, geoProviderOptions } from "./geoProviders";
+import { loadGeoProviderOptions, type GeoProviderOption } from "./geoProviders";
 
 const props = withDefaults(
   defineProps<{ node: NodeItem | null; flag?: string }>(),
@@ -26,23 +26,38 @@ const geoExpanded = ref(false);
 const geoLoading = ref(false);
 const geoError = ref("");
 const geoProviderStorageKey = "ackwrap.node.exitIPGeoProvider";
-const selectableGeoProviderOptions = geoProviderOptions.filter(
-  (option) => option.value !== "disable-geoip",
-);
-const geoProvider = ref(loadGeoProvider());
+const selectableGeoProviderOptions = ref<GeoProviderOption[]>([]);
+const geoProvider = ref("");
 let requestID = 0;
 let geoRequestID = 0;
 
-function loadGeoProvider() {
+async function loadGeoProviders() {
   try {
-    const saved = localStorage.getItem(geoProviderStorageKey);
-    if (selectableGeoProviderOptions.some((option) => option.value === saved)) {
-      return saved || defaultExitIPGeoProvider;
+    const loaded = await loadGeoProviderOptions(false);
+    selectableGeoProviderOptions.value = loaded.options;
+    let saved = "";
+    try {
+      saved = localStorage.getItem(geoProviderStorageKey) || "";
+    } catch {
+      // Storage can be unavailable in restricted browser contexts.
     }
-  } catch {
-    // Storage can be unavailable in restricted browser contexts.
+    geoProvider.value = loaded.options.some((option) => option.value === saved)
+      ? saved
+      : loaded.defaultProvider;
+  } catch (cause: any) {
+    selectableGeoProviderOptions.value = [];
+    geoProvider.value = "";
+    geoError.value = cause?.message || "GeoIP Provider 加载失败";
   }
-  return defaultExitIPGeoProvider;
+}
+
+function persistGeoProvider(value: string) {
+  if (!value) return;
+  try {
+    localStorage.setItem(geoProviderStorageKey, value);
+  } catch {
+    // Keep the current in-memory selection when storage is unavailable.
+  }
 }
 
 const geoDetailItems = computed(() => {
@@ -66,11 +81,8 @@ const geoDetailItems = computed(() => {
 });
 
 watch(geoProvider, (value) => {
-  try {
-    localStorage.setItem(geoProviderStorageKey, value);
-  } catch {
-    // Keep the current in-memory selection when storage is unavailable.
-  }
+  persistGeoProvider(value);
+  if (value && geoExpanded.value && result.value) void checkGeo();
 });
 
 async function check() {
@@ -100,6 +112,10 @@ async function check() {
 async function checkGeo() {
   const node = props.node;
   if (!node || !result.value || geoLoading.value) return;
+  if (!geoProvider.value) {
+    geoError.value = "没有可用的 GeoIP Provider，请先在设置中添加或启用";
+    return;
+  }
   const currentRequest = ++geoRequestID;
   geoLoading.value = true;
   geoError.value = "";
@@ -143,8 +159,12 @@ watch(
     geoError.value = "";
     result.value = null;
     geoExpanded.value = false;
-    if (uid) void check();
+    if (uid) {
+      void loadGeoProviders();
+      void check();
+    }
   },
+  { immediate: true },
 );
 </script>
 
@@ -282,7 +302,6 @@ watch(
               v-model="geoProvider"
               class="aw-input"
               :disabled="geoLoading"
-              @change="checkGeo"
             >
               <option
                 v-for="provider in selectableGeoProviderOptions"
@@ -294,8 +313,9 @@ watch(
             </select>
           </label>
           <p class="mt-2 text-xs text-[var(--text-tertiary)]">
-            仅展开此区域后查询；检测到的出口 IP 会发送给所选服务，Provider
-            选择保存在当前浏览器。
+            仅展开此区域后查询；检测到的出口 IP
+            会发送给所选服务。在线查询失败时自动回退已同步的本地
+            geoip.db，Provider 选择保存在当前浏览器。
           </p>
 
           <div

@@ -85,6 +85,9 @@ func main() {
 	} else if migrated {
 		logging.Info("config.migrate", "启动时配置兼容迁移完成")
 	}
+	if _, err := configSvc.ListBackups(); err != nil {
+		logging.Error("config.backup", "启动时整理配置备份失败: %v", err)
+	}
 	installerSvc.SetPostInstallHook(func(version string) error {
 		_, err := configSvc.MigrateCompatibility(version)
 		return err
@@ -115,6 +118,11 @@ func main() {
 	settingsSvc.SetConnectivitySettingsHook(proxyCollectionSvc.RefreshHealthCheckJobs)
 	reconcileSvc := service.NewConfigReconcileService(configGenSvc, realtimeSvc)
 	defer reconcileSvc.Close()
+	coreRestartSvc := service.NewCoreRestartScheduler(db, singboxSvc, realtimeSvc)
+	if err := coreRestartSvc.StartScheduler(); err != nil {
+		logging.Error("core.restart_scheduler", "启动核心定时重启调度器失败: %v", err)
+	}
+	defer coreRestartSvc.StopScheduler()
 	dnsSvc := service.NewDNSService(db)
 	nodeGroupSvc := service.NewNodeGroupService(db)
 
@@ -132,7 +140,7 @@ func main() {
 
 	r.Use(api.SecurityMiddleware(serverCfg.APIToken))
 	r.Static("/assets", "./ui/assets")
-	api.RegisterRoutes(r, runtimeSvc, installerSvc, singboxSvc, configSvc, settingsSvc, subscriptionSvc, nodeSvc, routeRuleSvc, proxyCollectionSvc, configGenSvc, realtimeSvc, coreLogSvc, dnsSvc, nodeGroupSvc, reconcileSvc)
+	api.RegisterRoutes(r, runtimeSvc, installerSvc, singboxSvc, configSvc, settingsSvc, subscriptionSvc, nodeSvc, routeRuleSvc, proxyCollectionSvc, configGenSvc, realtimeSvc, coreLogSvc, dnsSvc, nodeGroupSvc, reconcileSvc, coreRestartSvc)
 
 	r.NoRoute(func(c *gin.Context) {
 		if len(c.Request.URL.Path) >= 4 && c.Request.URL.Path[:4] == "/api" {
@@ -156,16 +164,23 @@ func main() {
 		serverErrors <- server.ListenAndServe()
 	}()
 
-	shutdownSignal, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stopSignals()
+	shutdownSignals := make(chan os.Signal, 1)
+	signal.Notify(shutdownSignals, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(shutdownSignals)
 	select {
 	case err := <-serverErrors:
 		if !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("server error: %v", err)
 		}
 		return
-	case <-shutdownSignal.Done():
-		logging.Info("main", "shutdown signal received")
+	case shutdownSignal := <-shutdownSignals:
+		logging.Info("main", "shutdown signal received: %s", shutdownSignal)
+	}
+	coreRestartSvc.StopScheduler()
+	if singboxSvc.IsRunning() {
+		if _, err := singboxSvc.Shutdown(); err != nil {
+			logging.Error("main", "stop sing-box during shutdown: %v", err)
+		}
 	}
 
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)

@@ -33,12 +33,13 @@ type nodeTracerouteTask struct {
 }
 
 type NodeService struct {
-	store        *store.Store
-	clashBaseURL string
-	httpClient   *http.Client
-	realtime     *RealtimeService
-	traceMu      sync.Mutex
-	traces       map[string]nodeTracerouteTask
+	store          *store.Store
+	clashBaseURL   string
+	httpClient     *http.Client
+	realtime       *RealtimeService
+	localGeoLookup func(net.IP) (traceroute.GeoData, error)
+	traceMu        sync.Mutex
+	traces         map[string]nodeTracerouteTask
 }
 
 func NewNodeService(s *store.Store) *NodeService {
@@ -244,7 +245,10 @@ func (svc *NodeService) StartTraceroute(uid string, traceID string, geoProvider 
 	if !tracerouteIDPattern.MatchString(traceID) {
 		return nil, fmt.Errorf("%w: invalid trace id", ErrTracerouteInvalid)
 	}
-	geoProvider, err := traceroute.ValidateGeoProvider(geoProvider)
+	if strings.TrimSpace(geoProvider) == "" {
+		geoProvider = traceroute.DefaultGeoProvider
+	}
+	resolvedProvider, err := svc.resolveNodeGeoProvider(geoProvider)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrTracerouteInvalid, err)
 	}
@@ -269,7 +273,7 @@ func (svc *NodeService) StartTraceroute(uid string, traceID string, geoProvider 
 	svc.traces[traceID] = nodeTracerouteTask{uid: uid, cancel: cancel}
 	svc.traceMu.Unlock()
 
-	logging.Info("node.traceroute", "starting trace uid=%s trace_id=%s geo_provider=%s", uid, traceID, geoProvider)
+	logging.Info("node.traceroute", "starting trace uid=%s trace_id=%s geo_provider=%s", uid, traceID, resolvedProvider.Key)
 	svc.broadcastTraceroute(model.NodeTracerouteEvent{
 		TraceID:     traceID,
 		UID:         uid,
@@ -277,13 +281,13 @@ func (svc *NodeService) StartTraceroute(uid string, traceID string, geoProvider 
 		Status:      "started",
 		Target:      node.Server,
 		Protocol:    "ICMP",
-		GeoProvider: geoProvider,
+		GeoProvider: resolvedProvider.Key,
 	})
-	go svc.runTraceroute(ctx, traceID, node, geoProvider)
-	return &model.NodeTracerouteStartResponse{TraceID: traceID, UID: uid, Status: "started", GeoProvider: geoProvider}, nil
+	go svc.runTraceroute(ctx, traceID, node, resolvedProvider)
+	return &model.NodeTracerouteStartResponse{TraceID: traceID, UID: uid, Status: "started", GeoProvider: resolvedProvider.Key}, nil
 }
 
-func (svc *NodeService) runTraceroute(ctx context.Context, traceID string, node model.Node, geoProvider string) {
+func (svc *NodeService) runTraceroute(ctx context.Context, traceID string, node model.Node, geoProvider resolvedNodeGeoProvider) {
 	started := time.Now()
 	defer func() {
 		svc.traceMu.Lock()
@@ -292,7 +296,9 @@ func (svc *NodeService) runTraceroute(ctx context.Context, traceID string, node 
 	}()
 
 	options := traceroute.DefaultOptions()
-	options.GeoProvider = geoProvider
+	options.GeoProvider = geoProvider.Key
+	options.GeoProviderName = geoProvider.Name
+	options.GeoLookup = geoProvider.Lookup
 	result, err := traceroute.TraceWithProgress(ctx, node.Server, options, func(partial traceroute.Result, hop traceroute.Hop) {
 		converted := convertTracerouteHop(hop)
 		svc.broadcastTraceroute(model.NodeTracerouteEvent{
@@ -322,7 +328,7 @@ func (svc *NodeService) runTraceroute(ctx context.Context, traceID string, node 
 		}
 		svc.broadcastTraceroute(model.NodeTracerouteEvent{
 			TraceID: traceID, UID: node.UID, NodeName: node.Name, Status: status,
-			Target: node.Server, DurationMS: time.Since(started).Milliseconds(), GeoProvider: geoProvider, Error: message,
+			Target: node.Server, DurationMS: time.Since(started).Milliseconds(), GeoProvider: geoProvider.Key, Error: message,
 		})
 		return
 	}

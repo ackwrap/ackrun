@@ -2,7 +2,13 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
 	"testing"
+
+	"github.com/ackwrap/ackwrap/internal/paths"
+	"github.com/ackwrap/ackwrap/internal/store"
 )
 
 func TestMigrateInlineACMEConfigForSingbox114(t *testing.T) {
@@ -68,4 +74,249 @@ func TestSingboxSupportsCertificateProviderPrerelease(t *testing.T) {
 	if singboxSupportsCertificateProvider("1.13.99") {
 		t.Fatal("sing-box 1.13 must not receive the 1.14 schema")
 	}
+}
+
+func TestMigrateUpdateProxyConfig(t *testing.T) {
+	input := []byte(`{
+  "inbounds": [{"type":"mixed","tag":"mixed-in","listen":"127.0.0.1","listen_port":8888},{"type":"tun","tag":"tun-in"}],
+  "outbounds": [{"type":"direct","tag":"direct"},{"type":"selector","tag":"proxy","outbounds":["direct"]}],
+  "route": {"rules":[{"process_name":["ackwrap","ackwrap.exe","sing-box","sing-box.exe"],"action":"route","outbound":"direct"}]}
+}`)
+	result, migrated, err := migrateUpdateProxyConfigData(input)
+	if err != nil {
+		t.Fatalf("migrate update proxy config: %v", err)
+	}
+	if migrated != 3 {
+		t.Fatalf("migrated = %d, want 3", migrated)
+	}
+
+	var config map[string]interface{}
+	if err := json.Unmarshal(result, &config); err != nil {
+		t.Fatalf("decode migrated config: %v", err)
+	}
+	inbounds := config["inbounds"].([]interface{})
+	if !hasTaggedConfigItem(inbounds, updateProxyInboundTag) {
+		t.Fatalf("update proxy inbound missing: %+v", config["inbounds"])
+	}
+	if port := taggedInboundPort(inbounds, "mixed-in"); port != 8888 {
+		t.Fatalf("custom mixed port changed to %d", port)
+	}
+	rules := config["route"].(map[string]interface{})["rules"].([]interface{})
+	updateRule := rules[0].(map[string]interface{})
+	if !stringListContains(updateRule["inbound"], updateProxyInboundTag) || updateRule["outbound"] != "proxy" {
+		t.Fatalf("update proxy route missing: %+v", rules)
+	}
+	processRule := rules[1].(map[string]interface{})
+	if !stringListContains(processRule["inbound"], "tun-in") {
+		t.Fatalf("process bypass rule is not limited to tun-in: %+v", processRule)
+	}
+
+	secondResult, secondMigrated, err := migrateUpdateProxyConfigData(result)
+	if err != nil {
+		t.Fatalf("repeat update proxy migration: %v", err)
+	}
+	if secondMigrated != 0 || string(secondResult) != string(result) {
+		t.Fatalf("update proxy migration is not idempotent: migrated=%d", secondMigrated)
+	}
+}
+
+func TestMigrateUpdateProxyConfigRejectsReservedPortConflict(t *testing.T) {
+	input := []byte(`{
+  "inbounds": [{"type":"mixed","tag":"custom-in","listen_port":9901}],
+  "outbounds": [{"type":"direct","tag":"direct"},{"type":"selector","tag":"proxy","outbounds":["direct"]}],
+  "route": {"rules":[]}
+}`)
+	if _, _, err := migrateUpdateProxyConfigData(input); err == nil {
+		t.Fatal("expected reserved update proxy port conflict")
+	}
+}
+
+func TestMigrateUpdateProxyConfigUpgradesHistoricalMinimalConfig(t *testing.T) {
+	input := []byte(`{
+  "inbounds": [{"type":"mixed","tag":"mixed-in","listen":"127.0.0.1","listen_port":8888}],
+  "outbounds": [{"type":"direct","tag":"direct"}]
+}`)
+	result, migrated, err := migrateUpdateProxyConfigData(input)
+	if err != nil {
+		t.Fatalf("migrate historical minimal config: %v", err)
+	}
+	if migrated != 4 {
+		t.Fatalf("migrated = %d, want 4", migrated)
+	}
+	var config map[string]interface{}
+	if err := json.Unmarshal(result, &config); err != nil {
+		t.Fatal(err)
+	}
+	if !hasTaggedConfigItem(config["outbounds"].([]interface{}), "proxy") {
+		t.Fatalf("proxy fallback missing: %+v", config["outbounds"])
+	}
+	inbounds := config["inbounds"].([]interface{})
+	if !hasTaggedConfigItem(inbounds, updateProxyInboundTag) || taggedInboundPort(inbounds, "mixed-in") != 8888 {
+		t.Fatalf("historical inbounds not migrated: %+v", inbounds)
+	}
+	rules := config["route"].(map[string]interface{})["rules"].([]interface{})
+	if len(rules) == 0 || !isCanonicalUpdateProxyRule(rules[0].(map[string]interface{})) {
+		t.Fatalf("historical update route missing: %+v", rules)
+	}
+	secondResult, secondMigrated, err := migrateUpdateProxyConfigData(result)
+	if err != nil || secondMigrated != 0 || string(secondResult) != string(result) {
+		t.Fatalf("historical migration is not idempotent: migrated=%d err=%v", secondMigrated, err)
+	}
+}
+
+func TestMigrateUpdateProxyConfigRepairsEmptyProxyGroup(t *testing.T) {
+	input := []byte(`{
+  "inbounds": [
+    {"type":"mixed","tag":"mixed-in","listen":"127.0.0.1","listen_port":7890},
+    {"type":"mixed","tag":"ackwrap-update-in","listen":"127.0.0.1","listen_port":9901}
+  ],
+  "outbounds": [{"type":"direct","tag":"direct"},{"type":"selector","tag":"proxy","outbounds":[]}],
+  "route": {"rules":[{"inbound":["ackwrap-update-in"],"action":"route","outbound":"proxy"}]}
+}`)
+	result, migrated, err := migrateUpdateProxyConfigData(input)
+	if err != nil {
+		t.Fatalf("repair empty proxy group: %v", err)
+	}
+	if migrated != 1 {
+		t.Fatalf("migrated = %d, want 1", migrated)
+	}
+	var config map[string]interface{}
+	if err := json.Unmarshal(result, &config); err != nil {
+		t.Fatal(err)
+	}
+	proxyOutbound := taggedConfigItem(config["outbounds"].([]interface{}), "proxy")
+	if proxyOutbound["type"] != "selector" || !stringListEquals(proxyOutbound["outbounds"], "direct") {
+		t.Fatalf("proxy fallback not repaired: %+v", proxyOutbound)
+	}
+	secondResult, secondMigrated, err := migrateUpdateProxyConfigData(result)
+	if err != nil || secondMigrated != 0 || string(secondResult) != string(result) {
+		t.Fatalf("proxy fallback migration is not idempotent: migrated=%d err=%v", secondMigrated, err)
+	}
+}
+
+func TestMigrateUpdateProxyConfigNormalizesInboundAndRulePriority(t *testing.T) {
+	input := []byte(`{
+  "inbounds": [
+    {"type":"mixed","tag":"mixed-in","listen":"127.0.0.1","listen_port":8888},
+    {"type":"socks","tag":"ackwrap-update-in","listen":"0.0.0.0","listen_port":9000}
+  ],
+  "outbounds": [{"type":"direct","tag":"direct"},{"type":"selector","tag":"proxy","outbounds":["direct"]}],
+  "route": {"rules":[
+    {"process_name":["ackwrap.exe"],"action":"route","outbound":"direct"},
+    {"inbound":["ackwrap-update-in"],"network":"tcp","action":"route","outbound":"proxy"}
+  ]}
+}`)
+	result, migrated, err := migrateUpdateProxyConfigData(input)
+	if err != nil {
+		t.Fatalf("migrate malformed update proxy config: %v", err)
+	}
+	if migrated != 3 {
+		t.Fatalf("migrated = %d, want 3", migrated)
+	}
+
+	var config map[string]interface{}
+	if err := json.Unmarshal(result, &config); err != nil {
+		t.Fatal(err)
+	}
+	inbounds := config["inbounds"].([]interface{})
+	for _, rawInbound := range inbounds {
+		inbound := rawInbound.(map[string]interface{})
+		if inbound["tag"] == updateProxyInboundTag && !isCanonicalUpdateProxyInbound(inbound) {
+			t.Fatalf("update proxy inbound not normalized: %+v", inbound)
+		}
+	}
+	rules := config["route"].(map[string]interface{})["rules"].([]interface{})
+	if !isCanonicalUpdateProxyRule(rules[0].(map[string]interface{})) {
+		t.Fatalf("first route rule is not canonical update proxy route: %+v", rules)
+	}
+	processRule := rules[1].(map[string]interface{})
+	if !stringListEquals(processRule["inbound"], "tun-in") {
+		t.Fatalf("single-process bypass rule is not scoped to tun-in: %+v", processRule)
+	}
+	secondResult, secondMigrated, err := migrateUpdateProxyConfigData(result)
+	if err != nil || secondMigrated != 0 || string(secondResult) != string(result) {
+		t.Fatalf("normalized migration is not idempotent: migrated=%d err=%v", secondMigrated, err)
+	}
+}
+
+func TestMigrateUpdateProxyConfigSplitsMixedProcessBypassRule(t *testing.T) {
+	input := []byte(`{
+  "inbounds": [
+    {"type":"mixed","tag":"mixed-in","listen":"127.0.0.1","listen_port":7890},
+    {"type":"mixed","tag":"ackwrap-update-in","listen":"127.0.0.1","listen_port":9901}
+  ],
+  "outbounds": [{"type":"direct","tag":"direct"},{"type":"selector","tag":"proxy","outbounds":["direct"]}],
+  "route": {"rules":[
+    {"inbound":["ackwrap-update-in"],"action":"route","outbound":"proxy"},
+    {"process_name":["ackwrap.exe","helper.exe"],"action":"route","outbound":"direct"}
+  ]}
+}`)
+	result, migrated, err := migrateUpdateProxyConfigData(input)
+	if err != nil {
+		t.Fatalf("split mixed process rule: %v", err)
+	}
+	if migrated != 1 {
+		t.Fatalf("migrated = %d, want 1", migrated)
+	}
+	var config map[string]interface{}
+	if err := json.Unmarshal(result, &config); err != nil {
+		t.Fatal(err)
+	}
+	rules := config["route"].(map[string]interface{})["rules"].([]interface{})
+	if len(rules) != 3 {
+		t.Fatalf("split rules = %+v", rules)
+	}
+	ackwrapRule := rules[1].(map[string]interface{})
+	otherRule := rules[2].(map[string]interface{})
+	if !stringListContains(ackwrapRule["process_name"], "ackwrap.exe") || !stringListEquals(ackwrapRule["inbound"], "tun-in") {
+		t.Fatalf("Ackwrap process rule not scoped: %+v", ackwrapRule)
+	}
+	if !stringListContains(otherRule["process_name"], "helper.exe") || otherRule["inbound"] != nil {
+		t.Fatalf("other process behavior changed: %+v", otherRule)
+	}
+}
+
+func TestMigrateCompatibilityKeepsOriginalWhenValidationFails(t *testing.T) {
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, "config")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(configDir, "config.json")
+	original := []byte(`{
+  "inbounds": [{"type":"mixed","tag":"mixed-in","listen_port":8888}],
+  "outbounds": [{"type":"direct","tag":"direct"},{"type":"selector","tag":"proxy","outbounds":["direct"]}],
+  "route": {"rules":[]}
+}`)
+	if err := os.WriteFile(configPath, original, 0644); err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.Open(filepath.Join(dir, "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	svc := NewConfigService(&paths.Paths{DataDir: dir, ConfigDir: configDir, ConfigPath: configPath}, db, NewRealtimeService())
+	svc.configValidator = func(string) error { return errors.New("rejected test config") }
+	migrated, err := svc.MigrateCompatibility("1.13.0")
+	if err == nil || migrated {
+		t.Fatalf("migration result = %t, %v; want validation error", migrated, err)
+	}
+	after, readErr := os.ReadFile(configPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(after) != string(original) {
+		t.Fatal("validation failure replaced the original config")
+	}
+}
+
+func taggedInboundPort(inbounds []interface{}, tag string) int {
+	for _, rawInbound := range inbounds {
+		inbound, ok := rawInbound.(map[string]interface{})
+		if ok && inbound["tag"] == tag {
+			return configNumber(inbound["listen_port"])
+		}
+	}
+	return 0
 }

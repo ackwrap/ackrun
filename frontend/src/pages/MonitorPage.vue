@@ -6,7 +6,7 @@ import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
 import Toast from "@/components/ui/Toast.vue";
 import { api } from "@/services/api";
 import { getClashClient } from "@/services/clash";
-import { defaultConnectivityTestURL } from "@/utils/connectivityTargets";
+import type { ConnectivityTarget } from "@/services/types";
 import type {
   Connection,
   ProxyGroup,
@@ -39,10 +39,8 @@ const activeTab = ref<MonitorTab>("overview"),
   testingNodes = ref(new Set<string>()),
   testingGroups = ref(new Set<string>()),
   proxyFlags = ref<Record<string, string>>({}),
-  delayTestURL = ref(
-    localStorage.getItem("ackwrap.monitor.delayTestURL") ||
-      defaultConnectivityTestURL,
-  ),
+  delayTestURL = ref(""),
+  connectivityTargets = ref<ConnectivityTarget[]>([]),
   connections = ref<Connection[]>([]),
   loadingConnections = ref(false),
   rules = ref<Rule[]>([]),
@@ -236,6 +234,21 @@ async function startMonitor() {
 }
 onMounted(async () => {
   try {
+    const [settings, targets] = await Promise.all([
+      api.getConnectivitySettings(),
+      api.getConnectivityTargets(),
+    ]);
+    connectivityTargets.value = targets.filter((target) => target.enabled);
+    const saved = localStorage.getItem("ackwrap.monitor.delayTestURL") || "";
+    delayTestURL.value = connectivityTargets.value.some(
+      (target) => target.url === saved,
+    )
+      ? saved
+      : settings.test_url;
+  } catch (error: any) {
+    show(`加载测速地址失败: ${error?.message || "请求失败"}`, "error");
+  }
+  try {
     const runtime = await api.getRuntime();
     if (runtime.status !== "running") {
       runtimeBlockedMessage.value =
@@ -377,13 +390,8 @@ async function testGroup(groupName: string, nodes: string[]) {
 }
 function updateDelayTestURL(value: string) {
   const next = value.trim();
-  try {
-    const parsed = new URL(next);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      throw new Error("unsupported protocol");
-    }
-  } catch {
-    show("测速地址无效，仅支持完整的 HTTP/HTTPS URL", "error");
+  if (!connectivityTargets.value.some((target) => target.url === next)) {
+    show("测速地址未启用，请先在设置中添加或启用", "error");
     return;
   }
   delayTestURL.value = next;
@@ -468,6 +476,7 @@ function returnToControl() {
         :testing-groups="testingGroups"
         :node-flags="proxyFlags"
         :delay-test-url="delayTestURL"
+        :connectivity-targets="connectivityTargets"
         @refresh="loadProxies"
         @update:delay-test-url="updateDelayTestURL"
         @select-proxy="selectProxy"

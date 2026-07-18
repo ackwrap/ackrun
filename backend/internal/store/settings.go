@@ -11,6 +11,7 @@ import (
 const (
 	DefaultConnectivityTestURL         = "http://www.gstatic.com/generate_204"
 	DefaultConnectivityIntervalSeconds = 300
+	DefaultUpdateProxyURL              = "http://127.0.0.1:9901"
 )
 
 func (s *Store) GetUpdateSettings() (*model.UpdateSettingsResponse, error) {
@@ -36,6 +37,15 @@ func (s *Store) GetUpdateSettings() (*model.UpdateSettingsResponse, error) {
 		case "update.proxy_url":
 			r.ProxyURL = value
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if r.ProxyURL == "" {
+		r.ProxyURL = DefaultUpdateProxyURL
 	}
 	return r, nil
 }

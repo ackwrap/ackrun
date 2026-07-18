@@ -10,12 +10,12 @@ import (
 
 func TestReadMixedInboundPort(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
-	data := []byte(`{"inbounds":[{"type":"tun"},{"type":"mixed","listen_port":2080}]}`)
+	data := []byte(`{"inbounds":[{"type":"tun"},{"type":"mixed","listen_port":8888}]}`)
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if got := readMixedInboundPort(path); got != 2080 {
-		t.Fatalf("readMixedInboundPort() = %d, want 2080", got)
+	if got := readMixedInboundPort(path); got != 8888 {
+		t.Fatalf("readMixedInboundPort() = %d, want 8888", got)
 	}
 }
 

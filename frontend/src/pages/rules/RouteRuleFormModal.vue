@@ -32,6 +32,7 @@ const types = [
   ["domain_suffix", "域名后缀"],
   ["domain_keyword", "域名关键词"],
   ["ip_cidr", "IP CIDR"],
+  ["process_name", "进程名称"],
   ["geoip", "GeoIP"],
   ["geosite", "GeoSite"],
   ["rule_set", "规则集"],
@@ -178,13 +179,22 @@ function update(
             rows="9"
             class="min-h-[210px] w-full font-mono"
             :disabled="editing?.is_system"
-            placeholder="每行一个匹配值"
+            :placeholder="
+              ruleType === 'process_name'
+                ? '每行一个进程名，例如 chrome.exe'
+                : '每行一个匹配值'
+            "
             @input="update($event, 'valuesText')"
           />
           <span
             class="mt-1.5 block text-[11px] font-normal text-[var(--text-tertiary)]"
           >
-            每行一个值，保存时自动清理空行和重复项。
+            <template v-if="ruleType === 'process_name'">
+              每行一个进程名；Windows 通常包含 .exe，Linux/macOS 填写可执行文件名。
+            </template>
+            <template v-else>
+              每行一个值，保存时自动清理空行和重复项。
+            </template>
           </span>
         </label>
 

@@ -23,18 +23,20 @@ import (
 )
 
 type SingboxService struct {
-	paths     *paths.Paths
-	realtime  *RealtimeService
-	coreLogs  *CoreLogService
-	store     *store.Store
-	cmd       *exec.Cmd
-	pid       int
-	mu        sync.Mutex
-	cancel    context.CancelFunc
-	done      chan struct{}
-	stopping  bool
-	cachedVer string
-	lastError string
+	paths       *paths.Paths
+	realtime    *RealtimeService
+	coreLogs    *CoreLogService
+	store       *store.Store
+	cmd         *exec.Cmd
+	pid         int
+	mu          sync.Mutex
+	lifecycleMu sync.Mutex
+	cancel      context.CancelFunc
+	done        chan struct{}
+	stopping    bool
+	stopReason  string
+	cachedVer   string
+	lastError   string
 }
 
 var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
@@ -44,6 +46,12 @@ func NewSingboxService(p *paths.Paths, rt *RealtimeService, logs *CoreLogService
 }
 
 func (svc *SingboxService) Start() (*model.ActionResponse, error) {
+	svc.lifecycleMu.Lock()
+	defer svc.lifecycleMu.Unlock()
+	return svc.start()
+}
+
+func (svc *SingboxService) start() (*model.ActionResponse, error) {
 	svc.mu.Lock()
 	defer svc.mu.Unlock()
 
@@ -78,6 +86,7 @@ func (svc *SingboxService) Start() (*model.ActionResponse, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	svc.cancel = cancel
 	svc.lastError = ""
+	svc.stopReason = ""
 
 	cmd := exec.CommandContext(ctx, svc.paths.BinaryPath, "run", "-c", configPath, "--disable-color")
 
@@ -134,6 +143,7 @@ func (svc *SingboxService) Start() (*model.ActionResponse, error) {
 		logWG.Wait()
 		svc.mu.Lock()
 		intentionalStop := svc.cmd == cmd && svc.stopping
+		stopReason := svc.stopReason
 		if svc.cmd == cmd {
 			svc.stopping = true
 			svc.pid = 0
@@ -144,7 +154,13 @@ func (svc *SingboxService) Start() (*model.ActionResponse, error) {
 		svc.mu.Unlock()
 
 		statusMsg, runtimeStatus, errorMessage := coreExitState(err, intentionalStop, svc.lastError)
-		logging.Info("core.start", "sing-box exited: %v", err)
+		if intentionalStop {
+			logging.Info("core.stop", "sing-box stopped, reason=%s", stopReason)
+		} else if err != nil {
+			logging.Error("core.start", "sing-box exited unexpectedly: %v", err)
+		} else {
+			logging.Error("core.start", "sing-box exited unexpectedly without a process error")
+		}
 		svc.realtime.Broadcast("core.status", map[string]any{
 			"status": statusMsg,
 			"pid":    0,
@@ -161,6 +177,18 @@ func (svc *SingboxService) Start() (*model.ActionResponse, error) {
 }
 
 func (svc *SingboxService) Stop() (*model.ActionResponse, error) {
+	svc.lifecycleMu.Lock()
+	defer svc.lifecycleMu.Unlock()
+	return svc.stop("manual stop request")
+}
+
+func (svc *SingboxService) Shutdown() (*model.ActionResponse, error) {
+	svc.lifecycleMu.Lock()
+	defer svc.lifecycleMu.Unlock()
+	return svc.stop("Ackwrap backend shutdown")
+}
+
+func (svc *SingboxService) stop(reason string) (*model.ActionResponse, error) {
 	svc.mu.Lock()
 	if !svc.isRunning() {
 		svc.mu.Unlock()
@@ -172,9 +200,10 @@ func (svc *SingboxService) Stop() (*model.ActionResponse, error) {
 	cancel := svc.cancel
 	done := svc.done
 	svc.stopping = true
+	svc.stopReason = reason
 	svc.mu.Unlock()
 
-	logging.Info("core.stop", "stopping sing-box, pid=%d", pid)
+	logging.Info("core.stop", "stopping sing-box, pid=%d, reason=%s", pid, reason)
 
 	svc.realtime.Broadcast("core.status", map[string]any{
 		"status": "stopping",
@@ -204,14 +233,28 @@ func (svc *SingboxService) Stop() (*model.ActionResponse, error) {
 }
 
 func (svc *SingboxService) Restart() (*model.ActionResponse, error) {
+	return svc.restartWithReason("manual restart request")
+}
+
+func (svc *SingboxService) ScheduledRestart() (*model.ActionResponse, error) {
+	return svc.restartWithReason("scheduled restart")
+}
+
+func (svc *SingboxService) restartWithReason(reason string) (*model.ActionResponse, error) {
+	svc.lifecycleMu.Lock()
+	defer svc.lifecycleMu.Unlock()
+	return svc.restart(reason)
+}
+
+func (svc *SingboxService) restart(reason string) (*model.ActionResponse, error) {
 	if _, err := svc.validateActiveConfig(); err != nil {
 		return nil, err
 	}
-	if _, err := svc.Stop(); err != nil {
+	if _, err := svc.stop(reason); err != nil {
 		return nil, err
 	}
 
-	return svc.Start()
+	return svc.start()
 }
 
 func (svc *SingboxService) validateActiveConfig() (string, error) {
@@ -233,11 +276,13 @@ func (svc *SingboxService) validateActiveConfig() (string, error) {
 }
 
 func (svc *SingboxService) ReloadConfig() (*model.ActionResponse, error) {
+	svc.lifecycleMu.Lock()
+	defer svc.lifecycleMu.Unlock()
 	logging.Info("core.reload_config", "reloading sing-box config")
 	if !svc.IsRunning() {
 		return &model.ActionResponse{Success: true, Message: "core is stopped; config will be used on next start"}, nil
 	}
-	return svc.Restart()
+	return svc.restart("config reload")
 }
 
 func (svc *SingboxService) isRunning() bool {
@@ -311,7 +356,10 @@ func coreExitErrorMessage(lastError string, processErr error) string {
 }
 
 func coreExitState(processErr error, intentionalStop bool, lastError string) (string, model.RuntimeStatus, string) {
-	if processErr != nil && !intentionalStop {
+	if !intentionalStop {
+		if processErr == nil {
+			processErr = fmt.Errorf("sing-box process exited without an error status")
+		}
 		return "error", model.RuntimeError, coreExitErrorMessage(lastError, processErr)
 	}
 	return "stopped", model.RuntimeStopped, ""

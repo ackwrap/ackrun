@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/ackwrap/ackwrap/internal/model"
 	"github.com/ackwrap/ackwrap/internal/store"
+	"github.com/ackwrap/ackwrap/internal/traceroute"
 )
 
 func TestLookupNodeExitIPUsesDedicatedCoreAPI(t *testing.T) {
@@ -161,17 +163,24 @@ func TestExitIPUsesNodeOutboundWithoutSelectorMutation(t *testing.T) {
 		_ = json.NewEncoder(writer).Encode(map[string]any{"ip": "203.0.113.11", "ip_version": 4})
 	}))
 	defer server.Close()
+	geoFails := false
 	geoServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Query().Get("q") != "203.0.113.11" {
-			t.Errorf("Geo query target = %q", request.URL.Query().Get("q"))
+		if geoFails {
+			writer.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		if request.URL.Query().Get("ip") != "203.0.113.11" {
+			t.Errorf("Geo query target = %q", request.URL.Query().Get("ip"))
 		}
 		_ = json.NewEncoder(writer).Encode(map[string]any{
-			"asn":      map[string]any{"asn": 64500, "org": "Example Network", "route": "203.0.113.0/24"},
-			"location": map[string]any{"country": "Singapore", "country_code": "SG", "state": "Singapore", "city": "Singapore", "latitude": 1.3, "longitude": 103.8},
+			"code": 200,
+			"data": map[string]any{
+				"countryCode": "SG", "country": "Singapore", "city": "Singapore", "isp": "Example ISP",
+			},
 		})
 	}))
 	defer geoServer.Close()
-	t.Setenv("NEXTTRACE_MINI_IPAPIIS_BASE", geoServer.URL)
+	t.Setenv("NEXTTRACE_SONGZIXIAN_IP_BASE", geoServer.URL)
 
 	svc := NewNodeService(db)
 	svc.clashBaseURL = server.URL
@@ -180,10 +189,25 @@ func TestExitIPUsesNodeOutboundWithoutSelectorMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response == nil || !response.Matched || response.GeoProvider != defaultExitIPGeoProvider {
+	if response == nil || !response.Matched || response.GeoProvider != "songzixian" {
 		t.Fatalf("response = %+v", response)
 	}
-	if response.Geo == nil || response.Geo.Country != "新加坡" || response.Geo.ASN != "64500" || response.Geo.Prefix != "203.0.113.0/24" {
+	if response.Geo == nil || response.Geo.Country != "新加坡" || response.Geo.Source != "松子 IP" {
 		t.Fatalf("Geo response = %+v", response.Geo)
+	}
+
+	geoFails = true
+	svc.localGeoLookup = func(ip net.IP) (traceroute.GeoData, error) {
+		if ip.String() != "203.0.113.11" {
+			t.Fatalf("local Geo query target = %s", ip)
+		}
+		return traceroute.GeoData{Country: "新加坡", Source: "geoip.db（本地回退）"}, nil
+	}
+	response, err = svc.ExitIP(context.Background(), nodes[0].UID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Geo == nil || response.Geo.Source != "geoip.db（本地回退）" || response.GeoError != "" {
+		t.Fatalf("local fallback response = %+v", response)
 	}
 }

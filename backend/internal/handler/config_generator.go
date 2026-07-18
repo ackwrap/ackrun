@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/ackwrap/ackwrap/internal/model"
@@ -63,10 +64,15 @@ func (h *ConfigGeneratorHandler) Preview(c *gin.Context) {
 func (h *ConfigGeneratorHandler) Apply(c *gin.Context) {
 	var req model.ConfigApplyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		req.RestartCore = true // 默认重启核心
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "INVALID_REQUEST", Message: err.Error()}})
+		return
 	}
 
-	if err := h.service.Apply(req.RestartCore); err != nil {
+	if err := h.service.Apply(req.FileName, req.RestartCore); err != nil {
+		if errors.Is(err, service.ErrInvalidConfigFileName) {
+			c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "INVALID_CONFIG_FILE_NAME", Message: err.Error()}})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Error: model.APIError{Code: "APPLY_FAILED", Message: err.Error()}})
 		return
 	}

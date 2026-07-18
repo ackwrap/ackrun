@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ackwrap/ackwrap/internal/model"
+	"github.com/ackwrap/ackwrap/internal/store"
 )
 
 type updateRequestAttempt struct {
@@ -31,7 +32,7 @@ func buildUpdateRequestAttempts(settings *model.UpdateSettingsResponse, rawURL s
 	case "proxy":
 		proxyURL := strings.TrimSpace(settings.ProxyURL)
 		if proxyURL == "" {
-			proxyURL = "http://127.0.0.1:2080"
+			proxyURL = store.DefaultUpdateProxyURL
 		}
 		parsed, err := url.Parse(proxyURL)
 		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
@@ -83,6 +84,62 @@ func buildUpdateRequestAttempts(settings *model.UpdateSettingsResponse, rawURL s
 		}, nil
 	default:
 		return []updateRequestAttempt{{name: "direct", url: rawURL, client: direct}}, nil
+	}
+}
+
+// buildGitHubDownloadAttempts keeps the official URL as the canonical source
+// while trying the configured accelerator and the remaining built-in mirrors.
+func buildGitHubDownloadAttempts(settings *model.UpdateSettingsResponse, rawURL string) []updateRequestAttempt {
+	direct := &http.Client{Timeout: generatedGeoRuleSetAttemptTimeout, Transport: directHTTPTransport()}
+	attempts := make([]updateRequestAttempt, 0, 8)
+	seen := make(map[string]bool)
+	appendAttempt := func(attempt updateRequestAttempt) {
+		key := attempt.url
+		if attempt.name == "local_proxy" {
+			key = attempt.name + "|" + attempt.url
+		}
+		if attempt.url == "" || seen[key] {
+			return
+		}
+		seen[key] = true
+		attempts = append(attempts, attempt)
+	}
+
+	if preferred, err := buildUpdateRequestAttempts(settings, rawURL); err == nil {
+		for _, attempt := range preferred {
+			if attempt.url == rawURL && attempt.name != "local_proxy" {
+				continue
+			}
+			client := *attempt.client
+			client.Timeout = generatedGeoRuleSetAttemptTimeout
+			attempt.client = &client
+			appendAttempt(attempt)
+		}
+	}
+
+	if isGitHubFileURL(rawURL) {
+		appendAttempt(updateRequestAttempt{name: "ghproxy", url: "https://gh-proxy.com/" + rawURL, client: direct})
+		appendAttempt(updateRequestAttempt{name: "ghproxy_vip", url: "https://ghproxy.vip/" + rawURL, client: direct})
+		for _, name := range []string{"jsdelivr_fastly", "jsdelivr_testingcf", "jsdelivr_cdn"} {
+			if acceleratedURL, ok := githubFileToJSDelivrURL(jsDelivrAccelerationBases[name], rawURL); ok {
+				appendAttempt(updateRequestAttempt{name: name, url: acceleratedURL, client: direct})
+			}
+		}
+	}
+	appendAttempt(updateRequestAttempt{name: "official_direct", url: rawURL, client: direct})
+	return attempts
+}
+
+func isGitHubFileURL(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Scheme != "https" {
+		return false
+	}
+	switch strings.ToLower(parsed.Hostname()) {
+	case "raw.githubusercontent.com", "github.com":
+		return true
+	default:
+		return false
 	}
 }
 
