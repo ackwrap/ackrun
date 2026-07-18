@@ -235,10 +235,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ uids }),
     }),
-  checkNodeExitIP: (uid: string) =>
-    request<NodeExitIPResponse>(`/nodes/${encodeURIComponent(uid)}/exit-ip`, {
-      method: "POST",
-    }),
+  checkNodeExitIP: (uid: string, geoProvider = "ipapi.is") =>
+    request<NodeExitIPResponse>(
+      `/nodes/${encodeURIComponent(uid)}/exit-ip?geo_provider=${encodeURIComponent(geoProvider)}`,
+      { method: "POST" },
+    ),
   startNodeTraceroute: (uid: string, traceID: string, geoProvider: string) =>
     request<NodeTracerouteStartResponse>(
       `/nodes/${encodeURIComponent(uid)}/traceroute`,

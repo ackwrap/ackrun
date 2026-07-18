@@ -49,6 +49,15 @@ func newMetadataClient(providerName string) (*metadataClient, error) {
 	}, nil
 }
 
+func LookupGeo(ctx context.Context, ip net.IP, providerName string) (GeoData, error) {
+	client, err := newMetadataClient(providerName)
+	if err != nil {
+		return GeoData{}, err
+	}
+	defer client.Close()
+	return client.lookupGeo(ctx, ip)
+}
+
 func (c *metadataClient) ProviderName() string {
 	return c.provider.Name()
 }

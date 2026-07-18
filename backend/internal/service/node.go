@@ -364,24 +364,7 @@ func convertTracerouteHop(hop traceroute.Hop) model.NodeTracerouteHop {
 	for index, attempt := range hop.Attempts {
 		var geo *model.NodeTracerouteGeo
 		if attempt.Success {
-			geo = &model.NodeTracerouteGeo{
-				ASN:        attempt.Geo.ASN,
-				Country:    attempt.Geo.Country,
-				CountryEn:  attempt.Geo.CountryEn,
-				Province:   attempt.Geo.Province,
-				ProvinceEn: attempt.Geo.ProvinceEn,
-				City:       attempt.Geo.City,
-				CityEn:     attempt.Geo.CityEn,
-				District:   attempt.Geo.District,
-				Owner:      attempt.Geo.Owner,
-				ISP:        attempt.Geo.ISP,
-				Domain:     attempt.Geo.Domain,
-				Whois:      attempt.Geo.Whois,
-				Latitude:   attempt.Geo.Latitude,
-				Longitude:  attempt.Geo.Longitude,
-				Prefix:     attempt.Geo.Prefix,
-				Source:     attempt.Geo.Source,
-			}
+			geo = convertTracerouteGeo(attempt.Geo)
 		}
 		attempts[index] = model.NodeTracerouteAttempt{
 			Success:  attempt.Success,
@@ -394,6 +377,27 @@ func convertTracerouteHop(hop traceroute.Hop) model.NodeTracerouteHop {
 		}
 	}
 	return model.NodeTracerouteHop{TTL: hop.TTL, Attempts: attempts}
+}
+
+func convertTracerouteGeo(geo traceroute.GeoData) *model.NodeTracerouteGeo {
+	return &model.NodeTracerouteGeo{
+		ASN:        geo.ASN,
+		Country:    geo.Country,
+		CountryEn:  geo.CountryEn,
+		Province:   geo.Province,
+		ProvinceEn: geo.ProvinceEn,
+		City:       geo.City,
+		CityEn:     geo.CityEn,
+		District:   geo.District,
+		Owner:      geo.Owner,
+		ISP:        geo.ISP,
+		Domain:     geo.Domain,
+		Whois:      geo.Whois,
+		Latitude:   geo.Latitude,
+		Longitude:  geo.Longitude,
+		Prefix:     geo.Prefix,
+		Source:     geo.Source,
+	}
 }
 
 func usesUDPTransport(nodeType string) bool {

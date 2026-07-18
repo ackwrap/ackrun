@@ -22,6 +22,7 @@ type ProxyCollectionService struct {
 	realtime     *RealtimeService
 	cron         *cron.Cron
 	entries      map[int]cron.EntryID
+	healthJobsMu sync.Mutex
 	mu           sync.Mutex
 	runningTests map[int]bool
 	httpClient   *http.Client

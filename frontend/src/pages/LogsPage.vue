@@ -6,9 +6,10 @@ import { api } from "@/services/api";
 import type { CoreLogEntry, WSEvent } from "@/services/types";
 
 type SourceFilter = "all" | "stdout" | "stderr";
+const retainedLogLimit = 1000;
 const logs = ref<CoreLogEntry[]>([]);
 const sourceFilter = ref<SourceFilter>("all");
-const autoScroll = ref(true);
+const autoScroll = ref(false);
 const loading = ref(true);
 const error = ref("");
 const logPanel = ref<HTMLDivElement | null>(null);
@@ -42,17 +43,44 @@ async function clearLogs() {
 useRealtimeSocket((event: WSEvent) => {
   if (event.type !== "core.log") return;
   const entry = event.data as CoreLogEntry;
-  if (entry?.line) logs.value = [...logs.value.slice(-500), entry];
+  if (!entry?.line) return;
+  const nextLogs = [...logs.value, entry];
+  logs.value =
+    autoScroll.value && nextLogs.length > retainedLogLimit
+      ? nextLogs.slice(-retainedLogLimit)
+      : nextLogs;
 });
-watch(
-  [logs, autoScroll],
-  async () => {
-    if (!autoScroll.value) return;
-    await nextTick();
-    if (logPanel.value) logPanel.value.scrollTop = logPanel.value.scrollHeight;
-  },
-  { deep: true },
-);
+async function scrollToLatest() {
+  await nextTick();
+  if (logPanel.value) logPanel.value.scrollTop = logPanel.value.scrollHeight;
+}
+async function toggleAutoScroll() {
+  if (autoScroll.value) {
+    autoScroll.value = false;
+    return;
+  }
+  if (logs.value.length > retainedLogLimit) {
+    logs.value = logs.value.slice(-retainedLogLimit);
+  }
+  autoScroll.value = true;
+  await scrollToLatest();
+}
+function pauseAutoScroll() {
+  autoScroll.value = false;
+}
+function handleLogScroll() {
+  const panel = logPanel.value;
+  if (
+    autoScroll.value &&
+    panel &&
+    panel.scrollHeight - panel.scrollTop - panel.clientHeight > 24
+  ) {
+    autoScroll.value = false;
+  }
+}
+watch(logs, () => {
+  if (autoScroll.value) void scrollToLatest();
+});
 onMounted(loadLogs);
 </script>
 
@@ -94,9 +122,9 @@ onMounted(loadLogs);
                 ? 'border-blue-400/40 bg-blue-500/15 text-blue-100'
                 : 'border-[var(--border-default)] bg-white/[0.04] text-[var(--text-secondary)] hover:text-white'
             "
-            @click="autoScroll = !autoScroll"
+            @click="toggleAutoScroll"
           >
-            {{ autoScroll ? "自动滚动" : "已暂停滚动" }}
+            {{ autoScroll ? "跟随最新" : "定屏" }}
           </button>
           <button
             class="h-8 rounded-md border border-[var(--border-default)] bg-white/[0.04] px-3 text-xs text-[var(--text-secondary)] hover:text-white"
@@ -115,15 +143,17 @@ onMounted(loadLogs);
       <div
         ref="logPanel"
         class="max-h-[calc(100vh-240px)] overflow-y-auto rounded-lg border border-[var(--border-default)] bg-[var(--bg-primary)] p-3 font-mono text-xs text-[var(--text-tertiary)]"
+        @scroll.passive="handleLogScroll"
+        @selectstart="pauseAutoScroll"
       >
         <div v-if="loading" class="py-8 text-center">加载日志...</div>
         <div v-else-if="!visibleLogs.length" class="py-8 text-center">
           等待日志...
         </div>
         <div
-          v-for="(item, index) in visibleLogs"
+          v-for="item in visibleLogs"
           v-else
-          :key="`${item.id}-${index}`"
+          :key="item.id"
           class="grid grid-cols-[82px_58px_minmax(0,1fr)] gap-2 whitespace-pre-wrap break-all py-0.5 hover:bg-white/[0.03]"
         >
           <span class="text-[var(--text-muted)]">{{

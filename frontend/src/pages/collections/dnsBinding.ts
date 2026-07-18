@@ -48,9 +48,10 @@ function ruleBody(
   rule: DNSBindingRule,
   conditions: Record<string, unknown>,
   server = rule.server,
+  enabled = rule.enabled,
 ) {
   return {
-    enabled: true,
+    enabled,
     priority: rule.priority || 0,
     rule_type: rule.rule_type || "default",
     conditions,
@@ -66,11 +67,12 @@ async function updateRule(
   rule: DNSBindingRule,
   conditions: Record<string, unknown>,
   server = rule.server,
+  enabled = rule.enabled,
 ) {
   await request(`/api/v1/dns/rules/${rule.id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(ruleBody(rule, conditions, server)),
+    body: JSON.stringify(ruleBody(rule, conditions, server, enabled)),
   });
 }
 
@@ -133,7 +135,7 @@ export async function saveDNSOutboundBinding(
   const hasOtherConditions = Object.keys(conditions).length > 0;
   if (old.server === server || !hasOtherConditions) {
     conditions.outbound = [...new Set([...remaining, next])];
-    await updateRule(request, old, conditions, server);
+    await updateRule(request, old, conditions, server, true);
     return;
   }
 

@@ -425,7 +425,7 @@ func (s *Store) GetNodeGroupsByIDs(ids []int64) ([]model.NodeGroup, error) {
 	}
 
 	// 构建 IN 查询
-	query := `SELECT id, name, type, filter_protocols, filter_subscriptions, filter_include, filter_exclude, test_url, test_interval, tolerance, enabled, priority, created_at, updated_at FROM node_groups WHERE id IN (`
+	query := `SELECT id, name, type, filter_protocols, filter_subscriptions, filter_include, filter_exclude, node_uids, test_url, test_interval, tolerance, enabled, priority, created_at, updated_at FROM node_groups WHERE id IN (`
 	args := []interface{}{}
 	for i, id := range ids {
 		if i > 0 {
@@ -446,7 +446,7 @@ func (s *Store) GetNodeGroupsByIDs(ids []int64) ([]model.NodeGroup, error) {
 	for rows.Next() {
 		var g model.NodeGroup
 		var enabled int
-		if err := rows.Scan(&g.ID, &g.Name, &g.Type, &g.FilterProtocols, &g.FilterSubscriptions, &g.FilterInclude, &g.FilterExclude, &g.TestURL, &g.TestInterval, &g.Tolerance, &enabled, &g.Priority, &g.CreatedAt, &g.UpdatedAt); err != nil {
+		if err := rows.Scan(&g.ID, &g.Name, &g.Type, &g.FilterProtocols, &g.FilterSubscriptions, &g.FilterInclude, &g.FilterExclude, &g.NodeUIDs, &g.TestURL, &g.TestInterval, &g.Tolerance, &enabled, &g.Priority, &g.CreatedAt, &g.UpdatedAt); err != nil {
 			return nil, err
 		}
 		g.Enabled = enabled == 1

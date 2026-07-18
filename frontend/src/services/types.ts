@@ -325,6 +325,9 @@ export interface NodeExitIPResponse {
   exit_ip: string;
   matched: boolean;
   resolution: "literal" | "alidns_doh";
+  geo_provider: string;
+  geo?: NodeTracerouteGeo;
+  geo_error?: string;
 }
 
 export interface NodeTracerouteAttempt {

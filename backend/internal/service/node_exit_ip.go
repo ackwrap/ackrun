@@ -20,9 +20,19 @@ import (
 const (
 	nodeExitIPMaxResponse          = 64 << 10
 	nodeExitIPProxyListMaxResponse = 4 << 20
+	defaultExitIPGeoProvider       = "ipapi.is"
 )
 
-func (svc *NodeService) ExitIP(ctx context.Context, uid string) (*model.NodeExitIPResponse, error) {
+var ErrNodeExitIPInvalid = errors.New("invalid node exit IP request")
+
+func (svc *NodeService) ExitIP(ctx context.Context, uid string, geoProvider string) (*model.NodeExitIPResponse, error) {
+	if strings.TrimSpace(geoProvider) == "" {
+		geoProvider = defaultExitIPGeoProvider
+	}
+	geoProvider, err := traceroute.ValidateGeoProvider(geoProvider)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrNodeExitIPInvalid, err)
+	}
 	nodes, err := svc.store.ListNodesByUIDs([]string{uid})
 	if err != nil {
 		return nil, err
@@ -61,15 +71,26 @@ func (svc *NodeService) ExitIP(ctx context.Context, uid string) (*model.NodeExit
 	logging.Info("node.exit_ip", "checking exit IP uid=%s", node.UID)
 	exitIP, err := svc.lookupNodeExitIP(lookupCtx, selectedTag, nodeIP.To4() == nil)
 	if err != nil {
-		logging.Error("node.exit_ip", "exit IP check failed uid=%s", node.UID)
+		logging.Error("node.exit_ip", "exit IP check failed uid=%s error=%v", node.UID, err)
 		return nil, fmt.Errorf("通过节点查询出口 IP 失败: %w", err)
 	}
 	matched := nodeIP.Equal(exitIP)
-	logging.Info("node.exit_ip", "exit IP check completed uid=%s matched=%v", node.UID, matched)
-	return &model.NodeExitIPResponse{
+	response := &model.NodeExitIPResponse{
 		UID: node.UID, NodeName: node.Name, NodeIP: nodeIP.String(), ExitIP: exitIP.String(),
-		Matched: matched, Resolution: resolution,
-	}, nil
+		Matched: matched, Resolution: resolution, GeoProvider: geoProvider,
+	}
+	if geoProvider != traceroute.DefaultGeoProvider {
+		geoCtx, geoCancel := context.WithTimeout(ctx, 10*time.Second)
+		geo, geoErr := traceroute.LookupGeo(geoCtx, exitIP, geoProvider)
+		geoCancel()
+		if geoErr != nil {
+			response.GeoError = geoErr.Error()
+		} else {
+			response.Geo = convertTracerouteGeo(geo)
+		}
+	}
+	logging.Info("node.exit_ip", "exit IP check completed uid=%s matched=%v geo_provider=%s geo_success=%v", node.UID, matched, geoProvider, response.Geo != nil)
+	return response, nil
 }
 
 func (svc *NodeService) resolveActiveNodeOutboundTag(ctx context.Context, node model.Node, expectedTag string) (string, error) {
@@ -150,13 +171,21 @@ func (svc *NodeService) lookupNodeExitIP(ctx context.Context, outboundTag string
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
+		var payload struct {
+			Message string `json:"message"`
+			Stage   string `json:"stage"`
+		}
+		body, _ := io.ReadAll(io.LimitReader(response.Body, nodeExitIPMaxResponse+1))
+		if len(body) <= nodeExitIPMaxResponse {
+			_ = json.Unmarshal(body, &payload)
+		}
 		switch response.StatusCode {
 		case http.StatusUnauthorized, http.StatusForbidden:
 			return nil, errors.New("sing-box Clash API 鉴权失败")
 		case http.StatusNotFound:
 			return nil, errors.New("当前核心不支持出口 IP 检测接口，或目标节点未载入活动配置，请更新核心并重新生成配置")
 		case http.StatusBadGateway, http.StatusServiceUnavailable:
-			return nil, errors.New("sing-box 无法通过目标节点访问出口 IP 服务")
+			return nil, describeCoreExitIPFailure(payload.Stage, payload.Message)
 		case http.StatusGatewayTimeout:
 			return nil, errors.New("sing-box 出口 IP 检测超时")
 		default:
@@ -181,6 +210,28 @@ func (svc *NodeService) lookupNodeExitIP(ctx context.Context, outboundTag string
 		return nil, errors.New("sing-box 出口 IP 检测未返回有效地址")
 	}
 	return exitIP, nil
+}
+
+func describeCoreExitIPFailure(stage string, message string) error {
+	switch stage {
+	case "outbound_connect":
+		return errors.New("目标节点无法连接出口 IP 服务，可能是节点不可用、网络被阻断或 TLS 握手失败")
+	case "http_status":
+		if message != "" {
+			return fmt.Errorf("出口 IP 服务返回异常状态: %s", message)
+		}
+		return errors.New("出口 IP 服务返回异常 HTTP 状态")
+	case "read_response":
+		return errors.New("读取出口 IP 服务响应失败")
+	case "response_too_large":
+		return errors.New("出口 IP 服务响应超过大小限制")
+	case "invalid_response":
+		return errors.New("出口 IP 服务响应格式无效，未找到有效 IP")
+	case "address_family":
+		return errors.New("出口 IP 服务返回的 IPv4/IPv6 地址族与节点不一致")
+	default:
+		return errors.New("sing-box 无法通过目标节点访问出口 IP 服务")
+	}
 }
 
 func (svc *NodeService) nodeHTTPClient() *http.Client {

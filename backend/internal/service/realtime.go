@@ -46,7 +46,9 @@ func (svc *RealtimeService) Broadcast(eventType string, data any) {
 		Data: data,
 	}
 
-	logging.Info("websocket.broadcast", "broadcasting event: %s", eventType)
+	if eventType != "core.log" {
+		logging.Info("websocket.broadcast", "broadcasting event: %s", eventType)
+	}
 	for conn := range svc.clients {
 		if err := conn.WriteJSON(event); err != nil {
 			logging.Error("websocket.broadcast", "write error: %v", err)

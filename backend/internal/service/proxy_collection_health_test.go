@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ackwrap/ackwrap/internal/model"
@@ -105,5 +106,82 @@ func TestCollectionHealthCheckExplainsMissingActiveOutbound(t *testing.T) {
 	result := svc.testNode("node-1", "Node-1-node-1", "https://example.com")
 	if result.Success || !strings.Contains(result.Error, "尚未载入当前运行配置") {
 		t.Fatalf("unexpected missing outbound result: %+v", result)
+	}
+}
+
+func TestCollectionHealthCheckUsesManualNodeGroupUIDs(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+	subscription, err := db.CreateSubscription(&model.SubscriptionRequest{Name: "test", URL: "https://example.com/sub", SyncMode: "off"})
+	if err != nil {
+		t.Fatalf("create subscription: %v", err)
+	}
+	if err := db.UpsertSubscriptionNodes(subscription.ID, []model.ParsedNode{
+		{UID: "node-1", Name: "Node 1", Type: "socks", Server: "127.0.0.1", ServerPort: 1080, RawJSON: `{}`},
+		{UID: "node-2", Name: "Node 2", Type: "socks", Server: "127.0.0.2", ServerPort: 1080, RawJSON: `{}`},
+	}); err != nil {
+		t.Fatalf("seed nodes: %v", err)
+	}
+	group, err := db.CreateNodeGroup(&model.NodeGroupRequest{Name: "Manual", Type: "selector", NodeUIDs: []string{"node-1"}, Enabled: true})
+	if err != nil {
+		t.Fatalf("create node group: %v", err)
+	}
+	svc := NewProxyCollectionService(db, nil)
+	collection, err := svc.Create(model.ProxyCollectionRequest{
+		Name: "Combined", Type: "selector", SourceType: proxyCollectionSourceNodeGroupsAndNodes,
+		ReferencedGroupIDs: []int64{group.ID}, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	nodes, err := svc.collectionNodes(collection)
+	if err != nil {
+		t.Fatalf("load collection nodes: %v", err)
+	}
+	if len(nodes) != 1 || nodes[0].UID != "node-1" {
+		t.Fatalf("unexpected collection nodes: %+v", nodes)
+	}
+}
+
+func TestCollectionHealthJobRefreshesDoNotLeaveDuplicateEntries(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+	svc := NewProxyCollectionService(db, nil)
+	collection, err := svc.Create(model.ProxyCollectionRequest{
+		Name: "Auto", Type: "urltest", SourceType: "manual", NodeUIDs: []string{"node-1"},
+		TestURL: "https://example.com/generate_204", TestInterval: 300, Tolerance: 100, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			svc.RefreshHealthCheckJobs()
+		}()
+		go func() {
+			defer wg.Done()
+			svc.refreshHealthCheckJob(collection.ID)
+		}()
+	}
+	wg.Wait()
+
+	if got := len(svc.cron.Entries()); got != 1 {
+		t.Fatalf("cron entries = %d, want 1", got)
+	}
+	svc.mu.Lock()
+	tracked := len(svc.entries)
+	svc.mu.Unlock()
+	if tracked != 1 {
+		t.Fatalf("tracked entries = %d, want 1", tracked)
 	}
 }

@@ -148,11 +148,19 @@ func fetchLatestSingboxReleaseWithSettings(settings *model.UpdateSettingsRespons
 	}
 	var lastErr error
 	for _, attempt := range attempts {
-		release, err := fetchLatestSingboxRelease(attempt.client, attempt.url, token)
+		release, err := fetchLatestSingboxRelease(attempt.client, attempt.url, githubTokenForURL(attempt.url, token))
 		if err == nil {
 			return release, nil
 		}
 		lastErr = err
 	}
 	return nil, lastErr
+}
+
+func githubTokenForURL(rawURL, token string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Scheme != "https" || !strings.EqualFold(parsed.Hostname(), "api.github.com") {
+		return ""
+	}
+	return token
 }

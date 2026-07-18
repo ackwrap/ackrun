@@ -16,25 +16,34 @@ import (
 )
 
 func (s *ProxyCollectionService) StartScheduler() {
+	s.healthJobsMu.Lock()
+	defer s.healthJobsMu.Unlock()
+
 	collections, err := s.store.ListProxyCollections()
 	if err != nil {
 		logging.Error("proxy_collection.scheduler", "加载策略组失败: %v", err)
 		return
 	}
 	for _, collection := range collections {
-		s.scheduleHealthCheckJob(collection)
+		s.scheduleHealthCheckJobLocked(collection)
 	}
 	s.cron.Start()
-	logging.Info("proxy_collection.scheduler", "健康检查调度器已启动，任务数: %d", len(s.entries))
+	s.mu.Lock()
+	taskCount := len(s.entries)
+	s.mu.Unlock()
+	logging.Info("proxy_collection.scheduler", "健康检查调度器已启动，任务数: %d", taskCount)
 }
 
 func (s *ProxyCollectionService) StopScheduler() {
+	s.healthJobsMu.Lock()
+	defer s.healthJobsMu.Unlock()
+
 	ctx := s.cron.Stop()
 	<-ctx.Done()
 	logging.Info("proxy_collection.scheduler", "健康检查调度器已停止")
 }
 
-func (s *ProxyCollectionService) scheduleHealthCheckJob(collection *model.ProxyCollection) {
+func (s *ProxyCollectionService) scheduleHealthCheckJobLocked(collection *model.ProxyCollection) {
 	if collection == nil || !collection.Enabled || collection.Type != "urltest" {
 		return
 	}
@@ -61,6 +70,9 @@ func (s *ProxyCollectionService) scheduleHealthCheckJob(collection *model.ProxyC
 }
 
 func (s *ProxyCollectionService) RefreshHealthCheckJobs() {
+	s.healthJobsMu.Lock()
+	defer s.healthJobsMu.Unlock()
+
 	s.mu.Lock()
 	entryIDs := make([]cron.EntryID, 0, len(s.entries))
 	for _, entryID := range s.entries {
@@ -78,7 +90,7 @@ func (s *ProxyCollectionService) RefreshHealthCheckJobs() {
 		return
 	}
 	for _, collection := range collections {
-		s.scheduleHealthCheckJob(collection)
+		s.scheduleHealthCheckJobLocked(collection)
 	}
 	s.mu.Lock()
 	taskCount := len(s.entries)
@@ -87,6 +99,12 @@ func (s *ProxyCollectionService) RefreshHealthCheckJobs() {
 }
 
 func (s *ProxyCollectionService) removeHealthCheckJob(id int) {
+	s.healthJobsMu.Lock()
+	defer s.healthJobsMu.Unlock()
+	s.removeHealthCheckJobLocked(id)
+}
+
+func (s *ProxyCollectionService) removeHealthCheckJobLocked(id int) {
 	s.mu.Lock()
 	entryID, ok := s.entries[id]
 	if ok {
@@ -99,10 +117,13 @@ func (s *ProxyCollectionService) removeHealthCheckJob(id int) {
 }
 
 func (s *ProxyCollectionService) refreshHealthCheckJob(id int) {
-	s.removeHealthCheckJob(id)
+	s.healthJobsMu.Lock()
+	defer s.healthJobsMu.Unlock()
+
+	s.removeHealthCheckJobLocked(id)
 	collection, err := s.store.GetProxyCollection(id)
 	if err == nil {
-		s.scheduleHealthCheckJob(collection)
+		s.scheduleHealthCheckJobLocked(collection)
 	}
 }
 

@@ -115,6 +115,28 @@ func TestBuildUpdateRequestAttemptsUsesGHProxyVIPAndFallback(t *testing.T) {
 	}
 }
 
+func TestGithubTokenForURLOnlyAllowsGitHubAPI(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{name: "github api", url: "https://api.github.com/repos/SagerNet/sing-box/releases/latest", want: "test-token"},
+		{name: "ghproxy vip", url: "https://ghproxy.vip/https://api.github.com/repos/SagerNet/sing-box/releases/latest"},
+		{name: "ghproxy", url: "https://gh-proxy.com/https://api.github.com/repos/SagerNet/sing-box/releases/latest"},
+		{name: "custom mirror", url: "https://mirror.example/https://api.github.com/repos/SagerNet/sing-box/releases/latest"},
+		{name: "lookalike host", url: "https://api.github.com.example/repos/SagerNet/sing-box/releases/latest"},
+		{name: "insecure github api", url: "http://api.github.com/repos/SagerNet/sing-box/releases/latest"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := githubTokenForURL(test.url, "test-token"); got != test.want {
+				t.Fatalf("githubTokenForURL() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestBuildUpdateRequestAttemptsConvertsGitHubFilesForJSDelivr(t *testing.T) {
 	tests := []struct {
 		acceleration string

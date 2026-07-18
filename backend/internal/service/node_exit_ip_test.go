@@ -63,6 +63,22 @@ func TestLookupNodeExitIPReportsUnsupportedCore(t *testing.T) {
 	}
 }
 
+func TestLookupNodeExitIPReportsDetailedCoreFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.WriteHeader(http.StatusBadGateway)
+		_ = json.NewEncoder(writer).Encode(map[string]string{
+			"message": "Exit IP service returned an invalid response",
+			"stage":   "invalid_response",
+		})
+	}))
+	defer server.Close()
+	svc := &NodeService{clashBaseURL: server.URL, httpClient: server.Client()}
+	_, err := svc.lookupNodeExitIP(context.Background(), "node", false)
+	if err == nil || !strings.Contains(err.Error(), "响应格式无效") {
+		t.Fatalf("expected detailed response error, got %v", err)
+	}
+}
+
 func TestLookupNodeExitIPRejectsUnexpectedAddressFamily(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		_ = json.NewEncoder(writer).Encode(map[string]string{"ip": "2001:db8::8"})
@@ -145,15 +161,29 @@ func TestExitIPUsesNodeOutboundWithoutSelectorMutation(t *testing.T) {
 		_ = json.NewEncoder(writer).Encode(map[string]any{"ip": "203.0.113.11", "ip_version": 4})
 	}))
 	defer server.Close()
+	geoServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Query().Get("q") != "203.0.113.11" {
+			t.Errorf("Geo query target = %q", request.URL.Query().Get("q"))
+		}
+		_ = json.NewEncoder(writer).Encode(map[string]any{
+			"asn":      map[string]any{"asn": 64500, "org": "Example Network", "route": "203.0.113.0/24"},
+			"location": map[string]any{"country": "Singapore", "country_code": "SG", "state": "Singapore", "city": "Singapore", "latitude": 1.3, "longitude": 103.8},
+		})
+	}))
+	defer geoServer.Close()
+	t.Setenv("NEXTTRACE_MINI_IPAPIIS_BASE", geoServer.URL)
 
 	svc := NewNodeService(db)
 	svc.clashBaseURL = server.URL
 	svc.httpClient = server.Client()
-	response, err := svc.ExitIP(context.Background(), nodes[0].UID)
+	response, err := svc.ExitIP(context.Background(), nodes[0].UID, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response == nil || !response.Matched {
+	if response == nil || !response.Matched || response.GeoProvider != defaultExitIPGeoProvider {
 		t.Fatalf("response = %+v", response)
+	}
+	if response.Geo == nil || response.Geo.Country != "新加坡" || response.Geo.ASN != "64500" || response.Geo.Prefix != "203.0.113.0/24" {
+		t.Fatalf("Geo response = %+v", response.Geo)
 	}
 }

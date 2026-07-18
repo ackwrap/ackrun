@@ -109,13 +109,16 @@ func (h *NodeHandler) ExitIP(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "NODE_UID_INVALID", Message: "node uid is required"}})
 		return
 	}
-	response, err := h.svc.ExitIP(c.Request.Context(), uid)
+	response, err := h.svc.ExitIP(c.Request.Context(), uid, c.Query("geo_provider"))
 	if err != nil {
 		status := http.StatusBadGateway
 		code := "NODE_EXIT_IP_FAILED"
 		if errors.Is(err, service.ErrNodeNotFound) {
 			status = http.StatusNotFound
 			code = "NODE_NOT_FOUND"
+		} else if errors.Is(err, service.ErrNodeExitIPInvalid) {
+			status = http.StatusBadRequest
+			code = "NODE_EXIT_IP_INVALID"
 		}
 		c.JSON(status, model.ErrorResponse{Error: model.APIError{Code: code, Message: err.Error()}})
 		return

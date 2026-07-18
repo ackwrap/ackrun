@@ -110,12 +110,15 @@ type NodeTCPingResult struct {
 }
 
 type NodeExitIPResponse struct {
-	UID        string `json:"uid"`
-	NodeName   string `json:"node_name"`
-	NodeIP     string `json:"node_ip"`
-	ExitIP     string `json:"exit_ip"`
-	Matched    bool   `json:"matched"`
-	Resolution string `json:"resolution"`
+	UID         string             `json:"uid"`
+	NodeName    string             `json:"node_name"`
+	NodeIP      string             `json:"node_ip"`
+	ExitIP      string             `json:"exit_ip"`
+	Matched     bool               `json:"matched"`
+	Resolution  string             `json:"resolution"`
+	GeoProvider string             `json:"geo_provider"`
+	Geo         *NodeTracerouteGeo `json:"geo,omitempty"`
+	GeoError    string             `json:"geo_error,omitempty"`
 }
 
 type NodeTracerouteStartRequest struct {

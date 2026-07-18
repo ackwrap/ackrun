@@ -411,8 +411,8 @@ function editCol(x: Col) {
   colGroups.value = x.referenced_groups?.map((g) => g.id) || [];
   colUIDs.value = x.node_uids || [];
   colRules.value = x.route_rule_ids || [];
-  colDNSServer.value =
-    findDNSOutboundBinding(dnsRules.value, x.name)?.server || "";
+  const dnsBinding = findDNSOutboundBinding(dnsRules.value, x.name);
+  colDNSServer.value = dnsBinding?.enabled ? dnsBinding.server : "";
   colEnabled.value = x.enabled;
   colTolerance.value = x.tolerance || 100;
 }
@@ -460,7 +460,9 @@ async function saveCol() {
       previousDNSBinding = previousName
         ? findDNSOutboundBinding(dnsRules.value, previousName)
         : undefined,
-      previousDNS = previousDNSBinding?.server || "",
+      previousDNS = previousDNSBinding?.enabled
+        ? previousDNSBinding.server
+        : "",
       p = {
         name: colName.value,
         type: colType.value,
@@ -480,11 +482,7 @@ async function saveCol() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(p),
     });
-    if (
-      previousName !== colName.value ||
-      previousDNS !== colDNSServer.value ||
-      (!!colDNSServer.value && !previousDNSBinding?.enabled)
-    ) {
+    if (previousName !== colName.value || previousDNS !== colDNSServer.value) {
       try {
         await saveDNSOutboundBinding(
           json,
