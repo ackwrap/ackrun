@@ -14,6 +14,7 @@ import {
   Zap,
 } from "lucide-vue-next";
 import PageHeader from "@/components/layout/PageHeader.vue";
+import NodeFlagName from "@/components/NodeFlagName.vue";
 import Toast from "@/components/ui/Toast.vue";
 import Modal from "@/components/ui/Modal.vue";
 import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
@@ -22,7 +23,6 @@ import NodeTracerouteModal from "@/pages/nodes/NodeTracerouteModal.vue";
 import NodeExitIPModal from "@/pages/nodes/NodeExitIPModal.vue";
 import { api } from "@/services/api";
 import type { NodeFacetItem, NodeItem, Subscription } from "@/services/types";
-import { defaultFlag, getFlagImageURL } from "@/utils/nodeFlags";
 
 const route = useRoute(),
   router = useRouter(),
@@ -496,11 +496,7 @@ onMounted(async () => {
                 />
               </td>
               <td class="truncate" :title="n.name">
-                <img
-                  :src="getFlagImageURL(flags[n.uid] || defaultFlag)"
-                  alt=""
-                  class="mr-2 inline h-4 w-4"
-                />{{ n.name }}
+                <NodeFlagName :name="n.name" :flag="flags[n.uid]" />
               </td>
               <td class="truncate" :title="n.type">{{ n.type }}</td>
               <td class="truncate" :title="address(n)">{{ address(n) }}</td>
@@ -585,6 +581,9 @@ onMounted(async () => {
     <Modal :open="!!detail" title="节点详情" size="lg" @close="detail = null"
       ><template v-if="detail"
         ><div class="grid gap-3 md:grid-cols-2">
+          <div class="md:col-span-2">
+            名称：<NodeFlagName :name="detail.name" :flag="flags[detail.uid]" />
+          </div>
           <div>UID：{{ detail.uid }}</div>
           <div>地址：{{ address(detail) }}</div>
           <div>协议：{{ detail.type }}</div>
@@ -597,8 +596,16 @@ onMounted(async () => {
           >{{ pretty(detail.raw_json) }}</pre>
       </template></Modal
     >
-    <NodeTracerouteModal :node="traceNode" @close="traceNode = null" />
-    <NodeExitIPModal :node="exitIPNode" @close="exitIPNode = null" />
+    <NodeTracerouteModal
+      :node="traceNode"
+      :flag="traceNode ? flags[traceNode.uid] : ''"
+      @close="traceNode = null"
+    />
+    <NodeExitIPModal
+      :node="exitIPNode"
+      :flag="exitIPNode ? flags[exitIPNode.uid] : ''"
+      @close="exitIPNode = null"
+    />
     <Modal
       :open="renameOpen"
       :title="`批量修改名称 (${selectedNodes.length})`"

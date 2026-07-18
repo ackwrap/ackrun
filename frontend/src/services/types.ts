@@ -115,6 +115,11 @@ export interface LogSettingsResponse {
   timestamp: boolean;
 }
 
+export interface ConnectivitySettings {
+  test_url: string;
+  interval_seconds: number;
+}
+
 export interface NTPSettings {
   enabled: boolean;
   server?: string;

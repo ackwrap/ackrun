@@ -6,7 +6,14 @@ import Toast from "@/components/ui/Toast.vue";
 import Modal from "@/components/ui/Modal.vue";
 import Pagination from "@/components/ui/Pagination.vue";
 import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
+import NodeFlagName from "@/components/NodeFlagName.vue";
 import NodeGroupDetailModal from "./collections/NodeGroupDetailModal.vue";
+import {
+  findDNSOutboundBinding,
+  saveDNSOutboundBinding,
+  type DNSBindingRule,
+  type DNSBindingServer,
+} from "./collections/dnsBinding";
 import { api } from "@/services/api";
 import { useRealtimeSocket } from "@/composables/useRealtimeSocket";
 import type {
@@ -15,6 +22,7 @@ import type {
   WSEvent,
 } from "@/services/types";
 import { defaultFlag, getFlagImageURL } from "@/utils/nodeFlags";
+import { defaultConnectivityTestURL } from "@/utils/connectivityTargets";
 interface NG {
   id: number;
   name: string;
@@ -69,12 +77,15 @@ const active = ref<"node-groups" | "collections">("node-groups"),
   groups = ref<NG[]>([]),
   collections = ref<Col[]>([]),
   rules = ref<Rule[]>([]),
+  dnsServers = ref<DNSBindingServer[]>([]),
+  dnsRules = ref<DNSBindingRule[]>([]),
   facets = ref<{ protocols: Facet[]; subscriptions: Facet[]; total: number }>({
     protocols: [],
     subscriptions: [],
     total: 0,
   }),
   flags = ref<Record<string, string>>({}),
+  nodeFlags = ref<Record<string, string>>({}),
   loading = ref(true),
   message = ref(""),
   messageType = ref<"success" | "error" | "info">("success");
@@ -103,23 +114,26 @@ const ngName = ref(""),
   ngExclude = ref(""),
   ngUIDs = ref<string[]>([]),
   ngEnabled = ref(true),
-  ngURL = ref("https://www.gstatic.com/generate_204"),
-  ngInterval = ref(300),
   ngTolerance = ref(100);
 const editingCol = ref<Col | null>(null),
   colName = ref(""),
   colType = ref("selector"),
-  colSource = ref<"node_groups" | "manual">("node_groups"),
+  colSource = ref<"node_groups" | "node_groups_and_nodes" | "manual">(
+    "node_groups",
+  ),
   colGroups = ref<number[]>([]),
   colUIDs = ref<string[]>([]),
   colRules = ref<number[]>([]),
+  colDNSServer = ref(""),
   colEnabled = ref(true),
-  colURL = ref("https://www.gstatic.com/generate_204"),
-  colInterval = ref(300),
   colTolerance = ref(100),
+  colGroupSearch = ref(""),
+  connectivitySettings = ref({
+    test_url: defaultConnectivityTestURL,
+    interval_seconds: 300,
+  }),
   previewCol = ref<Col | null>(null),
   tests = ref<Record<number, CollectionTestResponse>>({}),
-  testing = ref(new Set<number>()),
   deleteAction = ref<null | (() => Promise<void>)>(null),
   deleteMessage = ref("");
 const show = (s: string, t: "success" | "error" | "info" = "success") => {
@@ -174,15 +188,21 @@ async function json(url: string, init?: RequestInit) {
 }
 async function load() {
   try {
-    const [g, c, f, r] = await Promise.all([
+    const [g, c, f, r, ds, dr, connectivity] = await Promise.all([
       json("/api/v1/node-groups"),
       json("/api/v1/collections"),
       api.getNodeFacets(),
       json("/api/v1/rules"),
+      json("/api/v1/dns/servers"),
+      json("/api/v1/dns/rules"),
+      api.getConnectivitySettings(),
     ]);
     groups.value = Array.isArray(g) ? g : [];
     collections.value = Array.isArray(c) ? c : [];
     rules.value = Array.isArray(r) ? r : [];
+    dnsServers.value = Array.isArray(ds) ? ds : [];
+    dnsRules.value = Array.isArray(dr) ? dr : [];
+    connectivitySettings.value = connectivity;
     facets.value = {
       protocols: f.types,
       subscriptions: f.subscriptions,
@@ -217,8 +237,6 @@ function resetGroup() {
   ngExclude.value = "";
   ngUIDs.value = [];
   ngEnabled.value = true;
-  ngURL.value = "https://www.gstatic.com/generate_204";
-  ngInterval.value = 300;
   ngTolerance.value = 100;
 }
 function createGroup() {
@@ -236,8 +254,6 @@ function editGroup(x: NG) {
   ngExclude.value = x.filter_exclude;
   ngUIDs.value = parseUIDs(x.node_uids);
   ngEnabled.value = x.enabled;
-  ngURL.value = x.test_url || ngURL.value;
-  ngInterval.value = x.test_interval || 300;
   ngTolerance.value = x.tolerance || 100;
 }
 async function saveGroup() {
@@ -252,8 +268,6 @@ async function saveGroup() {
         node_uids: ngUIDs.value,
         enabled: ngEnabled.value,
         priority: editingGroup.value?.priority || 0,
-        test_url: ngURL.value,
-        test_interval: ngInterval.value,
         tolerance: ngTolerance.value,
       },
       id = editingGroup.value?.id;
@@ -299,6 +313,15 @@ async function detail(x: NG) {
       filter_exclude: x.filter_exclude || "",
     });
     detailNodes.value = await json(`/api/v1/node-groups/preview?${p}`);
+    const inferred = await api.inferNodeFlags(
+      detailNodes.value.map((node) => ({ key: node.uid, name: node.name })),
+    );
+    nodeFlags.value = {
+      ...nodeFlags.value,
+      ...Object.fromEntries(
+        inferred.items.map((item) => [item.key, item.flag]),
+      ),
+    };
   } catch (e: any) {
     show(`加载节点组详情失败: ${e.message}`, "error");
   } finally {
@@ -316,6 +339,19 @@ async function picker(target?: "group" | "collection") {
         keyword: manualKeyword.value,
       })
     ).items;
+    const inferred = await api.inferNodeFlags(
+      manualNodes.value.map((node) => ({
+        key: node.uid,
+        name: node.name,
+        server: node.server,
+      })),
+    );
+    nodeFlags.value = {
+      ...nodeFlags.value,
+      ...Object.fromEntries(
+        inferred.items.map((item) => [item.key, item.flag]),
+      ),
+    };
   } catch (e: any) {
     show(`加载节点失败: ${e.message}`, "error");
   }
@@ -352,10 +388,10 @@ function resetCol() {
   colGroups.value = [];
   colUIDs.value = [];
   colRules.value = [];
+  colDNSServer.value = "";
   colEnabled.value = true;
-  colURL.value = "https://www.gstatic.com/generate_204";
-  colInterval.value = 300;
   colTolerance.value = 100;
+  colGroupSearch.value = "";
 }
 function createCol() {
   resetCol();
@@ -366,13 +402,18 @@ function editCol(x: Col) {
   editingCol.value = x;
   colName.value = x.name;
   colType.value = x.type;
-  colSource.value = x.source_type === "manual" ? "manual" : "node_groups";
+  colSource.value =
+    x.source_type === "manual"
+      ? "manual"
+      : x.source_type === "node_groups_and_nodes"
+        ? "node_groups_and_nodes"
+        : "node_groups";
   colGroups.value = x.referenced_groups?.map((g) => g.id) || [];
   colUIDs.value = x.node_uids || [];
   colRules.value = x.route_rule_ids || [];
+  colDNSServer.value =
+    findDNSOutboundBinding(dnsRules.value, x.name)?.server || "";
   colEnabled.value = x.enabled;
-  colURL.value = x.test_url || colURL.value;
-  colInterval.value = x.test_interval || 300;
   colTolerance.value = x.tolerance || 100;
 }
 const occupied = computed(
@@ -387,28 +428,51 @@ const occupied = computed(
     rules.value.filter(
       (x) => x.outbound === "proxy" && !occupied.value.has(x.id),
     ),
+  ),
+  selectableColGroups = computed(() => {
+    const keyword = colGroupSearch.value.trim().toLowerCase();
+    return groups.value.filter(
+      (group) =>
+        group.enabled &&
+        ((group.matched_node_count || 0) > 0 ||
+          colGroups.value.includes(group.id)) &&
+        (!keyword || group.name.toLowerCase().includes(keyword)),
+    );
+  }),
+  selectableColGroupIDs = computed(() =>
+    selectableColGroups.value.map((group) => group.id),
   );
 function selectRule(id: number) {
+  const previousName = rules.value.find(
+    (rule) => rule.id === colRules.value[0],
+  )?.name;
+  const shouldFillName =
+    !colName.value.trim() || colName.value === previousName;
   colRules.value = id ? [id] : [];
-  colName.value = rules.value.find((x) => x.id === id)?.name || "";
+  if (shouldFillName) {
+    colName.value = rules.value.find((x) => x.id === id)?.name || "";
+  }
 }
 async function saveCol() {
   try {
     const id = editingCol.value?.id,
+      previousName = editingCol.value?.name || "",
+      previousDNSBinding = previousName
+        ? findDNSOutboundBinding(dnsRules.value, previousName)
+        : undefined,
+      previousDNS = previousDNSBinding?.server || "",
       p = {
         name: colName.value,
         type: colType.value,
         source_type: colSource.value,
         referenced_group_ids:
-          colSource.value === "node_groups" ? colGroups.value : [],
+          colSource.value !== "manual" ? colGroups.value : [],
         route_rule_ids: colRules.value,
         node_uids:
           colSource.value === "manual"
             ? colUIDs.value
             : builtin(editingCol.value),
         enabled: colEnabled.value,
-        test_url: colURL.value,
-        test_interval: colInterval.value,
         tolerance: colTolerance.value,
       };
     await json(id ? `/api/v1/collections/${id}` : "/api/v1/collections", {
@@ -416,6 +480,25 @@ async function saveCol() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(p),
     });
+    if (
+      previousName !== colName.value ||
+      previousDNS !== colDNSServer.value ||
+      (!!colDNSServer.value && !previousDNSBinding?.enabled)
+    ) {
+      try {
+        await saveDNSOutboundBinding(
+          json,
+          dnsRules.value,
+          previousName,
+          colName.value,
+          colDNSServer.value,
+        );
+      } catch (e: any) {
+        await load();
+        show(`策略组已保存，但 DNS 出口绑定失败: ${e.message}`, "error");
+        return;
+      }
+    }
     show(id ? "策略组已更新" : "策略组已创建");
     resetCol();
     await load();
@@ -425,26 +508,18 @@ async function saveCol() {
 }
 async function removeCol(x: Col) {
   await json(`/api/v1/collections/${x.id}`, { method: "DELETE" });
+  const binding = findDNSOutboundBinding(dnsRules.value, x.name);
+  if (binding) {
+    try {
+      await saveDNSOutboundBinding(json, dnsRules.value, x.name, x.name, "");
+    } catch (e: any) {
+      await load();
+      show(`策略组已删除，但 DNS 出口绑定清理失败: ${e.message}`, "error");
+      return;
+    }
+  }
   show("策略组已删除");
   await load();
-}
-async function testCol(x: Col) {
-  testing.value = new Set(testing.value).add(x.id);
-  try {
-    const r = await api.testProxyCollection(x.id);
-    tests.value[x.id] = r;
-    show(
-      r.available
-        ? `测速完成：${r.available}/${r.tested} 个节点可用，最低 ${r.fastest_latency}ms`
-        : `测速完成：全部节点不可用`,
-      r.available ? "success" : "error",
-    );
-  } catch (e: any) {
-    show(`测速失败: ${e.message}`, "error");
-  } finally {
-    testing.value.delete(x.id);
-    testing.value = new Set(testing.value);
-  }
 }
 const preview = computed(() =>
   previewCol.value
@@ -457,8 +532,8 @@ const preview = computed(() =>
         ],
         ...(previewCol.value.type === "urltest"
           ? {
-              url: previewCol.value.test_url,
-              interval: `${previewCol.value.test_interval || 300}s`,
+              url: connectivitySettings.value.test_url,
+              interval: `${connectivitySettings.value.interval_seconds}s`,
               tolerance: previewCol.value.tolerance || 100,
             }
           : {}),
@@ -638,7 +713,7 @@ onMounted(load);
                   '名称',
                   '绑定规则',
                   '类型',
-                  '引用节点组',
+                  '节点来源',
                   '状态',
                   '操作',
                 ]"
@@ -668,6 +743,9 @@ onMounted(load);
                     ...(x.referenced_groups || []).map((g) => g.name),
                   ].join("、") || "-"
                 }}
+                <small v-if="x.source_type === 'node_groups_and_nodes'">
+                  · 含组内节点
+                </small>
               </td>
               <td>
                 {{ x.enabled ? "启用" : "停用"
@@ -683,15 +761,7 @@ onMounted(load);
                   <Eye :size="12" class="inline" />预览
                 </button>
                 <template v-if="!system(x)"
-                  ><button
-                    :disabled="testing.has(x.id) || !x.enabled"
-                    @click="testCol(x)"
-                  >
-                    <Zap :size="12" class="inline" />{{
-                      testing.has(x.id) ? "测速中" : "测速"
-                    }}
-                  </button>
-                  <button @click="editCol(x)">
+                  ><button @click="editCol(x)">
                     <Edit :size="12" class="inline" />编辑
                   </button>
                   <button
@@ -722,6 +792,7 @@ onMounted(load);
       v-if="detailGroup"
       :group="detailGroup"
       :nodes="detailNodes"
+      :flags="nodeFlags"
       :loading="detailLoading"
       :subscriptions="facets.subscriptions"
       @close="detailGroup = null"
@@ -733,69 +804,174 @@ onMounted(load);
       @close="resetGroup"
     >
       <div class="grid gap-4 md:grid-cols-2">
-        <input
-          v-model="ngName"
-          class="aw-input md:col-span-2"
-          placeholder="名称"
-        /><select v-model="ngType" class="aw-input">
-          <option value="selector">手动切换</option>
-          <option value="urltest">自动选择（测速）</option></select
-        ><label
-          ><input v-model="ngEnabled" type="checkbox" /> 启用此节点组</label
+        <label class="grid content-start gap-1.5 md:col-span-2">
+          <span class="aw-modal-label text-xs font-medium">节点组名称</span>
+          <input
+            v-model.trim="ngName"
+            class="aw-input"
+            placeholder="例如：香港节点、流媒体节点"
+          />
+        </label>
+        <label class="grid content-start gap-1.5">
+          <span class="aw-modal-label text-xs font-medium">节点组类型</span>
+          <select v-model="ngType" class="aw-input">
+            <option value="selector">手动切换</option>
+            <option value="urltest">自动选择（测速）</option>
+          </select>
+        </label>
+        <label
+          class="flex h-[34px] cursor-pointer items-center gap-2 self-end rounded-[var(--radius-md)] border border-[var(--border-default)] bg-[var(--button-secondary-bg)] px-3 text-xs text-[var(--text-secondary)]"
         >
-        <div class="md:col-span-2">
+          <input v-model="ngEnabled" type="checkbox" class="h-4 w-4" />
+          启用此节点组
+        </label>
+        <div
+          class="flex flex-wrap items-center justify-between gap-2 rounded-[var(--radius-lg)] border border-[var(--border-light)] bg-[var(--bg-base)] p-3 md:col-span-2"
+        >
+          <div>
+            <p class="text-xs font-medium">指定固定节点</p>
+            <p class="mt-0.5 text-[11px] text-[var(--text-tertiary)]">
+              已手动选择节点时优先使用，下面的动态筛选条件不参与匹配
+            </p>
+          </div>
           <button class="aw-action-button" @click="picker('group')">
-            手动选择节点 ({{ ngUIDs.length }})
+            手动选择节点（已选择 {{ ngUIDs.length }} 个）
           </button>
         </div>
-        <template v-if="ngType === 'urltest'"
-          ><input v-model="ngURL" class="aw-input md:col-span-2" /><input
-            v-model.number="ngInterval"
-            type="number"
-            class="aw-input" /><input
-            v-model.number="ngTolerance"
-            type="number"
-            class="aw-input"
-        /></template>
-        <div class="md:col-span-2">
-          <b>协议范围</b>
-          <div class="flex flex-wrap gap-2">
-            <label v-for="x in facets.protocols" :key="x.value"
-              ><input
+        <template v-if="ngType === 'urltest'">
+          <div
+            class="rounded-[var(--radius-md)] bg-[var(--color-primary-bg)] p-3 text-xs text-[var(--text-secondary)] md:col-span-2"
+          >
+            测速地址与间隔统一使用“设置 → 常规功能 → 连通性测速”。
+          </div>
+          <label class="grid content-start gap-1.5 md:col-span-2">
+            <span class="aw-modal-label text-xs font-medium"
+              >切换容差（ms）</span
+            >
+            <input
+              v-model.number="ngTolerance"
+              type="number"
+              min="0"
+              class="aw-input"
+            />
+          </label>
+        </template>
+        <fieldset class="grid gap-2 md:col-span-2">
+          <div class="flex items-end justify-between gap-2">
+            <div>
+              <legend class="text-sm font-semibold">协议范围</legend>
+              <p class="mt-0.5 text-[11px] text-[var(--text-tertiary)]">
+                不选择表示允许全部协议
+              </p>
+            </div>
+            <button
+              v-if="ngProtocols.length"
+              type="button"
+              class="aw-action-button"
+              @click="ngProtocols = []"
+            >
+              清空
+            </button>
+          </div>
+          <div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            <label
+              v-for="x in facets.protocols"
+              :key="x.value"
+              class="flex min-w-0 cursor-pointer items-center gap-2 rounded-[var(--radius-md)] border px-3 py-2 text-xs transition-colors"
+              :class="
+                ngProtocols.includes(x.value)
+                  ? 'border-[var(--button-primary-border)] bg-[var(--button-primary-bg)] text-[var(--button-primary-text)]'
+                  : 'border-[var(--border-light)] bg-[var(--button-secondary-bg)] text-[var(--text-secondary)] hover:border-[var(--border-default)] hover:bg-[var(--button-secondary-hover)]'
+              "
+            >
+              <input
                 type="checkbox"
+                class="h-4 w-4 shrink-0"
                 :checked="ngProtocols.includes(x.value)"
                 @change="ngProtocols = toggle(ngProtocols, x.value)"
               />
-              {{ x.label }} ({{ x.count }})</label
-            >
+              <span class="min-w-0 flex-1 truncate uppercase">{{
+                x.label
+              }}</span>
+              <span class="shrink-0 tabular-nums opacity-70">{{
+                x.count
+              }}</span>
+            </label>
           </div>
-        </div>
-        <div class="md:col-span-2">
-          <b>订阅范围</b>
-          <div class="grid gap-2 md:grid-cols-2">
-            <label v-for="x in facets.subscriptions" :key="x.value"
-              ><input
+        </fieldset>
+        <fieldset class="grid gap-2 md:col-span-2">
+          <div class="flex items-end justify-between gap-2">
+            <div>
+              <legend class="text-sm font-semibold">订阅范围</legend>
+              <p class="mt-0.5 text-[11px] text-[var(--text-tertiary)]">
+                不选择表示包含全部订阅
+              </p>
+            </div>
+            <button
+              v-if="ngSubscriptions.length"
+              type="button"
+              class="aw-action-button"
+              @click="ngSubscriptions = []"
+            >
+              清空
+            </button>
+          </div>
+          <div
+            class="grid max-h-48 gap-2 overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--border-light)] bg-[var(--bg-base)] p-2 sm:grid-cols-2"
+          >
+            <label
+              v-for="x in facets.subscriptions"
+              :key="x.value"
+              class="flex min-w-0 cursor-pointer items-center gap-2 rounded-[var(--radius-md)] border px-3 py-2 text-xs transition-colors"
+              :class="
+                ngSubscriptions.includes(x.value)
+                  ? 'border-[var(--button-primary-border)] bg-[var(--button-primary-bg)] text-[var(--button-primary-text)]'
+                  : 'border-[var(--border-light)] bg-[var(--button-secondary-bg)] text-[var(--text-secondary)] hover:border-[var(--border-default)] hover:bg-[var(--button-secondary-hover)]'
+              "
+            >
+              <input
                 type="checkbox"
+                class="h-4 w-4 shrink-0"
                 :checked="ngSubscriptions.includes(x.value)"
                 @change="ngSubscriptions = toggle(ngSubscriptions, x.value)"
               />
-              {{ x.label }}</label
+              <span class="min-w-0 flex-1 truncate">{{ x.label }}</span>
+              <span class="shrink-0 tabular-nums opacity-70">{{
+                x.count
+              }}</span>
+            </label>
+            <p
+              v-if="!facets.subscriptions.length"
+              class="py-6 text-center text-xs text-[var(--text-tertiary)] sm:col-span-2"
             >
+              暂无可用订阅
+            </p>
           </div>
-        </div>
-        <input
-          v-model="ngInclude"
-          class="aw-input md:col-span-2"
-          placeholder="包含关键词，以 | 分隔"
-        /><input
-          v-model="ngExclude"
-          class="aw-input md:col-span-2"
-          placeholder="排除关键词，以 | 分隔"
-        />
+        </fieldset>
+        <label class="grid content-start gap-1.5 md:col-span-2">
+          <span class="aw-modal-label text-xs font-medium">包含关键词</span>
+          <input
+            v-model.trim="ngInclude"
+            class="aw-input"
+            placeholder="正则表达式，例如：香港|HK"
+          />
+        </label>
+        <label class="grid content-start gap-1.5 md:col-span-2">
+          <span class="aw-modal-label text-xs font-medium">排除关键词</span>
+          <input
+            v-model.trim="ngExclude"
+            class="aw-input"
+            placeholder="正则表达式，例如：过期|流量"
+          />
+        </label>
       </div>
       <template #footer
         ><button class="aw-action-button" @click="resetGroup">取消</button
-        ><button class="aw-action-button" @click="saveGroup">
+        ><button
+          class="aw-action-button"
+          :disabled="!ngName.trim()"
+          @click="saveGroup"
+        >
           保存
         </button></template
       >
@@ -839,7 +1015,7 @@ onMounted(load);
                   @change="togglePicked(x.uid)"
                 />
               </td>
-              <td>{{ x.name }}</td>
+              <td><NodeFlagName :name="x.name" :flag="nodeFlags[x.uid]" /></td>
               <td>{{ x.type }}</td>
               <td>{{ x.subscription_name }}</td>
               <td>{{ x.latency_ms || "-" }}</td>
@@ -913,50 +1089,166 @@ onMounted(load);
       @close="resetCol"
     >
       <div class="grid gap-4 md:grid-cols-2">
-        <select
-          class="aw-input"
-          :value="colRules[0] || 0"
-          @change="
-            selectRule(Number(($event.target as HTMLSelectElement).value))
-          "
-        >
-          <option :value="0">请选择规则</option>
-          <option v-for="x in selectableRules" :key="x.id" :value="x.id">
-            {{ x.name }}
-          </option></select
-        ><select v-model="colType" class="aw-input">
-          <option value="selector">手动切换</option>
-          <option value="urltest">自动选择（测速）</option></select
-        ><select v-model="colSource" class="aw-input">
-          <option value="node_groups">引用节点组</option>
-          <option value="manual">手动选择节点</option></select
-        ><label><input v-model="colEnabled" type="checkbox" /> 启用</label
-        ><template v-if="colType === 'urltest'"
-          ><input v-model="colURL" class="aw-input md:col-span-2" /><input
-            v-model.number="colInterval"
-            type="number"
-            class="aw-input" /><input
-            v-model.number="colTolerance"
-            type="number"
+        <label class="grid content-start gap-1.5 md:col-span-2">
+          <span class="aw-modal-label text-xs font-medium">策略组名称</span>
+          <input
+            v-model.trim="colName"
             class="aw-input"
-        /></template>
-        <div v-if="colSource === 'node_groups'" class="md:col-span-2">
-          <b>选择引用的节点组</b
-          ><label
-            v-for="x in groups.filter((g) => g.enabled)"
-            :key="x.id"
-            class="block"
-            ><input
-              type="checkbox"
-              :checked="colGroups.includes(x.id)"
-              @change="colGroups = toggle(colGroups, x.id)"
-            />
-            {{ x.name }} ({{ x.matched_node_count || 0 }})</label
+            placeholder="例如：AI 服务、国外网站"
+          />
+        </label>
+        <label class="grid content-start gap-1.5">
+          <span class="aw-modal-label text-xs font-medium">关联代理规则</span>
+          <select
+            class="aw-input"
+            :value="colRules[0] || 0"
+            @change="
+              selectRule(Number(($event.target as HTMLSelectElement).value))
+            "
           >
-        </div>
+            <option :value="0">请选择出站为“代理”的规则</option>
+            <option v-for="x in selectableRules" :key="x.id" :value="x.id">
+              {{ x.name }}
+            </option>
+          </select>
+          <small class="text-[11px] text-[var(--text-tertiary)]">
+            该规则命中的流量将交给此策略组处理
+          </small>
+        </label>
+        <label class="grid content-start gap-1.5">
+          <span class="aw-modal-label text-xs font-medium">切换方式</span>
+          <select v-model="colType" class="aw-input">
+            <option value="selector">手动切换</option>
+            <option value="urltest">自动选择（测速）</option>
+          </select>
+        </label>
+        <label class="grid content-start gap-1.5">
+          <span class="aw-modal-label text-xs font-medium">节点来源</span>
+          <select v-model="colSource" class="aw-input">
+            <option value="node_groups">引用节点组</option>
+            <option value="node_groups_and_nodes">引用节点组和节点</option>
+            <option value="manual">手动选择节点</option>
+          </select>
+        </label>
+        <label
+          class="flex h-[34px] cursor-pointer items-center gap-2 self-end rounded-[var(--radius-md)] border border-[var(--border-default)] bg-[var(--button-secondary-bg)] px-3 text-xs text-[var(--text-secondary)]"
+        >
+          <input v-model="colEnabled" type="checkbox" class="h-4 w-4" />
+          启用此策略组
+        </label>
+        <label class="grid content-start gap-1.5 md:col-span-2">
+          <span class="aw-modal-label text-xs font-medium">DNS 出口绑定</span>
+          <select v-model="colDNSServer" class="aw-input">
+            <option value="">不绑定（使用默认 DNS）</option>
+            <option
+              v-for="server in dnsServers.filter(
+                (item) => item.enabled && item.server_type !== 'fakeip',
+              )"
+              :key="server.tag"
+              :value="server.tag"
+            >
+              {{ server.tag }}{{ server.detour ? ` · ${server.detour}` : "" }}
+            </option>
+          </select>
+          <small class="text-[11px] text-[var(--text-tertiary)]">
+            用于该策略组节点出站的域名解析；DNS 本身走代理时会自动使用直连
+            bootstrap，避免循环依赖
+          </small>
+        </label>
+        <template v-if="colType === 'urltest'">
+          <div
+            class="rounded-[var(--radius-md)] bg-[var(--color-primary-bg)] p-3 text-xs text-[var(--text-secondary)] md:col-span-2"
+          >
+            测速地址与间隔统一使用“设置 → 常规功能 → 连通性测速”。
+          </div>
+          <label class="grid content-start gap-1.5 md:col-span-2">
+            <span class="aw-modal-label text-xs font-medium"
+              >切换容差（ms）</span
+            >
+            <input
+              v-model.number="colTolerance"
+              type="number"
+              min="0"
+              class="aw-input"
+            />
+          </label>
+        </template>
+        <fieldset
+          v-if="colSource !== 'manual'"
+          class="grid gap-3 md:col-span-2"
+        >
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <legend class="text-sm font-semibold">选择引用的节点组</legend>
+              <p class="mt-0.5 text-[11px] text-[var(--text-tertiary)]">
+                <template v-if="colSource === 'node_groups_and_nodes'">
+                  策略组将同时包含节点组入口和组内全部匹配节点；
+                </template>
+                <template v-else> 策略组仅包含节点组入口； </template>
+                仅显示已有匹配节点的启用组，编辑时保留已引用项；已选择
+                {{ colGroups.length }} 个
+              </p>
+            </div>
+            <div class="flex gap-2">
+              <button
+                type="button"
+                class="aw-action-button"
+                @click="colGroups = selectableColGroupIDs"
+              >
+                全选当前
+              </button>
+              <button
+                type="button"
+                class="aw-action-button"
+                :disabled="!colGroups.length"
+                @click="colGroups = []"
+              >
+                清空
+              </button>
+            </div>
+          </div>
+          <input
+            v-model.trim="colGroupSearch"
+            class="aw-input"
+            placeholder="搜索节点组"
+          />
+          <div
+            class="grid max-h-64 gap-2 overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--border-light)] bg-[var(--bg-base)] p-2 sm:grid-cols-2"
+          >
+            <label
+              v-for="x in selectableColGroups"
+              :key="x.id"
+              class="flex min-w-0 cursor-pointer items-center gap-2 rounded-[var(--radius-md)] border px-3 py-2.5 text-xs transition-colors"
+              :class="
+                colGroups.includes(x.id)
+                  ? 'border-[var(--button-primary-border)] bg-[var(--button-primary-bg)] text-[var(--button-primary-text)]'
+                  : 'border-[var(--border-light)] bg-[var(--button-secondary-bg)] text-[var(--text-secondary)] hover:border-[var(--border-default)] hover:bg-[var(--button-secondary-hover)]'
+              "
+            >
+              <input
+                type="checkbox"
+                class="h-4 w-4 shrink-0"
+                :checked="colGroups.includes(x.id)"
+                @change="colGroups = toggle(colGroups, x.id)"
+              />
+              <span class="min-w-0 flex-1 truncate">{{ x.name }}</span>
+              <span
+                class="shrink-0 rounded-full bg-[var(--button-secondary-bg)] px-2 py-0.5 tabular-nums"
+              >
+                {{ x.matched_node_count || 0 }}
+              </span>
+            </label>
+            <p
+              v-if="!selectableColGroups.length"
+              class="py-8 text-center text-xs text-[var(--text-tertiary)] sm:col-span-2"
+            >
+              没有匹配的可用节点组
+            </p>
+          </div>
+        </fieldset>
         <div v-else class="md:col-span-2">
           <button class="aw-action-button" @click="picker('collection')">
-            手动选择节点 ({{ colUIDs.length }})
+            手动选择节点（已选择 {{ colUIDs.length }} 个）
           </button>
         </div>
       </div>
@@ -965,8 +1257,9 @@ onMounted(load);
         ><button
           class="aw-action-button"
           :disabled="
+            !colName.trim() ||
             !colRules.length ||
-            (colSource === 'node_groups' ? !colGroups.length : !colUIDs.length)
+            (colSource !== 'manual' ? !colGroups.length : !colUIDs.length)
           "
           @click="saveCol"
         >

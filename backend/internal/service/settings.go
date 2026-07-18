@@ -14,20 +14,30 @@ import (
 )
 
 type SettingsService struct {
-	store           *store.Store
-	singbox         *SingboxService
-	configGenerator *ConfigGeneratorService
+	store                    *store.Store
+	singbox                  *SingboxService
+	configGenerator          modeConfigGenerator
+	connectivitySettingsHook func()
+}
+
+type modeConfigGenerator interface {
+	ReconcileCurrent() (*model.ConfigGenerateResponse, error)
 }
 
 var ErrModeChangeWhileRunning = errors.New("核心运行时不能切换模式，请先停止核心")
+var ErrConnectivitySettingsInvalid = errors.New("连通性测速设置无效")
 
 func NewSettingsService(s *store.Store) *SettingsService {
 	return &SettingsService{store: s}
 }
 
-func (svc *SettingsService) SetModeDependencies(singbox *SingboxService, generator *ConfigGeneratorService) {
+func (svc *SettingsService) SetModeDependencies(singbox *SingboxService, generator modeConfigGenerator) {
 	svc.singbox = singbox
 	svc.configGenerator = generator
+}
+
+func (svc *SettingsService) SetConnectivitySettingsHook(hook func()) {
+	svc.connectivitySettingsHook = hook
 }
 
 func (svc *SettingsService) GetUpdateSettings() (*model.UpdateSettingsResponse, error) {
@@ -39,7 +49,7 @@ func (svc *SettingsService) SetUpdateSettings(req *model.UpdateSettings) error {
 	req.CustomMirrorURL = strings.TrimSpace(req.CustomMirrorURL)
 	req.ProxyURL = strings.TrimSpace(req.ProxyURL)
 	switch req.Acceleration {
-	case "", "proxy", "ghproxy", "custom":
+	case "", "proxy", "ghproxy", "ghproxy_vip", "jsdelivr_fastly", "jsdelivr_testingcf", "jsdelivr_cdn", "custom":
 	default:
 		return fmt.Errorf("更新加速方式无效")
 	}
@@ -93,6 +103,28 @@ func (svc *SettingsService) SetLogSettings(req *model.LogSettings) error {
 	}
 	generateRequest.LogLevel = req.Level
 	return svc.store.SetConfigGenerateRequest(generateRequest)
+}
+
+func (svc *SettingsService) GetConnectivitySettings() (*model.ConnectivitySettings, error) {
+	return svc.store.GetConnectivitySettings()
+}
+
+func (svc *SettingsService) SetConnectivitySettings(req *model.ConnectivitySettings) error {
+	req.TestURL = strings.TrimSpace(req.TestURL)
+	if err := validateUpdateURL(req.TestURL, "连通性地址"); err != nil {
+		return fmt.Errorf("%w: %v", ErrConnectivitySettingsInvalid, err)
+	}
+	if req.IntervalSeconds < 60 || req.IntervalSeconds > 3600 {
+		return fmt.Errorf("%w: 连通间隔必须在 60 到 3600 秒之间", ErrConnectivitySettingsInvalid)
+	}
+	if err := svc.store.SetConnectivitySettings(req); err != nil {
+		return err
+	}
+	logging.Info("settings.update", "连通性测速设置已更新，间隔: %ds", req.IntervalSeconds)
+	if svc.connectivitySettingsHook != nil {
+		svc.connectivitySettingsHook()
+	}
+	return nil
 }
 
 func (svc *SettingsService) GetNTPSettings() (*model.NTPSettingsResponse, error) {

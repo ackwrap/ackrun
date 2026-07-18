@@ -295,7 +295,7 @@ onMounted(async () => {
             :class="item.accent"
           >
             <button
-              class="flex w-full justify-between text-left"
+              class="flex w-full items-start justify-between gap-3 text-left"
               @click="toggleRow(index)"
             >
               <span
@@ -303,7 +303,7 @@ onMounted(async () => {
                 ><small class="mt-1 block text-[var(--text-tertiary)]">{{
                   item.detail
                 }}</small></span
-              ><span class="flex gap-2"
+              ><span class="flex shrink-0 items-center gap-2"
                 ><button
                   v-if="expandedModules[item.key]"
                   @click.stop="
@@ -312,7 +312,7 @@ onMounted(async () => {
                 >
                   复制</button
                 ><span
-                  class="rounded-full px-2 py-1 text-xs"
+                  class="inline-flex h-6 min-w-6 items-center justify-center rounded-full px-1.5 text-xs leading-none tabular-nums"
                   :class="item.badge"
                   >{{ item.count }}</span
                 >

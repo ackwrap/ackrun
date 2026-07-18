@@ -112,6 +112,7 @@ func main() {
 	proxyCollectionSvc := service.NewProxyCollectionService(db, realtimeSvc)
 	configGenSvc := service.NewConfigGeneratorService(db, p, singboxSvc)
 	settingsSvc.SetModeDependencies(singboxSvc, configGenSvc)
+	settingsSvc.SetConnectivitySettingsHook(proxyCollectionSvc.RefreshHealthCheckJobs)
 	reconcileSvc := service.NewConfigReconcileService(configGenSvc, realtimeSvc)
 	defer reconcileSvc.Close()
 	dnsSvc := service.NewDNSService(db)

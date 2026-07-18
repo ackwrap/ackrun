@@ -6,6 +6,7 @@ import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
 import Toast from "@/components/ui/Toast.vue";
 import { api } from "@/services/api";
 import { getClashClient } from "@/services/clash";
+import { defaultConnectivityTestURL } from "@/utils/connectivityTargets";
 import type {
   Connection,
   ProxyGroup,
@@ -36,6 +37,12 @@ const activeTab = ref<MonitorTab>("overview"),
   proxies = ref<Record<string, ProxyGroup | ProxyNode>>({}),
   loadingProxies = ref(false),
   testingNodes = ref(new Set<string>()),
+  testingGroups = ref(new Set<string>()),
+  proxyFlags = ref<Record<string, string>>({}),
+  delayTestURL = ref(
+    localStorage.getItem("ackwrap.monitor.delayTestURL") ||
+      defaultConnectivityTestURL,
+  ),
   connections = ref<Connection[]>([]),
   loadingConnections = ref(false),
   rules = ref<Rule[]>([]),
@@ -124,6 +131,12 @@ async function loadProxies() {
   loadingProxies.value = true;
   try {
     proxies.value = (await client.getProxies()).proxies;
+    const inferred = await api.inferNodeFlags(
+      Object.keys(proxies.value).map((name) => ({ key: name, name })),
+    );
+    proxyFlags.value = Object.fromEntries(
+      inferred.items.map((item) => [item.key, item.flag]),
+    );
   } catch (e: any) {
     offline(e) ? unavailable(e) : show(`加载策略组失败: ${e.message}`);
   } finally {
@@ -274,19 +287,7 @@ async function testDelay(n: string) {
   if (!n || testingNodes.value.has(n)) return;
   testingNodes.value = new Set(testingNodes.value).add(n);
   try {
-    const result = await client.delayTest(n);
-    const current = proxies.value[n];
-    if (!current) return;
-    proxies.value = {
-      ...proxies.value,
-      [n]: {
-        ...current,
-        history: [
-          ...(current.history || []),
-          { time: new Date().toISOString(), delay: result.delay },
-        ],
-      },
-    };
+    await measureDelay(n, delayTestURL.value);
   } catch (e: any) {
     show(`测速失败: ${e.message}`);
   } finally {
@@ -294,6 +295,100 @@ async function testDelay(n: string) {
     next.delete(n);
     testingNodes.value = next;
   }
+}
+
+function appendDelayHistory(name: string, delay: number) {
+  const current = proxies.value[name];
+  if (!current) return;
+  proxies.value = {
+    ...proxies.value,
+    [name]: {
+      ...current,
+      history: [
+        ...(current.history || []),
+        { time: new Date().toISOString(), delay },
+      ],
+    },
+  };
+}
+
+async function measureDelay(name: string, testURL: string) {
+  const result = await client.delayTest(name, testURL);
+  appendDelayHistory(name, result.delay);
+}
+
+async function testGroup(groupName: string, nodes: string[]) {
+  if (!groupName || testingGroups.value.has(groupName)) return;
+  const candidates = [...new Set(nodes.filter(Boolean))];
+  const testNodes = candidates.filter((name) => !testingNodes.value.has(name));
+  if (!testNodes.length) return;
+
+  testingGroups.value = new Set(testingGroups.value).add(groupName);
+  testingNodes.value = new Set([...testingNodes.value, ...testNodes]);
+
+  let nextIndex = 0;
+  let succeeded = 0;
+  let failed = 0;
+  let firstError = "";
+  const testURL = delayTestURL.value;
+  const worker = async () => {
+    while (nextIndex < testNodes.length) {
+      const name = testNodes[nextIndex++];
+      if (!name) continue;
+      try {
+        await measureDelay(name, testURL);
+        succeeded += 1;
+      } catch (e: any) {
+        failed += 1;
+        firstError ||= e?.message || String(e);
+        appendDelayHistory(name, 0);
+      } finally {
+        const nextNodes = new Set(testingNodes.value);
+        nextNodes.delete(name);
+        testingNodes.value = nextNodes;
+      }
+    }
+  };
+
+  try {
+    await Promise.allSettled(
+      Array.from({ length: Math.min(5, testNodes.length) }, worker),
+    );
+  } finally {
+    const nextGroups = new Set(testingGroups.value);
+    nextGroups.delete(groupName);
+    testingGroups.value = nextGroups;
+    // Also clean up nodes left behind if a worker exits unexpectedly.
+    const nextNodes = new Set(testingNodes.value);
+    testNodes.forEach((name) => nextNodes.delete(name));
+    testingNodes.value = nextNodes;
+  }
+
+  const skipped = candidates.length - testNodes.length;
+  const summary = `分组测速完成：成功 ${succeeded}，失败 ${failed}${skipped ? `，跳过 ${skipped}` : ""}`;
+  if (!failed) {
+    show(summary, "success");
+  } else {
+    show(
+      `${summary}；首个失败原因：${firstError}`,
+      succeeded ? "info" : "error",
+    );
+  }
+}
+function updateDelayTestURL(value: string) {
+  const next = value.trim();
+  try {
+    const parsed = new URL(next);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error("unsupported protocol");
+    }
+  } catch {
+    show("测速地址无效，仅支持完整的 HTTP/HTTPS URL", "error");
+    return;
+  }
+  delayTestURL.value = next;
+  localStorage.setItem("ackwrap.monitor.delayTestURL", next);
+  show("手动测速地址已更新", "success");
 }
 async function closeConnection(id: string) {
   try {
@@ -370,13 +465,19 @@ function returnToControl() {
         :proxy-groups="groups"
         :loading="loadingProxies"
         :testing-nodes="testingNodes"
+        :testing-groups="testingGroups"
+        :node-flags="proxyFlags"
+        :delay-test-url="delayTestURL"
         @refresh="loadProxies"
+        @update:delay-test-url="updateDelayTestURL"
         @select-proxy="selectProxy"
         @test-delay="testDelay"
+        @test-group="testGroup"
       /><ConnectionsPanel
         v-else-if="activeTab === 'connections'"
         :connections="connections"
         :loading="loadingConnections"
+        :node-flags="proxyFlags"
         @refresh="loadConnections"
         @close-connection="closeConnection"
         @close-all="closeAll"

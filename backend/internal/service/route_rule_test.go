@@ -249,6 +249,68 @@ func TestGeneratedGeoRuleSetContentCachesDownload(t *testing.T) {
 	}
 }
 
+func TestGeneratedGeoRuleSetContentUsesConfiguredMirror(t *testing.T) {
+	payload := []byte("mirrored-rule-set")
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.URL.Path != "/https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-test.srs" {
+			t.Errorf("unexpected mirror path: %s", r.URL.Path)
+		}
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+	if err := db.SetUpdateSettings(&model.UpdateSettings{Acceleration: "custom", CustomMirrorURL: server.URL}); err != nil {
+		t.Fatalf("set update settings: %v", err)
+	}
+	svc := newTestRouteRuleService(t, db)
+	data, _, err := svc.GeneratedGeoRuleSetContent("geosite-test")
+	if err != nil {
+		t.Fatalf("generated geo content: %v", err)
+	}
+	if string(data) != string(payload) || requests != 1 {
+		t.Fatalf("unexpected mirror result: data=%q requests=%d", data, requests)
+	}
+}
+
+func TestGeneratedGeoRuleSetContentFallsBackToOfficialURL(t *testing.T) {
+	mirrorRequests := 0
+	mirror := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mirrorRequests++
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer mirror.Close()
+	officialRequests := 0
+	official := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		officialRequests++
+		_, _ = w.Write([]byte("official-rule-set"))
+	}))
+	defer official.Close()
+
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+	if err := db.SetUpdateSettings(&model.UpdateSettings{Acceleration: "custom", CustomMirrorURL: mirror.URL}); err != nil {
+		t.Fatalf("set update settings: %v", err)
+	}
+	svc := newTestRouteRuleService(t, db)
+	data, _, err := svc.generatedGeoRuleSetContent("geosite-test", official.URL)
+	if err != nil {
+		t.Fatalf("generated geo content: %v", err)
+	}
+	if string(data) != "official-rule-set" || mirrorRequests != 1 || officialRequests != 1 {
+		t.Fatalf("unexpected fallback result: data=%q mirror=%d official=%d", data, mirrorRequests, officialRequests)
+	}
+}
+
 func TestGeneratedGeoRuleSetContentRejectsInvalidTag(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {

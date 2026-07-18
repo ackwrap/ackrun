@@ -79,6 +79,38 @@ func (h *SettingsHandler) SetLogSettings(c *gin.Context) {
 	c.JSON(http.StatusOK, model.ActionResponse{Success: true, Message: "log settings updated"})
 }
 
+func (h *SettingsHandler) GetConnectivitySettings(c *gin.Context) {
+	resp, err := h.svc.GetConnectivitySettings()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
+			Error: model.APIError{Code: "SETTINGS_ERROR", Message: err.Error()},
+		})
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+func (h *SettingsHandler) SetConnectivitySettings(c *gin.Context) {
+	var req model.ConnectivitySettings
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{
+			Error: model.APIError{Code: "SETTINGS_INVALID", Message: err.Error()},
+		})
+		return
+	}
+	if err := h.svc.SetConnectivitySettings(&req); err != nil {
+		status := http.StatusInternalServerError
+		code := "SETTINGS_SAVE_FAILED"
+		if errors.Is(err, service.ErrConnectivitySettingsInvalid) {
+			status = http.StatusBadRequest
+			code = "SETTINGS_INVALID"
+		}
+		c.JSON(status, model.ErrorResponse{Error: model.APIError{Code: code, Message: err.Error()}})
+		return
+	}
+	c.JSON(http.StatusOK, model.ActionResponse{Success: true, Message: "connectivity settings updated"})
+}
+
 func (h *SettingsHandler) GetNTPSettings(c *gin.Context) {
 	resp, err := h.svc.GetNTPSettings()
 	if err != nil {

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { LoaderCircle, Zap } from "lucide-vue-next";
-import { latencyTextClass } from "./proxyGroupUtils";
+import { latencyTagClass } from "./proxyGroupUtils";
 
 const props = withDefaults(
   defineProps<{
@@ -8,8 +8,15 @@ const props = withDefaults(
     loading?: boolean;
     active?: boolean;
     disabled?: boolean;
+    title?: string;
   }>(),
-  { delay: 0, loading: false, active: false, disabled: false },
+  {
+    delay: 0,
+    loading: false,
+    active: false,
+    disabled: false,
+    title: "测试节点延迟",
+  },
 );
 
 defineEmits<{ test: [] }>();
@@ -18,14 +25,14 @@ defineEmits<{ test: [] }>();
 <template>
   <button
     type="button"
-    class="flex h-5 min-w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--button-secondary-bg)] px-1.5 text-[10px] tabular-nums transition-colors hover:bg-[var(--button-secondary-hover)] disabled:cursor-default"
+    class="flex h-6 min-w-11 shrink-0 items-center justify-center rounded-full px-2 text-[11px] font-medium tabular-nums transition-[filter] hover:brightness-110 disabled:cursor-default"
     :class="
       props.active
         ? 'bg-[var(--color-primary-active)] text-[var(--button-danger-text)]'
-        : latencyTextClass(delay)
+        : latencyTagClass(delay)
     "
     :disabled="disabled || loading"
-    title="测试节点延迟"
+    :title="title"
     @click.stop="$emit('test')"
   >
     <LoaderCircle v-if="loading" :size="12" class="animate-spin" />

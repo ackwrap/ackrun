@@ -51,6 +51,9 @@ func (s *Store) GetNodeGroup(id int64) (*model.NodeGroup, error) {
 }
 
 func (s *Store) CreateNodeGroup(req *model.NodeGroupRequest) (*model.NodeGroup, error) {
+	s.nodeRefsMu.Lock()
+	defer s.nodeRefsMu.Unlock()
+
 	now := time.Now().Unix()
 	testURL := req.TestURL
 	if testURL == "" {
@@ -77,6 +80,9 @@ func (s *Store) CreateNodeGroup(req *model.NodeGroupRequest) (*model.NodeGroup, 
 }
 
 func (s *Store) UpdateNodeGroup(id int64, req *model.NodeGroupRequest) error {
+	s.nodeRefsMu.Lock()
+	defer s.nodeRefsMu.Unlock()
+
 	now := time.Now().Unix()
 	testURL := req.TestURL
 	if testURL == "" {
@@ -98,13 +104,16 @@ func (s *Store) UpdateNodeGroup(id int64, req *model.NodeGroupRequest) error {
 }
 
 func (s *Store) DeleteNodeGroup(id int64) error {
-	if _, err := s.db.Exec(`DELETE FROM node_groups WHERE id = ?`, id); err != nil {
-		return err
-	}
-	return s.removeNodeGroupRefsFromProxyCollections([]int64{id})
+	return s.DeleteNodeGroups([]int64{id})
 }
 
 func (s *Store) DeleteNodeGroups(ids []int64) error {
+	s.nodeRefsMu.Lock()
+	defer s.nodeRefsMu.Unlock()
+	return s.deleteNodeGroups(ids)
+}
+
+func (s *Store) deleteNodeGroups(ids []int64) error {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -119,14 +128,20 @@ func (s *Store) DeleteNodeGroups(ids []int64) error {
 			return err
 		}
 	}
-
-	if err := tx.Commit(); err != nil {
+	remove := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		remove[id] = true
+	}
+	if _, err := updateIntJSONRefsTx(tx, "proxy_collections", "referenced_group_ids", remove); err != nil {
 		return err
 	}
-	return s.removeNodeGroupRefsFromProxyCollections(ids)
+	return tx.Commit()
 }
 
 func (s *Store) DeleteEmptyNodeGroups() ([]int64, error) {
+	s.nodeRefsMu.Lock()
+	defer s.nodeRefsMu.Unlock()
+
 	groups, err := s.ListNodeGroups()
 	if err != nil {
 		return nil, err
@@ -137,13 +152,16 @@ func (s *Store) DeleteEmptyNodeGroups() ([]int64, error) {
 			ids = append(ids, group.ID)
 		}
 	}
-	if err := s.DeleteNodeGroups(ids); err != nil {
+	if err := s.deleteNodeGroups(ids); err != nil {
 		return nil, err
 	}
 	return ids, nil
 }
 
 func (s *Store) ReorderNodeGroups(ids []int64) error {
+	s.nodeRefsMu.Lock()
+	defer s.nodeRefsMu.Unlock()
+
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -496,8 +514,8 @@ func (s *Store) GetProxyCollectionWithNodes(id int) (*model.ProxyCollectionWithN
 		json.Unmarshal([]byte(c.RouteRuleIDs), &result.RouteRuleIDs)
 	}
 
-	// 如果是 node_groups 模式，加载引用的节点组
-	if c.SourceType == "node_groups" {
+	// 节点组来源模式需要加载引用的节点组。
+	if c.SourceType == "node_groups" || c.SourceType == "node_groups_and_nodes" {
 		var groupIDs []int64
 		if c.ReferencedGroupIDs != "" && c.ReferencedGroupIDs != "[]" {
 			json.Unmarshal([]byte(c.ReferencedGroupIDs), &groupIDs)

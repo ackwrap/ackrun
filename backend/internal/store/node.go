@@ -298,7 +298,15 @@ func (s *Store) UpdateNodeHealthCheck(uid string, latencyMS int, success bool, t
 }
 
 func (s *Store) DeleteNode(uid string) error {
-	res, err := s.db.Exec(`DELETE FROM nodes WHERE uid = ?`, uid)
+	s.nodeRefsMu.Lock()
+	defer s.nodeRefsMu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`DELETE FROM nodes WHERE uid = ?`, uid)
 	if err != nil {
 		return err
 	}
@@ -309,10 +317,10 @@ func (s *Store) DeleteNode(uid string) error {
 	if affected == 0 {
 		return fmt.Errorf("node not found: %s", uid)
 	}
-	if err := s.removeNodeUIDFromProxyCollections(uid); err != nil {
+	if _, err := s.cleanInvalidNodeUIDsTx(tx, []string{uid}); err != nil {
 		return err
 	}
-	return s.removeNodeUIDFromNodeGroups(uid)
+	return tx.Commit()
 }
 
 func (s *Store) NodeFacets() (*model.NodeFacetsResponse, error) {

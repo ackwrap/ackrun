@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { LoaderCircle, RefreshCw } from "lucide-vue-next";
 import Modal from "@/components/ui/Modal.vue";
+import NodeFlagName from "@/components/NodeFlagName.vue";
 import { useRealtimeSocket } from "@/composables/useRealtimeSocket";
 import { api } from "@/services/api";
 import type {
@@ -15,7 +16,10 @@ import type {
 
 type TracePhase = "waiting" | "starting" | "running" | "completed" | "failed";
 
-const props = defineProps<{ node: NodeItem | null }>();
+const props = withDefaults(
+  defineProps<{ node: NodeItem | null; flag?: string }>(),
+  { flag: "" },
+);
 const emit = defineEmits<{ close: [] }>();
 const result = ref<NodeTracerouteResponse | null>(null);
 const error = ref("");
@@ -201,12 +205,13 @@ onBeforeUnmount(cancelActive);
 </script>
 
 <template>
-  <Modal
-    :open="!!node"
-    :title="`路由追踪${node ? ` · ${node.name}` : ''}`"
-    :width="1540"
-    @close="close"
-  >
+  <Modal :open="!!node" title="路由追踪" :width="1540" @close="close">
+    <template #title>
+      <span>路由追踪</span>
+      <template v-if="node">
+        · <NodeFlagName :name="node.name" :flag="flag" />
+      </template>
+    </template>
     <template v-if="result">
       <div class="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <div

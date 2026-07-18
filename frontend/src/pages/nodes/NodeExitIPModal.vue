@@ -7,10 +7,14 @@ import {
   RefreshCw,
 } from "lucide-vue-next";
 import Modal from "@/components/ui/Modal.vue";
+import NodeFlagName from "@/components/NodeFlagName.vue";
 import { api } from "@/services/api";
 import type { NodeExitIPResponse, NodeItem } from "@/services/types";
 
-const props = defineProps<{ node: NodeItem | null }>();
+const props = withDefaults(
+  defineProps<{ node: NodeItem | null; flag?: string }>(),
+  { flag: "" },
+);
 const emit = defineEmits<{ close: [] }>();
 const loading = ref(false);
 const error = ref("");
@@ -53,12 +57,13 @@ watch(
 </script>
 
 <template>
-  <Modal
-    :open="!!node"
-    :title="`出口 IP${node ? ` · ${node.name}` : ''}`"
-    size="lg"
-    @close="close"
-  >
+  <Modal :open="!!node" title="出口 IP" size="lg" @close="close">
+    <template #title>
+      <span>出口 IP</span>
+      <template v-if="node">
+        · <NodeFlagName :name="node.name" :flag="flag" />
+      </template>
+    </template>
     <div
       v-if="loading"
       class="flex min-h-48 flex-col items-center justify-center gap-3 text-[var(--text-secondary)]"

@@ -188,6 +188,40 @@ func TestBuiltinOutboundTagsOnlyIncludesRealOutbounds(t *testing.T) {
 	}
 }
 
+func TestGenerateCollectionOutboundIncludesGroupsAndTheirNodes(t *testing.T) {
+	service := &ConfigGeneratorService{}
+	collection := &model.ProxyCollectionWithNodes{
+		ProxyCollection: model.ProxyCollection{
+			Name:       "Google",
+			Type:       "selector",
+			SourceType: proxyCollectionSourceNodeGroupsAndNodes,
+			NodeUIDs:   `["direct"]`,
+		},
+		NodeUIDs: []string{"direct"},
+		ReferencedGroups: []model.NodeGroup{
+			{ID: 1, Name: "新加坡节点"},
+			{ID: 2, Name: "日本节点"},
+		},
+	}
+	outbound, err := service.generateCollectionOutbound(
+		collection,
+		map[string]bool{"新加坡节点": true, "日本节点": true},
+		map[string]string{"node-1": "SG-node-1", "node-2": "SG-node-2"},
+		map[int64][]string{1: {"node-1", "node-2"}, 2: {"node-2"}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := outbound["outbounds"].([]string)
+	if !ok {
+		t.Fatalf("outbounds type = %T, want []string", outbound["outbounds"])
+	}
+	want := []string{"direct", "新加坡节点", "SG-node-1", "SG-node-2", "日本节点"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("outbounds = %v, want %v", got, want)
+	}
+}
+
 func TestRouteRuleBlockUsesRejectAction(t *testing.T) {
 	rule := singboxRouteRule("domain_suffix", []string{"example.com"}, "block", false)
 	if rule["action"] != "reject" {
@@ -564,6 +598,67 @@ func TestGenerateOutboundsDoesNotApplyNodeListPageLimit(t *testing.T) {
 	t.Fatal("generated all-nodes group not found")
 }
 
+func TestGenerateOutboundsUsesGlobalConnectivitySettings(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.SetConnectivitySettings(&model.ConnectivitySettings{
+		TestURL: "http://connectivity.example/generate_204", IntervalSeconds: 120,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	subscription, err := db.CreateSubscription(&model.SubscriptionRequest{Name: "connectivity", URL: "https://example.com/subscription"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertSubscriptionNodes(subscription.ID, []model.ParsedNode{{
+		UID: "connectivity-node", Name: "Connectivity Node", Type: "socks", Server: "127.0.0.1", ServerPort: 1080,
+		RawJSON: `{"type":"socks","server":"127.0.0.1","server_port":1080}`,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	group, err := db.CreateNodeGroup(&model.NodeGroupRequest{
+		Name: "Auto Region", Type: "urltest", FilterInclude: ".*", TestURL: "https://legacy.example/check", TestInterval: 600, Tolerance: 80, Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collection := &model.ProxyCollection{
+		Name: "Auto Service", Type: "urltest", SourceType: proxyCollectionSourceNodeGroups,
+		ReferencedGroupIDs: fmt.Sprintf("[%d]", group.ID), RouteRuleIDs: "[]", NodeUIDs: "[]",
+		TestURL: "https://legacy.example/check", TestInterval: 900, Tolerance: 90, Enabled: true,
+	}
+	if err := db.CreateProxyCollection(collection); err != nil {
+		t.Fatal(err)
+	}
+
+	outbounds, _, err := NewConfigGeneratorService(db, nil).generateOutbounds()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := map[string]bool{"Auto Region": false, "Auto Service": false}
+	for _, item := range outbounds {
+		outbound, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		tag, ok := outbound["tag"].(string)
+		if _, exists := found[tag]; !ok || !exists {
+			continue
+		}
+		if outbound["url"] != "http://connectivity.example/generate_204" || outbound["interval"] != "120s" {
+			t.Fatalf("outbound connectivity settings = %+v", outbound)
+		}
+		found[tag] = true
+	}
+	for tag, ok := range found {
+		if !ok {
+			t.Fatalf("generated outbound %q not found", tag)
+		}
+	}
+}
 func TestGenerateOutboundsIncludesEnabledNodesForCoreExitIP(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {

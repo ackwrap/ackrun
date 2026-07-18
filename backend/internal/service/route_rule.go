@@ -1112,7 +1112,7 @@ func (svc *RouteRuleService) generatedGeoRuleSetContent(tag, upstreamURL string)
 		return nil, "", fmt.Errorf("read generated geo rule set cache: %w", err)
 	}
 
-	data, err := fetchRouteRuleSubscriptionContent(upstreamURL, false)
+	data, err := svc.fetchGeneratedGeoRuleSetContent(upstreamURL)
 	if err != nil {
 		logging.Error("route_rule_geo.cache", "下载 Geo 规则集失败 %s: %v", tag, err)
 		return nil, "", fmt.Errorf("download generated geo rule set %s: %w", tag, err)
@@ -1133,6 +1133,28 @@ func (svc *RouteRuleService) generatedGeoRuleSetContent(tag, upstreamURL string)
 	}
 	logging.Info("route_rule_geo.cache", "Geo 规则集已缓存: %s", tag)
 	return data, "application/octet-stream", nil
+}
+
+func (svc *RouteRuleService) fetchGeneratedGeoRuleSetContent(upstreamURL string) ([]byte, error) {
+	settings, err := svc.store.GetUpdateSettings()
+	if err != nil {
+		return nil, fmt.Errorf("read update acceleration settings: %w", err)
+	}
+	attempts, err := buildUpdateRequestAttempts(settings, upstreamURL)
+	if err != nil {
+		return nil, err
+	}
+	var lastErr error
+	for _, attempt := range attempts {
+		logging.Info("route_rule_geo.download", "download attempt: %s", attempt.name)
+		data, err := fetchRouteRuleSubscriptionContentWithClient(attempt.client, attempt.url)
+		if err == nil {
+			return data, nil
+		}
+		lastErr = err
+		logging.Info("route_rule_geo.download", "download attempt failed: %s: %v", attempt.name, err)
+	}
+	return nil, lastErr
 }
 
 func routeRuleSubscriptionContentType(format string) string {
@@ -1337,6 +1359,10 @@ func fetchRouteRuleSubscriptionContent(rawURL string, useProxy bool) ([]byte, er
 		transport.Proxy = http.ProxyURL(proxyURL)
 	}
 	client := &http.Client{Timeout: 60 * time.Second, Transport: transport}
+	return fetchRouteRuleSubscriptionContentWithClient(client, rawURL)
+}
+
+func fetchRouteRuleSubscriptionContentWithClient(client *http.Client, rawURL string) ([]byte, error) {
 	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create rule subscription request: %w", err)

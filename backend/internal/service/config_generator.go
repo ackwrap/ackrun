@@ -265,6 +265,10 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface
 	outbounds := []interface{}{}
 	endpoints := []interface{}{}
 	domainResolverBindings := s.dnsOutboundResolverBindings()
+	connectivitySettings, err := s.store.GetConnectivitySettings()
+	if err != nil {
+		return nil, nil, fmt.Errorf("读取连通性测速设置失败: %w", err)
+	}
 
 	// 1. 添加基础 direct 出站。sing-box 1.13 已移除 dns/block 特殊 outbound，DNS/拦截必须通过 route action 处理。
 	directOutbound := map[string]interface{}{
@@ -401,8 +405,8 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface
 
 		// urltest 特有字段
 		if group.Type == "urltest" {
-			outbound["url"] = group.TestURL
-			outbound["interval"] = fmt.Sprintf("%ds", group.TestInterval)
+			outbound["url"] = connectivitySettings.TestURL
+			outbound["interval"] = fmt.Sprintf("%ds", connectivitySettings.IntervalSeconds)
 			outbound["tolerance"] = group.Tolerance
 		}
 
@@ -418,7 +422,10 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface
 			continue
 		}
 
-		outbound, err := s.generateCollectionOutbound(col, validGroupTags, generatedNodeTags)
+		effectiveCollection := *col
+		effectiveCollection.TestURL = connectivitySettings.TestURL
+		effectiveCollection.TestInterval = connectivitySettings.IntervalSeconds
+		outbound, err := s.generateCollectionOutbound(&effectiveCollection, validGroupTags, generatedNodeTags, groupNodeUIDs)
 		if err != nil {
 			return nil, nil, fmt.Errorf("策略组 %s 生成失败: %w", col.Name, err)
 		}
@@ -447,22 +454,38 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface
 }
 
 // generateCollectionOutbound 为代理集合生成 outbound
-func (s *ConfigGeneratorService) generateCollectionOutbound(col *model.ProxyCollectionWithNodes, validGroupTags map[string]bool, nodeTags map[string]string) (map[string]interface{}, error) {
+func (s *ConfigGeneratorService) generateCollectionOutbound(col *model.ProxyCollectionWithNodes, validGroupTags map[string]bool, nodeTags map[string]string, groupNodeUIDs map[int64][]string) (map[string]interface{}, error) {
 	outbound := map[string]interface{}{
 		"type": col.Type,
 		"tag":  col.Name,
 	}
 
 	// 判断是引用节点组还是手动选节点
-	if col.SourceType == "node_groups" && len(col.ReferencedGroups) > 0 {
+	if isCollectionGroupSource(col.SourceType) && len(col.ReferencedGroups) > 0 {
 		// 引用节点组模式。node_uids 兼容存放 direct 这类真实内置出站 tag。
 		referencedTags := collectionBuiltinOutboundTags(col)
+		seen := make(map[string]bool, len(referencedTags))
+		for _, tag := range referencedTags {
+			seen[tag] = true
+		}
+		appendUnique := func(tags ...string) {
+			for _, tag := range tags {
+				if tag == "" || seen[tag] {
+					continue
+				}
+				seen[tag] = true
+				referencedTags = append(referencedTags, tag)
+			}
+		}
 		for _, group := range col.ReferencedGroups {
 			if !validGroupTags[group.Name] {
 				logging.Info("config_generator.outbound", "策略组 %s 跳过空节点组引用: %s", col.Name, group.Name)
 				continue
 			}
-			referencedTags = append(referencedTags, group.Name)
+			appendUnique(group.Name)
+			if col.SourceType == proxyCollectionSourceNodeGroupsAndNodes {
+				appendUnique(nodeUIDsToOutboundTags(groupNodeUIDs[group.ID], nodeTags)...)
+			}
 		}
 		if len(referencedTags) == 0 {
 			return nil, fmt.Errorf("策略组没有可用节点组引用")
@@ -1026,7 +1049,7 @@ func collectionNodeDomainResolverBindings(collections []*model.ProxyCollectionWi
 }
 
 func collectionNodeUIDs(col *model.ProxyCollectionWithNodes, groupNodeUIDs map[int64][]string) []string {
-	if col.SourceType != "node_groups" {
+	if !isCollectionGroupSource(col.SourceType) {
 		return col.NodeUIDs
 	}
 	uids := make([]string, 0)

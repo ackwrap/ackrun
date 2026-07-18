@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
 	"strings"
 	"time"
@@ -157,58 +158,68 @@ func (s *Store) ListProxyCollectionsWithNodes() ([]*model.ProxyCollectionWithNod
 	return result, nil
 }
 
-// CleanInvalidNodeUIDs 清理所有策略组中失效的节点 UID
-func (s *Store) CleanInvalidNodeUIDs(removedUIDs []string) (int, error) {
+type InvalidNodeCleanupResult struct {
+	UpdatedCollections int
+	DeletedNodeGroups  int
+}
+
+// CleanInvalidNodeUIDs 清理失效节点引用、零节点节点组及业务策略组引用。
+func (s *Store) CleanInvalidNodeUIDs(removedUIDs []string) (InvalidNodeCleanupResult, error) {
+	result := InvalidNodeCleanupResult{}
 	if len(removedUIDs) == 0 {
-		return 0, nil
+		return result, nil
 	}
+	s.nodeRefsMu.Lock()
+	defer s.nodeRefsMu.Unlock()
 
-	collections, err := s.ListProxyCollections()
+	tx, err := s.db.Begin()
 	if err != nil {
-		return 0, err
+		return result, err
 	}
-
-	removedSet := make(map[string]bool)
-	for _, uid := range removedUIDs {
-		removedSet[uid] = true
+	defer tx.Rollback()
+	result, err = s.cleanInvalidNodeUIDsTx(tx, removedUIDs)
+	if err != nil {
+		return result, err
 	}
-
-	cleanedCount := 0
-	for _, pc := range collections {
-		if pc.SourceType != "manual" || pc.NodeUIDs == "" || pc.NodeUIDs == "[]" {
-			continue
-		}
-
-		var currentUIDs []string
-		if err := json.Unmarshal([]byte(pc.NodeUIDs), &currentUIDs); err != nil {
-			continue
-		}
-
-		// 过滤掉失效的 UID
-		validUIDs := make([]string, 0)
-		hadInvalid := false
-		for _, uid := range currentUIDs {
-			if removedSet[uid] {
-				hadInvalid = true
-			} else {
-				validUIDs = append(validUIDs, uid)
-			}
-		}
-
-		if !hadInvalid {
-			continue
-		}
-
-		// 更新策略组
-		validUIDsJSON, _ := json.Marshal(validUIDs)
-		pc.NodeUIDs = string(validUIDsJSON)
-		if err := s.UpdateProxyCollection(pc.ID, pc); err != nil {
-			return cleanedCount, err
-		}
-		cleanedCount++
+	if err := tx.Commit(); err != nil {
+		return result, err
 	}
+	return result, nil
+}
 
-	return cleanedCount, nil
+func (s *Store) cleanInvalidNodeUIDsTx(tx *sql.Tx, removedUIDs []string) (InvalidNodeCleanupResult, error) {
+	result := InvalidNodeCleanupResult{}
+	remove, err := globallyMissingNodeUIDsTx(tx, removedUIDs)
+	if err != nil {
+		return result, err
+	}
+	emptyGroupIDs, err := s.emptyNodeGroupIDsTx(tx, remove)
+	if err != nil {
+		return result, err
+	}
+	if len(remove) > 0 {
+		result.UpdatedCollections, err = updateStringJSONRefsTx(tx, "proxy_collections", "node_uids", remove)
+		if err != nil {
+			return result, err
+		}
+		if _, err := updateStringJSONRefsTx(tx, "node_groups", "node_uids", remove); err != nil {
+			return result, err
+		}
+	}
+	for _, id := range emptyGroupIDs {
+		if _, err := tx.Exec(`DELETE FROM node_groups WHERE id = ?`, id); err != nil {
+			return result, err
+		}
+	}
+	groupRemove := make(map[int64]bool, len(emptyGroupIDs))
+	for _, id := range emptyGroupIDs {
+		groupRemove[id] = true
+	}
+	if _, err := updateIntJSONRefsTx(tx, "proxy_collections", "referenced_group_ids", groupRemove); err != nil {
+		return result, err
+	}
+	result.DeletedNodeGroups = len(emptyGroupIDs)
+	return result, nil
 }
 
 // AutoAddNewNodes 自动将新增节点加入匹配的策略组
@@ -216,6 +227,8 @@ func (s *Store) AutoAddNewNodes(subscriptionID int64, addedUIDs []string) (int, 
 	if len(addedUIDs) == 0 {
 		return 0, nil
 	}
+	s.nodeRefsMu.Lock()
+	defer s.nodeRefsMu.Unlock()
 
 	// 获取新增节点的详细信息
 	newNodes, err := s.ListNodesByUIDs(addedUIDs)

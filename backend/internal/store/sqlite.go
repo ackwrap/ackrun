@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"sync"
 
 	_ "modernc.org/sqlite"
 
@@ -10,7 +11,8 @@ import (
 )
 
 type Store struct {
-	db *sql.DB
+	db         *sql.DB
+	nodeRefsMu sync.Mutex
 }
 
 func Open(dbPath string) (*Store, error) {

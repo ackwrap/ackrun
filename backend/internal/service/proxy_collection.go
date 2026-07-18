@@ -30,6 +30,12 @@ type ProxyCollectionService struct {
 
 var ErrSystemProxyCollectionProtected = errors.New("系统默认策略组不可编辑")
 
+const (
+	proxyCollectionSourceManual             = "manual"
+	proxyCollectionSourceNodeGroups         = "node_groups"
+	proxyCollectionSourceNodeGroupsAndNodes = "node_groups_and_nodes"
+)
+
 // NewProxyCollectionService 创建代理集合服务
 func NewProxyCollectionService(store *store.Store, realtime *RealtimeService) *ProxyCollectionService {
 	return &ProxyCollectionService{
@@ -57,18 +63,18 @@ func (s *ProxyCollectionService) Create(req model.ProxyCollectionRequest) (*mode
 		return nil, err
 	}
 
-	sourceType := req.SourceType
-	if sourceType == "" {
-		sourceType = "manual"
+	sourceType, err := normalizeCollectionSourceType(req.SourceType)
+	if err != nil {
+		return nil, err
 	}
 
 	// 验证节点数量（manual 模式）
-	if sourceType == "manual" && len(req.NodeUIDs) == 0 {
+	if sourceType == proxyCollectionSourceManual && len(req.NodeUIDs) == 0 {
 		return nil, fmt.Errorf("至少需要选择一个节点")
 	}
 
-	// 验证节点组引用（node_groups 模式）
-	if sourceType == "node_groups" && len(req.ReferencedGroupIDs) == 0 {
+	// 验证节点组引用
+	if isCollectionGroupSource(sourceType) && len(req.ReferencedGroupIDs) == 0 {
 		return nil, fmt.Errorf("至少需要引用一个节点组")
 	}
 
@@ -127,18 +133,18 @@ func (s *ProxyCollectionService) Update(id int, req model.ProxyCollectionRequest
 		return err
 	}
 
-	sourceType := req.SourceType
-	if sourceType == "" {
-		sourceType = "manual"
+	sourceType, err := normalizeCollectionSourceType(req.SourceType)
+	if err != nil {
+		return err
 	}
 
 	// 验证节点数量（manual 模式）
-	if sourceType == "manual" && len(req.NodeUIDs) == 0 {
+	if sourceType == proxyCollectionSourceManual && len(req.NodeUIDs) == 0 {
 		return fmt.Errorf("至少需要选择一个节点")
 	}
 
-	// 验证节点组引用（node_groups 模式）
-	if sourceType == "node_groups" && len(req.ReferencedGroupIDs) == 0 {
+	// 验证节点组引用
+	if isCollectionGroupSource(sourceType) && len(req.ReferencedGroupIDs) == 0 {
 		return fmt.Errorf("至少需要引用一个节点组")
 	}
 
@@ -169,6 +175,23 @@ func (s *ProxyCollectionService) Update(id int, req model.ProxyCollectionRequest
 
 func isSupportedGroupType(groupType string) bool {
 	return groupType == "selector" || groupType == "urltest"
+}
+
+func normalizeCollectionSourceType(sourceType string) (string, error) {
+	sourceType = strings.TrimSpace(sourceType)
+	if sourceType == "" {
+		return proxyCollectionSourceManual, nil
+	}
+	switch sourceType {
+	case proxyCollectionSourceManual, proxyCollectionSourceNodeGroups, proxyCollectionSourceNodeGroupsAndNodes:
+		return sourceType, nil
+	default:
+		return "", fmt.Errorf("无效的节点来源: %s", sourceType)
+	}
+}
+
+func isCollectionGroupSource(sourceType string) bool {
+	return sourceType == proxyCollectionSourceNodeGroups || sourceType == proxyCollectionSourceNodeGroupsAndNodes
 }
 
 // Delete 删除代理集合

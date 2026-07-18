@@ -77,6 +77,8 @@ func RegisterRoutes(
 		v1.PUT("/settings/update", settingsH.SetUpdateSettings)
 		v1.GET("/settings/log", settingsH.GetLogSettings)
 		v1.PUT("/settings/log", settingsH.SetLogSettings)
+		v1.GET("/settings/connectivity", settingsH.GetConnectivitySettings)
+		v1.PUT("/settings/connectivity", settingsH.SetConnectivitySettings)
 		v1.GET("/settings/ntp", settingsH.GetNTPSettings)
 		v1.PUT("/settings/ntp", settingsH.SetNTPSettings)
 		v1.GET("/settings/dns", settingsH.GetDNSSettings)

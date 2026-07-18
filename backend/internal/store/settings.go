@@ -8,6 +8,11 @@ import (
 	"github.com/ackwrap/ackwrap/internal/model"
 )
 
+const (
+	DefaultConnectivityTestURL         = "http://www.gstatic.com/generate_204"
+	DefaultConnectivityIntervalSeconds = 300
+)
+
 func (s *Store) GetUpdateSettings() (*model.UpdateSettingsResponse, error) {
 	r := &model.UpdateSettingsResponse{}
 	rows, err := s.db.Query(`SELECT key, value FROM app_settings WHERE key IN ('update.acceleration', 'update.custom_mirror_url', 'update.github_token', 'update.proxy_url')`)
@@ -114,6 +119,57 @@ func (s *Store) SetLogSettings(req *model.LogSettings) error {
 	for key, value := range map[string]string{
 		"log.level":     req.Level,
 		"log.timestamp": fmt.Sprintf("%t", req.Timestamp),
+	} {
+		if _, err := tx.Exec(`
+			INSERT INTO app_settings (key, value, updated_at)
+			VALUES (?, ?, ?)
+			ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+		`, key, value, now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) GetConnectivitySettings() (*model.ConnectivitySettings, error) {
+	settings := &model.ConnectivitySettings{
+		TestURL:         DefaultConnectivityTestURL,
+		IntervalSeconds: DefaultConnectivityIntervalSeconds,
+	}
+	rows, err := s.db.Query(`SELECT key, value FROM app_settings WHERE key IN ('connectivity.test_url', 'connectivity.interval_seconds')`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			return nil, err
+		}
+		switch key {
+		case "connectivity.test_url":
+			if value != "" {
+				settings.TestURL = value
+			}
+		case "connectivity.interval_seconds":
+			if interval, err := strconv.Atoi(value); err == nil {
+				settings.IntervalSeconds = interval
+			}
+		}
+	}
+	return settings, rows.Err()
+}
+
+func (s *Store) SetConnectivitySettings(req *model.ConnectivitySettings) error {
+	now := time.Now().Unix()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for key, value := range map[string]string{
+		"connectivity.test_url":         req.TestURL,
+		"connectivity.interval_seconds": strconv.Itoa(req.IntervalSeconds),
 	} {
 		if _, err := tx.Exec(`
 			INSERT INTO app_settings (key, value, updated_at)

@@ -83,6 +83,8 @@ const types = [
   strategies = ["prefer_ipv4", "prefer_ipv6", "ipv4_only", "ipv6_only"],
   presets = [
     ["阿里 DoH", "dns_ali", "https", "https://dns.alidns.com/dns-query", ""],
+    ["阿里 DNS UDP", "dns_ali_udp", "udp", "223.5.5.5", ""],
+    ["阿里 DNS UDP 备用", "dns_ali_udp_2", "udp", "223.6.6.6", ""],
     [
       "腾讯 DNSPod DoH",
       "dns_tencent",
@@ -90,6 +92,8 @@ const types = [
       "https://doh.pub/dns-query",
       "",
     ],
+    ["腾讯 DNSPod UDP", "dns_tencent_udp", "udp", "119.29.29.29", ""],
+    ["腾讯 DNSPod UDP 备用", "dns_tencent_udp_2", "udp", "119.28.28.28", ""],
     [
       "Cloudflare DoH",
       "dns_cloudflare",
@@ -104,8 +108,18 @@ const types = [
       "https://dns.google/dns-query",
       "proxy",
     ],
-    ["阿里 UDP", "dns_ali_udp", "udp", "223.5.5.5", ""],
-    ["腾讯 UDP", "dns_tencent_udp", "udp", "119.29.29.29", ""],
+    [
+      "Quad9 DoH",
+      "dns_quad9",
+      "https",
+      "https://dns.quad9.net/dns-query",
+      "proxy",
+    ],
+    ["114 DNS UDP", "dns_114", "udp", "114.114.114.114", ""],
+    ["百度 DNS UDP", "dns_baidu", "udp", "180.76.76.76", ""],
+    ["移动 DNS UDP", "dns_mobile", "udp", "211.136.192.6", ""],
+    ["联通 DNS UDP", "dns_unicom", "udp", "123.125.81.6", ""],
+    ["电信 DNS UDP", "dns_telecom", "udp", "202.96.128.86", ""],
   ],
   preset = ref(0);
 async function request(url: string, init?: RequestInit) {
@@ -697,8 +711,10 @@ onMounted(load);
             ><input v-model="serverForm.enabled" type="checkbox" />启用</label
           >
         </div>
-        <button @click="serverForm = null">取消</button
-        ><button @click="saveServer">保存</button>
+        <div class="mt-4 flex justify-end gap-2">
+          <button @click="serverForm = null">取消</button>
+          <button @click="saveServer">保存</button>
+        </div>
       </div>
     </div>
     <div v-if="ruleForm" class="aw-modal-backdrop">

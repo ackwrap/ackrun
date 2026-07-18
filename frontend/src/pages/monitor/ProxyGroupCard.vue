@@ -7,6 +7,7 @@ import ProxyGroupPreview from "./ProxyGroupPreview.vue";
 import ProxyLatencyTag from "./ProxyLatencyTag.vue";
 import ProxyNodeCard from "./ProxyNodeCard.vue";
 import ProxyNodeGrid from "./ProxyNodeGrid.vue";
+import NodeFlagName from "@/components/NodeFlagName.vue";
 import type { ProxyMap } from "./proxyGroupUtils";
 import { availableProxyCount, latestDelay } from "./proxyGroupUtils";
 
@@ -17,8 +18,15 @@ const props = withDefaults(
     expanded?: boolean;
     search?: string;
     testingNodes?: Set<string>;
+    testingGroups?: Set<string>;
+    nodeFlags: Record<string, string>;
   }>(),
-  { expanded: false, search: "", testingNodes: () => new Set<string>() },
+  {
+    expanded: false,
+    search: "",
+    testingNodes: () => new Set<string>(),
+    testingGroups: () => new Set<string>(),
+  },
 );
 
 const emit = defineEmits<{
@@ -26,6 +34,7 @@ const emit = defineEmits<{
   "update:search": [string];
   selectProxy: [string, string];
   testDelay: [string];
+  testGroup: [string, string[]];
 }>();
 
 const selectable = computed(() => props.group.type === "Selector");
@@ -52,11 +61,11 @@ function updateSearch(event: Event) {
 
 <template>
   <section
-    class="overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] shadow-[var(--shadow-card)]"
+    class="overflow-hidden rounded-[14px] border border-[var(--proxy-card-border)] bg-[var(--proxy-card-bg)] shadow-[var(--proxy-card-shadow)] transition-[border-color,box-shadow] hover:border-[var(--border-default)]"
     :data-group-name="group.name"
   >
     <div
-      class="cursor-pointer px-4 py-3.5 outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]"
+      class="cursor-pointer px-4 py-4 outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]"
       role="button"
       tabindex="0"
       @click="$emit('toggle')"
@@ -64,11 +73,12 @@ function updateSearch(event: Event) {
     >
       <div class="flex min-w-0 items-center gap-2.5">
         <ProxyGroupIcon :group="group" class="h-5 w-5 shrink-0" />
-        <b class="min-w-0 truncate text-sm text-[var(--text-primary)]">{{
-          group.name
-        }}</b>
+        <b
+          class="min-w-0 truncate text-[15px] leading-none font-semibold text-[var(--text-primary)]"
+          >{{ group.name }}</b
+        >
         <span
-          class="min-w-0 flex-1 truncate text-[10px] font-medium tracking-wider text-[var(--text-tertiary)] uppercase tabular-nums"
+          class="min-w-0 flex-1 truncate text-[10px] font-medium tracking-[0.08em] text-[var(--text-tertiary)] uppercase tabular-nums"
         >
           {{ group.type }} · {{ availableProxyCount(group, proxies) }}/{{
             group.all?.length || 0
@@ -76,7 +86,7 @@ function updateSearch(event: Event) {
         </span>
         <button
           type="button"
-          class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--text-secondary)] hover:bg-[var(--bg-sidebar-hover)]"
+          class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] transition-colors hover:bg-[var(--bg-sidebar-hover)] hover:text-[var(--text-primary)]"
           title="展开并搜索组内节点"
           @click.stop="$emit('toggle')"
         >
@@ -84,9 +94,10 @@ function updateSearch(event: Event) {
         </button>
         <ProxyLatencyTag
           :delay="latestDelay(proxies[group.now])"
-          :loading="testingNodes.has(group.now)"
-          :disabled="!group.now"
-          @test="$emit('testDelay', group.now)"
+          :loading="testingGroups.has(group.name)"
+          :disabled="!group.all?.length"
+          title="测试分组全部节点"
+          @test="$emit('testGroup', group.name, group.all || [])"
         />
         <ChevronDown
           :size="14"
@@ -95,15 +106,21 @@ function updateSearch(event: Event) {
         />
       </div>
 
-      <div class="mt-2 flex items-center gap-2 text-xs">
+      <div class="mt-3 flex items-center gap-2 text-xs">
         <CircleArrowRight
           :size="14"
           class="shrink-0 text-[var(--text-tertiary)]"
         />
         <span
-          class="min-w-0 flex-1 truncate font-medium text-[var(--text-primary)]"
+          class="min-w-0 flex-1 truncate font-medium text-[var(--text-secondary)]"
         >
-          {{ group.now || "未选择节点" }}
+          <NodeFlagName
+            v-if="group.now"
+            :name="group.now"
+            :flag="nodeFlags[group.now]"
+            class="w-full"
+          />
+          <template v-else>未选择节点</template>
         </span>
       </div>
 
@@ -119,17 +136,17 @@ function updateSearch(event: Event) {
 
     <div
       v-if="expanded"
-      class="border-t border-[var(--border-default)] px-3 pb-3"
+      class="border-t border-[var(--proxy-card-border)] px-3.5 pb-3.5"
       @click.stop
     >
-      <div class="relative my-3">
+      <div class="relative my-3.5">
         <Search
           :size="13"
           class="absolute top-1/2 left-2.5 -translate-y-1/2 text-[var(--text-tertiary)]"
         />
         <input
           type="search"
-          class="h-8 w-full rounded-lg border border-[var(--border-default)] bg-[var(--button-secondary-bg)] pr-3 pl-8 text-xs outline-none focus:border-[var(--color-primary)]"
+          class="h-9 w-full rounded-[10px] border border-[var(--proxy-card-border)] bg-[var(--proxy-node-bg)] pr-3 pl-8 text-xs outline-none transition-colors focus:border-[var(--color-primary)]"
           :value="search"
           placeholder="搜索组内节点"
           @input="updateSearch"
@@ -141,6 +158,7 @@ function updateSearch(event: Event) {
             v-for="name in visibleNodes"
             :key="name"
             :name="name"
+            :flag="nodeFlags[name]"
             :node="node(name)"
             :active="group.now === name"
             :selectable="selectable"

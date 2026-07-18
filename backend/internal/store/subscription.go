@@ -99,11 +99,7 @@ func (s *Store) DeleteSubscription(id int64) error {
 	if err != nil || existing == nil {
 		return err
 	}
-	if err := s.deleteSubscriptionNodesAndCleanup(id); err != nil {
-		return err
-	}
-	_, err = s.db.Exec(`DELETE FROM subscriptions WHERE id = ?`, id)
-	return err
+	return s.deleteSubscriptionNodesAndCleanup(id, true)
 }
 
 func (s *Store) ClearSubscriptionNodes(id int64) error {
@@ -111,38 +107,54 @@ func (s *Store) ClearSubscriptionNodes(id int64) error {
 	if err != nil || existing == nil {
 		return err
 	}
-	return s.deleteSubscriptionNodesAndCleanup(id)
+	return s.deleteSubscriptionNodesAndCleanup(id, false)
 }
 
-func (s *Store) deleteSubscriptionNodesAndCleanup(id int64) error {
-	uids, err := s.GetSubscriptionNodeUIDs(id)
-	if err != nil {
-		return err
-	}
-	if len(uids) > 0 {
-		if err := s.removeNodeUIDsFromProxyCollections(uids); err != nil {
-			return err
-		}
-		if err := s.removeNodeUIDsFromNodeGroups(uids); err != nil {
-			return err
-		}
-	}
+func (s *Store) deleteSubscriptionNodesAndCleanup(id int64, deleteSubscription bool) error {
+	s.nodeRefsMu.Lock()
+	defer s.nodeRefsMu.Unlock()
+
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	rows, err := tx.Query(`SELECT uid FROM nodes WHERE subscription_id = ? AND uid <> ''`, id)
+	if err != nil {
+		return err
+	}
+	uids := make([]string, 0)
+	for rows.Next() {
+		var uid string
+		if err := rows.Scan(&uid); err != nil {
+			rows.Close()
+			return err
+		}
+		uids = append(uids, uid)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`DELETE FROM nodes WHERE subscription_id = ?`, id); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`UPDATE subscriptions SET node_count = 0, updated_at = ? WHERE id = ?`, time.Now().UnixMilli(), id); err != nil {
+	if deleteSubscription {
+		if _, err := tx.Exec(`DELETE FROM subscriptions WHERE id = ?`, id); err != nil {
+			return err
+		}
+	} else {
+		if _, err := tx.Exec(`UPDATE subscriptions SET node_count = 0, updated_at = ? WHERE id = ?`, time.Now().UnixMilli(), id); err != nil {
+			return err
+		}
+	}
+	if _, err := s.cleanInvalidNodeUIDsTx(tx, uids); err != nil {
 		return err
 	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	_, err = s.DeleteEmptyNodeGroups()
-	return err
+	return tx.Commit()
 }
 
 func (s *Store) MarkSubscriptionSynced(id int64) (*model.Subscription, error) {

@@ -54,6 +54,15 @@ func TestImportManualNodes(t *testing.T) {
 	}
 }
 
+func TestInferNodeEmojiRecognizesDelimitedRegionCode(t *testing.T) {
+	if got := inferNodeEmoji(model.Node{Name: "HK Li 香港07 | 倍率:1.5"}); got != "🇭🇰" {
+		t.Fatalf("flag = %q, want Hong Kong", got)
+	}
+	if got := inferNodeEmoji(model.Node{Name: "SHK-node"}); got != "" {
+		t.Fatalf("embedded region code flag = %q, want empty", got)
+	}
+}
+
 func TestManualImportFiltersUnsupportedClashVariants(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {

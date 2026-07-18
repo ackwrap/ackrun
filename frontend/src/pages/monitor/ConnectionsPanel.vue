@@ -2,6 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { Link, Pause, Play, RefreshCw, Search, X } from "lucide-vue-next";
 import type { Connection } from "@/services/clash";
+import NodeFlagName from "@/components/NodeFlagName.vue";
 import { formatBytes, formatSpeed } from "./monitorUtils";
 
 interface ConnectionRow {
@@ -16,7 +17,11 @@ interface Snapshot {
   observedAt: number;
 }
 
-const props = defineProps<{ connections: Connection[]; loading: boolean }>();
+const props = defineProps<{
+  connections: Connection[];
+  loading: boolean;
+  nodeFlags: Record<string, string>;
+}>();
 const emit = defineEmits<{
   refresh: [];
   closeConnection: [string];
@@ -315,7 +320,23 @@ function elapsed(connection: Connection, closedAt?: number) {
               {{ ruleDescription(row.connection) }}
             </td>
             <td class="max-w-96 truncate px-3 py-2">
-              {{ row.connection.chains?.join(" → ") || "DIRECT" }}
+              <span
+                v-if="row.connection.chains?.length"
+                class="inline-flex max-w-full items-center gap-1"
+              >
+                <template
+                  v-for="(chain, index) in row.connection.chains"
+                  :key="`${chain}-${index}`"
+                >
+                  <span v-if="index" class="shrink-0">→</span>
+                  <NodeFlagName
+                    :name="chain"
+                    :flag="nodeFlags[chain]"
+                    class="min-w-0"
+                  />
+                </template>
+              </span>
+              <template v-else>DIRECT</template>
             </td>
             <td class="whitespace-nowrap px-3 py-2 text-right tabular-nums">
               {{ formatSpeed(row.downloadSpeed) }}

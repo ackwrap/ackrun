@@ -24,6 +24,12 @@ type LogSettingsResponse struct {
 	Timestamp bool   `json:"timestamp"`
 }
 
+// ConnectivitySettings controls automatic URLTest checks globally.
+type ConnectivitySettings struct {
+	TestURL         string `json:"test_url"`
+	IntervalSeconds int    `json:"interval_seconds"`
+}
+
 // NTPSettings NTP 时间同步设置
 type NTPSettings struct {
 	Enabled    bool   `json:"enabled"`

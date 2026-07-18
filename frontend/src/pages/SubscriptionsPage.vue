@@ -11,6 +11,7 @@ import {
   Upload,
 } from "lucide-vue-next";
 import PageHeader from "@/components/layout/PageHeader.vue";
+import NodeFlagName from "@/components/NodeFlagName.vue";
 import Toast from "@/components/ui/Toast.vue";
 import Modal from "@/components/ui/Modal.vue";
 import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
@@ -49,6 +50,7 @@ const content = ref(""),
   previewLoading = ref(false),
   previewError = ref(""),
   previewDetail = ref<NodeImportPreviewItem | null>(null),
+  previewFlags = ref<Record<string, string>>({}),
   detailFormat = ref<"json" | "yaml">("json"),
   lastPreview = ref("");
 const editingFilter = ref<NodeFilter | null>(null),
@@ -202,6 +204,16 @@ async function parse(silent = false) {
   try {
     const r = await api.previewImportNodes({ content: content.value });
     preview.value = r.items;
+    const inferred = await api.inferNodeFlags(
+      r.items.map((node) => ({
+        key: node.uid,
+        name: node.name,
+        server: node.server,
+      })),
+    );
+    previewFlags.value = Object.fromEntries(
+      inferred.items.map((item) => [item.key, item.flag]),
+    );
     if (!silent) show(`预览完成：识别到 ${r.count} 个节点`);
   } catch (e: any) {
     preview.value = [];
@@ -542,8 +554,15 @@ const pretty = (s: string) => {
             class="mb-2 flex w-full justify-between rounded border border-[var(--border-default)] p-2 text-left"
             @click="previewDetail = x"
           >
-            <span class="truncate">{{ x.name }} · {{ x.type }}</span
-            ><Eye :size="13" />
+            <span class="flex min-w-0 items-center gap-1">
+              <NodeFlagName
+                :name="x.name"
+                :flag="previewFlags[x.uid]"
+                class="min-w-0 flex-1"
+              />
+              <span class="shrink-0">· {{ x.type }}</span>
+            </span>
+            <Eye :size="13" />
           </button>
         </aside>
       </div>

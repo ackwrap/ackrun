@@ -5,7 +5,7 @@ type ProxyCollection struct {
 	ID                 int    `json:"id"`
 	Name               string `json:"name"`
 	Type               string `json:"type"`                 // selector, urltest
-	SourceType         string `json:"source_type"`          // 'node_groups', 'manual'
+	SourceType         string `json:"source_type"`          // 'node_groups', 'node_groups_and_nodes', 'manual'
 	ReferencedGroupIDs string `json:"referenced_group_ids"` // JSON: [1,2,3]
 	RouteRuleIDs       string `json:"route_rule_ids"`       // JSON: [1,2,3]
 	NodeUIDs           string `json:"node_uids"`            // JSON: ["uid1","uid2"]

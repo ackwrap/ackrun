@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/ackwrap/ackwrap/internal/model"
@@ -205,6 +206,375 @@ func TestDeleteSubscriptionCascadesNodesGroupsAndStrategyRefs(t *testing.T) {
 	}
 	if updatedCollection.ReferencedGroupIDs != "[]" {
 		t.Fatalf("expected strategy group refs removed, got %s", updatedCollection.ReferencedGroupIDs)
+	}
+}
+
+func TestCleanInvalidNodeUIDsDeletesEmptyGroupsAndUpdatesStrategyRefs(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+
+	sub, err := db.CreateSubscription(&model.SubscriptionRequest{Name: "sub", URL: "https://example.com/sub", UserAgent: "clash-meta/2.4.0", SyncMode: "off", SyncTimeoutSecs: 60})
+	if err != nil {
+		t.Fatalf("create subscription: %v", err)
+	}
+	const removedUID = "removed-uid"
+	const keptUID = "kept-uid"
+	if err := db.ReplaceSubscriptionNodes(sub.ID, []model.ParsedNode{
+		{UID: removedUID, Name: "TW-01", Type: "vless", Server: "tw.example.com", ServerPort: 443, Raw: "raw-tw", RawJSON: `{"type":"vless","server":"tw.example.com","server_port":443,"uuid":"uuid-tw"}`},
+		{UID: keptUID, Name: "HK-01", Type: "vless", Server: "hk.example.com", ServerPort: 443, Raw: "raw-hk", RawJSON: `{"type":"vless","server":"hk.example.com","server_port":443,"uuid":"uuid-hk"}`},
+	}); err != nil {
+		t.Fatalf("replace subscription nodes: %v", err)
+	}
+
+	emptyManual, err := db.CreateNodeGroup(&model.NodeGroupRequest{Name: "empty manual", Type: "selector", NodeUIDs: []string{removedUID}, Enabled: true})
+	if err != nil {
+		t.Fatalf("create empty manual group: %v", err)
+	}
+	emptyDynamic, err := db.CreateNodeGroup(&model.NodeGroupRequest{Name: "empty dynamic", Type: "selector", FilterSubscriptions: fmt.Sprintf("%d", sub.ID), FilterInclude: "TW", Enabled: true})
+	if err != nil {
+		t.Fatalf("create empty dynamic group: %v", err)
+	}
+	keptGroup, err := db.CreateNodeGroup(&model.NodeGroupRequest{Name: "kept group", Type: "selector", NodeUIDs: []string{keptUID}, Enabled: true})
+	if err != nil {
+		t.Fatalf("create kept group: %v", err)
+	}
+	keptDynamic, err := db.CreateNodeGroup(&model.NodeGroupRequest{Name: "kept dynamic", Type: "selector", FilterSubscriptions: fmt.Sprintf("%d", sub.ID), FilterInclude: "HK", Enabled: true})
+	if err != nil {
+		t.Fatalf("create kept dynamic group: %v", err)
+	}
+
+	refs, _ := json.Marshal([]int64{emptyManual.ID, emptyDynamic.ID, keptGroup.ID, keptDynamic.ID})
+	groupCollection := &model.ProxyCollection{Name: "group strategy", Type: "selector", SourceType: "node_groups", ReferencedGroupIDs: string(refs), RouteRuleIDs: "[]", NodeUIDs: "[]", Enabled: true}
+	if err := db.CreateProxyCollection(groupCollection); err != nil {
+		t.Fatalf("create group strategy: %v", err)
+	}
+	manualUIDs, _ := json.Marshal([]string{removedUID, keptUID})
+	manualCollection := &model.ProxyCollection{Name: "manual strategy", Type: "selector", SourceType: "manual", ReferencedGroupIDs: "[]", RouteRuleIDs: "[]", NodeUIDs: string(manualUIDs), Enabled: true}
+	if err := db.CreateProxyCollection(manualCollection); err != nil {
+		t.Fatalf("create manual strategy: %v", err)
+	}
+
+	if err := db.ReplaceSubscriptionNodes(sub.ID, []model.ParsedNode{
+		{UID: keptUID, Name: "HK-01", Type: "vless", Server: "hk.example.com", ServerPort: 443, Raw: "raw-hk", RawJSON: `{"type":"vless","server":"hk.example.com","server_port":443,"uuid":"uuid-hk"}`},
+	}); err != nil {
+		t.Fatalf("replace updated subscription nodes: %v", err)
+	}
+	cleanup, err := db.CleanInvalidNodeUIDs([]string{removedUID})
+	if err != nil {
+		t.Fatalf("clean invalid node UIDs: %v", err)
+	}
+	if cleanup.UpdatedCollections != 1 || cleanup.DeletedNodeGroups != 2 {
+		t.Fatalf("unexpected cleanup result: %+v", cleanup)
+	}
+
+	groups, err := db.ListNodeGroups()
+	if err != nil {
+		t.Fatalf("list node groups: %v", err)
+	}
+	if len(groups) != 2 || groups[0].ID != keptGroup.ID || groups[1].ID != keptDynamic.ID {
+		t.Fatalf("expected manual and dynamic groups with matches to remain, got %+v", groups)
+	}
+	updatedGroupCollection, err := db.GetProxyCollection(groupCollection.ID)
+	if err != nil {
+		t.Fatalf("get group strategy: %v", err)
+	}
+	var updatedRefs []int64
+	if err := json.Unmarshal([]byte(updatedGroupCollection.ReferencedGroupIDs), &updatedRefs); err != nil {
+		t.Fatalf("unmarshal group strategy refs: %v", err)
+	}
+	if len(updatedRefs) != 2 || updatedRefs[0] != keptGroup.ID || updatedRefs[1] != keptDynamic.ID {
+		t.Fatalf("expected empty group refs removed, got %+v", updatedRefs)
+	}
+	updatedManualCollection, err := db.GetProxyCollection(manualCollection.ID)
+	if err != nil {
+		t.Fatalf("get manual strategy: %v", err)
+	}
+	var updatedUIDs []string
+	if err := json.Unmarshal([]byte(updatedManualCollection.NodeUIDs), &updatedUIDs); err != nil {
+		t.Fatalf("unmarshal manual strategy UIDs: %v", err)
+	}
+	if len(updatedUIDs) != 1 || updatedUIDs[0] != keptUID {
+		t.Fatalf("expected invalid manual UID removed, got %+v", updatedUIDs)
+	}
+}
+
+func TestCleanInvalidNodeUIDsSerializesConcurrentCleanup(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+
+	sub, err := db.CreateSubscription(&model.SubscriptionRequest{Name: "sub", URL: "https://example.com/sub", UserAgent: "clash-meta/2.4.0", SyncMode: "off", SyncTimeoutSecs: 60})
+	if err != nil {
+		t.Fatalf("create subscription: %v", err)
+	}
+	const uidA = "removed-a"
+	const uidB = "removed-b"
+	const keptUID = "kept"
+	nodes := []model.ParsedNode{
+		{UID: uidA, Name: "A", Type: "vless", Server: "a.example.com", ServerPort: 443, Raw: "raw-a", RawJSON: `{"type":"vless","server":"a.example.com","server_port":443,"uuid":"uuid-a"}`},
+		{UID: uidB, Name: "B", Type: "vless", Server: "b.example.com", ServerPort: 443, Raw: "raw-b", RawJSON: `{"type":"vless","server":"b.example.com","server_port":443,"uuid":"uuid-b"}`},
+		{UID: keptUID, Name: "K", Type: "vless", Server: "k.example.com", ServerPort: 443, Raw: "raw-k", RawJSON: `{"type":"vless","server":"k.example.com","server_port":443,"uuid":"uuid-k"}`},
+	}
+	if err := db.ReplaceSubscriptionNodes(sub.ID, nodes); err != nil {
+		t.Fatalf("replace subscription nodes: %v", err)
+	}
+	groupA, err := db.CreateNodeGroup(&model.NodeGroupRequest{Name: "group a", Type: "selector", NodeUIDs: []string{uidA}, Enabled: true})
+	if err != nil {
+		t.Fatalf("create group a: %v", err)
+	}
+	groupB, err := db.CreateNodeGroup(&model.NodeGroupRequest{Name: "group b", Type: "selector", NodeUIDs: []string{uidB}, Enabled: true})
+	if err != nil {
+		t.Fatalf("create group b: %v", err)
+	}
+	refs, _ := json.Marshal([]int64{groupA.ID, groupB.ID})
+	uids, _ := json.Marshal([]string{uidA, uidB, keptUID})
+	collection := &model.ProxyCollection{Name: "strategy", Type: "selector", SourceType: "manual", ReferencedGroupIDs: string(refs), RouteRuleIDs: "[]", NodeUIDs: string(uids), Enabled: true}
+	if err := db.CreateProxyCollection(collection); err != nil {
+		t.Fatalf("create strategy: %v", err)
+	}
+	if err := db.ReplaceSubscriptionNodes(sub.ID, nodes[2:]); err != nil {
+		t.Fatalf("replace updated subscription nodes: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, uid := range []string{uidA, uidB} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, cleanupErr := db.CleanInvalidNodeUIDs([]string{uid})
+			errs <- cleanupErr
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for cleanupErr := range errs {
+		if cleanupErr != nil {
+			t.Fatalf("concurrent cleanup: %v", cleanupErr)
+		}
+	}
+
+	updated, err := db.GetProxyCollection(collection.ID)
+	if err != nil {
+		t.Fatalf("get strategy: %v", err)
+	}
+	if updated.NodeUIDs != `["kept"]` || updated.ReferencedGroupIDs != "[]" {
+		t.Fatalf("expected both stale references removed, got node_uids=%s group_refs=%s", updated.NodeUIDs, updated.ReferencedGroupIDs)
+	}
+	groups, err := db.ListNodeGroups()
+	if err != nil {
+		t.Fatalf("list node groups: %v", err)
+	}
+	if len(groups) != 0 {
+		t.Fatalf("expected zero-match groups deleted, got %+v", groups)
+	}
+}
+
+func TestCleanInvalidNodeUIDsKeepsUIDReferencedByAnotherSubscription(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+
+	subA, err := db.CreateSubscription(&model.SubscriptionRequest{Name: "sub-a", URL: "https://example.com/a", UserAgent: "clash-meta/2.4.0", SyncMode: "off", SyncTimeoutSecs: 60})
+	if err != nil {
+		t.Fatalf("create subscription a: %v", err)
+	}
+	subB, err := db.CreateSubscription(&model.SubscriptionRequest{Name: "sub-b", URL: "https://example.com/b", UserAgent: "clash-meta/2.4.0", SyncMode: "off", SyncTimeoutSecs: 60})
+	if err != nil {
+		t.Fatalf("create subscription b: %v", err)
+	}
+	const sharedUID = "shared-uid"
+	const keptUID = "kept-a"
+	sharedNode := model.ParsedNode{UID: sharedUID, Name: "Shared", Type: "vless", Server: "shared.example.com", ServerPort: 443, Raw: "raw-shared", RawJSON: `{"type":"vless","server":"shared.example.com","server_port":443,"uuid":"uuid-shared"}`}
+	keptNode := model.ParsedNode{UID: keptUID, Name: "Kept", Type: "vless", Server: "kept.example.com", ServerPort: 443, Raw: "raw-kept", RawJSON: `{"type":"vless","server":"kept.example.com","server_port":443,"uuid":"uuid-kept"}`}
+	if err := db.ReplaceSubscriptionNodes(subA.ID, []model.ParsedNode{sharedNode, keptNode}); err != nil {
+		t.Fatalf("replace subscription a nodes: %v", err)
+	}
+	if err := db.ReplaceSubscriptionNodes(subB.ID, []model.ParsedNode{sharedNode}); err != nil {
+		t.Fatalf("replace subscription b nodes: %v", err)
+	}
+	group, err := db.CreateNodeGroup(&model.NodeGroupRequest{Name: "shared group", Type: "selector", NodeUIDs: []string{sharedUID}, Enabled: true})
+	if err != nil {
+		t.Fatalf("create shared group: %v", err)
+	}
+	emptyDynamic, err := db.CreateNodeGroup(&model.NodeGroupRequest{Name: "subscription a shared group", Type: "selector", FilterSubscriptions: fmt.Sprintf("%d", subA.ID), FilterInclude: "Shared", Enabled: true})
+	if err != nil {
+		t.Fatalf("create subscription-scoped dynamic group: %v", err)
+	}
+	refs, _ := json.Marshal([]int64{group.ID, emptyDynamic.ID})
+	uids, _ := json.Marshal([]string{sharedUID})
+	collection := &model.ProxyCollection{Name: "shared strategy", Type: "selector", SourceType: "node_groups", ReferencedGroupIDs: string(refs), RouteRuleIDs: "[]", NodeUIDs: string(uids), Enabled: true}
+	if err := db.CreateProxyCollection(collection); err != nil {
+		t.Fatalf("create shared strategy: %v", err)
+	}
+	if err := db.ReplaceSubscriptionNodes(subA.ID, []model.ParsedNode{keptNode}); err != nil {
+		t.Fatalf("replace updated subscription a nodes: %v", err)
+	}
+
+	cleanup, err := db.CleanInvalidNodeUIDs([]string{sharedUID})
+	if err != nil {
+		t.Fatalf("clean shared UID: %v", err)
+	}
+	if cleanup.UpdatedCollections != 0 || cleanup.DeletedNodeGroups != 1 {
+		t.Fatalf("expected shared UID retained and empty dynamic group deleted, got %+v", cleanup)
+	}
+	groups, err := db.ListNodeGroups()
+	if err != nil {
+		t.Fatalf("list node groups: %v", err)
+	}
+	if len(groups) != 1 || groups[0].ID != group.ID {
+		t.Fatalf("expected shared node group retained, got %+v", groups)
+	}
+	updated, err := db.GetProxyCollection(collection.ID)
+	if err != nil {
+		t.Fatalf("get shared strategy: %v", err)
+	}
+	keptRefs, _ := json.Marshal([]int64{group.ID})
+	if updated.NodeUIDs != string(uids) || updated.ReferencedGroupIDs != string(keptRefs) {
+		t.Fatalf("expected shared references retained, got node_uids=%s group_refs=%s", updated.NodeUIDs, updated.ReferencedGroupIDs)
+	}
+}
+
+func TestCleanInvalidNodeUIDsSerializesWithSubscriptionClear(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+
+	subA, err := db.CreateSubscription(&model.SubscriptionRequest{Name: "sub-a", URL: "https://example.com/a", UserAgent: "clash-meta/2.4.0", SyncMode: "off", SyncTimeoutSecs: 60})
+	if err != nil {
+		t.Fatalf("create subscription a: %v", err)
+	}
+	subB, err := db.CreateSubscription(&model.SubscriptionRequest{Name: "sub-b", URL: "https://example.com/b", UserAgent: "clash-meta/2.4.0", SyncMode: "off", SyncTimeoutSecs: 60})
+	if err != nil {
+		t.Fatalf("create subscription b: %v", err)
+	}
+	const uidA = "removed-a"
+	const keptUID = "kept-a"
+	const uidB = "removed-b"
+	nodeA := model.ParsedNode{UID: uidA, Name: "A", Type: "vless", Server: "a.example.com", ServerPort: 443, Raw: "raw-a", RawJSON: `{"type":"vless","server":"a.example.com","server_port":443,"uuid":"uuid-a"}`}
+	keptNode := model.ParsedNode{UID: keptUID, Name: "K", Type: "vless", Server: "k.example.com", ServerPort: 443, Raw: "raw-k", RawJSON: `{"type":"vless","server":"k.example.com","server_port":443,"uuid":"uuid-k"}`}
+	nodeB := model.ParsedNode{UID: uidB, Name: "B", Type: "vless", Server: "b.example.com", ServerPort: 443, Raw: "raw-b", RawJSON: `{"type":"vless","server":"b.example.com","server_port":443,"uuid":"uuid-b"}`}
+	if err := db.ReplaceSubscriptionNodes(subA.ID, []model.ParsedNode{nodeA, keptNode}); err != nil {
+		t.Fatalf("replace subscription a nodes: %v", err)
+	}
+	if err := db.ReplaceSubscriptionNodes(subB.ID, []model.ParsedNode{nodeB}); err != nil {
+		t.Fatalf("replace subscription b nodes: %v", err)
+	}
+	groupA, err := db.CreateNodeGroup(&model.NodeGroupRequest{Name: "group a", Type: "selector", NodeUIDs: []string{uidA}, Enabled: true})
+	if err != nil {
+		t.Fatalf("create group a: %v", err)
+	}
+	groupB, err := db.CreateNodeGroup(&model.NodeGroupRequest{Name: "group b", Type: "selector", NodeUIDs: []string{uidB}, Enabled: true})
+	if err != nil {
+		t.Fatalf("create group b: %v", err)
+	}
+	refs, _ := json.Marshal([]int64{groupA.ID, groupB.ID})
+	uids, _ := json.Marshal([]string{uidA, uidB})
+	collection := &model.ProxyCollection{Name: "strategy", Type: "selector", SourceType: "manual", ReferencedGroupIDs: string(refs), RouteRuleIDs: "[]", NodeUIDs: string(uids), Enabled: true}
+	if err := db.CreateProxyCollection(collection); err != nil {
+		t.Fatalf("create strategy: %v", err)
+	}
+	if err := db.ReplaceSubscriptionNodes(subA.ID, []model.ParsedNode{keptNode}); err != nil {
+		t.Fatalf("replace updated subscription a nodes: %v", err)
+	}
+
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, cleanupErr := db.CleanInvalidNodeUIDs([]string{uidA})
+		errs <- cleanupErr
+	}()
+	go func() {
+		defer wg.Done()
+		errs <- db.ClearSubscriptionNodes(subB.ID)
+	}()
+	wg.Wait()
+	close(errs)
+	for operationErr := range errs {
+		if operationErr != nil {
+			t.Fatalf("concurrent cleanup and clear: %v", operationErr)
+		}
+	}
+
+	updated, err := db.GetProxyCollection(collection.ID)
+	if err != nil {
+		t.Fatalf("get strategy: %v", err)
+	}
+	if updated.NodeUIDs != "[]" || updated.ReferencedGroupIDs != "[]" {
+		t.Fatalf("expected all stale references removed, got node_uids=%s group_refs=%s", updated.NodeUIDs, updated.ReferencedGroupIDs)
+	}
+	groups, err := db.ListNodeGroups()
+	if err != nil {
+		t.Fatalf("list node groups: %v", err)
+	}
+	if len(groups) != 0 {
+		t.Fatalf("expected empty groups deleted, got %+v", groups)
+	}
+}
+
+func TestCleanInvalidNodeUIDsRollsBackAllChanges(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+
+	sub, err := db.CreateSubscription(&model.SubscriptionRequest{Name: "sub", URL: "https://example.com/sub", UserAgent: "clash-meta/2.4.0", SyncMode: "off", SyncTimeoutSecs: 60})
+	if err != nil {
+		t.Fatalf("create subscription: %v", err)
+	}
+	const removedUID = "removed"
+	const keptUID = "kept"
+	nodes := []model.ParsedNode{
+		{UID: removedUID, Name: "R", Type: "vless", Server: "r.example.com", ServerPort: 443, Raw: "raw-r", RawJSON: `{"type":"vless","server":"r.example.com","server_port":443,"uuid":"uuid-r"}`},
+		{UID: keptUID, Name: "K", Type: "vless", Server: "k.example.com", ServerPort: 443, Raw: "raw-k", RawJSON: `{"type":"vless","server":"k.example.com","server_port":443,"uuid":"uuid-k"}`},
+	}
+	if err := db.ReplaceSubscriptionNodes(sub.ID, nodes); err != nil {
+		t.Fatalf("replace subscription nodes: %v", err)
+	}
+	group, err := db.CreateNodeGroup(&model.NodeGroupRequest{Name: "empty group", Type: "selector", NodeUIDs: []string{removedUID}, Enabled: true})
+	if err != nil {
+		t.Fatalf("create node group: %v", err)
+	}
+	uids, _ := json.Marshal([]string{removedUID, keptUID})
+	collection := &model.ProxyCollection{Name: "strategy", Type: "selector", SourceType: "manual", ReferencedGroupIDs: "[]", RouteRuleIDs: "[]", NodeUIDs: string(uids), Enabled: true}
+	if err := db.CreateProxyCollection(collection); err != nil {
+		t.Fatalf("create strategy: %v", err)
+	}
+	if _, err := db.DB().Exec(`UPDATE proxy_collections SET referenced_group_ids = ? WHERE id = ?`, "invalid-json", collection.ID); err != nil {
+		t.Fatalf("corrupt strategy refs: %v", err)
+	}
+	if err := db.ReplaceSubscriptionNodes(sub.ID, nodes[1:]); err != nil {
+		t.Fatalf("replace updated subscription nodes: %v", err)
+	}
+
+	if _, err := db.CleanInvalidNodeUIDs([]string{removedUID}); err == nil {
+		t.Fatal("expected malformed group references to fail cleanup")
+	}
+	updated, err := db.GetProxyCollection(collection.ID)
+	if err != nil {
+		t.Fatalf("get strategy after rollback: %v", err)
+	}
+	if updated.NodeUIDs != string(uids) {
+		t.Fatalf("expected node UID cleanup rolled back, got %s", updated.NodeUIDs)
+	}
+	groups, err := db.ListNodeGroups()
+	if err != nil {
+		t.Fatalf("list node groups after rollback: %v", err)
+	}
+	if len(groups) != 1 || groups[0].ID != group.ID {
+		t.Fatalf("expected node group deletion rolled back, got %+v", groups)
 	}
 }
 

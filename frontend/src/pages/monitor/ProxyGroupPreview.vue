@@ -1,7 +1,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import type { ProxyMap } from "./proxyGroupUtils";
-import { latencyBackgroundClass, latestDelay } from "./proxyGroupUtils";
+import {
+  latencyBackgroundClass,
+  latencyLevel,
+  latestDelay,
+} from "./proxyGroupUtils";
 
 const props = withDefaults(
   defineProps<{
@@ -33,10 +37,7 @@ const showDots = computed(
 const distribution = computed(() => {
   const result = { low: 0, medium: 0, high: 0, unknown: 0 };
   for (const node of nodesWithDelay.value) {
-    if (!node.delay) result.unknown += 1;
-    else if (node.delay < 200) result.low += 1;
-    else if (node.delay < 800) result.medium += 1;
-    else result.high += 1;
+    result[latencyLevel(node.delay)] += 1;
   }
   return result;
 });
@@ -61,7 +62,7 @@ onBeforeUnmount(() => observer?.disconnect());
   <div
     ref="previewRef"
     class="flex flex-wrap"
-    :class="showDots ? 'gap-1 pt-3' : 'gap-2 pt-4 pb-1'"
+    :class="showDots ? 'gap-1.5 pt-4' : 'gap-2 pt-5 pb-1'"
   >
     <template v-if="showDots">
       <button
@@ -82,22 +83,22 @@ onBeforeUnmount(() => observer?.disconnect());
     </template>
     <div
       v-else
-      class="flex h-2 flex-1 items-center justify-center overflow-hidden rounded-2xl"
+      class="flex h-2 flex-1 items-center justify-center overflow-hidden rounded-full"
     >
       <span
-        class="h-full bg-[var(--color-success)]"
+        class="h-full bg-[var(--latency-low)]"
         :style="{ width: percentage(distribution.low) }"
       />
       <span
-        class="h-full bg-[var(--color-warning)]"
+        class="h-full bg-[var(--latency-medium)]"
         :style="{ width: percentage(distribution.medium) }"
       />
       <span
-        class="h-full bg-[var(--color-error)]"
+        class="h-full bg-[var(--latency-high)]"
         :style="{ width: percentage(distribution.high) }"
       />
       <span
-        class="h-full bg-[var(--text-tertiary)]"
+        class="h-full bg-[var(--latency-unknown)]"
         :style="{ width: percentage(distribution.unknown) }"
       />
     </div>

@@ -5,11 +5,23 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ackwrap/ackwrap/internal/model"
 	"github.com/ackwrap/ackwrap/internal/store"
 )
+
+type modeConfigGeneratorStub struct {
+	calls  int
+	result *model.ConfigGenerateResponse
+	err    error
+}
+
+func (stub *modeConfigGeneratorStub) ReconcileCurrent() (*model.ConfigGenerateResponse, error) {
+	stub.calls++
+	return stub.result, stub.err
+}
 
 func TestSetProxyModePersistsSupportedMode(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
@@ -24,6 +36,48 @@ func TestSetProxyModePersistsSupportedMode(t *testing.T) {
 	}
 	if got := svc.GetProxyMode(); got != "global" {
 		t.Fatalf("proxy mode = %q, want global", got)
+	}
+}
+
+func TestSetProxyModeReconcilesConfig(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	generator := &modeConfigGeneratorStub{result: &model.ConfigGenerateResponse{Valid: true}}
+	svc := NewSettingsService(db)
+	svc.SetModeDependencies(nil, generator)
+	if err := svc.SetProxyMode("global"); err != nil {
+		t.Fatal(err)
+	}
+	if generator.calls != 1 {
+		t.Fatalf("config reconcile calls = %d, want 1", generator.calls)
+	}
+	if got := svc.GetProxyMode(); got != "global" {
+		t.Fatalf("proxy mode = %q, want global", got)
+	}
+}
+
+func TestSetInboundModeRollsBackWhenConfigIsInvalid(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	generator := &modeConfigGeneratorStub{result: &model.ConfigGenerateResponse{Valid: false, Error: "invalid mode config"}}
+	svc := NewSettingsService(db)
+	svc.SetModeDependencies(nil, generator)
+	if err := svc.SetInboundMode("mixed"); err == nil || !strings.Contains(err.Error(), "已回滚") {
+		t.Fatalf("error = %v, want rollback error", err)
+	}
+	if generator.calls != 1 {
+		t.Fatalf("config reconcile calls = %d, want 1", generator.calls)
+	}
+	if got := svc.GetInboundMode(); got != "tun_mixed" {
+		t.Fatalf("inbound mode = %q, want rollback to tun_mixed", got)
 	}
 }
 
@@ -74,6 +128,58 @@ func TestSetLogSettingsRejectsInvalidLevel(t *testing.T) {
 
 	if err := NewSettingsService(db).SetLogSettings(&model.LogSettings{Level: "verbose"}); err == nil {
 		t.Fatal("SetLogSettings() error = nil, want invalid level error")
+	}
+}
+
+func TestConnectivitySettingsPersistAndNotifyScheduler(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	svc := NewSettingsService(db)
+	settings, err := svc.GetConnectivitySettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.TestURL != store.DefaultConnectivityTestURL || settings.IntervalSeconds != store.DefaultConnectivityIntervalSeconds {
+		t.Fatalf("default connectivity settings = %+v", settings)
+	}
+	if settings.TestURL != "http://www.gstatic.com/generate_204" {
+		t.Fatalf("default connectivity URL = %q, want HTTP", settings.TestURL)
+	}
+	hookCalled := false
+	svc.SetConnectivitySettingsHook(func() { hookCalled = true })
+	request := &model.ConnectivitySettings{TestURL: "http://connectivity.example/generate_204", IntervalSeconds: 120}
+	if err := svc.SetConnectivitySettings(request); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := svc.GetConnectivitySettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.TestURL != request.TestURL || stored.IntervalSeconds != request.IntervalSeconds || !hookCalled {
+		t.Fatalf("stored connectivity settings = %+v, hook = %t", stored, hookCalled)
+	}
+}
+
+func TestConnectivitySettingsRejectInvalidValues(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	svc := NewSettingsService(db)
+
+	for _, request := range []model.ConnectivitySettings{
+		{TestURL: "file:///tmp/check", IntervalSeconds: 300},
+		{TestURL: "https://example.com/check", IntervalSeconds: 59},
+		{TestURL: "https://example.com/check", IntervalSeconds: 3601},
+	} {
+		if err := svc.SetConnectivitySettings(&request); !errors.Is(err, ErrConnectivitySettingsInvalid) {
+			t.Fatalf("request = %+v, error = %v", request, err)
+		}
 	}
 }
 

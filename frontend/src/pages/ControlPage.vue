@@ -231,7 +231,7 @@ async function changeMode(kind: "inbound" | "proxy", mode: string) {
       proxyMode.value = mode;
     }
     notify(
-      `${kind === "inbound" ? "运行" : "代理"}模式已切换为 ${(kind === "inbound" ? inboundLabels : proxyLabels)[mode]}`,
+      `${kind === "inbound" ? "运行" : "代理"}模式已切换为 ${(kind === "inbound" ? inboundLabels : proxyLabels)[mode]}，配置已自动生成并应用`,
     );
   } catch (e: any) {
     notify(`切换模式失败: ${e.message}`, "error");

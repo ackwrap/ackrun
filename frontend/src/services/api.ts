@@ -8,6 +8,7 @@ import type {
   UpdateSettingsResponse,
   LogSettings,
   LogSettingsResponse,
+  ConnectivitySettings,
   NTPSettings,
   NTPSettingsResponse,
   DNSSettings,
@@ -132,6 +133,13 @@ export const api = {
   getLogSettings: () => request<LogSettingsResponse>("/settings/log"),
   setLogSettings: (body: LogSettings) =>
     request<ActionResponse>("/settings/log", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  getConnectivitySettings: () =>
+    request<ConnectivitySettings>("/settings/connectivity"),
+  setConnectivitySettings: (body: ConnectivitySettings) =>
+    request<ActionResponse>("/settings/connectivity", {
       method: "PUT",
       body: JSON.stringify(body),
     }),

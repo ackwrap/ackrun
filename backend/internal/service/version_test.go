@@ -27,6 +27,33 @@ func TestFetchLatestSingboxVersion(t *testing.T) {
 	}
 }
 
+func TestFetchLatestSingboxReleaseIncludesAssetDigest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"tag_name":"v1.13.14",
+			"assets":[{
+				"name":"sing-wrap-1.13.14-windows-amd64.zip",
+				"digest":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+				"size":123
+			}]
+		}`))
+	}))
+	defer server.Close()
+
+	release, err := fetchLatestSingboxRelease(server.Client(), server.URL, "")
+	if err != nil {
+		t.Fatalf("fetch latest release: %v", err)
+	}
+	asset, ok := releaseAssetByName(release, "sing-wrap-1.13.14-windows-amd64.zip")
+	if !ok {
+		t.Fatal("expected release asset")
+	}
+	if asset.Digest != "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" || asset.Size != 123 {
+		t.Fatalf("unexpected release asset: %+v", asset)
+	}
+}
+
 func TestFetchLatestSingboxVersionRejectsInvalidResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"tag_name":"latest"}`))
@@ -73,6 +100,67 @@ func TestBuildUpdateRequestAttemptsUsesMirrorAndFallback(t *testing.T) {
 		t.Fatalf("build attempts: %v", err)
 	}
 	if len(attempts) != 2 || attempts[0].url != "https://mirror.example/https://github.com/ackwrap/release.zip" || attempts[1].url != "https://github.com/ackwrap/release.zip" {
+		t.Fatalf("unexpected attempts: %+v", attempts)
+	}
+}
+
+func TestBuildUpdateRequestAttemptsUsesGHProxyVIPAndFallback(t *testing.T) {
+	upstream := "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-google.srs"
+	attempts, err := buildUpdateRequestAttempts(&model.UpdateSettingsResponse{Acceleration: "ghproxy_vip"}, upstream)
+	if err != nil {
+		t.Fatalf("build attempts: %v", err)
+	}
+	if len(attempts) != 2 || attempts[0].url != "https://ghproxy.vip/"+upstream || attempts[1].url != upstream {
+		t.Fatalf("unexpected attempts: %+v", attempts)
+	}
+}
+
+func TestBuildUpdateRequestAttemptsConvertsGitHubFilesForJSDelivr(t *testing.T) {
+	tests := []struct {
+		acceleration string
+		baseURL      string
+	}{
+		{acceleration: "jsdelivr_fastly", baseURL: "https://fastly.jsdelivr.net"},
+		{acceleration: "jsdelivr_testingcf", baseURL: "https://testingcf.jsdelivr.net"},
+		{acceleration: "jsdelivr_cdn", baseURL: "https://cdn.jsdelivr.net"},
+	}
+	for _, test := range tests {
+		t.Run(test.acceleration, func(t *testing.T) {
+			upstream := "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-google.srs"
+			attempts, err := buildUpdateRequestAttempts(&model.UpdateSettingsResponse{Acceleration: test.acceleration}, upstream)
+			if err != nil {
+				t.Fatalf("build attempts: %v", err)
+			}
+			want := test.baseURL + "/gh/SagerNet/sing-geosite@rule-set/geosite-google.srs"
+			if len(attempts) != 2 || attempts[0].url != want || attempts[1].url != upstream {
+				t.Fatalf("unexpected attempts: %+v", attempts)
+			}
+		})
+	}
+}
+
+func TestBuildUpdateRequestAttemptsRecognizesCustomJSDelivrURL(t *testing.T) {
+	upstream := "https://github.com/SagerNet/sing-geosite/raw/rule-set/geosite-google.srs"
+	attempts, err := buildUpdateRequestAttempts(&model.UpdateSettingsResponse{
+		Acceleration:    "custom",
+		CustomMirrorURL: "https://fastly.jsdelivr.net/",
+	}, upstream)
+	if err != nil {
+		t.Fatalf("build attempts: %v", err)
+	}
+	want := "https://fastly.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-google.srs"
+	if len(attempts) != 2 || attempts[0].url != want || attempts[1].url != upstream {
+		t.Fatalf("unexpected attempts: %+v", attempts)
+	}
+}
+
+func TestBuildUpdateRequestAttemptsSkipsJSDelivrForReleaseAssets(t *testing.T) {
+	upstream := "https://github.com/ackwrap/ackwrap/releases/download/v1.0.0/ackwrap.zip"
+	attempts, err := buildUpdateRequestAttempts(&model.UpdateSettingsResponse{Acceleration: "jsdelivr_cdn"}, upstream)
+	if err != nil {
+		t.Fatalf("build attempts: %v", err)
+	}
+	if len(attempts) != 1 || attempts[0].url != upstream || attempts[0].name != "direct" {
 		t.Fatalf("unexpected attempts: %+v", attempts)
 	}
 }
