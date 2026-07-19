@@ -588,9 +588,32 @@ func (svc *SingboxService) FlushFakeIP() (*model.ActionResponse, error) {
 		return nil, fmt.Errorf("sing-box is not running")
 	}
 	if err := svc.requestClashAPI(http.MethodPost, "/cache/fakeip/flush"); err != nil {
+		if isEmptyFakeIPCacheError(err) {
+			logging.Info("core.flush_fakeip", "FakeIP cache is already empty")
+			return &model.ActionResponse{Success: true, Message: "FakeIP cache already empty"}, nil
+		}
 		return nil, fmt.Errorf("failed to flush FakeIP cache: %w", err)
 	}
 	return &model.ActionResponse{Success: true, Message: "FakeIP cache flushed"}, nil
+}
+
+type clashAPIResponseError struct {
+	statusCode int
+	message    string
+}
+
+func (err *clashAPIResponseError) Error() string {
+	if err.message != "" {
+		return fmt.Sprintf("Clash API returned HTTP %d: %s", err.statusCode, err.message)
+	}
+	return fmt.Sprintf("Clash API returned HTTP %d", err.statusCode)
+}
+
+func isEmptyFakeIPCacheError(err error) bool {
+	var responseErr *clashAPIResponseError
+	return errors.As(err, &responseErr) &&
+		responseErr.statusCode == http.StatusInternalServerError &&
+		strings.EqualFold(strings.TrimSpace(responseErr.message), "bucket not found")
 }
 
 func (svc *SingboxService) requestClashAPI(method, path string) error {
@@ -630,9 +653,13 @@ func requestClashAPI(method, target, secret string) error {
 		return err
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, resp.Body)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("Clash API returned HTTP %d", resp.StatusCode)
+		var payload struct {
+			Message string `json:"message"`
+		}
+		_ = json.Unmarshal(body, &payload)
+		return &clashAPIResponseError{statusCode: resp.StatusCode, message: strings.TrimSpace(payload.Message)}
 	}
 	return nil
 }

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -45,6 +46,24 @@ func TestRequestClashAPIRejectsFailureStatus(t *testing.T) {
 
 	if err := requestClashAPI(http.MethodDelete, server.URL+"/connections", "bad-secret"); err == nil {
 		t.Fatal("requestClashAPI() error = nil, want HTTP status error")
+	}
+}
+
+func TestRequestClashAPIReportsEmptyFakeIPCache(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"message":"bucket not found"}`))
+	}))
+	defer server.Close()
+
+	err := requestClashAPI(http.MethodPost, server.URL+"/cache/fakeip/flush", "")
+	var responseErr *clashAPIResponseError
+	if !errors.As(err, &responseErr) {
+		t.Fatalf("requestClashAPI() error = %v, want clashAPIResponseError", err)
+	}
+	if !isEmptyFakeIPCacheError(err) {
+		t.Fatalf("isEmptyFakeIPCacheError() = false, want true for %v", err)
 	}
 }
 
