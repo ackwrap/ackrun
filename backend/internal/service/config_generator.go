@@ -187,7 +187,7 @@ func (s *ConfigGeneratorService) generateLockedTo(req *model.ConfigGenerateReque
 		config["endpoints"] = endpoints
 	}
 
-	dnsGlobalSettings, _ := s.store.GetDNSGlobalSettings()
+	dnsGlobalSettings, _ := s.effectiveDNSGlobalSettings()
 	if dnsGlobalSettings != nil && dnsGlobalSettings.Enabled {
 		if dns := s.generateDNSFromDatabase(); len(dns) > 0 {
 			config["dns"] = dns
@@ -1002,7 +1002,7 @@ func mapMihomoUDPFlagToSingboxNetwork(nodeData map[string]interface{}) {
 
 func (s *ConfigGeneratorService) dnsOutboundResolverBindings() map[string]map[string]interface{} {
 	bindings := make(map[string]map[string]interface{})
-	globalSettings, err := s.store.GetDNSGlobalSettings()
+	globalSettings, err := s.effectiveDNSGlobalSettings()
 	if err != nil || globalSettings == nil || !globalSettings.Enabled {
 		return bindings
 	}
@@ -1061,7 +1061,7 @@ func (s *ConfigGeneratorService) dnsOutboundResolverBindings() map[string]map[st
 func enabledDNSServerTags(servers []model.DNSServer, fakeIPEnabled bool) map[string]bool {
 	tags := make(map[string]bool)
 	for _, server := range servers {
-		if server.Enabled && server.Tag != "" {
+		if server.Enabled && server.Tag != "" && (fakeIPEnabled || server.ServerType != "fakeip") {
 			tags[server.Tag] = true
 		}
 	}
@@ -1069,6 +1069,15 @@ func enabledDNSServerTags(servers []model.DNSServer, fakeIPEnabled bool) map[str
 		tags["fakeip"] = true
 	}
 	return tags
+}
+
+func (s *ConfigGeneratorService) effectiveDNSGlobalSettings() (*model.DNSGlobalSettings, error) {
+	settings, err := s.store.GetDNSGlobalSettings()
+	if err != nil {
+		return nil, err
+	}
+	applyTUNManagedFakeIP(settings, s.store.GetInboundMode())
+	return settings, nil
 }
 
 func collectionNodeDomainResolverBindings(collections []*model.ProxyCollectionWithNodes, groupNodeUIDs map[int64][]string, usedNodeUIDs map[string]bool, bindings map[string]map[string]interface{}) map[string]map[string]interface{} {
@@ -1420,7 +1429,7 @@ func nodeServerBypassTargets(nodes []model.Node) ([]string, []string) {
 // generateDNSFromDatabase 从数据库读取 DNS servers 和 rules 生成完整 DNS 配置
 func (s *ConfigGeneratorService) generateDNSFromDatabase() map[string]interface{} {
 	// 1. 获取全局设置
-	globalSettings, _ := s.store.GetDNSGlobalSettings()
+	globalSettings, _ := s.effectiveDNSGlobalSettings()
 	if globalSettings == nil {
 		globalSettings = &model.DNSGlobalSettings{
 			Enabled:          true,
@@ -1451,7 +1460,7 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase() map[string]interface{
 	}
 	hasFakeIPServer := false
 	for _, srv := range dnsServers {
-		if !srv.Enabled {
+		if !srv.Enabled || (!globalSettings.FakeIPEnabled && srv.ServerType == "fakeip") {
 			continue
 		}
 		if srv.Tag == "fakeip" {
@@ -1741,7 +1750,7 @@ func dnsRuleOutboundConditions(conditions map[string]interface{}) []string {
 }
 
 func (s *ConfigGeneratorService) defaultDomainResolver() map[string]interface{} {
-	settings, err := s.store.GetDNSGlobalSettings()
+	settings, err := s.effectiveDNSGlobalSettings()
 	if err != nil || settings == nil || !settings.Enabled || settings.Final == "" {
 		return nil
 	}
@@ -1769,7 +1778,7 @@ func selectDefaultDomainResolver(settings *model.DNSGlobalSettings, servers []mo
 		return settings.Final
 	}
 	for _, server := range servers {
-		if server.Enabled && server.Tag != "" {
+		if tags[server.Tag] {
 			return server.Tag
 		}
 	}

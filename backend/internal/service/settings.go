@@ -155,7 +155,7 @@ func (svc *SettingsService) SetInboundMode(mode string) error {
 	default:
 		return fmt.Errorf("运行模式无效")
 	}
-	logging.Info("settings.update", "切换运行模式: %s", mode)
+	logging.Info("settings.update", "切换运行模式: %s，FakeIP: %t", mode, mode != "mixed")
 	return svc.setMode(svc.store.GetInboundMode(), mode, svc.store.SetInboundMode)
 }
 

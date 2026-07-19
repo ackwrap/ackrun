@@ -109,9 +109,22 @@ func (svc *DNSService) ReorderDNSRules(ids []int64) error {
 // DNS Global Settings
 
 func (svc *DNSService) GetDNSGlobalSettings() (*model.DNSGlobalSettings, error) {
-	return svc.store.GetDNSGlobalSettings()
+	settings, err := svc.store.GetDNSGlobalSettings()
+	if err != nil {
+		return nil, err
+	}
+	applyTUNManagedFakeIP(settings, svc.store.GetInboundMode())
+	return settings, nil
 }
 
 func (svc *DNSService) SetDNSGlobalSettings(req *model.DNSGlobalSettings) error {
+	applyTUNManagedFakeIP(req, svc.store.GetInboundMode())
+	logging.Info("dns.global.update", "FakeIP 跟随 TUN 模式，当前状态: %t", req.FakeIPEnabled)
 	return svc.store.SetDNSGlobalSettings(req)
+}
+
+func applyTUNManagedFakeIP(settings *model.DNSGlobalSettings, inboundMode string) {
+	if settings != nil {
+		settings.FakeIPEnabled = inboundMode != "mixed"
+	}
 }

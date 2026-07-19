@@ -99,6 +99,7 @@ func TestEnabledDNSServerTagsExcludesDisabledServers(t *testing.T) {
 	tags := enabledDNSServerTags([]model.DNSServer{
 		{Tag: "dns_direct", Enabled: true},
 		{Tag: "dns_proxy", Enabled: false},
+		{Tag: "custom_fakeip", Enabled: true, ServerType: "fakeip"},
 	}, false)
 	if !tags["dns_direct"] {
 		t.Fatal("enabled DNS server tag is missing")
@@ -108,6 +109,9 @@ func TestEnabledDNSServerTagsExcludesDisabledServers(t *testing.T) {
 	}
 	if tags["fakeip"] {
 		t.Fatal("fakeip tag must not be available when fake IP is disabled")
+	}
+	if tags["custom_fakeip"] {
+		t.Fatal("explicit fakeip server must not be available when TUN is disabled")
 	}
 }
 
@@ -126,6 +130,7 @@ func TestSelectDefaultDomainResolverRequiresGeneratedServer(t *testing.T) {
 
 	servers := []model.DNSServer{
 		{Tag: "dns_proxy", Enabled: false},
+		{Tag: "custom_fakeip", Enabled: true, ServerType: "fakeip"},
 		{Tag: "dns_direct", Enabled: true},
 	}
 	if got := selectDefaultDomainResolver(settings, servers); got != "dns_direct" {
@@ -921,6 +926,74 @@ func TestGenerateMixedOnlyDoesNotEnableTransparentRouting(t *testing.T) {
 	if _, exists := route["auto_detect_interface"]; exists {
 		t.Fatalf("mixed-only route enables TUN interface detection: %+v", route)
 	}
+}
+
+func TestGenerateDNSFakeIPFollowsTUNMode(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.CreateDNSServer(&model.DNSServerRequest{
+		Tag: "custom_fakeip", Enabled: true, ServerType: "fakeip",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateDNSServer(&model.DNSServerRequest{
+		Tag: "dns_direct", Enabled: true, ServerType: "udp", Address: "1.1.1.1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := db.GetDNSGlobalSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.Final = "missing"
+	settings.FakeIPEnabled = false
+	if err := db.SetDNSGlobalSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+
+	service := NewConfigGeneratorService(db, nil)
+	dns := service.generateDNSFromDatabase()
+	if !generatedDNSHasServerType(dns, "fakeip") || !generatedDNSHasRuleServer(dns, "fakeip") {
+		t.Fatalf("TUN mode DNS does not contain fakeip server and rule: %+v", dns)
+	}
+
+	if err := db.SetInboundMode("mixed"); err != nil {
+		t.Fatal(err)
+	}
+	settings.FakeIPEnabled = true
+	if err := db.SetDNSGlobalSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+	dns = service.generateDNSFromDatabase()
+	if generatedDNSHasServerType(dns, "fakeip") || generatedDNSHasRuleServer(dns, "fakeip") {
+		t.Fatalf("Mixed mode DNS contains fakeip server or rule: %+v", dns)
+	}
+	if resolver := service.defaultDomainResolver(); resolver["server"] != "dns_direct" {
+		t.Fatalf("Mixed mode default domain resolver = %+v, want dns_direct", resolver)
+	}
+}
+
+func generatedDNSHasServerType(dns map[string]interface{}, serverType string) bool {
+	servers, _ := dns["servers"].([]map[string]interface{})
+	for _, server := range servers {
+		if server["type"] == serverType {
+			return true
+		}
+	}
+	return false
+}
+
+func generatedDNSHasRuleServer(dns map[string]interface{}, serverTag string) bool {
+	rules, _ := dns["rules"].([]map[string]interface{})
+	for _, rule := range rules {
+		if rule["server"] == serverTag {
+			return true
+		}
+	}
+	return false
 }
 
 func TestGenerateInboundsAllowsFormerUpdateProxyPort(t *testing.T) {

@@ -495,13 +495,14 @@ onMounted(load);
       >
         <div class="flex justify-between">
           <h3>FakeIP</h3>
-          <label
-            ><input
-              v-model="global.fakeip_enabled"
-              type="checkbox"
-            />启用</label
-          >
+          <label class="text-sm text-[var(--text-secondary)]">
+            <input :checked="global.fakeip_enabled" type="checkbox" disabled />
+            {{ global.fakeip_enabled ? "已随 TUN 启用" : "已随 TUN 停用" }}
+          </label>
         </div>
+        <p class="mt-2 text-xs text-[var(--text-tertiary)]">
+          FakeIP 由运行模式自动管理：TUN / TUN + Mixed 启用，Mixed 停用。
+        </p>
         <div class="mt-3 grid gap-3 md:grid-cols-3">
           <input v-model="global.fakeip_inet4_range" /><input
             v-model="global.fakeip_inet6_range"
