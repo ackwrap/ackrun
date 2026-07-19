@@ -1443,8 +1443,9 @@ func validateGeoAssetRequest(req *model.GeoAssetRequest) error {
 func fetchRouteRuleSubscriptionContent(rawURL string, useProxy bool) ([]byte, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	if useProxy {
-		proxyURL, _ := url.Parse(store.DefaultUpdateProxyURL)
-		transport.Proxy = http.ProxyURL(proxyURL)
+		transport.Proxy = http.ProxyFromEnvironment
+	} else {
+		transport.Proxy = nil
 	}
 	client := &http.Client{Timeout: 60 * time.Second, Transport: transport}
 	return fetchRouteRuleSubscriptionContentWithClient(client, rawURL)
@@ -1497,12 +1498,36 @@ func detectRouteRuleSubscriptionFormat(rawURL string) string {
 	}
 }
 
-func routeRuleSubscriptionContentURL(baseURL string, id int64) string {
+func routeRuleSubscriptionContentURL(baseURL string, id int64, accessToken ...string) string {
 	path := fmt.Sprintf("/api/v1/rules/subscriptions/%d/content", id)
+	rawURL := path
 	if strings.TrimSpace(baseURL) == "" {
-		return path
+		return appendAccessToken(rawURL, accessToken)
 	}
-	return strings.TrimRight(baseURL, "/") + path
+	rawURL = strings.TrimRight(baseURL, "/") + path
+	return appendAccessToken(rawURL, accessToken)
+}
+
+func appendAccessToken(rawURL string, accessToken []string) string {
+	if len(accessToken) == 0 || strings.TrimSpace(accessToken[0]) == "" {
+		return rawURL
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	query := parsed.Query()
+	query.Set("access_token", strings.TrimSpace(accessToken[0]))
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
+}
+
+func internalAPIBaseURL() string {
+	port := "8080"
+	if _, configuredPort, err := net.SplitHostPort(strings.TrimSpace(os.Getenv("ACKWRAP_LISTEN_ADDR"))); err == nil && configuredPort != "" {
+		port = configuredPort
+	}
+	return "http://" + net.JoinHostPort("127.0.0.1", port)
 }
 
 func (svc *RouteRuleService) ensureRouteRuleSubscriptionTagUnique(id int64, tag string) error {

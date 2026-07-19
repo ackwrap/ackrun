@@ -1,0 +1,14 @@
+#!/bin/sh
+
+if [ -z "$(uci -q get ackwrap.main.api_token)" ]; then
+	token="$(head -c 32 /dev/urandom | sha256sum | cut -c 1-48)"
+	if [ "${#token}" -ne 48 ]; then
+		logger -t ackwrap "failed to generate API token"
+		exit 1
+	fi
+	uci -q set ackwrap.main.api_token="$token"
+	uci -q commit ackwrap
+fi
+
+/etc/init.d/ackwrap enable
+exit 0

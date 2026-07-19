@@ -2,6 +2,7 @@ package logging
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -36,6 +37,28 @@ func TestToolLogsRetainBoundedTail(t *testing.T) {
 	}
 	if entries[0].Message != "entry-2" {
 		t.Fatalf("first retained message = %q, want entry-2", entries[0].Message)
+	}
+	ClearToolLogs()
+}
+
+func TestRedactAccessToken(t *testing.T) {
+	values := []string{
+		`GET /api/v1/rules/content?access_token=secret-value&format=source`,
+		`GET /api/v1/rules/content?access%5Ftoken=secret-value&format=source`,
+		`GET /api/v1/rules/content?%61%63%63%65%73%73%5f%74%6f%6b%65%6e=secret-value&format=source`,
+	}
+	for _, value := range values {
+		redacted := RedactAccessToken(value)
+		if strings.Contains(redacted, "secret-value") || !strings.Contains(redacted, "[REDACTED]") {
+			t.Fatalf("RedactAccessToken(%q) = %q", value, redacted)
+		}
+	}
+
+	ClearToolLogs()
+	Info("test.token", "%s", values[1])
+	entries := ListToolLogs(1)
+	if len(entries) != 1 || strings.Contains(entries[0].Message, "secret-value") {
+		t.Fatalf("tool log exposed access token: %+v", entries)
 	}
 	ClearToolLogs()
 }

@@ -3,6 +3,9 @@ import { computed, onMounted, ref } from "vue";
 import { Plus, Save, ServerCog, Trash2 } from "lucide-vue-next";
 import PageHeader from "@/components/layout/PageHeader.vue";
 import Toast from "@/components/ui/Toast.vue";
+import OrderButtons from "@/components/ui/OrderButtons.vue";
+import { authenticatedFetch } from "@/services/apiAuth";
+import DNSServerFormModal from "./dns/DNSServerFormModal.vue";
 interface Server {
   id: number;
   tag: string;
@@ -14,6 +17,7 @@ interface Server {
   strategy: string;
   detour: string;
   client_subnet: string;
+  priority: number;
 }
 interface Rule {
   id: number;
@@ -53,6 +57,7 @@ const defaults = {
   serverForm = ref<Partial<Server> | null>(null),
   ruleForm = ref<any | null>(null),
   bindings = ref<Record<string, string>>({}),
+  outboundOrder = ref<string[]>([]),
   preview = ref("");
 const types = [
     "udp",
@@ -123,7 +128,7 @@ const types = [
   ],
   preset = ref(0);
 async function request(url: string, init?: RequestInit) {
-  const r = await fetch(url, init);
+  const r = await authenticatedFetch(url, init);
   const x = await r.json().catch(() => null);
   if (!r.ok) throw new Error(x?.error?.message || r.statusText);
   return x;
@@ -134,15 +139,19 @@ const show = (s: string, t: "success" | "error" = "success") => {
 };
 async function load() {
   try {
-    const [a, b, c, d] = await Promise.all([
+    const [a, b, c, d, e] = await Promise.all([
       request("/api/v1/dns/servers"),
       request("/api/v1/dns/rules"),
       request("/api/v1/dns/global"),
       request("/api/v1/collections").catch(() => []),
+      request("/api/v1/dns/outbound-bindings/order").catch(() => ({
+        outbounds: [],
+      })),
     ]);
     servers.value = Array.isArray(a) ? a : [];
     rules.value = Array.isArray(b) ? b : [];
     collections.value = Array.isArray(d) ? d : [];
+    outboundOrder.value = Array.isArray(e?.outbounds) ? e.outbounds : [];
     Object.assign(global.value, c || {});
   } catch (e: any) {
     show(`加载失败: ${e.message}`, "error");
@@ -156,7 +165,13 @@ const detours = computed(() => [
     "proxy",
     ...collections.value.filter((x) => x.enabled).map((x) => x.name),
   ]),
-  targets = computed(() => detours.value.filter(Boolean)),
+  targets = computed(() => {
+    const available = detours.value.filter(Boolean);
+    return [
+      ...outboundOrder.value.filter((item) => available.includes(item)),
+      ...available.filter((item) => !outboundOrder.value.includes(item)),
+    ];
+  }),
   outbounds = (r: Rule) => {
     try {
       const x = JSON.parse(r.conditions_json || "{}").outbound;
@@ -263,6 +278,43 @@ async function toggleServer(s: Server) {
     await load();
   } catch (e: any) {
     show(`状态更新失败: ${e.message}`, "error");
+  }
+}
+function swapped<T>(items: T[], index: number, direction: -1 | 1) {
+  const target = index + direction;
+  if (target < 0 || target >= items.length) return null;
+  const next = [...items];
+  [next[index], next[target]] = [next[target], next[index]];
+  return next;
+}
+async function moveServer(index: number, direction: -1 | 1) {
+  const next = swapped(servers.value, index, direction);
+  if (!next) return;
+  servers.value = next;
+  try {
+    await request("/api/v1/dns/servers/reorder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(next.map((item) => item.id)),
+    });
+  } catch (e: any) {
+    show(`DNS Server 排序失败: ${e.message}`, "error");
+    await load();
+  }
+}
+async function moveBinding(index: number, direction: -1 | 1) {
+  const next = swapped(targets.value, index, direction);
+  if (!next) return;
+  outboundOrder.value = next;
+  try {
+    await request("/api/v1/dns/outbound-bindings/reorder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ outbounds: next }),
+    });
+  } catch (e: any) {
+    show(`DNS 出口绑定排序失败: ${e.message}`, "error");
+    await load();
   }
 }
 async function saveBinding(x: string) {
@@ -485,6 +537,7 @@ onMounted(load);
           <table class="aw-data-table min-w-[760px]">
             <thead>
               <tr>
+                <th>排序</th>
                 <th>Tag</th>
                 <th>类型</th>
                 <th>地址</th>
@@ -495,9 +548,17 @@ onMounted(load);
             </thead>
             <tbody>
               <tr v-if="!servers.length">
-                <td colspan="6" class="py-10 text-center">暂无 DNS 服务器</td>
+                <td colspan="7" class="py-10 text-center">暂无 DNS 服务器</td>
               </tr>
-              <tr v-for="s in servers" :key="s.id">
+              <tr v-for="(s, i) in servers" :key="s.id">
+                <td>
+                  <OrderButtons
+                    :up-disabled="i === 0"
+                    :down-disabled="i === servers.length - 1"
+                    @up="moveServer(i, -1)"
+                    @down="moveServer(i, 1)"
+                  />
+                </td>
                 <td class="font-medium text-[var(--text-primary)]">
                   {{ s.tag }}
                 </td>
@@ -545,6 +606,7 @@ onMounted(load);
           <table class="aw-data-table min-w-[760px]">
             <thead>
               <tr>
+                <th>排序</th>
                 <th>出站</th>
                 <th>DNS 服务器</th>
                 <th>绑定状态</th>
@@ -552,7 +614,15 @@ onMounted(load);
               </tr>
             </thead>
             <tbody>
-              <tr v-for="x in targets" :key="x">
+              <tr v-for="(x, i) in targets" :key="x">
+                <td>
+                  <OrderButtons
+                    :up-disabled="i === 0"
+                    :down-disabled="i === targets.length - 1"
+                    @up="moveBinding(i, -1)"
+                    @down="moveBinding(i, 1)"
+                  />
+                </td>
                 <td>{{ x }}</td>
                 <td>
                   <select
@@ -676,47 +746,15 @@ onMounted(load);
         </div>
       </section></template
     >
-    <div v-if="serverForm" class="aw-modal-backdrop">
-      <div class="aw-modal-panel max-w-4xl p-5">
-        <h3>{{ serverForm.id ? "编辑" : "新增" }} DNS 服务器</h3>
-        <div class="grid gap-3 md:grid-cols-3">
-          <label>Tag<input v-model="serverForm.tag" /></label
-          ><label
-            >类型<select v-model="serverForm.server_type">
-              <option v-for="x in types">{{ x }}</option>
-            </select></label
-          ><label>地址<input v-model="serverForm.address" /></label
-          ><label
-            >Address Resolver<input
-              v-model="serverForm.address_resolver" /></label
-          ><label
-            >Address Strategy<select v-model="serverForm.address_strategy">
-              <option value="">留空</option>
-              <option v-for="x in strategies">{{ x }}</option>
-            </select></label
-          ><label
-            >Strategy<select v-model="serverForm.strategy">
-              <option value="">留空</option>
-              <option v-for="x in strategies">{{ x }}</option>
-            </select></label
-          ><label
-            >Detour<select v-model="serverForm.detour">
-              <option v-for="x in detours" :value="x">
-                {{ x || "默认出站" }}
-              </option>
-            </select></label
-          ><label
-            >Client Subnet<input v-model="serverForm.client_subnet" /></label
-          ><label
-            ><input v-model="serverForm.enabled" type="checkbox" />启用</label
-          >
-        </div>
-        <div class="mt-4 flex justify-end gap-2">
-          <button @click="serverForm = null">取消</button>
-          <button @click="saveServer">保存</button>
-        </div>
-      </div>
-    </div>
+    <DNSServerFormModal
+      v-if="serverForm"
+      :form="serverForm"
+      :types="types"
+      :strategies="strategies"
+      :detours="detours"
+      @close="serverForm = null"
+      @save="saveServer"
+    />
     <div v-if="ruleForm" class="aw-modal-backdrop">
       <div class="aw-modal-panel max-w-4xl p-5">
         <h3>{{ ruleForm.id ? "编辑" : "新增" }} DNS 规则</h3>

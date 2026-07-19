@@ -62,6 +62,7 @@ import type {
   MaintenanceCheckResponse,
   CoreDiagnosticsResponse,
 } from "./types";
+import { authenticatedFetch } from "./apiAuth";
 
 const API_BASE = "/api/v1";
 
@@ -70,7 +71,7 @@ async function request<T>(
   options: RequestInit = {},
 ): Promise<T> {
   const url = `${API_BASE}${endpoint}`;
-  const res = await fetch(url, {
+  const res = await authenticatedFetch(url, {
     headers: { "Content-Type": "application/json", ...options.headers },
     ...options,
   });

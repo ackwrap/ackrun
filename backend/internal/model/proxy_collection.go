@@ -13,6 +13,7 @@ type ProxyCollection struct {
 	TestInterval       int    `json:"test_interval"` // 秒
 	Tolerance          int    `json:"tolerance"`     // 毫秒
 	Enabled            bool   `json:"enabled"`
+	Priority           int    `json:"priority"`
 	CreatedAt          int64  `json:"created_at"`
 	UpdatedAt          int64  `json:"updated_at"`
 }

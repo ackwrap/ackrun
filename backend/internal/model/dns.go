@@ -13,6 +13,7 @@ type DNSServer struct {
 	Detour          string `json:"detour"`
 	ClientSubnet    string `json:"client_subnet"`
 	OptionsJSON     string `json:"options_json"`
+	Priority        int    `json:"priority"`
 	CreatedAt       int64  `json:"created_at"`
 	UpdatedAt       int64  `json:"updated_at"`
 }
@@ -56,6 +57,10 @@ type DNSRuleRequest struct {
 	DisableCache bool                   `json:"disable_cache"`
 	RewriteTTL   int                    `json:"rewrite_ttl"`
 	ClientSubnet string                 `json:"client_subnet"`
+}
+
+type DNSOutboundBindingOrder struct {
+	Outbounds []string `json:"outbounds"`
 }
 
 // DNSGlobalSettings DNS 全局设置（复用现有 settings 表）

@@ -3,15 +3,11 @@ package model
 type UpdateSettings struct {
 	Acceleration    string `json:"acceleration"`
 	CustomMirrorURL string `json:"custom_mirror_url,omitempty"`
-	GithubToken     string `json:"github_token,omitempty"`
-	ProxyURL        string `json:"proxy_url,omitempty"`
 }
 
 type UpdateSettingsResponse struct {
 	Acceleration    string `json:"acceleration"`
 	CustomMirrorURL string `json:"custom_mirror_url"`
-	GithubToken     string `json:"github_token"`
-	ProxyURL        string `json:"proxy_url"`
 }
 
 type LogSettings struct {

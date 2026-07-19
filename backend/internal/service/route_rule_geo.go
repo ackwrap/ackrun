@@ -70,15 +70,17 @@ func validateGeneratedGeoRuleSetSize(data []byte, maxUncompressedSize int64) err
 	return nil
 }
 
-func generatedGeoRuleSetContentURL(baseURL, tag string) string {
+func generatedGeoRuleSetContentURL(baseURL, tag string, accessToken ...string) string {
 	path := fmt.Sprintf("/api/v1/rules/geo/rule-sets/%s/content", tag)
+	rawURL := path
 	if strings.TrimSpace(baseURL) == "" {
-		return path
+		return appendAccessToken(rawURL, accessToken)
 	}
-	return strings.TrimRight(baseURL, "/") + path
+	rawURL = strings.TrimRight(baseURL, "/") + path
+	return appendAccessToken(rawURL, accessToken)
 }
 
-func appendGeneratedGeoRuleSets(ruleSets []map[string]interface{}, seen map[string]bool, ruleType string, values []string, baseURL string) []map[string]interface{} {
+func appendGeneratedGeoRuleSets(ruleSets []map[string]interface{}, seen map[string]bool, ruleType string, values []string, baseURL string, accessToken ...string) []map[string]interface{} {
 	for _, value := range values {
 		tag := generatedGeoRuleSetTag(ruleType, value)
 		if tag == "" || seen[tag] {
@@ -89,7 +91,7 @@ func appendGeneratedGeoRuleSets(ruleSets []map[string]interface{}, seen map[stri
 			"tag":             tag,
 			"type":            "remote",
 			"format":          "binary",
-			"url":             generatedGeoRuleSetContentURL(baseURL, tag),
+			"url":             generatedGeoRuleSetContentURL(baseURL, tag, accessToken...),
 			"update_interval": generatedGeoRuleSetUpdateIntervalValue,
 		})
 	}

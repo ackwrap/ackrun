@@ -157,6 +157,7 @@ func (s *Store) migrate() error {
 			test_interval INTEGER NOT NULL DEFAULT 300,
 			tolerance INTEGER NOT NULL DEFAULT 100,
 			enabled INTEGER NOT NULL DEFAULT 1,
+			priority INTEGER NOT NULL DEFAULT 0,
 			created_at INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL
 		)`,
@@ -172,6 +173,7 @@ func (s *Store) migrate() error {
 			detour TEXT NOT NULL DEFAULT '',
 			client_subnet TEXT NOT NULL DEFAULT '',
 			options_json TEXT NOT NULL DEFAULT '{}',
+			priority INTEGER NOT NULL DEFAULT 0,
 			created_at INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL
 		)`,
@@ -208,6 +210,8 @@ func (s *Store) migrate() error {
 		`ALTER TABLE proxy_collections ADD COLUMN referenced_group_ids TEXT NOT NULL DEFAULT '[]'`,
 		`ALTER TABLE proxy_collections ADD COLUMN route_rule_ids TEXT NOT NULL DEFAULT '[]'`,
 		`ALTER TABLE proxy_collections ADD COLUMN node_uids TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE proxy_collections ADD COLUMN priority INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE dns_servers ADD COLUMN priority INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE node_groups ADD COLUMN node_uids TEXT NOT NULL DEFAULT '[]'`,
 		`UPDATE node_groups SET node_uids = '[]' WHERE node_uids = '' OR node_uids = 'null'`,
 		`UPDATE node_groups SET filter_exclude = '' WHERE name = '全部节点' AND filter_include = '.*' AND filter_exclude = '免费|过期|流量|官网|到期|剩余'`,
@@ -227,15 +231,16 @@ func (s *Store) migrate() error {
 		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_geoip_providers_default ON geoip_providers(is_default) WHERE is_default = 1`,
 		`INSERT OR IGNORE INTO geoip_providers (name, provider_key, template, enabled, is_default, builtin, created_at, updated_at) VALUES
-			('松子 IP', 'songzixian', 'builtin', 1, 1, 1, unixepoch(), unixepoch()),
-			('ipapi.is', 'ipapi.is', 'builtin', 1, 0, 1, unixepoch(), unixepoch()),
+			('ipapi.is', 'ipapi.is', 'builtin', 1, 1, 1, unixepoch(), unixepoch()),
 			('LeoMoeAPI', 'leomoeapi', 'builtin', 1, 0, 1, unixepoch(), unixepoch()),
 			('IP.SB', 'ip.sb', 'builtin', 1, 0, 1, unixepoch(), unixepoch()),
 			('IPInfo', 'ipinfo', 'builtin', 1, 0, 1, unixepoch(), unixepoch()),
 			('IP-API.com', 'ip-api.com', 'builtin', 1, 0, 1, unixepoch(), unixepoch()),
 			('百度 IP', 'baidu', 'builtin', 1, 0, 1, unixepoch(), unixepoch())`,
+		`UPDATE geoip_providers SET is_default = 0, updated_at = unixepoch() WHERE provider_key = 'songzixian' AND builtin = 1 AND is_default = 1`,
+		`DELETE FROM geoip_providers WHERE provider_key = 'songzixian' AND builtin = 1`,
 		`UPDATE geoip_providers SET is_default = 1, enabled = 1, updated_at = unixepoch()
-			WHERE id = (SELECT id FROM geoip_providers ORDER BY CASE WHEN provider_key = 'songzixian' THEN 0 ELSE 1 END, id ASC LIMIT 1)
+			WHERE provider_key = 'ipapi.is'
 			AND NOT EXISTS (SELECT 1 FROM geoip_providers WHERE is_default = 1)`,
 		`CREATE TABLE IF NOT EXISTS connectivity_targets (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -265,6 +270,8 @@ func (s *Store) migrate() error {
 			created_at INTEGER NOT NULL,
 			UNIQUE(config_name, backup_date)
 		)`,
+		`DELETE FROM app_settings WHERE key IN ('update.github_token', 'update.proxy_url')`,
+		`DELETE FROM app_settings WHERE key = 'update.acceleration' AND value = 'proxy'`,
 	}
 
 	for _, m := range migrations {
@@ -418,6 +425,8 @@ func isDuplicateColumnMigration(m string) bool {
 		`ALTER TABLE proxy_collections ADD COLUMN referenced_group_ids TEXT NOT NULL DEFAULT '[]'`,
 		`ALTER TABLE proxy_collections ADD COLUMN route_rule_ids TEXT NOT NULL DEFAULT '[]'`,
 		`ALTER TABLE proxy_collections ADD COLUMN node_uids TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE proxy_collections ADD COLUMN priority INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE dns_servers ADD COLUMN priority INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE node_groups ADD COLUMN node_uids TEXT NOT NULL DEFAULT '[]'`,
 		`ALTER TABLE route_rules ADD COLUMN system_key TEXT NOT NULL DEFAULT ''`:
 		return true

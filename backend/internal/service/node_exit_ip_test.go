@@ -169,18 +169,16 @@ func TestExitIPUsesNodeOutboundWithoutSelectorMutation(t *testing.T) {
 			writer.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
-		if request.URL.Query().Get("ip") != "203.0.113.11" {
-			t.Errorf("Geo query target = %q", request.URL.Query().Get("ip"))
+		if request.URL.Query().Get("q") != "203.0.113.11" {
+			t.Errorf("Geo query target = %q", request.URL.Query().Get("q"))
 		}
 		_ = json.NewEncoder(writer).Encode(map[string]any{
-			"code": 200,
-			"data": map[string]any{
-				"countryCode": "SG", "country": "Singapore", "city": "Singapore", "isp": "Example ISP",
-			},
+			"location": map[string]any{"country_code": "SG", "country": "Singapore", "city": "Singapore"},
+			"company":  map[string]any{"name": "Example ISP"},
 		})
 	}))
 	defer geoServer.Close()
-	t.Setenv("NEXTTRACE_SONGZIXIAN_IP_BASE", geoServer.URL)
+	t.Setenv("NEXTTRACE_MINI_IPAPIIS_BASE", geoServer.URL)
 
 	svc := NewNodeService(db)
 	svc.clashBaseURL = server.URL
@@ -189,10 +187,10 @@ func TestExitIPUsesNodeOutboundWithoutSelectorMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response == nil || !response.Matched || response.GeoProvider != "songzixian" {
+	if response == nil || !response.Matched || response.GeoProvider != "ipapi.is" {
 		t.Fatalf("response = %+v", response)
 	}
-	if response.Geo == nil || response.Geo.Country != "新加坡" || response.Geo.Source != "松子 IP" {
+	if response.Geo == nil || response.Geo.Country != "新加坡" || response.Geo.Source != "ipapi.is" {
 		t.Fatalf("Geo response = %+v", response.Geo)
 	}
 

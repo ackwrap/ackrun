@@ -11,12 +11,11 @@ import (
 const (
 	DefaultConnectivityTestURL         = "http://www.gstatic.com/generate_204"
 	DefaultConnectivityIntervalSeconds = 300
-	DefaultUpdateProxyURL              = "http://127.0.0.1:9901"
 )
 
 func (s *Store) GetUpdateSettings() (*model.UpdateSettingsResponse, error) {
 	r := &model.UpdateSettingsResponse{}
-	rows, err := s.db.Query(`SELECT key, value FROM app_settings WHERE key IN ('update.acceleration', 'update.custom_mirror_url', 'update.github_token', 'update.proxy_url')`)
+	rows, err := s.db.Query(`SELECT key, value FROM app_settings WHERE key IN ('update.acceleration', 'update.custom_mirror_url')`)
 	if err != nil {
 		return nil, err
 	}
@@ -32,10 +31,6 @@ func (s *Store) GetUpdateSettings() (*model.UpdateSettingsResponse, error) {
 			r.Acceleration = value
 		case "update.custom_mirror_url":
 			r.CustomMirrorURL = value
-		case "update.github_token":
-			r.GithubToken = value
-		case "update.proxy_url":
-			r.ProxyURL = value
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -43,9 +38,6 @@ func (s *Store) GetUpdateSettings() (*model.UpdateSettingsResponse, error) {
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
-	}
-	if r.ProxyURL == "" {
-		r.ProxyURL = DefaultUpdateProxyURL
 	}
 	return r, nil
 }
@@ -55,8 +47,6 @@ func (s *Store) SetUpdateSettings(req *model.UpdateSettings) error {
 	settings := map[string]string{
 		"update.acceleration":      req.Acceleration,
 		"update.custom_mirror_url": req.CustomMirrorURL,
-		"update.github_token":      req.GithubToken,
-		"update.proxy_url":         req.ProxyURL,
 	}
 	for key, value := range settings {
 		if value == "" {

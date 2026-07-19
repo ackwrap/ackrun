@@ -3,6 +3,8 @@ package logging
 import (
 	"fmt"
 	"log"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
@@ -24,15 +26,58 @@ var toolLogs = struct {
 }{entries: make([]ToolLogEntry, 0, defaultToolLogLimit)}
 
 func Info(tag string, format string, args ...any) {
-	message := fmt.Sprintf(format, args...)
+	message := RedactAccessToken(fmt.Sprintf(format, args...))
 	appendToolLog("info", tag, message)
 	log.Printf("[%s] %s", tag, message)
 }
 
 func Error(tag string, format string, args ...any) {
-	message := fmt.Sprintf(format, args...)
+	message := RedactAccessToken(fmt.Sprintf(format, args...))
 	appendToolLog("error", tag, message)
 	log.Printf("[ERROR][%s] %s", tag, message)
+}
+
+func RedactAccessToken(value string) string {
+	var redacted strings.Builder
+	lastWritten := 0
+	for searchFrom := 0; searchFrom < len(value); {
+		relativeEqual := strings.IndexByte(value[searchFrom:], '=')
+		if relativeEqual < 0 {
+			break
+		}
+		equalIndex := searchFrom + relativeEqual
+		keyStart := equalIndex
+		for keyStart > 0 && isQueryKeyCharacter(value[keyStart-1]) {
+			keyStart--
+		}
+		decodedKey, err := url.QueryUnescape(value[keyStart:equalIndex])
+		if err != nil || !strings.EqualFold(decodedKey, "access_token") {
+			searchFrom = equalIndex + 1
+			continue
+		}
+
+		valueEnd := equalIndex + 1
+		for valueEnd < len(value) && !isQueryValueDelimiter(value[valueEnd]) {
+			valueEnd++
+		}
+		redacted.WriteString(value[lastWritten : equalIndex+1])
+		redacted.WriteString("[REDACTED]")
+		lastWritten = valueEnd
+		searchFrom = valueEnd
+	}
+	if lastWritten == 0 {
+		return value
+	}
+	redacted.WriteString(value[lastWritten:])
+	return redacted.String()
+}
+
+func isQueryKeyCharacter(value byte) bool {
+	return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' || value >= '0' && value <= '9' || strings.ContainsRune("_-.~%+", rune(value))
+}
+
+func isQueryValueDelimiter(value byte) bool {
+	return value == '&' || value == '\\' || value == '"' || value == '\'' || value == '<' || value == '>' || value == ' ' || value == '\t' || value == '\r' || value == '\n'
 }
 
 func appendToolLog(level, tag, message string) {

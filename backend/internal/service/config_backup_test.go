@@ -3,6 +3,7 @@ package service
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -55,6 +56,15 @@ func TestSyncConfigBackupsMovesAndDeduplicatesLegacyFiles(t *testing.T) {
 	}
 	if string(data) != "old" {
 		t.Fatalf("kept backup = %q, want oldest daily snapshot", data)
+	}
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(wantPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mode := info.Mode().Perm(); mode != 0600 {
+			t.Fatalf("backup mode = %o, want 600", mode)
+		}
 	}
 	for _, legacyPath := range []string{older, newer} {
 		if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {

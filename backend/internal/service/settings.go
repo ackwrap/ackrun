@@ -48,19 +48,10 @@ func (svc *SettingsService) GetUpdateSettings() (*model.UpdateSettingsResponse, 
 func (svc *SettingsService) SetUpdateSettings(req *model.UpdateSettings) error {
 	req.Acceleration = strings.TrimSpace(req.Acceleration)
 	req.CustomMirrorURL = strings.TrimSpace(req.CustomMirrorURL)
-	req.ProxyURL = strings.TrimSpace(req.ProxyURL)
 	switch req.Acceleration {
-	case "", "proxy", "ghproxy", "ghproxy_vip", "jsdelivr_fastly", "jsdelivr_testingcf", "jsdelivr_cdn", "custom":
+	case "", "ghproxy", "ghproxy_vip", "jsdelivr_fastly", "jsdelivr_testingcf", "jsdelivr_cdn", "custom":
 	default:
 		return fmt.Errorf("更新加速方式无效")
-	}
-	if req.Acceleration == "proxy" {
-		if req.ProxyURL == "" {
-			req.ProxyURL = store.DefaultUpdateProxyURL
-		}
-		if err := validateUpdateURL(req.ProxyURL, "代理 URL"); err != nil {
-			return err
-		}
 	}
 	if req.Acceleration == "custom" {
 		if req.CustomMirrorURL == "" {

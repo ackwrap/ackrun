@@ -16,8 +16,6 @@ import {
 type SettingsTab = "general" | "experimental";
 const acceleration = ref(""),
   customMirror = ref(""),
-  githubToken = ref(""),
-  proxyURL = ref("http://127.0.0.1:9901"),
   message = ref(""),
   messageType = ref<"success" | "error" | "info">("success");
 const activeTab = ref<SettingsTab>("general"),
@@ -45,8 +43,6 @@ onMounted(() => {
     .then((d) => {
       acceleration.value = d.acceleration || "";
       customMirror.value = d.custom_mirror_url || "";
-      githubToken.value = d.github_token || "";
-      proxyURL.value = d.proxy_url || "http://127.0.0.1:9901";
     })
     .catch(() => {});
   api
@@ -85,8 +81,6 @@ async function saveUpdate() {
     await api.setUpdateSettings({
       acceleration: acceleration.value,
       custom_mirror_url: customMirror.value,
-      github_token: githubToken.value,
-      proxy_url: proxyURL.value,
     });
     notify("更新设置已保存");
   } catch (e: any) {
@@ -241,18 +235,8 @@ const input =
         </div>
         <div class="flex flex-1 flex-col gap-4">
           <label class="block text-sm"
-            >GitHub Token<input
-              v-model="githubToken"
-              type="password"
-              :class="input"
-              placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
-            /><small class="text-[var(--text-tertiary)]"
-              >用于 GitHub API 调用，避免触发速率限制。</small
-            ></label
-          ><label class="block text-sm"
             >下载加速<select v-model="acceleration" :class="input">
               <option value="">无加速</option>
-              <option value="proxy">本地代理优先（推荐）</option>
               <option value="ghproxy">https://gh-proxy.com/</option>
               <option value="ghproxy_vip">https://ghproxy.vip/</option>
               <option value="jsdelivr_fastly">
@@ -264,10 +248,6 @@ const input =
               <option value="jsdelivr_cdn">https://cdn.jsdelivr.net/</option>
               <option value="custom">自定义镜像</option>
             </select></label
-          ><label v-if="acceleration === 'proxy'" class="block text-sm"
-            >本地 HTTP 代理 URL<input
-              v-model="proxyURL"
-              :class="input" /></label
           ><label v-if="acceleration === 'custom'" class="block text-sm"
             >自定义镜像 URL<input
               v-model="customMirror"

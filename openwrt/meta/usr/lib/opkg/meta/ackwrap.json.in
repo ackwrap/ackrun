@@ -1,0 +1,14 @@
+{
+  "name": "ackwrap",
+  "title": "Ackwrap 代理管理",
+  "title_en": "Ackwrap",
+  "entry": "/cgi-bin/luci/admin/services/ackwrap",
+  "author": "Ackwrap",
+  "version": "@VERSION@",
+  "release": 1,
+  "arch": ["x86_64", "aarch64"],
+  "description": "Ackwrap 提供 sing-box 配置、订阅、规则和 OpenWrt 透明代理管理。",
+  "description_en": "Ackwrap manages sing-box configuration, subscriptions, rules, and OpenWrt transparent proxying.",
+  "tags": ["networking", "service", "proxy"],
+  "depends": []
+}

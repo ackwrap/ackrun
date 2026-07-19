@@ -713,3 +713,20 @@ func TestPreviewUsesGeneratedGeoRuleSetCacheEndpoint(t *testing.T) {
 		t.Fatalf("unexpected generated geo rule set: %+v", preview.RuleSets)
 	}
 }
+
+func TestInternalRuleSetContentURLsIncludeEscapedAccessToken(t *testing.T) {
+	const token = "token with+symbols"
+	if got := routeRuleSubscriptionContentURL("http://127.0.0.1:8080", 12, token); got != "http://127.0.0.1:8080/api/v1/rules/subscriptions/12/content?access_token=token+with%2Bsymbols" {
+		t.Fatalf("subscription URL = %q", got)
+	}
+	if got := generatedGeoRuleSetContentURL("http://127.0.0.1:8080", "geosite-google", token); got != "http://127.0.0.1:8080/api/v1/rules/geo/rule-sets/geosite-google/content?access_token=token+with%2Bsymbols" {
+		t.Fatalf("Geo URL = %q", got)
+	}
+}
+
+func TestInternalAPIBaseURLUsesConfiguredListenPort(t *testing.T) {
+	t.Setenv("ACKWRAP_LISTEN_ADDR", "0.0.0.0:9090")
+	if got := internalAPIBaseURL(); got != "http://127.0.0.1:9090" {
+		t.Fatalf("internal API base URL = %q", got)
+	}
+}

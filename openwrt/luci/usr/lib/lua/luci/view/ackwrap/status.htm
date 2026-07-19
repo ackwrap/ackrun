@@ -1,0 +1,21 @@
+<fieldset class="cbi-section">
+	<legend><%:状态%></legend>
+	<div class="cbi-section-node">
+		<div class="cbi-value">
+			<label class="cbi-value-title"><%:状态%></label>
+			<div class="cbi-value-field">
+				<% if self.running then %>
+				<span style="color: green; font-weight: bold"><%:运行中%></span>
+				<% else %>
+				<span style="color: red; font-weight: bold"><%:未运行%></span>
+				<% end %>
+			</div>
+		</div>
+		<div class="cbi-value">
+			<label class="cbi-value-title"><%:打开 Web 界面%></label>
+			<div class="cbi-value-field">
+				<a href="<%=self.url%>" target="_blank" rel="noreferrer"><%:打开 Web 界面%></a>
+			</div>
+		</div>
+	</div>
+</fieldset>

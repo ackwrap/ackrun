@@ -11,14 +11,14 @@ import (
 
 func TestFetchLatestSingboxVersion(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer test-token" {
-			t.Errorf("unexpected authorization header: %q", r.Header.Get("Authorization"))
+		if authorization := r.Header.Get("Authorization"); authorization != "" {
+			t.Errorf("unexpected authorization header: %q", authorization)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"tag_name":"v1.13.14"}`))
 	}))
 	defer server.Close()
-	version, err := fetchLatestSingboxVersion(server.Client(), server.URL, "test-token")
+	version, err := fetchLatestSingboxVersion(server.Client(), server.URL)
 	if err != nil {
 		t.Fatalf("fetch latest version: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestFetchLatestSingboxReleaseIncludesAssetDigest(t *testing.T) {
 	}))
 	defer server.Close()
 
-	release, err := fetchLatestSingboxRelease(server.Client(), server.URL, "")
+	release, err := fetchLatestSingboxRelease(server.Client(), server.URL)
 	if err != nil {
 		t.Fatalf("fetch latest release: %v", err)
 	}
@@ -59,26 +59,22 @@ func TestFetchLatestSingboxVersionRejectsInvalidResponse(t *testing.T) {
 		_, _ = w.Write([]byte(`{"tag_name":"latest"}`))
 	}))
 	defer server.Close()
-	if _, err := fetchLatestSingboxVersion(server.Client(), server.URL, ""); err == nil {
+	if _, err := fetchLatestSingboxVersion(server.Client(), server.URL); err == nil {
 		t.Fatal("expected invalid version error")
 	}
 }
 
-func TestFetchLatestSingboxVersionUsesLocalProxyFirst(t *testing.T) {
-	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Host != "github.test" {
-			t.Errorf("unexpected proxy target: %s", r.URL.String())
-		}
-		_, _ = w.Write([]byte(`{"tag_name":"v1.13.14"}`))
-	}))
-	defer proxy.Close()
-	settings := &model.UpdateSettingsResponse{Acceleration: "proxy", ProxyURL: proxy.URL}
-	version, err := fetchLatestSingboxVersionWithSettings(settings, "http://github.test/releases/latest")
+func TestBuildUpdateRequestAttemptsDefaultsToDirect(t *testing.T) {
+	attempts, err := buildUpdateRequestAttempts(&model.UpdateSettingsResponse{}, "https://api.github.com/releases/latest")
 	if err != nil {
-		t.Fatalf("fetch through proxy: %v", err)
+		t.Fatal(err)
 	}
-	if version != "1.13.14" {
-		t.Fatalf("version = %q, want 1.13.14", version)
+	if len(attempts) != 1 || attempts[0].name != "direct" || attempts[0].url != "https://api.github.com/releases/latest" {
+		t.Fatalf("default update attempts = %+v", attempts)
+	}
+	transport, ok := attempts[0].client.Transport.(*http.Transport)
+	if !ok || transport.Proxy != nil {
+		t.Fatalf("default update transport must bypass environment proxies: %#v", attempts[0].client.Transport)
 	}
 }
 
@@ -88,8 +84,8 @@ func TestFetchLatestSingboxVersionReturnsFriendlyRateLimitError(t *testing.T) {
 		w.WriteHeader(http.StatusForbidden)
 	}))
 	defer server.Close()
-	_, err := fetchLatestSingboxVersion(server.Client(), server.URL, "")
-	if err == nil || !strings.Contains(err.Error(), "GitHub Token") || !strings.Contains(err.Error(), "本地代理") {
+	_, err := fetchLatestSingboxVersion(server.Client(), server.URL)
+	if err == nil || !strings.Contains(err.Error(), "匿名请求次数已用完") {
 		t.Fatalf("unexpected rate limit error: %v", err)
 	}
 }
@@ -112,28 +108,6 @@ func TestBuildUpdateRequestAttemptsUsesGHProxyVIPAndFallback(t *testing.T) {
 	}
 	if len(attempts) != 2 || attempts[0].url != "https://ghproxy.vip/"+upstream || attempts[1].url != upstream {
 		t.Fatalf("unexpected attempts: %+v", attempts)
-	}
-}
-
-func TestGithubTokenForURLOnlyAllowsGitHubAPI(t *testing.T) {
-	tests := []struct {
-		name string
-		url  string
-		want string
-	}{
-		{name: "github api", url: "https://api.github.com/repos/SagerNet/sing-box/releases/latest", want: "test-token"},
-		{name: "ghproxy vip", url: "https://ghproxy.vip/https://api.github.com/repos/SagerNet/sing-box/releases/latest"},
-		{name: "ghproxy", url: "https://gh-proxy.com/https://api.github.com/repos/SagerNet/sing-box/releases/latest"},
-		{name: "custom mirror", url: "https://mirror.example/https://api.github.com/repos/SagerNet/sing-box/releases/latest"},
-		{name: "lookalike host", url: "https://api.github.com.example/repos/SagerNet/sing-box/releases/latest"},
-		{name: "insecure github api", url: "http://api.github.com/repos/SagerNet/sing-box/releases/latest"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if got := githubTokenForURL(test.url, "test-token"); got != test.want {
-				t.Fatalf("githubTokenForURL() = %q, want %q", got, test.want)
-			}
-		})
 	}
 }
 

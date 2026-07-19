@@ -167,6 +167,9 @@ func (s *Store) ReorderNodeGroups(ids []int64) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err := validateCompleteReorderIDs(tx, "node_groups", ids); err != nil {
+		return err
+	}
 
 	for priority, id := range ids {
 		if _, err := tx.Exec(`UPDATE node_groups SET priority = ? WHERE id = ?`, priority, id); err != nil {

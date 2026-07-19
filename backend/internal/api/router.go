@@ -136,6 +136,7 @@ func RegisterRoutes(
 
 		v1.GET("/collections", proxyCollectionH.List)
 		v1.POST("/collections", proxyCollectionH.Create)
+		v1.POST("/collections/reorder", proxyCollectionH.Reorder)
 		v1.GET("/collections/:id", proxyCollectionH.Get)
 		v1.PUT("/collections/:id", proxyCollectionH.Update)
 		v1.DELETE("/collections/:id", proxyCollectionH.Delete)
@@ -171,6 +172,7 @@ func RegisterRoutes(
 
 		v1.GET("/dns/servers", dnsH.ListDNSServers)
 		v1.POST("/dns/servers", dnsH.CreateDNSServer)
+		v1.POST("/dns/servers/reorder", dnsH.ReorderDNSServers)
 		v1.GET("/dns/servers/:id", dnsH.GetDNSServer)
 		v1.PUT("/dns/servers/:id", dnsH.UpdateDNSServer)
 		v1.DELETE("/dns/servers/:id", dnsH.DeleteDNSServer)
@@ -184,6 +186,8 @@ func RegisterRoutes(
 
 		v1.GET("/dns/global", dnsH.GetDNSGlobalSettings)
 		v1.PUT("/dns/global", dnsH.SetDNSGlobalSettings)
+		v1.GET("/dns/outbound-bindings/order", dnsH.GetDNSOutboundBindingOrder)
+		v1.POST("/dns/outbound-bindings/reorder", dnsH.ReorderDNSOutboundBindings)
 
 		v1.GET("/node-groups", nodeGroupH.List)
 		v1.POST("/node-groups", nodeGroupH.Create)

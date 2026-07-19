@@ -22,10 +22,6 @@ var (
 
 var geoIPProviderTemplates = []model.GeoIPProviderTemplate{
 	{
-		Key: "songzixian", Name: "松子 IP", URL: "https://api.songzixian.com/api/ip", IPParameter: "ip",
-		Mapping: model.GeoIPFieldMapping{CountryCode: "data.countryCode", Country: "data.country", Province: "data.province", City: "data.city", District: "data.district", Latitude: "data.latitude", Longitude: "data.longitude", ISP: "data.isp", Owner: "data.isp"},
-	},
-	{
 		Key: "ip.sb", Name: "IP.SB", URL: "https://api.ip.sb/geoip/{ip}",
 		Mapping: model.GeoIPFieldMapping{ASN: "asn", CountryCode: "country_code", Country: "country", Province: "region", City: "city", Latitude: "latitude", Longitude: "longitude", ISP: "isp", Owner: "organization"},
 	},

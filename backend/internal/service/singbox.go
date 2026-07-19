@@ -3,12 +3,15 @@ package service
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	goruntime "runtime"
 	"strconv"
@@ -39,7 +42,9 @@ type SingboxService struct {
 	lastError   string
 }
 
-var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
+var (
+	ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
+)
 
 func NewSingboxService(p *paths.Paths, rt *RealtimeService, logs *CoreLogService, s *store.Store) *SingboxService {
 	return &SingboxService{paths: p, realtime: rt, coreLogs: logs, store: s}
@@ -258,12 +263,18 @@ func (svc *SingboxService) restart(reason string) (*model.ActionResponse, error)
 }
 
 func (svc *SingboxService) validateActiveConfig() (string, error) {
+	configFileMu.Lock()
+	defer configFileMu.Unlock()
+
 	configPath, ok, err := svc.paths.ActiveConfigPath()
 	if err != nil {
 		return "", err
 	}
 	if !ok {
 		return "", fmt.Errorf("config file not found")
+	}
+	if err := svc.migrateRuleSetAccessToken(configPath); err != nil {
+		return "", err
 	}
 	if output, err := exec.Command(svc.paths.BinaryPath, "check", "-c", configPath).CombinedOutput(); err != nil {
 		message := strings.TrimSpace(cleanLogLine(string(output)))
@@ -273,6 +284,56 @@ func (svc *SingboxService) validateActiveConfig() (string, error) {
 		return "", fmt.Errorf("config check failed: %s", message)
 	}
 	return configPath, nil
+}
+
+func (svc *SingboxService) migrateRuleSetAccessToken(configPath string) error {
+	if err := os.Chmod(configPath, 0600); err != nil {
+		return fmt.Errorf("protect config before rule-set authentication migration: %w", err)
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("read config for rule-set authentication migration: %w", err)
+	}
+	migratedData, migrated, err := migrateInternalRuleSetAccessTokenData(
+		data,
+		internalAPIBaseURL(),
+		os.Getenv("ACKWRAP_API_TOKEN"),
+	)
+	if err != nil || migrated == 0 {
+		return err
+	}
+	stagedFile, err := os.CreateTemp(filepath.Dir(configPath), ".ackwrap-rule-set-auth-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create rule-set authentication migration file: %w", err)
+	}
+	stagedPath := stagedFile.Name()
+	defer os.Remove(stagedPath)
+	if err := stagedFile.Chmod(0600); err != nil {
+		stagedFile.Close()
+		return fmt.Errorf("protect rule-set authentication migration file: %w", err)
+	}
+	if _, err := stagedFile.Write(migratedData); err != nil {
+		stagedFile.Close()
+		return fmt.Errorf("write rule-set authentication migration file: %w", err)
+	}
+	if err := stagedFile.Close(); err != nil {
+		return fmt.Errorf("close rule-set authentication migration file: %w", err)
+	}
+	if output, err := exec.Command(svc.paths.BinaryPath, "check", "-c", stagedPath).CombinedOutput(); err != nil {
+		message := strings.TrimSpace(cleanLogLine(string(output)))
+		if message == "" {
+			message = err.Error()
+		}
+		return fmt.Errorf("rule-set authentication migration validation failed: %s", message)
+	}
+	if _, _, err := ensureDailyConfigBackup(svc.paths, svc.store, configPath, time.Now()); err != nil {
+		return fmt.Errorf("backup config before rule-set authentication migration: %w", err)
+	}
+	if err := atomicReplaceFile(stagedPath, configPath); err != nil {
+		return fmt.Errorf("apply rule-set authentication migration: %w", err)
+	}
+	logging.Info("config.migrate", "已更新 %d 个本机规则集认证 URL", migrated)
+	return nil
 }
 
 func (svc *SingboxService) ReloadConfig() (*model.ActionResponse, error) {
@@ -322,7 +383,12 @@ func (svc *SingboxService) getVersion() string {
 }
 
 func cleanLogLine(line string) string {
-	return ansiEscapePattern.ReplaceAllString(line, "")
+	line = ansiEscapePattern.ReplaceAllString(line, "")
+	return redactAccessToken(line)
+}
+
+func redactAccessToken(value string) string {
+	return logging.RedactAccessToken(value)
 }
 
 func (svc *SingboxService) captureCoreLog(reader io.Reader, source string) {
@@ -348,6 +414,12 @@ func coreExitErrorMessage(lastError string, processErr error) string {
 	lower := strings.ToLower(lastError)
 	if strings.Contains(lower, "configure tun interface") && strings.Contains(lower, "access is denied") {
 		return "TUN 模式启动失败：Windows 拒绝创建 TUN 网卡，请以管理员身份运行 AckWrap"
+	}
+	if strings.Contains(lower, "auto-redirect") || strings.Contains(lower, "auto_redirect") || strings.Contains(lower, "nftables") {
+		return "OpenWrt 透明代理启动失败：sing-box 无法配置 nftables/fw4，请确认以 root 或 CAP_NET_ADMIN 运行且系统使用 fw4/nftables；核心错误：" + lastError
+	}
+	if strings.Contains(lower, "configure tun interface") && (strings.Contains(lower, "operation not permitted") || strings.Contains(lower, "permission denied")) {
+		return "TUN 模式启动失败：缺少创建 TUN 和修改路由的权限，请以 root 运行或授予 CAP_NET_ADMIN"
 	}
 	if lastError != "" {
 		return lastError
@@ -448,6 +520,41 @@ func (svc *SingboxService) NetworkCheck() (*model.MaintenanceCheckResponse, erro
 	return svc.networkCheck(), nil
 }
 
+type activeTUNState struct {
+	Enabled bool
+	IPv6    bool
+}
+
+func readActiveTUNState(configPath string) (activeTUNState, error) {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return activeTUNState{}, err
+	}
+	var config struct {
+		Inbounds []struct {
+			Type    string   `json:"type"`
+			Address []string `json:"address"`
+		} `json:"inbounds"`
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return activeTUNState{}, err
+	}
+	state := activeTUNState{}
+	for _, inbound := range config.Inbounds {
+		if inbound.Type != "tun" {
+			continue
+		}
+		state.Enabled = true
+		for _, address := range inbound.Address {
+			prefix, err := netip.ParsePrefix(address)
+			if err == nil && prefix.Addr().Is6() {
+				state.IPv6 = true
+			}
+		}
+	}
+	return state, nil
+}
+
 func (svc *SingboxService) networkCheck() *model.MaintenanceCheckResponse {
 	checks := make([]model.MaintenanceCheck, 0, 5)
 	add := func(key, label, status, message string) {
@@ -462,9 +569,10 @@ func (svc *SingboxService) networkCheck() *model.MaintenanceCheckResponse {
 		add("binary", "核心程序", "pass", "sing-box 核心程序可用")
 	}
 
-	if _, ok, err := svc.paths.ActiveConfigPath(); err != nil {
+	configPath, configPresent, configPathErr := svc.paths.ActiveConfigPath()
+	if configPathErr != nil {
 		add("config", "配置文件", "fail", "无法读取当前配置状态")
-	} else if !ok {
+	} else if !configPresent {
 		add("config", "配置文件", "fail", "当前没有可用配置文件")
 	} else if !binaryReady {
 		add("config", "配置文件", "warn", "需要安装核心后才能校验配置")
@@ -492,6 +600,37 @@ func (svc *SingboxService) networkCheck() *model.MaintenanceCheckResponse {
 			add("administrator", "管理员权限", "warn", "当前进程可能没有管理员权限，TUN 和系统维护操作可能失败")
 		} else {
 			add("administrator", "管理员权限", "pass", "当前进程具有管理员权限")
+		}
+	} else if goruntime.GOOS == "linux" && configPathErr == nil && configPresent {
+		tunState, err := readActiveTUNState(configPath)
+		if err != nil {
+			add("tun_config", "TUN 配置", "warn", "无法解析活动配置的 TUN 状态")
+		} else if tunState.Enabled {
+			if os.Geteuid() != 0 {
+				add("tun_permission", "TUN 管理权限", "warn", "当前进程不是 root；OpenWrt 透明代理需要 CAP_NET_ADMIN 和 nftables 管理权限")
+			} else {
+				add("tun_permission", "TUN 管理权限", "pass", "当前进程以 root 运行")
+			}
+			forwarding, err := os.ReadFile("/proc/sys/net/ipv4/ip_forward")
+			if err != nil {
+				add("ip_forward", "IPv4 转发", "warn", "无法读取 net.ipv4.ip_forward；请确认 OpenWrt LAN 转发已启用")
+			} else if strings.TrimSpace(string(forwarding)) != "1" {
+				add("ip_forward", "IPv4 转发", "warn", "net.ipv4.ip_forward 未启用，本机 TUN 可用但无法透明代理 LAN 设备")
+			} else {
+				add("ip_forward", "IPv4 转发", "pass", "IPv4 LAN 转发已启用")
+			}
+			if !tunState.IPv6 {
+				add("ipv6_forward", "IPv6 转发", "warn", "活动 TUN 未配置 IPv6 地址，LAN IPv6 流量可能绕过代理")
+			} else {
+				forwarding, err := os.ReadFile("/proc/sys/net/ipv6/conf/all/forwarding")
+				if err != nil {
+					add("ipv6_forward", "IPv6 转发", "warn", "无法读取 IPv6 forwarding；请确认 OpenWrt IPv6 LAN 转发已启用")
+				} else if strings.TrimSpace(string(forwarding)) != "1" {
+					add("ipv6_forward", "IPv6 转发", "warn", "IPv6 forwarding 未启用，LAN IPv6 流量可能绕过代理")
+				} else {
+					add("ipv6_forward", "IPv6 转发", "pass", "IPv6 LAN 转发已启用")
+				}
+			}
 		}
 	}
 

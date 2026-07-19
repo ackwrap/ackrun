@@ -23,6 +23,7 @@ const rules = ref<RouteRule[]>([]),
   message = ref(""),
   messageType = ref<"success" | "error">("success"),
   pending = ref<RouteRule | null>(null),
+  detailRule = ref<RouteRule | null>(null),
   formOpen = ref(false),
   editing = ref<RouteRule | null>(null),
   name = ref(""),
@@ -371,6 +372,7 @@ onBeforeUnmount(() => clearInterval(poll));
         @toggle="toggleRule"
         @edit="editRule"
         @remove="pending = $event"
+        @detail="detailRule = $event"
       />
       <section
         class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
@@ -548,6 +550,43 @@ onBeforeUnmount(() => clearInterval(poll));
       @edit="editSub"
       @remove="deleteSub"
     />
+    <Modal
+      :open="!!detailRule"
+      :title="detailRule ? `规则详情：${detailRule.name}` : '规则详情'"
+      size="lg"
+      @close="detailRule = null"
+    >
+      <div v-if="detailRule" class="grid gap-4 text-sm md:grid-cols-2">
+        <div class="rounded-lg bg-[var(--bg-base)] p-3">
+          <span class="text-[var(--text-tertiary)]">类型</span>
+          <p class="mt-1 font-mono">{{ detailRule.rule_type }}</p>
+        </div>
+        <div class="rounded-lg bg-[var(--bg-base)] p-3">
+          <span class="text-[var(--text-tertiary)]">出站</span>
+          <p class="mt-1 font-mono">{{ detailRule.outbound }}</p>
+        </div>
+        <div class="rounded-lg bg-[var(--bg-base)] p-3">
+          <span class="text-[var(--text-tertiary)]">状态</span>
+          <p class="mt-1">{{ detailRule.enabled ? "启用" : "停用" }}</p>
+        </div>
+        <div class="rounded-lg bg-[var(--bg-base)] p-3">
+          <span class="text-[var(--text-tertiary)]">排序 / 反向</span>
+          <p class="mt-1">
+            {{ detailRule.priority }} / {{ detailRule.invert ? "是" : "否" }}
+          </p>
+        </div>
+        <div
+          class="rounded-lg border border-[var(--border-default)] bg-[var(--bg-base)] p-3 md:col-span-2"
+        >
+          <span class="text-[var(--text-tertiary)]"
+            >匹配值（{{ detailRule.values.length }}）</span
+          >
+          <pre
+            class="mt-2 max-h-[50vh] overflow-auto whitespace-pre-wrap break-all font-mono text-xs leading-5 text-[var(--text-primary)]"
+          >{{ detailRule.values.join("\n") || "-" }}</pre>
+        </div>
+      </div>
+    </Modal>
     <Modal
       :open="!!(preview || content)"
       :title="content?.title || '规则 JSON 预览'"

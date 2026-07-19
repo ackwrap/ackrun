@@ -62,11 +62,23 @@ npm run build
 开发模式：
 
 ```bash
-cd backend && go run ./cmd/server
+cd backend && ACKWRAP_LISTEN_ADDR=127.0.0.1:8080 go run ./cmd/server
 cd frontend && npm run dev
 ```
 
 前端开发服务器端口为 `5173`，API 会代理到后端 `8080`。
+
+发布构建会先生成前端并嵌入 Go 二进制，不需要单独携带 `ui/`：
+
+```bash
+# 默认生成 Windows、Linux、OpenWrt amd64 产物到 dist/
+python build.py
+
+# 生成 OpenWrt arm64 二进制和单一 IPK 安装包
+python build.py --target openwrt --arch arm64
+```
+
+OpenWrt 目标会生成一个包含服务、LuCI 页面和 iStoreOS 元数据的架构相关 `ackwrap` IPK；UCI、procd、LuCI 与 iStoreOS 模板统一维护在根目录 `openwrt/`。
 
 ## 定制 sing-box 构建
 

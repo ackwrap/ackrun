@@ -112,15 +112,11 @@ export interface CoreDiagnosticsResponse {
 export interface UpdateSettings {
   acceleration: string;
   custom_mirror_url?: string;
-  github_token?: string;
-  proxy_url?: string;
 }
 
 export interface UpdateSettingsResponse {
   acceleration: string;
   custom_mirror_url: string;
-  github_token: string;
-  proxy_url: string;
 }
 
 export interface LogSettings {

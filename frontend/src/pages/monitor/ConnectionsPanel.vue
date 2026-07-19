@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { Link, Pause, Play, RefreshCw, Search, X } from "lucide-vue-next";
 import type { Connection } from "@/services/clash";
 import NodeFlagName from "@/components/NodeFlagName.vue";
@@ -35,6 +35,71 @@ const paused = ref(false);
 const activeRows = ref<ConnectionRow[]>([]);
 const closedRows = ref<ConnectionRow[]>([]);
 const previous = new Map<string, Snapshot>();
+const columns = [
+  { key: "close", label: "关闭", width: 52, min: 44, align: "center" },
+  { key: "host", label: "主机", width: 220, min: 120, align: "left" },
+  { key: "type", label: "类型", width: 180, min: 110, align: "left" },
+  { key: "rule", label: "规则", width: 170, min: 100, align: "left" },
+  { key: "chain", label: "代理链", width: 520, min: 180, align: "left" },
+  { key: "downSpeed", label: "下载速度", width: 110, min: 90, align: "right" },
+  { key: "upSpeed", label: "上传速度", width: 110, min: 90, align: "right" },
+  { key: "download", label: "下载", width: 90, min: 70, align: "right" },
+  { key: "upload", label: "上传", width: 90, min: 70, align: "right" },
+  { key: "elapsed", label: "连接时间", width: 110, min: 90, align: "right" },
+] as const;
+type ColumnKey = (typeof columns)[number]["key"];
+const columnWidths = ref<Record<ColumnKey, number>>(
+  Object.fromEntries(columns.map((column) => [column.key, column.width])) as Record<
+    ColumnKey,
+    number
+  >,
+);
+const storedWidths = localStorage.getItem("ackwrap.monitor.connection-columns");
+if (storedWidths) {
+  try {
+    const parsed = JSON.parse(storedWidths) as Partial<Record<ColumnKey, number>>;
+    for (const column of columns) {
+      const width = Number(parsed[column.key]);
+      if (Number.isFinite(width) && width >= column.min)
+        columnWidths.value[column.key] = Math.min(width, 1200);
+    }
+  } catch {}
+}
+const tableWidth = computed(() =>
+  columns.reduce((total, column) => total + columnWidths.value[column.key], 0),
+);
+let cleanupResize: (() => void) | undefined;
+
+function startColumnResize(event: PointerEvent, key: ColumnKey, min: number) {
+  if (event.button !== 0) return;
+  event.preventDefault();
+  cleanupResize?.();
+  const startX = event.clientX;
+  const startWidth = columnWidths.value[key];
+  const move = (nextEvent: PointerEvent) => {
+    columnWidths.value[key] = Math.max(min, startWidth + nextEvent.clientX - startX);
+  };
+  const finish = () => {
+    localStorage.setItem(
+      "ackwrap.monitor.connection-columns",
+      JSON.stringify(columnWidths.value),
+    );
+    cleanupResize?.();
+  };
+  cleanupResize = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", finish);
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+    cleanupResize = undefined;
+  };
+  document.body.style.cursor = "col-resize";
+  document.body.style.userSelect = "none";
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", finish);
+}
+
+onBeforeUnmount(() => cleanupResize?.());
 
 function updateRows(connections: Connection[]) {
   const observedAt = Date.now();
@@ -153,9 +218,16 @@ function connectionType(connection: Connection) {
 }
 
 function ruleDescription(connection: Connection) {
-  return (
-    [connection.rule, connection.rulePayload].filter(Boolean).join(": ") || "-"
-  );
+  const description = [connection.rule, connection.rulePayload]
+    .filter(Boolean)
+    .join(": ");
+  return connection.rule === "final"
+    ? "final（未命中规则，使用默认出站）"
+    : description || "-";
+}
+
+function displayChains(connection: Connection) {
+  return [...(connection.chains || [])].reverse();
 }
 
 function elapsed(connection: Connection, closedAt?: number) {
@@ -253,21 +325,39 @@ function elapsed(connection: Connection, closedAt?: number) {
     <div
       class="min-h-0 flex-1 overflow-auto rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)]"
     >
-      <table class="w-full min-w-[1320px] border-collapse text-xs">
+      <table
+        class="table-fixed border-collapse text-xs"
+        :style="{ width: `${tableWidth}px`, minWidth: '100%' }"
+      >
+        <colgroup>
+          <col
+            v-for="column in columns"
+            :key="column.key"
+            :style="{ width: `${columnWidths[column.key]}px` }"
+          />
+        </colgroup>
         <thead
           class="sticky top-0 z-10 bg-[var(--bg-elevated)] text-[var(--text-secondary)]"
         >
           <tr>
-            <th class="w-10 px-2 py-2 text-center">关闭</th>
-            <th class="px-3 py-2 text-left">主机</th>
-            <th class="px-3 py-2 text-left">类型</th>
-            <th class="px-3 py-2 text-left">规则</th>
-            <th class="px-3 py-2 text-left">代理链</th>
-            <th class="px-3 py-2 text-right">下载速度</th>
-            <th class="px-3 py-2 text-right">上传速度</th>
-            <th class="px-3 py-2 text-right">下载</th>
-            <th class="px-3 py-2 text-right">上传</th>
-            <th class="px-3 py-2 text-right">连接时间</th>
+            <th
+              v-for="column in columns"
+              :key="column.key"
+              class="relative px-3 py-2"
+              :class="{
+                'text-left': column.align === 'left',
+                'text-center': column.align === 'center',
+                'text-right': column.align === 'right',
+              }"
+            >
+              {{ column.label }}
+              <span
+                class="absolute top-0 right-0 h-full w-2 cursor-col-resize touch-none select-none after:absolute after:top-1/4 after:right-0 after:h-1/2 after:w-px after:bg-[var(--border-default)] hover:after:bg-[var(--color-primary)]"
+                @pointerdown="
+                  startColumnResize($event, column.key, column.min)
+                "
+              />
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -323,9 +413,10 @@ function elapsed(connection: Connection, closedAt?: number) {
               <span
                 v-if="row.connection.chains?.length"
                 class="inline-flex max-w-full items-center gap-1"
+                title="入口策略组 → 实际出站节点"
               >
                 <template
-                  v-for="(chain, index) in row.connection.chains"
+                  v-for="(chain, index) in displayChains(row.connection)"
                   :key="`${chain}-${index}`"
                 >
                   <span v-if="index" class="shrink-0">→</span>

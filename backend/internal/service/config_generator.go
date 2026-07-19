@@ -29,8 +29,8 @@ var ErrInvalidConfigFileName = errors.New("配置文件名无效")
 
 const (
 	defaultRuleSetHTTPClientTag = "ackwrap-rule-set-direct"
-	updateProxyInboundTag       = "ackwrap-update-in"
-	updateProxyListenPort       = 9901
+	defaultTUNIPv4Address       = "172.19.0.1/30"
+	defaultTUNIPv6Address       = "fdfe:dcba:9876::1/126"
 )
 
 // ConfigGeneratorService 配置生成服务
@@ -261,11 +261,38 @@ func (s *ConfigGeneratorService) generateLockedTo(req *model.ConfigGenerateReque
 	valid, errMsg := s.validateConfig(tmpPath)
 
 	return &model.ConfigGenerateResponse{
-		Config:   config,
+		Config:   redactConfigAccessTokens(config).(map[string]interface{}),
 		Valid:    valid,
-		Error:    errMsg,
+		Error:    redactAccessToken(errMsg),
 		FilePath: tmpPath,
 	}, nil
+}
+
+func redactConfigAccessTokens(value interface{}) interface{} {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		redacted := make(map[string]interface{}, len(typed))
+		for key, item := range typed {
+			redacted[key] = redactConfigAccessTokens(item)
+		}
+		return redacted
+	case []interface{}:
+		redacted := make([]interface{}, len(typed))
+		for index, item := range typed {
+			redacted[index] = redactConfigAccessTokens(item)
+		}
+		return redacted
+	case []map[string]interface{}:
+		redacted := make([]map[string]interface{}, len(typed))
+		for index, item := range typed {
+			redacted[index] = redactConfigAccessTokens(item).(map[string]interface{})
+		}
+		return redacted
+	case string:
+		return redactAccessToken(typed)
+	default:
+		return value
+	}
 }
 
 // generateOutbounds 生成所有 outbounds 和 endpoints。WireGuard 在 sing-box 1.13 起是 endpoint，
@@ -1155,18 +1182,15 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 		"rule_set":            []map[string]interface{}{},
 		"default_http_client": defaultRuleSetHTTPClientTag,
 	}
+	inboundMode := s.store.GetInboundMode()
+	if inboundMode == "tun" || inboundMode == "tun_mixed" {
+		route["auto_detect_interface"] = true
+	}
 
 	// 根据代理模式决定是否加载规则
 	var routeRules []map[string]interface{}
 	var ruleSets []map[string]interface{}
 	ruleSetTags := make(map[string]bool)
-
-	// 更新入口必须位于所有可能终止路由的规则之前，确保显式代理不会被进程或用户规则改为直连。
-	routeRules = append(routeRules, map[string]interface{}{
-		"inbound":  []string{updateProxyInboundTag},
-		"action":   "route",
-		"outbound": "proxy",
-	})
 
 	// sing-box 1.13 已移除 inbound sniff 字段，嗅探和 DNS 劫持必须使用 rule action。
 	routeRules = append(routeRules, map[string]interface{}{
@@ -1196,6 +1220,8 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 	proxyMode := s.store.GetProxyMode()
 
 	if proxyMode == "rule" {
+		apiToken := strings.TrimSpace(os.Getenv("ACKWRAP_API_TOKEN"))
+		apiBaseURL := internalAPIBaseURL()
 		// 规则模式：加载所有启用的规则
 		rules, err := s.store.ListRouteRules()
 		if err != nil {
@@ -1230,10 +1256,10 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 				routeRules = append(routeRules, ruleMap)
 			}
 			if rule.RuleType == "geoip" || rule.RuleType == "geosite" {
-				ruleSets = appendGeneratedGeoRuleSets(ruleSets, ruleSetTags, rule.RuleType, rule.Values, "http://127.0.0.1:8080")
+				ruleSets = appendGeneratedGeoRuleSets(ruleSets, ruleSetTags, rule.RuleType, rule.Values, apiBaseURL, apiToken)
 			}
 			if rule.RuleType == "mixed" {
-				ruleSets = addMixedGeneratedRuleSets(ruleSets, ruleSetTags, rule.Values, "http://127.0.0.1:8080")
+				ruleSets = addMixedGeneratedRuleSets(ruleSets, ruleSetTags, rule.Values, apiBaseURL, apiToken)
 			}
 		}
 
@@ -1251,7 +1277,7 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 				"type":   "remote",
 				"tag":    sub.Tag,
 				"format": format,
-				"url":    fmt.Sprintf("http://127.0.0.1:8080/api/v1/rules/subscriptions/%d/content", sub.ID),
+				"url":    routeRuleSubscriptionContentURL(apiBaseURL, sub.ID, apiToken),
 			}
 			ruleSets = append(ruleSets, ruleSet)
 		}
@@ -1829,9 +1855,24 @@ func (s *ConfigGeneratorService) Apply(fileName string, restartCore bool) error 
 
 func (s *ConfigGeneratorService) applyLocked(fileName string, restartCore bool) error {
 	configFileMu.Lock()
-	defer configFileMu.Unlock()
+	err := s.applyConfigFileLocked(fileName)
+	configFileMu.Unlock()
+	if err != nil {
+		return err
+	}
 
-	logging.Info("config_generator.apply", "应用配置，文件名: %s，重启核心: %v", fileName, restartCore)
+	if restartCore && s.singbox != nil {
+		if _, err := s.singbox.ReloadConfig(); err != nil {
+			return fmt.Errorf("配置已应用，但重载核心失败: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func (s *ConfigGeneratorService) applyConfigFileLocked(fileName string) error {
+
+	logging.Info("config_generator.apply", "应用配置，文件名: %s", fileName)
 
 	tmpPath := filepath.Join(s.paths.DataDir, "config.tmp.json")
 	if err := os.MkdirAll(s.paths.ConfigDir, 0755); err != nil {
@@ -1903,12 +1944,6 @@ func (s *ConfigGeneratorService) applyLocked(fileName string, restartCore bool) 
 		logging.Info("config_generator.apply", "删除临时配置失败: %v", err)
 	}
 
-	if restartCore && s.singbox != nil {
-		if _, err := s.singbox.ReloadConfig(); err != nil {
-			return fmt.Errorf("配置已应用，但重载核心失败: %w", err)
-		}
-	}
-
 	return nil
 }
 
@@ -1969,9 +2004,7 @@ func (s *ConfigGeneratorService) generateInbounds(listen string, port int) ([]in
 
 	// 获取运行模式设置
 	mode := s.store.GetInboundMode()
-	if port == updateProxyListenPort && mode != "tun" {
-		return nil, fmt.Errorf("端口 %d 保留给 Ackwrap 更新代理，请选择其他 mixed 端口", updateProxyListenPort)
-	}
+	autoRedirect := runtime.GOOS == "linux"
 
 	var inbounds []interface{}
 
@@ -1979,15 +2012,7 @@ func (s *ConfigGeneratorService) generateInbounds(listen string, port int) ([]in
 	case "tun":
 		// 纯 TUN 模式
 		inbounds = []interface{}{
-			map[string]interface{}{
-				"type":           "tun",
-				"tag":            "tun-in",
-				"interface_name": "tun0",
-				"address":        []string{"172.19.0.1/30"},
-				"auto_route":     true,
-				"strict_route":   true,
-				"stack":          "system",
-			},
+			generatedTUNInbound(autoRedirect),
 		}
 	case "mixed":
 		// 纯 Mixed 模式
@@ -2004,15 +2029,7 @@ func (s *ConfigGeneratorService) generateInbounds(listen string, port int) ([]in
 	default:
 		// TUN + Mixed 双模式（默认）
 		inbounds = []interface{}{
-			map[string]interface{}{
-				"type":           "tun",
-				"tag":            "tun-in",
-				"interface_name": "tun0",
-				"address":        []string{"172.19.0.1/30"},
-				"auto_route":     true,
-				"strict_route":   true,
-				"stack":          "system",
-			},
+			generatedTUNInbound(autoRedirect),
 			map[string]interface{}{
 				"type":        "mixed",
 				"tag":         "mixed-in",
@@ -2021,15 +2038,27 @@ func (s *ConfigGeneratorService) generateInbounds(listen string, port int) ([]in
 			},
 		}
 	}
-
-	inbounds = append(inbounds, map[string]interface{}{
-		"type":        "mixed",
-		"tag":         updateProxyInboundTag,
-		"listen":      "127.0.0.1",
-		"listen_port": updateProxyListenPort,
-	})
+	if autoRedirect && (mode == "tun" || mode == "tun_mixed") {
+		logging.Info("config_generator.inbound", "Linux TUN 已启用 auto_redirect，由 sing-box 管理 nftables/OpenWrt fw4 兼容规则")
+	}
 
 	return inbounds, nil
+}
+
+func generatedTUNInbound(autoRedirect bool) map[string]interface{} {
+	inbound := map[string]interface{}{
+		"type":           "tun",
+		"tag":            "tun-in",
+		"interface_name": "tun0",
+		"address":        []string{defaultTUNIPv4Address, defaultTUNIPv6Address},
+		"auto_route":     true,
+		"strict_route":   true,
+		"stack":          "system",
+	}
+	if autoRedirect {
+		inbound["auto_redirect"] = true
+	}
+	return inbound
 }
 
 // Preview 预览生成的配置
@@ -2085,7 +2114,7 @@ func (s *ConfigGeneratorService) writeConfigFile(path string, config map[string]
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+	return os.WriteFile(path, data, 0600)
 }
 
 func copyFile(src, dst string) error {
@@ -2093,5 +2122,5 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(dst, data, 0644)
+	return os.WriteFile(dst, data, 0600)
 }

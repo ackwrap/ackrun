@@ -70,6 +70,9 @@ func syncConfigBackups(p *paths.Paths, db *store.Store) ([]model.ConfigBackup, e
 			keeper.path = canonicalPath
 			moved++
 		}
+		if err := os.Chmod(keeper.path, 0600); err != nil {
+			return nil, fmt.Errorf("保护配置备份失败: %w", err)
+		}
 		info, err := os.Stat(keeper.path)
 		if err != nil {
 			return nil, err

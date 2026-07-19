@@ -21,11 +21,11 @@ func TestGeoIPProviderResources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(response.Items) == 0 || len(response.Templates) == 0 || response.Items[0].Key != "songzixian" || !response.Items[0].IsDefault {
+	if len(response.Items) == 0 || len(response.Templates) == 0 || response.Items[0].Key != "ipapi.is" || !response.Items[0].IsDefault {
 		t.Fatalf("seeded providers = %+v", response)
 	}
 
-	created, err := svc.CreateGeoIPProvider(&model.GeoIPProviderRequest{Name: "Custom Geo", Template: "songzixian", Enabled: true})
+	created, err := svc.CreateGeoIPProvider(&model.GeoIPProviderRequest{Name: "Custom Geo", Template: "ip.sb", Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}

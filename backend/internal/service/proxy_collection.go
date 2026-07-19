@@ -115,6 +115,21 @@ func (s *ProxyCollectionService) List() ([]*model.ProxyCollectionWithNodes, erro
 	return s.store.ListProxyCollectionsWithNodes()
 }
 
+func (s *ProxyCollectionService) Reorder(ids []int) error {
+	if len(ids) == 0 {
+		return fmt.Errorf("策略组 ID 不能为空")
+	}
+	seen := make(map[int]bool, len(ids))
+	for _, id := range ids {
+		if id <= 0 || seen[id] {
+			return fmt.Errorf("策略组 ID 无效或重复")
+		}
+		seen[id] = true
+	}
+	logging.Info("proxy_collection.reorder", "调整 %d 个策略组的顺序", len(ids))
+	return s.store.ReorderProxyCollections(ids)
+}
+
 // Update 更新代理集合
 func (s *ProxyCollectionService) Update(id int, req model.ProxyCollectionRequest) error {
 	logging.Info("proxy_collection.update", "更新代理集合: %d", id)

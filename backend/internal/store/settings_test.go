@@ -56,7 +56,7 @@ func TestLogSettingsPersistLevelAndTimestamp(t *testing.T) {
 	}
 }
 
-func TestUpdateSettingsUsesDedicatedProxyAndPreservesCustomURL(t *testing.T) {
+func TestUpdateSettingsDefaultsToDirectAndPreservesCustomMirror(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -67,18 +67,18 @@ func TestUpdateSettingsUsesDedicatedProxyAndPreservesCustomURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.ProxyURL != DefaultUpdateProxyURL {
-		t.Fatalf("default update proxy = %q, want %q", settings.ProxyURL, DefaultUpdateProxyURL)
+	if settings.Acceleration != "" || settings.CustomMirrorURL != "" {
+		t.Fatalf("default update settings = %+v, want direct without mirror", settings)
 	}
-	customProxyURL := "http://127.0.0.1:9999"
-	if err := s.SetUpdateSettings(&model.UpdateSettings{Acceleration: "proxy", ProxyURL: customProxyURL}); err != nil {
+	customMirrorURL := "https://mirror.example"
+	if err := s.SetUpdateSettings(&model.UpdateSettings{Acceleration: "custom", CustomMirrorURL: customMirrorURL}); err != nil {
 		t.Fatal(err)
 	}
 	settings, err = s.GetUpdateSettings()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.ProxyURL != customProxyURL {
-		t.Fatalf("custom update proxy = %q, want %q", settings.ProxyURL, customProxyURL)
+	if settings.Acceleration != "custom" || settings.CustomMirrorURL != customMirrorURL {
+		t.Fatalf("custom update settings = %+v", settings)
 	}
 }

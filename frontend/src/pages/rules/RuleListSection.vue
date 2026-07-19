@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ArrowDown, ArrowUp, Eye, Plus, Trash2 } from "lucide-vue-next";
+import { Eye, Plus, Trash2 } from "lucide-vue-next";
+import OrderButtons from "@/components/ui/OrderButtons.vue";
 import type { RouteRule, RouteRuleSubscription } from "@/services/types";
 defineProps<{ rules: RouteRule[]; subscriptions: RouteRuleSubscription[] }>();
 defineEmits<{
@@ -11,6 +12,7 @@ defineEmits<{
   toggle: [RouteRule];
   edit: [RouteRule];
   remove: [RouteRule];
+  detail: [RouteRule];
 }>();
 </script>
 <template>
@@ -74,22 +76,12 @@ defineEmits<{
                 <span class="w-6 text-[var(--text-tertiary)]"
                   >#{{ i + 1 }}</span
                 >
-                <button
-                  class="aw-action-button aw-action-neutral !h-7 !w-7 !px-0"
-                  :disabled="i === 0"
-                  title="上移"
-                  @click="$emit('move', i, -1)"
-                >
-                  <ArrowUp :size="13" />
-                </button>
-                <button
-                  class="aw-action-button aw-action-neutral !h-7 !w-7 !px-0"
-                  :disabled="i === rules.length - 1"
-                  title="下移"
-                  @click="$emit('move', i, 1)"
-                >
-                  <ArrowDown :size="13" />
-                </button>
+                <OrderButtons
+                  :up-disabled="i === 0"
+                  :down-disabled="i === rules.length - 1"
+                  @up="$emit('move', i, -1)"
+                  @down="$emit('move', i, 1)"
+                />
               </div>
             </td>
             <td>
@@ -124,16 +116,23 @@ defineEmits<{
             <td>
               <div class="flex gap-2">
                 <button
+                  v-if="!r.is_system"
                   class="aw-action-button aw-action-neutral"
                   @click="$emit('edit', r)"
                 >
-                  {{ r.is_system ? "查看" : "编辑" }}</button
+                  编辑</button
                 ><button
                   class="aw-action-button aw-action-danger"
                   :disabled="r.is_system"
                   @click="$emit('remove', r)"
                 >
                   <Trash2 :size="13" />删除
+                </button>
+                <button
+                  class="aw-action-button aw-action-neutral"
+                  @click="$emit('detail', r)"
+                >
+                  <Eye :size="13" />查看
                 </button>
               </div>
             </td>

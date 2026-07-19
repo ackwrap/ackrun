@@ -5,7 +5,7 @@ import path from 'path'
 export default defineConfig({
   plugins: [vue()],
   build: {
-    outDir: '../backend/ui',
+    outDir: '../backend/internal/webui/dist',
     emptyOutDir: true,
     rollupOptions: {
       output: {

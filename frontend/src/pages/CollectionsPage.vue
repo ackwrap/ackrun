@@ -6,6 +6,7 @@ import Toast from "@/components/ui/Toast.vue";
 import Modal from "@/components/ui/Modal.vue";
 import Pagination from "@/components/ui/Pagination.vue";
 import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
+import OrderButtons from "@/components/ui/OrderButtons.vue";
 import NodeFlagName from "@/components/NodeFlagName.vue";
 import NodeGroupDetailModal from "./collections/NodeGroupDetailModal.vue";
 import {
@@ -15,6 +16,7 @@ import {
   type DNSBindingServer,
 } from "./collections/dnsBinding";
 import { api } from "@/services/api";
+import { authenticatedFetch } from "@/services/apiAuth";
 import { useRealtimeSocket } from "@/composables/useRealtimeSocket";
 import type {
   CollectionTestResponse,
@@ -62,6 +64,7 @@ interface Col {
   test_interval: number;
   tolerance: number;
   enabled: boolean;
+  priority: number;
   referenced_groups: NG[];
   route_rule_ids: number[];
   node_uids: string[];
@@ -148,11 +151,7 @@ const show = (s: string, t: "success" | "error" | "info" = "success") => {
       groupPage.value * groupPageSize.value,
     ),
   ),
-  sortedCols = computed(() =>
-    [...collections.value].sort((a, b) =>
-      a.name === "全球直连" ? -1 : b.name === "全球直连" ? 1 : 0,
-    ),
-  ),
+  sortedCols = computed(() => collections.value),
   colPages = computed(() =>
     Math.max(1, Math.ceil(sortedCols.value.length / collectionPageSize.value)),
   ),
@@ -178,7 +177,7 @@ const parseUIDs = (s: string) => {
       : (c?.node_uids || []).filter((x) => x === "direct"),
   system = (c: Col) => c.name === "全球直连";
 async function json(url: string, init?: RequestInit) {
-  const r = await fetch(url, init);
+  const r = await authenticatedFetch(url, init);
   if (!r.ok)
     throw new Error(
       (await r.json().catch(() => null))?.error?.message || r.statusText,
@@ -518,6 +517,26 @@ async function removeCol(x: Col) {
   show("策略组已删除");
   await load();
 }
+async function moveCollection(index: number, direction: -1 | 1) {
+  const currentIndex =
+    (collectionPage.value - 1) * collectionPageSize.value + index;
+  const nextIndex = currentIndex + direction;
+  if (nextIndex < 0 || nextIndex >= collections.value.length) return;
+  const next = [...collections.value];
+  [next[currentIndex], next[nextIndex]] = [next[nextIndex], next[currentIndex]];
+  collections.value = next;
+  try {
+    await json("/api/v1/collections/reorder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(next.map((item) => item.id)),
+    });
+    show("策略组顺序已保存");
+  } catch (e: any) {
+    show(`策略组排序失败: ${e.message}`, "error");
+    await load();
+  }
+}
 const preview = computed(() =>
   previewCol.value
     ? {
@@ -707,6 +726,7 @@ onMounted(load);
             <tr>
               <th
                 v-for="c in [
+                  '排序',
                   '名称',
                   '绑定规则',
                   '类型',
@@ -721,7 +741,20 @@ onMounted(load);
             </tr>
           </thead>
           <tbody>
-            <tr v-for="x in pagedCols" :key="x.id">
+            <tr v-for="(x, i) in pagedCols" :key="x.id">
+              <td>
+                <OrderButtons
+                  :up-disabled="
+                    (collectionPage - 1) * collectionPageSize + i === 0
+                  "
+                  :down-disabled="
+                    (collectionPage - 1) * collectionPageSize + i ===
+                    collections.length - 1
+                  "
+                  @up="moveCollection(i, -1)"
+                  @down="moveCollection(i, 1)"
+                />
+              </td>
               <td>{{ x.name }} <small v-if="system(x)">系统默认</small></td>
               <td>
                 {{

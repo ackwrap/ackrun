@@ -41,24 +41,21 @@ func readSingboxVersion(binaryPath string) string {
 	return match[1]
 }
 
-func fetchLatestSingboxVersion(client *http.Client, apiURL, githubToken string) (string, error) {
-	release, err := fetchLatestSingboxRelease(client, apiURL, githubToken)
+func fetchLatestSingboxVersion(client *http.Client, apiURL string) (string, error) {
+	release, err := fetchLatestSingboxRelease(client, apiURL)
 	if err != nil {
 		return "", err
 	}
 	return release.Version, nil
 }
 
-func fetchLatestSingboxRelease(client *http.Client, apiURL, githubToken string) (*singboxRelease, error) {
+func fetchLatestSingboxRelease(client *http.Client, apiURL string) (*singboxRelease, error) {
 	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create release request: %w", err)
 	}
 	req.Header.Set("User-Agent", "Ackwrap/1.0")
 	req.Header.Set("Accept", "application/vnd.github+json")
-	if strings.TrimSpace(githubToken) != "" {
-		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(githubToken))
-	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request release API: %w", err)
@@ -67,14 +64,14 @@ func fetchLatestSingboxRelease(client *http.Client, apiURL, githubToken string) 
 	if resp.StatusCode != http.StatusOK {
 		switch resp.StatusCode {
 		case http.StatusUnauthorized:
-			return nil, fmt.Errorf("GitHub Token 无效，请在设置中更新或清空 Token")
+			return nil, fmt.Errorf("GitHub Release API 拒绝未认证请求")
 		case http.StatusForbidden:
 			if resp.Header.Get("X-RateLimit-Remaining") == "0" {
-				return nil, fmt.Errorf("GitHub API 匿名请求次数已用完，请在设置中填写 GitHub Token 或启用本地代理")
+				return nil, fmt.Errorf("GitHub API 匿名请求次数已用完，请稍后重试")
 			}
-			return nil, fmt.Errorf("GitHub 拒绝访问，请在设置中启用本地代理或填写 GitHub Token")
+			return nil, fmt.Errorf("GitHub 拒绝访问，请检查网络或更新加速设置")
 		case http.StatusTooManyRequests:
-			return nil, fmt.Errorf("GitHub 请求过于频繁，请稍后重试或在设置中填写 GitHub Token")
+			return nil, fmt.Errorf("GitHub 请求过于频繁，请稍后重试")
 		default:
 			return nil, fmt.Errorf("GitHub Release API 返回 HTTP %d，请检查网络或更新加速设置", resp.StatusCode)
 		}

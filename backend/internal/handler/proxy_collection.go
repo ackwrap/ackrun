@@ -69,6 +69,19 @@ func (h *ProxyCollectionHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
+func (h *ProxyCollectionHandler) Reorder(c *gin.Context) {
+	var ids []int
+	if err := c.ShouldBindJSON(&ids); err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "INVALID_REQUEST", Message: err.Error()}})
+		return
+	}
+	if err := h.service.Reorder(ids); err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "COLLECTIONS_REORDER_FAILED", Message: err.Error()}})
+		return
+	}
+	c.JSON(http.StatusOK, model.ActionResponse{Success: true, Message: "Proxy collections reordered"})
+}
+
 // Update 更新代理集合
 func (h *ProxyCollectionHandler) Update(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))

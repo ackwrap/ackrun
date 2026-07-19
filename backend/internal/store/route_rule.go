@@ -92,6 +92,9 @@ func (s *Store) ReorderRouteRules(ids []int64) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err := validateCompleteReorderIDs(tx, "route_rules", ids); err != nil {
+		return err
+	}
 	now := time.Now().UnixMilli()
 	for i, id := range ids {
 		if _, err := tx.Exec(`UPDATE route_rules SET priority = ?, updated_at = ? WHERE id = ?`, (i+1)*10, now, id); err != nil {

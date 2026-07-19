@@ -3,13 +3,18 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/ackwrap/ackwrap/internal/logging"
 )
+
+const legacyUpdateProxyInboundTag = "ackwrap-update-in"
 
 func singboxSupportsCertificateProvider(version string) bool {
 	parsed, _ := parseSingboxVersion(version)
@@ -37,12 +42,12 @@ func migrateInlineACMEConfig(data []byte, version string) ([]byte, int, error) {
 	return result, migrated, nil
 }
 
-func migrateUpdateProxyConfigData(data []byte) ([]byte, int, error) {
+func migrateManagedConfigData(data []byte) ([]byte, int, error) {
 	var config map[string]interface{}
 	if err := json.Unmarshal(data, &config); err != nil {
 		return nil, 0, fmt.Errorf("解析配置失败: %w", err)
 	}
-	migrated, err := migrateUpdateProxyConfig(config)
+	migrated, err := migrateManagedConfig(config)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -51,19 +56,93 @@ func migrateUpdateProxyConfigData(data []byte) ([]byte, int, error) {
 	}
 	result, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
-		return nil, 0, fmt.Errorf("序列化更新代理迁移配置失败: %w", err)
+		return nil, 0, fmt.Errorf("序列化 Ackwrap 配置迁移失败: %w", err)
 	}
 	return result, migrated, nil
 }
 
-func migrateUpdateProxyConfig(config map[string]interface{}) (int, error) {
+func migrateInternalRuleSetAccessTokenData(data []byte, baseURL, token string) ([]byte, int, error) {
+	var config map[string]interface{}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return nil, 0, fmt.Errorf("解析配置失败: %w", err)
+	}
+	route, ok := config["route"].(map[string]interface{})
+	if !ok {
+		return data, 0, nil
+	}
+	ruleSets, ok := route["rule_set"].([]interface{})
+	if !ok {
+		return data, 0, nil
+	}
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		return nil, 0, fmt.Errorf("解析 Ackwrap API 地址失败: %w", err)
+	}
+	token = strings.TrimSpace(token)
+	migrated := 0
+	for _, rawRuleSet := range ruleSets {
+		ruleSet, ok := rawRuleSet.(map[string]interface{})
+		if !ok || ruleSet["type"] != "remote" {
+			continue
+		}
+		rawURL, ok := ruleSet["url"].(string)
+		if !ok {
+			continue
+		}
+		parsed, err := url.Parse(rawURL)
+		if err != nil || !isInternalRuleSetContentPath(parsed.Path) {
+			continue
+		}
+		host := net.ParseIP(parsed.Hostname())
+		if host == nil || !host.IsLoopback() {
+			continue
+		}
+		parsed.Scheme = base.Scheme
+		parsed.Host = base.Host
+		query := parsed.Query()
+		if token == "" {
+			query.Del("access_token")
+		} else {
+			query.Set("access_token", token)
+		}
+		parsed.RawQuery = query.Encode()
+		if nextURL := parsed.String(); nextURL != rawURL {
+			ruleSet["url"] = nextURL
+			migrated++
+		}
+	}
+	if migrated == 0 {
+		return data, 0, nil
+	}
+	result, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return nil, 0, fmt.Errorf("序列化规则集认证迁移配置失败: %w", err)
+	}
+	return result, migrated, nil
+}
+
+func isInternalRuleSetContentPath(path string) bool {
+	for _, prefix := range []string{
+		"/api/v1/rules/subscriptions/",
+		"/api/v1/rules/geo/rule-sets/",
+	} {
+		if !strings.HasPrefix(path, prefix) || !strings.HasSuffix(path, "/content") {
+			continue
+		}
+		value := strings.TrimSuffix(strings.TrimPrefix(path, prefix), "/content")
+		return value != "" && !strings.Contains(value, "/")
+	}
+	return false
+}
+
+func migrateManagedConfig(config map[string]interface{}) (int, error) {
 	migrated := 0
 	var inbounds []interface{}
 	if rawInbounds, exists := config["inbounds"]; exists {
 		var ok bool
 		inbounds, ok = rawInbounds.([]interface{})
 		if !ok {
-			return 0, fmt.Errorf("活动配置 inbounds 格式无效，无法添加 Ackwrap 更新代理")
+			return 0, fmt.Errorf("活动配置 inbounds 格式无效，无法执行 Ackwrap 配置迁移")
 		}
 	}
 	var outbounds []interface{}
@@ -71,7 +150,7 @@ func migrateUpdateProxyConfig(config map[string]interface{}) (int, error) {
 		var ok bool
 		outbounds, ok = rawOutbounds.([]interface{})
 		if !ok {
-			return 0, fmt.Errorf("活动配置 outbounds 格式无效，无法添加 Ackwrap 更新代理")
+			return 0, fmt.Errorf("活动配置 outbounds 格式无效，无法执行 Ackwrap 配置迁移")
 		}
 	}
 	if !hasTaggedConfigItem(outbounds, "direct") {
@@ -87,7 +166,7 @@ func migrateUpdateProxyConfig(config map[string]interface{}) (int, error) {
 		members, exists := proxyOutbound["outbounds"]
 		memberCount, valid := configStringListLength(members)
 		if exists && !valid {
-			return 0, fmt.Errorf("活动配置 proxy outbound 成员格式无效，无法添加 Ackwrap 更新代理")
+			return 0, fmt.Errorf("活动配置 proxy outbound 成员格式无效，无法执行 Ackwrap 配置迁移")
 		}
 		if !exists || memberCount == 0 {
 			outbounds = replaceTaggedConfigItem(outbounds, "proxy", map[string]interface{}{
@@ -103,55 +182,56 @@ func migrateUpdateProxyConfig(config map[string]interface{}) (int, error) {
 		var ok bool
 		route, ok = rawRoute.(map[string]interface{})
 		if !ok {
-			return 0, fmt.Errorf("活动配置 route 格式无效，无法添加 Ackwrap 更新代理")
+			return 0, fmt.Errorf("活动配置 route 格式无效，无法执行 Ackwrap 配置迁移")
 		}
 	} else {
 		route = make(map[string]interface{})
 		config["route"] = route
 		migrated++
 	}
+	if hasTUNInbound(inbounds) && isAckwrapManagedConfig(config, inbounds, route) {
+		if _, exists := route["auto_detect_interface"]; !exists {
+			route["auto_detect_interface"] = true
+			migrated++
+		}
+		migrated += migrateAckwrapTUNInbounds(inbounds, runtime.GOOS == "linux")
+	}
 
-	updateInboundIndex := -1
-	for index, rawInbound := range inbounds {
+	filteredInbounds := make([]interface{}, 0, len(inbounds))
+	inboundsChanged := false
+	for _, rawInbound := range inbounds {
 		inbound, ok := rawInbound.(map[string]interface{})
-		if !ok {
+		if ok && inbound["tag"] == legacyUpdateProxyInboundTag {
+			inboundsChanged = true
+			migrated++
 			continue
 		}
-		tag, _ := inbound["tag"].(string)
-		port := configNumber(inbound["listen_port"])
-		if tag == updateProxyInboundTag {
-			if updateInboundIndex >= 0 {
-				return 0, fmt.Errorf("活动配置存在重复的 %s inbound", updateProxyInboundTag)
-			}
-			updateInboundIndex = index
-			continue
-		}
-		if port == updateProxyListenPort {
-			return 0, fmt.Errorf("活动配置端口 %d 已被 inbound %v 占用，无法添加 Ackwrap 更新代理", updateProxyListenPort, inbound["tag"])
-		}
+		filteredInbounds = append(filteredInbounds, rawInbound)
 	}
-
-	canonicalInbound := map[string]interface{}{
-		"type":        "mixed",
-		"tag":         updateProxyInboundTag,
-		"listen":      "127.0.0.1",
-		"listen_port": updateProxyListenPort,
-	}
-	if updateInboundIndex < 0 {
-		inbounds = append(inbounds, canonicalInbound)
+	if inboundsChanged {
+		inbounds = filteredInbounds
 		config["inbounds"] = inbounds
-		migrated++
-	} else if !isCanonicalUpdateProxyInbound(inbounds[updateInboundIndex].(map[string]interface{})) {
-		inbounds[updateInboundIndex] = canonicalInbound
-		migrated++
 	}
 	var rules []interface{}
 	if rawRules, exists := route["rules"]; exists {
 		var ok bool
 		rules, ok = rawRules.([]interface{})
 		if !ok {
-			return 0, fmt.Errorf("活动配置 route.rules 格式无效，无法添加 Ackwrap 更新代理规则")
+			return 0, fmt.Errorf("活动配置 route.rules 格式无效，无法执行 Ackwrap 配置迁移")
 		}
+	}
+	filteredRules := make([]interface{}, 0, len(rules))
+	for _, rawRule := range rules {
+		rule, ok := rawRule.(map[string]interface{})
+		if ok && stringListContains(rule["inbound"], legacyUpdateProxyInboundTag) {
+			migrated++
+			continue
+		}
+		filteredRules = append(filteredRules, rawRule)
+	}
+	if len(filteredRules) != len(rules) {
+		rules = filteredRules
+		route["rules"] = rules
 	}
 	scopedRules := make([]interface{}, 0, len(rules)+1)
 	processRulesChanged := false
@@ -187,45 +267,93 @@ func migrateUpdateProxyConfig(config map[string]interface{}) (int, error) {
 		rules = scopedRules
 		route["rules"] = rules
 	}
-	firstRule, firstRuleOK := map[string]interface{}(nil), false
-	if len(rules) > 0 {
-		firstRule, firstRuleOK = rules[0].(map[string]interface{})
-	}
-	if !firstRuleOK || !isCanonicalUpdateProxyRule(firstRule) {
-		canonicalRule := map[string]interface{}{
-			"inbound":  []interface{}{updateProxyInboundTag},
-			"action":   "route",
-			"outbound": "proxy",
-		}
-		filteredRules := make([]interface{}, 0, len(rules)+1)
-		filteredRules = append(filteredRules, canonicalRule)
-		for _, rawRule := range rules {
-			rule, ok := rawRule.(map[string]interface{})
-			if ok && isCanonicalUpdateProxyRule(rule) {
-				continue
-			}
-			filteredRules = append(filteredRules, rawRule)
-		}
-		rules = filteredRules
-		route["rules"] = rules
-		migrated++
-	}
 	return migrated, nil
 }
 
-func isCanonicalUpdateProxyInbound(inbound map[string]interface{}) bool {
-	return len(inbound) == 4 &&
-		inbound["type"] == "mixed" &&
-		inbound["tag"] == updateProxyInboundTag &&
-		inbound["listen"] == "127.0.0.1" &&
-		configNumber(inbound["listen_port"]) == updateProxyListenPort
+func hasTUNInbound(inbounds []interface{}) bool {
+	for _, rawInbound := range inbounds {
+		if inbound, ok := rawInbound.(map[string]interface{}); ok && inbound["type"] == "tun" {
+			return true
+		}
+	}
+	return false
 }
 
-func isCanonicalUpdateProxyRule(rule map[string]interface{}) bool {
-	return len(rule) == 3 &&
-		rule["action"] == "route" &&
-		rule["outbound"] == "proxy" &&
-		stringListEquals(rule["inbound"], updateProxyInboundTag)
+func isAckwrapManagedConfig(config map[string]interface{}, inbounds []interface{}, route map[string]interface{}) bool {
+	if route["default_http_client"] == defaultRuleSetHTTPClientTag {
+		return true
+	}
+	if httpClients, ok := config["http_clients"].([]interface{}); ok && hasTaggedConfigItem(httpClients, defaultRuleSetHTTPClientTag) {
+		return true
+	}
+	for _, rawInbound := range inbounds {
+		inbound, ok := rawInbound.(map[string]interface{})
+		if ok && inbound["type"] == "tun" && inbound["tag"] == "tun-in" && inbound["interface_name"] == "tun0" && stringListContains(inbound["address"], defaultTUNIPv4Address) {
+			return true
+		}
+	}
+	return false
+}
+
+func migrateAckwrapTUNInbounds(inbounds []interface{}, linux bool) int {
+	migrated := 0
+	for _, rawInbound := range inbounds {
+		inbound, ok := rawInbound.(map[string]interface{})
+		if !ok || inbound["type"] != "tun" || inbound["tag"] != "tun-in" {
+			continue
+		}
+		if _, exists := inbound["auto_route"]; !exists {
+			inbound["auto_route"] = true
+			migrated++
+		}
+		if _, exists := inbound["strict_route"]; !exists {
+			inbound["strict_route"] = true
+			migrated++
+		}
+		if stringListContains(inbound["address"], defaultTUNIPv4Address) && !stringListHasIPv6(inbound["address"]) {
+			inbound["address"] = appendStringList(inbound["address"], defaultTUNIPv6Address)
+			migrated++
+		}
+		if linux && inbound["auto_route"] == true {
+			if _, exists := inbound["auto_redirect"]; !exists {
+				inbound["auto_redirect"] = true
+				migrated++
+			}
+		}
+	}
+	return migrated
+}
+
+func stringListHasIPv6(value interface{}) bool {
+	var values []interface{}
+	switch typed := value.(type) {
+	case []interface{}:
+		values = typed
+	case []string:
+		values = make([]interface{}, 0, len(typed))
+		for _, item := range typed {
+			values = append(values, item)
+		}
+	default:
+		return false
+	}
+	for _, value := range values {
+		if address, ok := value.(string); ok && strings.Contains(address, ":") {
+			return true
+		}
+	}
+	return false
+}
+
+func appendStringList(value interface{}, item string) interface{} {
+	switch values := value.(type) {
+	case []interface{}:
+		return append(values, item)
+	case []string:
+		return append(values, item)
+	default:
+		return []interface{}{item}
+	}
 }
 
 func splitAckwrapProcessNames(value interface{}) ([]interface{}, []interface{}) {
@@ -428,6 +556,15 @@ func (svc *ConfigService) MigrateCompatibility(version string) (bool, error) {
 	if !exists {
 		return false, nil
 	}
+	permissionsUpdated := false
+	if info, err := os.Stat(configPath); err != nil {
+		return false, fmt.Errorf("检查活动配置权限失败: %w", err)
+	} else if info.Mode().Perm() != 0600 {
+		if err := os.Chmod(configPath, 0600); err != nil {
+			return false, fmt.Errorf("保护活动配置失败: %w", err)
+		}
+		permissionsUpdated = true
+	}
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
@@ -437,13 +574,13 @@ func (svc *ConfigService) MigrateCompatibility(version string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	migratedData, updateProxyMigrated, err := migrateUpdateProxyConfigData(migratedData)
+	migratedData, managedConfigMigrated, err := migrateManagedConfigData(migratedData)
 	if err != nil {
 		return false, err
 	}
-	migrated += updateProxyMigrated
+	migrated += managedConfigMigrated
 	if migrated == 0 {
-		return false, nil
+		return permissionsUpdated, nil
 	}
 
 	stagedFile, err := os.CreateTemp(filepath.Dir(configPath), ".ackwrap-config-migration-*.tmp")

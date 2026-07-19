@@ -207,26 +207,12 @@ func (svc *ConfigService) GenerateDefault() error {
 				Listen:     "127.0.0.1",
 				ListenPort: model.DefaultMixedInboundPort,
 			},
-			{
-				Type:       "mixed",
-				Tag:        updateProxyInboundTag,
-				Listen:     "127.0.0.1",
-				ListenPort: updateProxyListenPort,
-			},
 		},
 		Outbounds: []MinimalOutbound{
 			{Type: "direct", Tag: "direct"},
 			{Type: "selector", Tag: "proxy", Outbounds: []string{"direct"}},
 		},
-		Route: MinimalRoute{
-			Rules: []map[string]interface{}{
-				{
-					"inbound":  []string{updateProxyInboundTag},
-					"action":   "route",
-					"outbound": "proxy",
-				},
-			},
-		},
+		Route: MinimalRoute{Rules: []map[string]interface{}{}},
 	}
 
 	data, err := json.MarshalIndent(cfg, "", "  ")
@@ -235,7 +221,7 @@ func (svc *ConfigService) GenerateDefault() error {
 	}
 
 	tmpPath := svc.paths.ConfigPath + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
 		return fmt.Errorf("write temp config: %w", err)
 	}
 	defer os.Remove(tmpPath)

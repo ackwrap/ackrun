@@ -13,7 +13,7 @@ import (
 // DNS Servers
 
 func (s *Store) ListDNSServers() ([]model.DNSServer, error) {
-	rows, err := s.db.Query(`SELECT id, tag, enabled, server_type, address, address_resolver, address_strategy, strategy, detour, client_subnet, options_json, created_at, updated_at FROM dns_servers ORDER BY id ASC`)
+	rows, err := s.db.Query(`SELECT id, tag, enabled, server_type, address, address_resolver, address_strategy, strategy, detour, client_subnet, options_json, priority, created_at, updated_at FROM dns_servers ORDER BY priority ASC, id ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -23,7 +23,7 @@ func (s *Store) ListDNSServers() ([]model.DNSServer, error) {
 	for rows.Next() {
 		var srv model.DNSServer
 		var enabled int
-		if err := rows.Scan(&srv.ID, &srv.Tag, &enabled, &srv.ServerType, &srv.Address, &srv.AddressResolver, &srv.AddressStrategy, &srv.Strategy, &srv.Detour, &srv.ClientSubnet, &srv.OptionsJSON, &srv.CreatedAt, &srv.UpdatedAt); err != nil {
+		if err := rows.Scan(&srv.ID, &srv.Tag, &enabled, &srv.ServerType, &srv.Address, &srv.AddressResolver, &srv.AddressStrategy, &srv.Strategy, &srv.Detour, &srv.ClientSubnet, &srv.OptionsJSON, &srv.Priority, &srv.CreatedAt, &srv.UpdatedAt); err != nil {
 			return nil, err
 		}
 		srv.Enabled = enabled == 1
@@ -35,7 +35,7 @@ func (s *Store) ListDNSServers() ([]model.DNSServer, error) {
 func (s *Store) GetDNSServer(id int64) (*model.DNSServer, error) {
 	var srv model.DNSServer
 	var enabled int
-	err := s.db.QueryRow(`SELECT id, tag, enabled, server_type, address, address_resolver, address_strategy, strategy, detour, client_subnet, options_json, created_at, updated_at FROM dns_servers WHERE id = ?`, id).Scan(&srv.ID, &srv.Tag, &enabled, &srv.ServerType, &srv.Address, &srv.AddressResolver, &srv.AddressStrategy, &srv.Strategy, &srv.Detour, &srv.ClientSubnet, &srv.OptionsJSON, &srv.CreatedAt, &srv.UpdatedAt)
+	err := s.db.QueryRow(`SELECT id, tag, enabled, server_type, address, address_resolver, address_strategy, strategy, detour, client_subnet, options_json, priority, created_at, updated_at FROM dns_servers WHERE id = ?`, id).Scan(&srv.ID, &srv.Tag, &enabled, &srv.ServerType, &srv.Address, &srv.AddressResolver, &srv.AddressStrategy, &srv.Strategy, &srv.Detour, &srv.ClientSubnet, &srv.OptionsJSON, &srv.Priority, &srv.CreatedAt, &srv.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -45,13 +45,17 @@ func (s *Store) GetDNSServer(id int64) (*model.DNSServer, error) {
 
 func (s *Store) CreateDNSServer(req *model.DNSServerRequest) (*model.DNSServer, error) {
 	now := time.Now().Unix()
+	var priority int
+	if err := s.db.QueryRow(`SELECT COALESCE(MAX(priority), -1) + 1 FROM dns_servers`).Scan(&priority); err != nil {
+		return nil, err
+	}
 	optionsJSON, _ := json.Marshal(req.Options)
 	if optionsJSON == nil {
 		optionsJSON = []byte("{}")
 	}
 
-	result, err := s.db.Exec(`INSERT INTO dns_servers (tag, enabled, server_type, address, address_resolver, address_strategy, strategy, detour, client_subnet, options_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		req.Tag, req.Enabled, req.ServerType, req.Address, req.AddressResolver, req.AddressStrategy, req.Strategy, req.Detour, req.ClientSubnet, string(optionsJSON), now, now)
+	result, err := s.db.Exec(`INSERT INTO dns_servers (tag, enabled, server_type, address, address_resolver, address_strategy, strategy, detour, client_subnet, options_json, priority, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		req.Tag, req.Enabled, req.ServerType, req.Address, req.AddressResolver, req.AddressStrategy, req.Strategy, req.Detour, req.ClientSubnet, string(optionsJSON), priority, now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -74,6 +78,49 @@ func (s *Store) UpdateDNSServer(id int64, req *model.DNSServerRequest) error {
 
 func (s *Store) DeleteDNSServer(id int64) error {
 	_, err := s.db.Exec(`DELETE FROM dns_servers WHERE id = ?`, id)
+	return err
+}
+
+func (s *Store) ReorderDNSServers(ids []int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := validateCompleteReorderIDs(tx, "dns_servers", ids); err != nil {
+		return err
+	}
+	now := time.Now().Unix()
+	for priority, id := range ids {
+		if _, err := tx.Exec(`UPDATE dns_servers SET priority = ?, updated_at = ? WHERE id = ?`, priority, now, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) GetDNSOutboundBindingOrder() ([]string, error) {
+	var value string
+	err := s.db.QueryRow(`SELECT value FROM app_settings WHERE key = 'dns.outbound_binding_order'`).Scan(&value)
+	if err == sql.ErrNoRows {
+		return []string{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var outbounds []string
+	if err := json.Unmarshal([]byte(value), &outbounds); err != nil {
+		return nil, err
+	}
+	return outbounds, nil
+}
+
+func (s *Store) SetDNSOutboundBindingOrder(outbounds []string) error {
+	data, err := json.Marshal(outbounds)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`INSERT INTO app_settings (key, value, updated_at) VALUES ('dns.outbound_binding_order', ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`, string(data), time.Now().Unix())
 	return err
 }
 
@@ -152,6 +199,9 @@ func (s *Store) ReorderDNSRules(ids []int64) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err := validateCompleteReorderIDs(tx, "dns_rules", ids); err != nil {
+		return err
+	}
 
 	for priority, id := range ids {
 		if _, err := tx.Exec(`UPDATE dns_rules SET priority = ? WHERE id = ?`, priority, id); err != nil {

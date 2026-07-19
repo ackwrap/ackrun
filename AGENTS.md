@@ -18,10 +18,11 @@ npm run build
 
 **开发模式：**
 - 前端：`cd frontend && npm run dev` (端口 5173，API 自动代理到 :8080)
-- 后端：`cd backend && go run ./cmd/server` (端口 8080)
+- 后端：设置 `ACKWRAP_LISTEN_ADDR=127.0.0.1:8080` 后运行 `cd backend && go run ./cmd/server`（远程监听则必须同时设置 `ACKWRAP_API_TOKEN`）
 
 **构建：**
-- 前端构建输出到 `backend/ui/`，后端直接服务该目录
+- 前端构建输出到 `backend/internal/webui/dist/`，通过 `go:embed` 打包进后端二进制
+- 发布构建统一从仓库根目录运行 `python build.py`，默认生成 Windows、Linux、OpenWrt amd64 单文件产物；OpenWrt 目标同时生成包含核心、LuCI 和 iStoreOS app-meta 的单一 IPK
 - 后端入口：`backend/cmd/server/main.go`
 
 ---
@@ -642,7 +643,7 @@ not_installed → no_config → stopped → running
 
 ## 前端规则
 
-- 前端构建输出到 `backend/ui/`
+- 前端构建输出到 `backend/internal/webui/dist/` 并由后端嵌入
 - Go 后端负责静态资源和 SPA fallback
 - 视觉风格遵循当前暗色蓝灰主题，不照搬参考项目的橙色选中样式
 - 新增或调整 UI 时，优先复用全局组件、全局 CSS class 和设计 token；不要在单个页面里重复硬编码大段颜色、弹窗、表格、按钮样式

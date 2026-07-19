@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/ackwrap/ackwrap/internal/model"
-	"github.com/ackwrap/ackwrap/internal/store"
 )
 
 type updateRequestAttempt struct {
@@ -29,21 +28,6 @@ func buildUpdateRequestAttempts(settings *model.UpdateSettingsResponse, rawURL s
 		return []updateRequestAttempt{{name: "direct", url: rawURL, client: direct}}, nil
 	}
 	switch settings.Acceleration {
-	case "proxy":
-		proxyURL := strings.TrimSpace(settings.ProxyURL)
-		if proxyURL == "" {
-			proxyURL = store.DefaultUpdateProxyURL
-		}
-		parsed, err := url.Parse(proxyURL)
-		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-			return nil, fmt.Errorf("本地代理 URL 无效，请到设置页面检查")
-		}
-		transport := directHTTPTransport()
-		transport.Proxy = http.ProxyURL(parsed)
-		return []updateRequestAttempt{
-			{name: "local_proxy", url: rawURL, client: &http.Client{Timeout: 30 * time.Second, Transport: transport}},
-			{name: "direct_fallback", url: rawURL, client: direct},
-		}, nil
 	case "ghproxy":
 		return []updateRequestAttempt{
 			{name: "ghproxy", url: "https://gh-proxy.com/" + rawURL, client: direct},
@@ -95,9 +79,6 @@ func buildGitHubDownloadAttempts(settings *model.UpdateSettingsResponse, rawURL 
 	seen := make(map[string]bool)
 	appendAttempt := func(attempt updateRequestAttempt) {
 		key := attempt.url
-		if attempt.name == "local_proxy" {
-			key = attempt.name + "|" + attempt.url
-		}
 		if attempt.url == "" || seen[key] {
 			return
 		}
@@ -107,7 +88,7 @@ func buildGitHubDownloadAttempts(settings *model.UpdateSettingsResponse, rawURL 
 
 	if preferred, err := buildUpdateRequestAttempts(settings, rawURL); err == nil {
 		for _, attempt := range preferred {
-			if attempt.url == rawURL && attempt.name != "local_proxy" {
+			if attempt.url == rawURL {
 				continue
 			}
 			client := *attempt.client
@@ -199,25 +180,13 @@ func fetchLatestSingboxReleaseWithSettings(settings *model.UpdateSettingsRespons
 	if err != nil {
 		return nil, err
 	}
-	token := ""
-	if settings != nil {
-		token = settings.GithubToken
-	}
 	var lastErr error
 	for _, attempt := range attempts {
-		release, err := fetchLatestSingboxRelease(attempt.client, attempt.url, githubTokenForURL(attempt.url, token))
+		release, err := fetchLatestSingboxRelease(attempt.client, attempt.url)
 		if err == nil {
 			return release, nil
 		}
 		lastErr = err
 	}
 	return nil, lastErr
-}
-
-func githubTokenForURL(rawURL, token string) string {
-	parsed, err := url.Parse(rawURL)
-	if err != nil || parsed.Scheme != "https" || !strings.EqualFold(parsed.Hostname(), "api.github.com") {
-		return ""
-	}
-	return token
 }

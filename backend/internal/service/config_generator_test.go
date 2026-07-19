@@ -10,6 +10,27 @@ import (
 	"github.com/ackwrap/ackwrap/internal/store"
 )
 
+func TestRedactConfigAccessTokens(t *testing.T) {
+	originalURL := "http://127.0.0.1:8080/api/v1/rules/content?access_token=secret-value&format=source"
+	config := map[string]interface{}{
+		"route": map[string]interface{}{
+			"rule_set": []interface{}{
+				map[string]interface{}{"url": originalURL},
+			},
+		},
+	}
+
+	redacted := redactConfigAccessTokens(config).(map[string]interface{})
+	redactedURL := redacted["route"].(map[string]interface{})["rule_set"].([]interface{})[0].(map[string]interface{})["url"].(string)
+	if strings.Contains(redactedURL, "secret-value") || !strings.Contains(redactedURL, "access_token=[REDACTED]") {
+		t.Fatalf("config response did not redact access token: %q", redactedURL)
+	}
+	original := config["route"].(map[string]interface{})["rule_set"].([]interface{})[0].(map[string]interface{})["url"]
+	if original != originalURL {
+		t.Fatalf("redaction mutated generated config: %q", original)
+	}
+}
+
 func TestMapMihomoUDPFlagToSingboxNetwork(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -305,17 +326,17 @@ func TestGenerateRouteIncludesDefaultLoopBypassRules(t *testing.T) {
 	if route["default_http_client"] != defaultRuleSetHTTPClientTag {
 		t.Fatalf("default_http_client = %v, want %s", route["default_http_client"], defaultRuleSetHTTPClientTag)
 	}
+	if route["auto_detect_interface"] != true {
+		t.Fatalf("auto_detect_interface = %v, want true for TUN mode", route["auto_detect_interface"])
+	}
 	rules, ok := route["rules"].([]map[string]interface{})
 	if !ok {
 		t.Fatalf("route rules type = %T", route["rules"])
 	}
-	if len(rules) == 0 || rules[0]["outbound"] != "proxy" || !stringListContains(rules[0]["inbound"], updateProxyInboundTag) {
-		t.Fatalf("update proxy rule must be first: %+v", rules)
-	}
-	var updateProxyRule, processRule, processRuleScoped, domainRule, ipRule bool
+	var processRule, processRuleScoped, domainRule, ipRule bool
 	for _, rule := range rules {
-		if inbound, ok := rule["inbound"].([]string); ok && len(inbound) == 1 && inbound[0] == updateProxyInboundTag && rule["outbound"] == "proxy" {
-			updateProxyRule = true
+		if stringListContains(rule["inbound"], legacyUpdateProxyInboundTag) {
+			t.Fatalf("generated route contains legacy update proxy rule: %+v", rule)
 		}
 		if rule["outbound"] != "direct" {
 			continue
@@ -328,8 +349,22 @@ func TestGenerateRouteIncludesDefaultLoopBypassRules(t *testing.T) {
 		domainRule = domainRule || rule["domain"] != nil
 		ipRule = ipRule || rule["ip_cidr"] != nil
 	}
-	if !updateProxyRule || !processRule || !processRuleScoped || !domainRule || !ipRule {
+	if !processRule || !processRuleScoped || !domainRule || !ipRule {
 		t.Fatalf("missing loop bypass rule: %+v", rules)
+	}
+}
+
+func TestGeneratedTUNInboundUsesAutoRedirectOnLinux(t *testing.T) {
+	inbound := generatedTUNInbound(true)
+	if inbound["auto_route"] != true || inbound["strict_route"] != true || inbound["auto_redirect"] != true {
+		t.Fatalf("OpenWrt TUN inbound = %+v", inbound)
+	}
+	if !stringListContains(inbound["address"], defaultTUNIPv4Address) || !stringListContains(inbound["address"], defaultTUNIPv6Address) {
+		t.Fatalf("OpenWrt TUN inbound is not dual-stack: %+v", inbound)
+	}
+	withoutRedirect := generatedTUNInbound(false)
+	if _, exists := withoutRedirect["auto_redirect"]; exists {
+		t.Fatalf("non-Linux TUN inbound contains auto_redirect: %+v", withoutRedirect)
 	}
 }
 
@@ -774,11 +809,24 @@ func TestGenerateInboundsDefaultsToLoopback(t *testing.T) {
 		t.Fatal(err)
 	}
 	foundMixed := false
-	foundUpdateProxy := false
+	foundTUN := false
 	for _, item := range inbounds {
 		inbound, ok := item.(map[string]interface{})
-		if !ok || inbound["type"] != "mixed" {
+		if !ok {
 			continue
+		}
+		if inbound["type"] == "tun" {
+			foundTUN = true
+			if !stringListContains(inbound["address"], defaultTUNIPv4Address) || !stringListContains(inbound["address"], defaultTUNIPv6Address) {
+				t.Fatalf("default TUN is not dual-stack: %+v", inbound)
+			}
+			continue
+		}
+		if inbound["type"] != "mixed" {
+			continue
+		}
+		if inbound["tag"] == legacyUpdateProxyInboundTag {
+			t.Fatalf("generated inbounds contain legacy update proxy: %+v", inbounds)
 		}
 		switch inbound["tag"] {
 		case "mixed-in":
@@ -786,19 +834,40 @@ func TestGenerateInboundsDefaultsToLoopback(t *testing.T) {
 			if inbound["listen"] != "127.0.0.1" || inbound["listen_port"] != model.DefaultMixedInboundPort {
 				t.Fatalf("mixed inbound = %+v, want loopback:%d", inbound, model.DefaultMixedInboundPort)
 			}
-		case updateProxyInboundTag:
-			foundUpdateProxy = true
-			if inbound["listen"] != "127.0.0.1" || inbound["listen_port"] != updateProxyListenPort {
-				t.Fatalf("update proxy inbound = %+v, want loopback:%d", inbound, updateProxyListenPort)
-			}
 		}
 	}
-	if !foundMixed || !foundUpdateProxy {
-		t.Fatalf("generated inbounds missing mixed=%t update_proxy=%t: %+v", foundMixed, foundUpdateProxy, inbounds)
+	if !foundTUN || !foundMixed {
+		t.Fatalf("generated inbounds missing tun=%t mixed=%t: %+v", foundTUN, foundMixed, inbounds)
 	}
 }
 
-func TestGenerateInboundsRejectsReservedUpdateProxyPort(t *testing.T) {
+func TestGenerateMixedOnlyDoesNotEnableTransparentRouting(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.SetInboundMode("mixed"); err != nil {
+		t.Fatal(err)
+	}
+	service := NewConfigGeneratorService(db, nil)
+	inbounds, err := service.generateInbounds("127.0.0.1", 8888)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasTUNInbound(inbounds) {
+		t.Fatalf("mixed-only config contains TUN: %+v", inbounds)
+	}
+	route, err := service.generateRoute("direct")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := route["auto_detect_interface"]; exists {
+		t.Fatalf("mixed-only route enables TUN interface detection: %+v", route)
+	}
+}
+
+func TestGenerateInboundsAllowsFormerUpdateProxyPort(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -806,9 +875,17 @@ func TestGenerateInboundsRejectsReservedUpdateProxyPort(t *testing.T) {
 	defer db.Close()
 
 	service := NewConfigGeneratorService(db, nil)
-	if _, err := service.generateInbounds("127.0.0.1", updateProxyListenPort); err == nil || !strings.Contains(err.Error(), "保留") {
-		t.Fatalf("reserved port error = %v", err)
+	inbounds, err := service.generateInbounds("127.0.0.1", 9901)
+	if err != nil {
+		t.Fatal(err)
 	}
+	for _, item := range inbounds {
+		inbound, ok := item.(map[string]interface{})
+		if ok && inbound["tag"] == "mixed-in" && inbound["listen_port"] == 9901 {
+			return
+		}
+	}
+	t.Fatalf("mixed inbound did not preserve port 9901: %+v", inbounds)
 }
 
 func TestPreviewRequestPreservesStoredGenerationSettings(t *testing.T) {

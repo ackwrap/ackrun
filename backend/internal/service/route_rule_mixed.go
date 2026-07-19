@@ -137,14 +137,14 @@ func mixedSingboxRouteRules(values []string, outbound string, invert bool) ([]ma
 	return rules, nil
 }
 
-func addMixedGeneratedRuleSets(ruleSets []map[string]interface{}, seen map[string]bool, values []string, baseURL string) []map[string]interface{} {
+func addMixedGeneratedRuleSets(ruleSets []map[string]interface{}, seen map[string]bool, values []string, baseURL string, accessToken ...string) []map[string]interface{} {
 	items, err := parseMixedRouteRuleValues(values)
 	if err != nil {
 		return ruleSets
 	}
 	for _, item := range items {
 		if item.RuleType == "geoip" || item.RuleType == "geosite" {
-			ruleSets = appendGeneratedGeoRuleSets(ruleSets, seen, item.RuleType, []string{item.Value}, baseURL)
+			ruleSets = appendGeneratedGeoRuleSets(ruleSets, seen, item.RuleType, []string{item.Value}, baseURL, accessToken...)
 		}
 	}
 	return ruleSets

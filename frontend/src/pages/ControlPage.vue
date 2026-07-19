@@ -546,32 +546,34 @@ onBeforeUnmount(() => {
               <small>sing-box 进程管理</small>
             </div>
           </div>
-          <div class="flex min-w-0 max-w-56 flex-1 items-end gap-2 sm:flex-none">
+          <div
+            class="flex min-w-0 max-w-56 flex-1 items-end gap-2 sm:flex-none"
+          >
             <ControlRestartSchedule @notify="notify" />
             <label class="min-w-0 flex-1">
-            <span class="sr-only">当前配置文件</span>
-            <select
-              v-model="selectedConfig"
-              class="aw-input w-full min-w-32"
-              title="选择当前配置文件"
-              :disabled="
-                configChanging ||
-                !!runtimeAction ||
-                notInstalled ||
-                !configFiles.length
-              "
-              @change="changeActiveConfig"
-            >
-              <option value="" disabled>选择配置文件</option>
-              <option
-                v-for="item in configFiles"
-                :key="item.path"
-                :value="item.name"
-                :disabled="!item.valid"
+              <span class="sr-only">当前配置文件</span>
+              <select
+                v-model="selectedConfig"
+                class="aw-input w-full min-w-32"
+                title="选择当前配置文件"
+                :disabled="
+                  configChanging ||
+                  !!runtimeAction ||
+                  notInstalled ||
+                  !configFiles.length
+                "
+                @change="changeActiveConfig"
               >
-                {{ item.name }}{{ item.valid ? "" : "（校验失败）" }}
-              </option>
-            </select>
+                <option value="" disabled>选择配置文件</option>
+                <option
+                  v-for="item in configFiles"
+                  :key="item.path"
+                  :value="item.name"
+                  :disabled="!item.valid"
+                >
+                  {{ item.name }}{{ item.valid ? "" : "（校验失败）" }}
+                </option>
+              </select>
             </label>
           </div>
         </div>
@@ -632,7 +634,7 @@ onBeforeUnmount(() => {
           {{
             kind === "proxy"
               ? "决定流量使用规则、代理或直连"
-              : "选择流量进入 sing-box 的方式"
+              : "TUN 模式在 Linux/OpenWrt 自动接管 LAN 流量；Mixed 模式需要客户端显式设置代理"
           }}
         </p>
         <div

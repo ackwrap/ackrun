@@ -39,7 +39,7 @@ func TestSetProxyModePersistsSupportedMode(t *testing.T) {
 	}
 }
 
-func TestSetUpdateSettingsDefaultsToDedicatedProxy(t *testing.T) {
+func TestSetUpdateSettingsRejectsRemovedProxyMode(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -47,15 +47,8 @@ func TestSetUpdateSettingsDefaultsToDedicatedProxy(t *testing.T) {
 	defer db.Close()
 
 	svc := NewSettingsService(db)
-	if err := svc.SetUpdateSettings(&model.UpdateSettings{Acceleration: "proxy"}); err != nil {
-		t.Fatal(err)
-	}
-	settings, err := db.GetUpdateSettings()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if settings.ProxyURL != store.DefaultUpdateProxyURL {
-		t.Fatalf("update proxy = %q, want %q", settings.ProxyURL, store.DefaultUpdateProxyURL)
+	if err := svc.SetUpdateSettings(&model.UpdateSettings{Acceleration: "proxy"}); err == nil {
+		t.Fatal("removed proxy acceleration mode should be rejected")
 	}
 }
 

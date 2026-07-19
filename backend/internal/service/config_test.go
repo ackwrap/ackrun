@@ -37,7 +37,7 @@ func TestListConfigFilesIgnoresRootBackups(t *testing.T) {
 	}
 }
 
-func TestGenerateDefaultUsesBackendMixedPortAndDedicatedUpdatePort(t *testing.T) {
+func TestGenerateDefaultUsesOnlyBackendMixedPort(t *testing.T) {
 	dir := t.TempDir()
 	configDir := filepath.Join(dir, "config")
 	p := &paths.Paths{
@@ -68,10 +68,10 @@ func TestGenerateDefaultUsesBackendMixedPortAndDedicatedUpdatePort(t *testing.T)
 	for _, inbound := range config.Inbounds {
 		ports[inbound.Tag] = inbound.ListenPort
 	}
-	if ports["mixed-in"] != model.DefaultMixedInboundPort || ports[updateProxyInboundTag] != updateProxyListenPort {
+	if len(config.Inbounds) != 1 || ports["mixed-in"] != model.DefaultMixedInboundPort {
 		t.Fatalf("generated ports = %+v", ports)
 	}
-	if len(config.Route.Rules) == 0 || !stringListContains(config.Route.Rules[0]["inbound"], updateProxyInboundTag) || config.Route.Rules[0]["outbound"] != "proxy" {
-		t.Fatalf("dedicated update route missing: %+v", config.Route.Rules)
+	if len(config.Route.Rules) != 0 {
+		t.Fatalf("default config contains unexpected route rules: %+v", config.Route.Rules)
 	}
 }
