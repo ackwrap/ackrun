@@ -23,6 +23,14 @@ type ConfigService struct {
 	store           *store.Store
 	realtime        *RealtimeService
 	configValidator func(string) error
+	validationMu    sync.Mutex
+	validationCache map[string]configValidationCacheEntry
+}
+
+type configValidationCacheEntry struct {
+	modTimeNS int64
+	size      int64
+	err       error
 }
 
 var (
@@ -89,7 +97,7 @@ func (svc *ConfigService) GetConfigStatus() (*model.ConfigStatusResponse, error)
 		UpdatedAt: info.ModTime().UnixMilli(),
 	}
 
-	if err := svc.validateFile(configPath); err != nil {
+	if err := svc.validateFileCached(configPath, info); err != nil {
 		status.Valid = false
 		return status, nil
 	}
@@ -128,7 +136,7 @@ func (svc *ConfigService) ListConfigFiles() ([]model.ConfigFileItem, error) {
 			UpdatedAt: info.ModTime().UnixMilli(),
 			Valid:     true,
 		}
-		if err := svc.validateFile(path); err != nil {
+		if err := svc.validateFileCached(path, info); err != nil {
 			item.Valid = false
 			item.Error = err.Error()
 		}
@@ -266,13 +274,6 @@ func (svc *ConfigService) GenerateDefault() error {
 }
 
 func (svc *ConfigService) Validate() error {
-	status, err := svc.GetConfigStatus()
-	if err != nil {
-		return err
-	}
-	if !status.HasConfig {
-		return fmt.Errorf("no config file found")
-	}
 	configPath, ok, err := svc.paths.ActiveConfigPath()
 	if err != nil {
 		return err
@@ -280,7 +281,11 @@ func (svc *ConfigService) Validate() error {
 	if !ok {
 		return fmt.Errorf("no config file found")
 	}
-	return svc.validateFile(configPath)
+	info, err := os.Stat(configPath)
+	if err != nil {
+		return err
+	}
+	return svc.validateFileAndCache(configPath, info)
 }
 
 func (svc *ConfigService) UpdateRules() (*model.ActionResponse, error) {
@@ -396,6 +401,13 @@ func (svc *ConfigService) RestoreLatestBackup() (*model.ActionResponse, error) {
 }
 
 func (svc *ConfigService) validateFile(path string) error {
+	if svc.configValidator != nil {
+		if err := svc.configValidator(path); err != nil {
+			return err
+		}
+		logging.Info("config.validate", "config validated: %s", path)
+		return nil
+	}
 	binPath := svc.paths.BinaryPath
 	if _, err := os.Stat(binPath); os.IsNotExist(err) {
 		return fmt.Errorf("sing-box binary not found")
@@ -409,6 +421,36 @@ func (svc *ConfigService) validateFile(path string) error {
 
 	logging.Info("config.validate", "config validated: %s", path)
 	return nil
+}
+
+func (svc *ConfigService) validateFileCached(path string, info os.FileInfo) error {
+	svc.validationMu.Lock()
+	defer svc.validationMu.Unlock()
+
+	key := filepath.Clean(path)
+	if cached, ok := svc.validationCache[key]; ok && cached.modTimeNS == info.ModTime().UnixNano() && cached.size == info.Size() {
+		return cached.err
+	}
+	return svc.validateFileAndCacheLocked(key, path, info)
+}
+
+func (svc *ConfigService) validateFileAndCache(path string, info os.FileInfo) error {
+	svc.validationMu.Lock()
+	defer svc.validationMu.Unlock()
+	return svc.validateFileAndCacheLocked(filepath.Clean(path), path, info)
+}
+
+func (svc *ConfigService) validateFileAndCacheLocked(key, path string, info os.FileInfo) error {
+	err := svc.validateFile(path)
+	if svc.validationCache == nil {
+		svc.validationCache = make(map[string]configValidationCacheEntry)
+	}
+	svc.validationCache[key] = configValidationCacheEntry{
+		modTimeNS: info.ModTime().UnixNano(),
+		size:      info.Size(),
+		err:       err,
+	}
+	return err
 }
 
 func getConfigDir(p *paths.Paths) string {

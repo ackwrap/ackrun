@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -78,5 +79,88 @@ func TestGenerateDefaultUsesOnlyBackendMixedPort(t *testing.T) {
 	}
 	if len(config.Route.Rules) != 0 {
 		t.Fatalf("default config contains unexpected route rules: %+v", config.Route.Rules)
+	}
+}
+
+func TestConfigStatusCachesValidationUntilFileChanges(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(configPath, []byte("{}"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewConfigService(&paths.Paths{
+		ConfigDir:  dir,
+		ConfigPath: configPath,
+	}, nil, nil)
+	validationCount := 0
+	svc.configValidator = func(string) error {
+		validationCount++
+		return nil
+	}
+
+	if _, err := svc.GetConfigStatus(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.GetConfigStatus(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ListConfigFiles(); err != nil {
+		t.Fatal(err)
+	}
+	if validationCount != 1 {
+		t.Fatalf("unchanged config validated %d times, want 1", validationCount)
+	}
+	if err := svc.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if validationCount != 2 {
+		t.Fatalf("explicit validation count = %d, want 2", validationCount)
+	}
+
+	if err := os.WriteFile(configPath, []byte("{\n}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.GetConfigStatus(); err != nil {
+		t.Fatal(err)
+	}
+	if validationCount != 3 {
+		t.Fatalf("changed config validation count = %d, want 3", validationCount)
+	}
+}
+
+func TestExplicitConfigValidationRefreshesFailedCache(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(configPath, []byte("{}"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewConfigService(&paths.Paths{
+		ConfigDir:  dir,
+		ConfigPath: configPath,
+	}, nil, nil)
+	validationErr := errors.New("invalid")
+	validationCount := 0
+	svc.configValidator = func(string) error {
+		validationCount++
+		return validationErr
+	}
+
+	status, err := svc.GetConfigStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Valid || validationCount != 1 {
+		t.Fatalf("initial status = %+v, validation count = %d", status, validationCount)
+	}
+	validationErr = nil
+	if err := svc.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	status, err = svc.GetConfigStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Valid || validationCount != 2 {
+		t.Fatalf("refreshed status = %+v, validation count = %d", status, validationCount)
 	}
 }

@@ -5,6 +5,7 @@ import PageHeader from "@/components/layout/PageHeader.vue";
 import Toast from "@/components/ui/Toast.vue";
 import OrderButtons from "@/components/ui/OrderButtons.vue";
 import { authenticatedFetch } from "@/services/apiAuth";
+import DNSRuleFormModal from "./dns/DNSRuleFormModal.vue";
 import DNSServerFormModal from "./dns/DNSServerFormModal.vue";
 interface Server {
   id: number;
@@ -56,6 +57,7 @@ const defaults = {
   messageType = ref<"success" | "error">("success"),
   serverForm = ref<Partial<Server> | null>(null),
   ruleForm = ref<any | null>(null),
+  ruleSaving = ref(false),
   ruleOrderPending = ref(false),
   bindings = ref<Record<string, string>>({}),
   outboundOrder = ref<string[]>([]),
@@ -388,6 +390,7 @@ function editRule(r: Rule) {
   ruleForm.value = { ...r, condition_type: type, values };
 }
 async function saveRule() {
+  if (ruleSaving.value) return;
   const f = ruleForm.value,
     v = f.values
       .split("\n")
@@ -396,7 +399,21 @@ async function saveRule() {
     c: { [k: string]: any } = {
       [f.condition_type]:
         f.condition_type === "clash_mode" ? v[0] || "rule" : v,
-    };
+    },
+    rewriteTTL = Number(f.rewrite_ttl || 0);
+  if (!f.server) {
+    show("请选择 DNS Server", "error");
+    return;
+  }
+  if (!v.length && f.condition_type !== "clash_mode") {
+    show("请填写至少一个匹配值", "error");
+    return;
+  }
+  if (!Number.isInteger(rewriteTTL) || rewriteTTL < 0) {
+    show("Rewrite TTL 必须是大于或等于 0 的整数", "error");
+    return;
+  }
+  ruleSaving.value = true;
   try {
     await request(f.id ? `/api/v1/dns/rules/${f.id}` : "/api/v1/dns/rules", {
       method: f.id ? "PUT" : "POST",
@@ -408,7 +425,7 @@ async function saveRule() {
         conditions: c,
         server: f.server,
         disable_cache: f.disable_cache,
-        rewrite_ttl: +f.rewrite_ttl || 0,
+        rewrite_ttl: rewriteTTL,
         client_subnet: f.client_subnet,
       }),
     });
@@ -417,6 +434,8 @@ async function saveRule() {
     await load();
   } catch (e: any) {
     show(`保存失败: ${e.message}`, "error");
+  } finally {
+    ruleSaving.value = false;
   }
 }
 async function removeRule(r: Rule) {
@@ -457,7 +476,8 @@ onMounted(load);
     />
     <div v-if="loading" class="py-20 text-center">加载中...</div>
     <template v-else
-      ><section
+      ><div class="grid gap-4 lg:grid-cols-2">
+        <section
         class="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
       >
         <div class="flex justify-between">
@@ -509,8 +529,8 @@ onMounted(load);
             {{ x }}</label
           >
         </div>
-      </section>
-      <section
+        </section>
+        <section
         class="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
       >
         <div class="flex justify-between">
@@ -529,7 +549,8 @@ onMounted(load);
             v-model="global.fakeip_inet6_range"
           /><button @click="saveGlobal">保存 FakeIP</button>
         </div>
-      </section>
+        </section>
+      </div>
       <section
         class="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
       >
@@ -791,31 +812,16 @@ onMounted(load);
       @close="serverForm = null"
       @save="saveServer"
     />
-    <div v-if="ruleForm" class="aw-modal-backdrop">
-      <div class="aw-modal-panel max-w-4xl p-5">
-        <h3>{{ ruleForm.id ? "编辑" : "新增" }} DNS 规则</h3>
-        <select v-model="ruleForm.condition_type">
-          <option v-for="x in conditions">{{ x }}</option></select
-        ><textarea v-model="ruleForm.values" rows="4" /><select
-          v-model="ruleForm.server"
-        >
-          <option value="">请选择 Server</option>
-          <option v-for="s in servers.filter((x) => x.enabled)" :value="s.tag">
-            {{ s.tag }}
-          </option>
-          <option v-if="global.fakeip_enabled">fakeip</option></select
-        ><input v-model.number="ruleForm.rewrite_ttl" type="number" /><input
-          v-model="ruleForm.client_subnet"
-        /><label
-          ><input
-            v-model="ruleForm.disable_cache"
-            type="checkbox"
-          />禁用缓存</label
-        ><label><input v-model="ruleForm.enabled" type="checkbox" />启用</label
-        ><button @click="ruleForm = null">取消</button
-        ><button @click="saveRule">保存</button>
-      </div>
-    </div>
+    <DNSRuleFormModal
+      v-if="ruleForm"
+      :form="ruleForm"
+      :conditions="conditions"
+      :servers="servers.filter((server) => server.enabled)"
+      :fake-i-p-enabled="global.fakeip_enabled"
+      :saving="ruleSaving"
+      @close="ruleForm = null"
+      @save="saveRule"
+    />
     <div v-if="preview" class="aw-modal-backdrop" @click="preview = ''">
       <pre class="aw-modal-panel max-w-xl p-5">{{ preview }}</pre>
     </div>

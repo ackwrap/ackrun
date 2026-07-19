@@ -383,7 +383,7 @@ onBeforeUnmount(() => clearInterval(poll));
               <Cloud :size="17" />规则订阅
             </h3>
             <p class="mt-1 text-xs text-[var(--text-secondary)]">
-              下载远程规则集，并生成 sing-box rule_set 引用。
+              支持 sing-box binary/source 和 Clash Rule Provider YAML；选择 clash 或由 auto 按 .yml/.yaml 自动识别，转换后生成 sing-box rule_set 引用。不支持完整 Clash 节点订阅配置。
             </p>
           </div>
           <button class="aw-action-button aw-action-neutral" @click="syncAll">
