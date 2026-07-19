@@ -11,6 +11,7 @@ import NodeFlagName from "@/components/NodeFlagName.vue";
 import type { ProxyMap } from "./proxyGroupUtils";
 import {
   availableProxyCount,
+  displayProxyGroupName,
   displayProxyName,
   latestDelay,
 } from "./proxyGroupUtils";
@@ -79,7 +80,7 @@ function updateSearch(event: Event) {
         <ProxyGroupIcon :group="group" class="h-5 w-5 shrink-0" />
         <b
           class="min-w-0 truncate text-[15px] leading-none font-semibold text-[var(--text-primary)]"
-          >{{ group.name }}</b
+          >{{ displayProxyGroupName(group.name) }}</b
         >
         <span
           class="min-w-0 flex-1 truncate text-[10px] font-medium tracking-[0.08em] text-[var(--text-tertiary)] uppercase tabular-nums"

@@ -20,6 +20,18 @@ export const emojiGroups = [
       "🔎",
       "🧠",
       "☁️",
+      "🔗",
+      "📡",
+      "🛰️",
+      "🛜",
+      "🧭",
+      "🔒",
+      "🔑",
+      "📍",
+      "🎯",
+      "🌍",
+      "🧩",
+      "🛠️",
     ],
   },
   {
@@ -50,6 +62,23 @@ export const emojiGroups = [
       "📦",
       "📁",
       "🗂️",
+      "📶",
+      "🔌",
+      "🕸️",
+      "🗺️",
+      "💾",
+      "💿",
+      "🔋",
+      "🪫",
+      "📲",
+      "☎️",
+      "🖨️",
+      "💡",
+      "🔧",
+      "🔩",
+      "🛠️",
+      "🧑‍💻",
+      "👾",
     ],
   },
   {
@@ -78,6 +107,34 @@ export const emojiGroups = [
       "🎾",
       "🎲",
       "🧩",
+      "🎸",
+      "🎹",
+      "🥁",
+      "🎻",
+      "🎷",
+      "🎺",
+      "📻",
+      "🎙️",
+      "🎼",
+      "🎟️",
+      "🎫",
+      "🎪",
+      "🖼️",
+      "🎁",
+      "🏆",
+      "🥇",
+      "🏅",
+      "🏓",
+      "🏸",
+      "🏐",
+      "⚾",
+      "🥊",
+      "⛳",
+      "🎳",
+      "🛹",
+      "🎿",
+      "🏂",
+      "🪁",
     ],
   },
   {
@@ -105,6 +162,24 @@ export const emojiGroups = [
       "🔞",
       "☢️",
       "☣️",
+      "🧿",
+      "⚔️",
+      "🗝️",
+      "🔏",
+      "📜",
+      "🧾",
+      "📝",
+      "🛑",
+      "🚧",
+      "🆘",
+      "‼️",
+      "❗",
+      "❓",
+      "👮",
+      "🦺",
+      "🩹",
+      "💊",
+      "🏥",
     ],
   },
   {
@@ -135,6 +210,25 @@ export const emojiGroups = [
       "🇵🇭",
       "🇮🇩",
       "🇹🇷",
+      "🇵🇱",
+      "🇮🇹",
+      "🇪🇸",
+      "🇵🇹",
+      "🇨🇭",
+      "🇸🇪",
+      "🇳🇴",
+      "🇫🇮",
+      "🇩🇰",
+      "🇳🇿",
+      "🇲🇽",
+      "🇦🇷",
+      "🇨🇱",
+      "🇵🇪",
+      "🇨🇴",
+      "🇪🇬",
+      "🇿🇦",
+      "🇦🇪",
+      "🇮🇱",
     ],
   },
   {
@@ -165,6 +259,30 @@ export const emojiGroups = [
       "🔹",
       "🔶",
       "🔷",
+      "⬆️",
+      "⬇️",
+      "⬅️",
+      "➡️",
+      "↗️",
+      "↘️",
+      "↙️",
+      "↖️",
+      "🔺",
+      "🔻",
+      "💠",
+      "🔘",
+      "⭕",
+      "❌",
+      "✔️",
+      "➕",
+      "➖",
+      "✖️",
+      "➗",
+      "♻️",
+      "♾️",
+      "©️",
+      "®️",
+      "™️",
     ],
   },
   {
@@ -201,6 +319,58 @@ export const emojiGroups = [
       "🔧",
       "🧲",
       "🪄",
+      "😊",
+      "😂",
+      "🤣",
+      "😍",
+      "🤩",
+      "🥳",
+      "😴",
+      "😇",
+      "🤝",
+      "👍",
+      "👎",
+      "👏",
+      "🙏",
+      "💪",
+      "👀",
+      "🫡",
+      "🐭",
+      "🐹",
+      "🐰",
+      "🐻",
+      "🐨",
+      "🐯",
+      "🦁",
+      "🐸",
+      "🐵",
+      "🦉",
+      "🦋",
+      "🐝",
+      "🌸",
+      "🌺",
+      "🌻",
+      "🌲",
+      "🍀",
+      "🍎",
+      "🍔",
+      "🍕",
+      "🍜",
+      "☕",
+      "🍺",
+      "🎉",
+      "🎊",
+      "🛒",
+      "🎒",
+      "🧳",
+      "📬",
+      "📮",
+      "⏰",
+      "🔔",
+      "💬",
+      "❤️",
+      "💔",
+      "💯",
     ],
   },
 ] as const;
@@ -276,7 +446,7 @@ function apply() {
 
     <div
       v-if="open"
-      class="absolute left-0 top-10 z-20 w-[min(380px,calc(100vw-3rem))] rounded-xl border border-[var(--border-default)] bg-[var(--bg-elevated)] p-3 shadow-[var(--shadow-card)]"
+      class="absolute left-0 top-10 z-20 w-[min(460px,calc(100vw-2rem))] rounded-xl border border-[var(--border-default)] bg-[var(--bg-elevated)] p-4 shadow-[var(--shadow-card)]"
     >
       <div class="mb-2 flex items-center justify-between gap-2">
         <span class="text-xs font-medium text-[var(--text-primary)]"
@@ -314,12 +484,12 @@ function apply() {
         </button>
       </div>
 
-      <div class="grid max-h-56 grid-cols-10 gap-1 overflow-auto pr-1">
+      <div class="grid max-h-64 grid-cols-8 gap-2 overflow-auto pr-1">
         <button
           v-for="emoji in visible"
           :key="emoji"
           type="button"
-          class="flex h-8 items-center justify-center rounded-md bg-[var(--button-secondary-bg)] text-base transition-colors hover:bg-[var(--button-secondary-hover)]"
+          class="flex h-10 items-center justify-center rounded-md bg-[var(--button-secondary-bg)] text-xl transition-colors hover:bg-[var(--button-secondary-hover)]"
           :class="value === emoji ? 'ring-1 ring-[var(--color-primary)]' : ''"
           :title="emoji"
           @click="select(emoji)"
@@ -328,14 +498,14 @@ function apply() {
             v-if="isFlag(emoji)"
             :src="getFlagImageURL(emoji)"
             :alt="emoji"
-            class="h-4 w-4 object-contain"
+            class="h-5 w-5 object-contain"
             loading="lazy"
           />
           <span v-else>{{ emoji }}</span>
         </button>
         <div
           v-if="!visible.length"
-          class="col-span-10 py-5 text-center text-xs text-[var(--text-tertiary)]"
+          class="col-span-8 py-5 text-center text-xs text-[var(--text-tertiary)]"
         >
           没有匹配的 emoji，可在下方自定义输入
         </div>

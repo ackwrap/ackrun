@@ -75,12 +75,21 @@ func TestRouteRuleServicePreview(t *testing.T) {
 	if _, err := svc.Create(&model.RouteRuleRequest{Name: "Disabled", Enabled: false, RuleType: "geosite", Values: []string{"cn"}, Outbound: "direct"}); err != nil {
 		t.Fatalf("create disabled rule: %v", err)
 	}
+	if _, err := svc.Create(&model.RouteRuleRequest{Name: "Blocked", Enabled: true, RuleType: "domain", Values: []string{"blocked.example"}, Outbound: "block"}); err != nil {
+		t.Fatalf("create block rule: %v", err)
+	}
 	preview, err := svc.Preview()
 	if err != nil {
 		t.Fatalf("preview rules: %v", err)
 	}
-	if len(preview.Rules) != 1 || preview.Rules[0]["outbound"] != "proxy" {
+	if len(preview.Rules) != 2 || preview.Rules[0]["action"] != "route" || preview.Rules[0]["outbound"] != "proxy" {
 		t.Fatalf("unexpected preview: %+v", preview)
+	}
+	if preview.Rules[1]["action"] != "reject" {
+		t.Fatalf("block preview must use reject action: %+v", preview.Rules[1])
+	}
+	if _, exists := preview.Rules[1]["outbound"]; exists {
+		t.Fatalf("block preview must not emit outbound: %+v", preview.Rules[1])
 	}
 }
 
@@ -110,6 +119,48 @@ func TestProcessNameRouteRuleGeneration(t *testing.T) {
 	}
 	if len(mixed) != 2 || mixed[0]["process_name"] == nil {
 		t.Fatalf("unexpected mixed process_name rules: %+v", mixed)
+	}
+}
+
+func TestMixedRouteRuleGroupsMultipleConditionTypes(t *testing.T) {
+	rules, err := mixedSingboxRouteRules([]string{
+		"domain_suffix:example.com",
+		"domain_suffix:example.org",
+		"geosite:google",
+		"geoip:cn",
+		"rule_set:custom-sites",
+	}, "proxy", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rules) != 2 {
+		t.Fatalf("mixed rules = %+v, want domain_suffix and rule_set groups", rules)
+	}
+	domains, _ := rules[0]["domain_suffix"].([]string)
+	if len(domains) != 2 || domains[0] != "example.com" || domains[1] != "example.org" {
+		t.Fatalf("mixed domain suffixes = %v", domains)
+	}
+	ruleSets, _ := rules[1]["rule_set"].([]string)
+	if len(ruleSets) != 3 || ruleSets[0] != "geosite-google" || ruleSets[1] != "geoip-cn" || ruleSets[2] != "custom-sites" {
+		t.Fatalf("mixed rule sets = %v", ruleSets)
+	}
+	for _, rule := range rules {
+		if rule["action"] != "route" || rule["outbound"] != "proxy" {
+			t.Fatalf("mixed rule action = %+v", rule)
+		}
+	}
+
+	blocked, err := mixedSingboxRouteRules([]string{
+		"domain_suffix:example.com",
+		"geoip:cn",
+	}, "block", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rule := range blocked {
+		if rule["action"] != "reject" || rule["outbound"] != nil || rule["invert"] != true {
+			t.Fatalf("mixed block rule action = %+v", rule)
+		}
 	}
 }
 

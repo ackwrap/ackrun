@@ -342,8 +342,6 @@ func (svc *RouteRuleService) PreviewWithBaseURL(baseURL string) (*model.RouteRul
 		if !item.Enabled {
 			continue
 		}
-		key := routeRuleSingboxKey(item.RuleType)
-		values := item.Values
 		if item.RuleType == "mixed" {
 			mixedRules, err := mixedSingboxRouteRules(item.Values, item.Outbound, item.Invert)
 			if err != nil {
@@ -354,15 +352,9 @@ func (svc *RouteRuleService) PreviewWithBaseURL(baseURL string) (*model.RouteRul
 			continue
 		}
 		if item.RuleType == "geoip" || item.RuleType == "geosite" {
-			key = "rule_set"
-			values = generatedGeoRuleSetTags(item.RuleType, item.Values)
 			ruleSets = appendGeneratedGeoRuleSets(ruleSets, ruleSetTags, item.RuleType, item.Values, baseURL)
 		}
-		rule := map[string]any{key: values, "outbound": item.Outbound}
-		if item.Invert {
-			rule["invert"] = true
-		}
-		rules = append(rules, rule)
+		rules = append(rules, singboxRouteRule(item.RuleType, item.Values, item.Outbound, item.Invert))
 	}
 	return &model.RouteRulePreviewResponse{Rules: rules, RuleSets: ruleSets}, nil
 }

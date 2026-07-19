@@ -59,6 +59,20 @@ export function displayProxyName(name: string) {
   return name.replace(/-[0-9a-f]{16}$/i, "");
 }
 
+export function isEmojiPrefix(value: string): boolean {
+  return /^[\p{Extended_Pictographic}\p{Regional_Indicator}\p{Emoji_Modifier}\uFE0F\u200D]+$/u.test(
+    value,
+  );
+}
+
+export function displayProxyGroupName(name: string): string {
+  const customEmoji = name.match(/^(\S+)\s+(.+)$/u);
+  if (customEmoji && isEmojiPrefix(customEmoji[1])) {
+    return customEmoji[2];
+  }
+  return name;
+}
+
 export function availableProxyCount(group: ProxyGroup, proxies: ProxyMap) {
   return (group.all || []).filter((name) => latestDelay(proxies[name]) > 0)
     .length;
