@@ -1,0 +1,1 @@
+Frontend assets are generated locally by Vite before release builds.

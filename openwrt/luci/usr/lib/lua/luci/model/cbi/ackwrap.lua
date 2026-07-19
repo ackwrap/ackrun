@@ -31,6 +31,9 @@ function api_token.validate(self, value)
 	return value
 end
 
+local generate_token = settings:option(DummyValue, "_generate_token", translate("随机 Token"))
+generate_token.template = "ackwrap/token_button"
+
 local data_dir = settings:option(Value, "data_dir", translate("数据目录"))
 data_dir.default = "/etc/ackwrap"
 data_dir.rmempty = false

@@ -3,6 +3,8 @@ backend/backend.exe
 backend/backend
 backend/ackwrap.db
 backend/ui/
+backend/internal/webui/dist/*
+!backend/internal/webui/dist/embed-placeholder.txt
 backend/.air/
 mihomo-Alpha
 # Frontend

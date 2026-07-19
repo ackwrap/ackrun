@@ -727,6 +727,8 @@ export interface ConfigGenerateRequest {
   default_outbound: string;
   inbound_listen?: string;
   inbound_port?: number;
+  tun_ipv4_address?: string;
+  tun_ipv6_address?: string;
   log_level?: string;
 }
 

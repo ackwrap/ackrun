@@ -355,16 +355,51 @@ func TestGenerateRouteIncludesDefaultLoopBypassRules(t *testing.T) {
 }
 
 func TestGeneratedTUNInboundUsesAutoRedirectOnLinux(t *testing.T) {
-	inbound := generatedTUNInbound(true)
+	inbound := generatedTUNInbound(true, defaultTUNIPv4Address, defaultTUNIPv6Address)
 	if inbound["auto_route"] != true || inbound["strict_route"] != true || inbound["auto_redirect"] != true {
 		t.Fatalf("OpenWrt TUN inbound = %+v", inbound)
 	}
 	if !stringListContains(inbound["address"], defaultTUNIPv4Address) || !stringListContains(inbound["address"], defaultTUNIPv6Address) {
 		t.Fatalf("OpenWrt TUN inbound is not dual-stack: %+v", inbound)
 	}
-	withoutRedirect := generatedTUNInbound(false)
+	withoutRedirect := generatedTUNInbound(false, defaultTUNIPv4Address, defaultTUNIPv6Address)
 	if _, exists := withoutRedirect["auto_redirect"]; exists {
 		t.Fatalf("non-Linux TUN inbound contains auto_redirect: %+v", withoutRedirect)
+	}
+}
+
+func TestNormalizeTUNAddresses(t *testing.T) {
+	ipv4, ipv6, err := normalizeTUNAddresses("10.254.0.1/30", "fd12:3456:789a::1/126")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ipv4 != "10.254.0.1/30" || ipv6 != "fd12:3456:789a::1/126" {
+		t.Fatalf("normalized TUN addresses = %q, %q", ipv4, ipv6)
+	}
+	defaultIPv4, defaultIPv6, err := normalizeTUNAddresses("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaultIPv4 != defaultTUNIPv4Address || defaultIPv6 != defaultTUNIPv6Address {
+		t.Fatalf("default TUN addresses = %q, %q", defaultIPv4, defaultIPv6)
+	}
+	for _, test := range []struct {
+		name string
+		ipv4 string
+		ipv6 string
+	}{
+		{name: "missing IPv4 CIDR", ipv4: "10.0.0.1", ipv6: defaultTUNIPv6Address},
+		{name: "IPv6 in IPv4 field", ipv4: defaultTUNIPv6Address, ipv6: defaultTUNIPv6Address},
+		{name: "IPv4-mapped IPv6 CIDR", ipv4: "::ffff:10.0.0.1/120", ipv6: defaultTUNIPv6Address},
+		{name: "IPv4 in IPv6 field", ipv4: defaultTUNIPv4Address, ipv6: defaultTUNIPv4Address},
+		{name: "IPv4 network address", ipv4: "10.0.0.0/30", ipv6: defaultTUNIPv6Address},
+		{name: "IPv4 broadcast address", ipv4: "10.0.0.3/30", ipv6: defaultTUNIPv6Address},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, _, err := normalizeTUNAddresses(test.ipv4, test.ipv6); err == nil {
+				t.Fatal("expected invalid TUN address to fail")
+			}
+		})
 	}
 }
 
@@ -804,7 +839,7 @@ func TestGenerateInboundsDefaultsToLoopback(t *testing.T) {
 	defer db.Close()
 
 	service := NewConfigGeneratorService(db, nil)
-	inbounds, err := service.generateInbounds("", 0)
+	inbounds, err := service.generateInbounds("", 0, defaultTUNIPv4Address, defaultTUNIPv6Address)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -851,7 +886,7 @@ func TestGenerateMixedOnlyDoesNotEnableTransparentRouting(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := NewConfigGeneratorService(db, nil)
-	inbounds, err := service.generateInbounds("127.0.0.1", 8888)
+	inbounds, err := service.generateInbounds("127.0.0.1", 8888, defaultTUNIPv4Address, defaultTUNIPv6Address)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -875,7 +910,7 @@ func TestGenerateInboundsAllowsFormerUpdateProxyPort(t *testing.T) {
 	defer db.Close()
 
 	service := NewConfigGeneratorService(db, nil)
-	inbounds, err := service.generateInbounds("127.0.0.1", 9901)
+	inbounds, err := service.generateInbounds("127.0.0.1", 9901, defaultTUNIPv4Address, defaultTUNIPv6Address)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -899,6 +934,8 @@ func TestPreviewRequestPreservesStoredGenerationSettings(t *testing.T) {
 		DefaultOutbound: "proxy",
 		InboundListen:   "127.0.0.1",
 		InboundPort:     8888,
+		TUNIPv4Address:  "10.254.0.1/30",
+		TUNIPv6Address:  "fd12:3456:789a::1/126",
 		LogLevel:        "warn",
 	}
 	if err := db.SetConfigGenerateRequest(stored); err != nil {
@@ -910,7 +947,7 @@ func TestPreviewRequestPreservesStoredGenerationSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if preview.DefaultOutbound != "custom-proxy" || preview.InboundListen != stored.InboundListen || preview.InboundPort != stored.InboundPort || preview.LogLevel != stored.LogLevel {
+	if preview.DefaultOutbound != "custom-proxy" || preview.InboundListen != stored.InboundListen || preview.InboundPort != stored.InboundPort || preview.TUNIPv4Address != stored.TUNIPv4Address || preview.TUNIPv6Address != stored.TUNIPv6Address || preview.LogLevel != stored.LogLevel {
 		t.Fatalf("preview request = %+v, want stored settings with overridden outbound", preview)
 	}
 	persisted, err := db.GetConfigGenerateRequest()
@@ -938,5 +975,34 @@ func TestGetGenerateRequestUsesPersistedLogLevelByDefault(t *testing.T) {
 	}
 	if request.LogLevel != "debug" {
 		t.Fatalf("default generation log level = %q, want debug", request.LogLevel)
+	}
+	if request.TUNIPv4Address != defaultTUNIPv4Address || request.TUNIPv6Address != defaultTUNIPv6Address {
+		t.Fatalf("default TUN addresses = %q, %q", request.TUNIPv4Address, request.TUNIPv6Address)
+	}
+}
+
+func TestGetGenerateRequestBackfillsLegacyTUNAddresses(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	legacy := &model.ConfigGenerateRequest{
+		DefaultOutbound: "proxy",
+		InboundListen:   "127.0.0.1",
+		InboundPort:     8888,
+		LogLevel:        "warn",
+	}
+	if err := db.SetConfigGenerateRequest(legacy); err != nil {
+		t.Fatal(err)
+	}
+	service := NewConfigGeneratorService(db, nil)
+	request, err := service.GetGenerateRequest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.TUNIPv4Address != defaultTUNIPv4Address || request.TUNIPv6Address != defaultTUNIPv6Address {
+		t.Fatalf("backfilled TUN addresses = %q, %q", request.TUNIPv4Address, request.TUNIPv6Address)
 	}
 }

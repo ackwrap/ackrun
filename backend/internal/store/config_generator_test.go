@@ -18,6 +18,8 @@ func TestConfigGenerateRequestRoundTrip(t *testing.T) {
 		DefaultOutbound: "proxy",
 		InboundListen:   "127.0.0.1",
 		InboundPort:     8888,
+		TUNIPv4Address:  "10.254.0.1/30",
+		TUNIPv6Address:  "fd12:3456:789a::1/126",
 		LogLevel:        "warn",
 	}
 	if err := db.SetConfigGenerateRequest(request); err != nil {

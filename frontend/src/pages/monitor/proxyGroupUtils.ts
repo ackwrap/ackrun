@@ -55,6 +55,10 @@ export function proxyNodeDescription(node?: ProxyNode) {
     .join(" / ");
 }
 
+export function displayProxyName(name: string) {
+  return name.replace(/-[0-9a-f]{16}$/i, "");
+}
+
 export function availableProxyCount(group: ProxyGroup, proxies: ProxyMap) {
   return (group.all || []).filter((name) => latestDelay(proxies[name]) > 0)
     .length;

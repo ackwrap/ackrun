@@ -369,6 +369,24 @@ onMounted(async () => {
               type="number"
               class="aw-input mt-1 w-full" /></label
           ><label
+            ><span class="text-xs">TUN IPv4 地址</span
+            ><input
+              v-model="request.tun_ipv4_address"
+              class="aw-input mt-1 w-full"
+              placeholder="172.19.0.1/30"
+            /><small class="mt-1 block text-[var(--text-tertiary)]"
+              >使用 CIDR，需避开 LAN、Docker 和 VPN 已占用网段。</small
+            ></label
+          ><label
+            ><span class="text-xs">TUN IPv6 地址</span
+            ><input
+              v-model="request.tun_ipv6_address"
+              class="aw-input mt-1 w-full"
+              placeholder="fdfe:dcba:9876::1/126"
+            /><small class="mt-1 block text-[var(--text-tertiary)]"
+              >使用 IPv6 CIDR；修改后需重新生成并应用配置。</small
+            ></label
+          ><label
             ><span class="text-xs">日志级别</span
             ><select v-model="request.log_level" class="aw-input mt-1 w-full">
               <option

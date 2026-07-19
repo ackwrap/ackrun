@@ -4,6 +4,7 @@ import { Link, Pause, Play, RefreshCw, Search, X } from "lucide-vue-next";
 import type { Connection } from "@/services/clash";
 import NodeFlagName from "@/components/NodeFlagName.vue";
 import { formatBytes, formatSpeed } from "./monitorUtils";
+import { displayProxyName } from "./proxyGroupUtils";
 
 interface ConnectionRow {
   connection: Connection;
@@ -49,15 +50,16 @@ const columns = [
 ] as const;
 type ColumnKey = (typeof columns)[number]["key"];
 const columnWidths = ref<Record<ColumnKey, number>>(
-  Object.fromEntries(columns.map((column) => [column.key, column.width])) as Record<
-    ColumnKey,
-    number
-  >,
+  Object.fromEntries(
+    columns.map((column) => [column.key, column.width]),
+  ) as Record<ColumnKey, number>,
 );
 const storedWidths = localStorage.getItem("ackwrap.monitor.connection-columns");
 if (storedWidths) {
   try {
-    const parsed = JSON.parse(storedWidths) as Partial<Record<ColumnKey, number>>;
+    const parsed = JSON.parse(storedWidths) as Partial<
+      Record<ColumnKey, number>
+    >;
     for (const column of columns) {
       const width = Number(parsed[column.key]);
       if (Number.isFinite(width) && width >= column.min)
@@ -77,7 +79,10 @@ function startColumnResize(event: PointerEvent, key: ColumnKey, min: number) {
   const startX = event.clientX;
   const startWidth = columnWidths.value[key];
   const move = (nextEvent: PointerEvent) => {
-    columnWidths.value[key] = Math.max(min, startWidth + nextEvent.clientX - startX);
+    columnWidths.value[key] = Math.max(
+      min,
+      startWidth + nextEvent.clientX - startX,
+    );
   };
   const finish = () => {
     localStorage.setItem(
@@ -353,9 +358,7 @@ function elapsed(connection: Connection, closedAt?: number) {
               {{ column.label }}
               <span
                 class="absolute top-0 right-0 h-full w-2 cursor-col-resize touch-none select-none after:absolute after:top-1/4 after:right-0 after:h-1/2 after:w-px after:bg-[var(--border-default)] hover:after:bg-[var(--color-primary)]"
-                @pointerdown="
-                  startColumnResize($event, column.key, column.min)
-                "
+                @pointerdown="startColumnResize($event, column.key, column.min)"
               />
             </th>
           </tr>
@@ -424,7 +427,8 @@ function elapsed(connection: Connection, closedAt?: number) {
                     :name="chain"
                     :flag="nodeFlags[chain]"
                     class="min-w-0"
-                  />
+                    >{{ displayProxyName(chain) }}</NodeFlagName
+                  >
                 </template>
               </span>
               <template v-else>DIRECT</template>

@@ -7,6 +7,8 @@ type ConfigGenerateRequest struct {
 	DefaultOutbound string `json:"default_outbound"` // 默认出站（代理集合名称）
 	InboundListen   string `json:"inbound_listen"`   // 入站监听地址
 	InboundPort     int    `json:"inbound_port"`     // 入站监听端口
+	TUNIPv4Address  string `json:"tun_ipv4_address"` // TUN IPv4 接口地址（CIDR）
+	TUNIPv6Address  string `json:"tun_ipv6_address"` // TUN IPv6 接口地址（CIDR）
 	LogLevel        string `json:"log_level"`        // 日志级别
 }
 

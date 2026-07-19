@@ -113,6 +113,8 @@ func (s *ConfigGeneratorService) generateCurrentLocked() (*model.ConfigGenerateR
 			DefaultOutbound: "proxy",
 			InboundListen:   "127.0.0.1",
 			InboundPort:     model.DefaultMixedInboundPort,
+			TUNIPv4Address:  defaultTUNIPv4Address,
+			TUNIPv6Address:  defaultTUNIPv6Address,
 			LogLevel:        s.store.GetLogLevel(),
 		}
 	}
@@ -128,11 +130,16 @@ func (s *ConfigGeneratorService) generateLockedTo(req *model.ConfigGenerateReque
 	if req.LogLevel == "" {
 		req.LogLevel = s.store.GetLogLevel()
 	}
+	var err error
+	req.TUNIPv4Address, req.TUNIPv6Address, err = normalizeTUNAddresses(req.TUNIPv4Address, req.TUNIPv6Address)
+	if err != nil {
+		return nil, err
+	}
 
 	logging.Info("config_generator.generate", "开始生成配置，默认出站: %s", req.DefaultOutbound)
 
 	// 1. 生成 inbounds
-	inbounds, err := s.generateInbounds(req.InboundListen, req.InboundPort)
+	inbounds, err := s.generateInbounds(req.InboundListen, req.InboundPort, req.TUNIPv4Address, req.TUNIPv6Address)
 	if err != nil {
 		return nil, fmt.Errorf("生成 inbounds 失败: %w", err)
 	}
@@ -1994,7 +2001,7 @@ func writeActiveConfigMarker(p *paths.Paths, targetPath string) error {
 }
 
 // generateInbounds 生成入站配置
-func (s *ConfigGeneratorService) generateInbounds(listen string, port int) ([]interface{}, error) {
+func (s *ConfigGeneratorService) generateInbounds(listen string, port int, tunIPv4Address, tunIPv6Address string) ([]interface{}, error) {
 	if listen == "" {
 		listen = "127.0.0.1"
 	}
@@ -2012,7 +2019,7 @@ func (s *ConfigGeneratorService) generateInbounds(listen string, port int) ([]in
 	case "tun":
 		// 纯 TUN 模式
 		inbounds = []interface{}{
-			generatedTUNInbound(autoRedirect),
+			generatedTUNInbound(autoRedirect, tunIPv4Address, tunIPv6Address),
 		}
 	case "mixed":
 		// 纯 Mixed 模式
@@ -2029,7 +2036,7 @@ func (s *ConfigGeneratorService) generateInbounds(listen string, port int) ([]in
 	default:
 		// TUN + Mixed 双模式（默认）
 		inbounds = []interface{}{
-			generatedTUNInbound(autoRedirect),
+			generatedTUNInbound(autoRedirect, tunIPv4Address, tunIPv6Address),
 			map[string]interface{}{
 				"type":        "mixed",
 				"tag":         "mixed-in",
@@ -2045,12 +2052,12 @@ func (s *ConfigGeneratorService) generateInbounds(listen string, port int) ([]in
 	return inbounds, nil
 }
 
-func generatedTUNInbound(autoRedirect bool) map[string]interface{} {
+func generatedTUNInbound(autoRedirect bool, tunIPv4Address, tunIPv6Address string) map[string]interface{} {
 	inbound := map[string]interface{}{
 		"type":           "tun",
 		"tag":            "tun-in",
 		"interface_name": "tun0",
-		"address":        []string{defaultTUNIPv4Address, defaultTUNIPv6Address},
+		"address":        []string{tunIPv4Address, tunIPv6Address},
 		"auto_route":     true,
 		"strict_route":   true,
 		"stack":          "system",
@@ -2059,6 +2066,59 @@ func generatedTUNInbound(autoRedirect bool) map[string]interface{} {
 		inbound["auto_redirect"] = true
 	}
 	return inbound
+}
+
+func normalizeTUNAddresses(ipv4Address, ipv6Address string) (string, string, error) {
+	normalizedIPv4, err := normalizeTUNAddress(ipv4Address, defaultTUNIPv4Address, false)
+	if err != nil {
+		return "", "", fmt.Errorf("TUN IPv4 地址无效: %w", err)
+	}
+	normalizedIPv6, err := normalizeTUNAddress(ipv6Address, defaultTUNIPv6Address, true)
+	if err != nil {
+		return "", "", fmt.Errorf("TUN IPv6 地址无效: %w", err)
+	}
+	return normalizedIPv4, normalizedIPv6, nil
+}
+
+func normalizeTUNAddress(value, fallback string, ipv6 bool) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		value = fallback
+	}
+	ip, network, err := net.ParseCIDR(value)
+	if err != nil {
+		return "", fmt.Errorf("必须使用 CIDR 格式")
+	}
+	ones, bits := network.Mask.Size()
+	if ipv6 {
+		if bits != net.IPv6len*8 || ip.To4() != nil {
+			return "", fmt.Errorf("必须是 IPv6 地址")
+		}
+	} else {
+		if bits != net.IPv4len*8 {
+			return "", fmt.Errorf("必须是 IPv4 地址")
+		}
+		ip = ip.To4()
+		if ip == nil {
+			return "", fmt.Errorf("必须是 IPv4 地址")
+		}
+	}
+	if ip.IsUnspecified() || ip.IsLoopback() || ip.IsMulticast() {
+		return "", fmt.Errorf("不能使用未指定、回环或组播地址")
+	}
+	if ones < bits && ip.Equal(network.IP) {
+		return "", fmt.Errorf("必须填写网段内的主机地址，不能使用网段地址")
+	}
+	if !ipv6 && ones < 31 {
+		broadcast := append(net.IP(nil), network.IP...)
+		for i := range broadcast {
+			broadcast[i] |= ^network.Mask[i]
+		}
+		if ip.Equal(broadcast) {
+			return "", fmt.Errorf("必须填写网段内的主机地址，不能使用广播地址")
+		}
+	}
+	return fmt.Sprintf("%s/%d", ip.String(), ones), nil
 }
 
 // Preview 预览生成的配置
@@ -2098,10 +2158,18 @@ func (s *ConfigGeneratorService) previewRequest(defaultOutbound string) (*model.
 			DefaultOutbound: "proxy",
 			InboundListen:   "127.0.0.1",
 			InboundPort:     model.DefaultMixedInboundPort,
+			TUNIPv4Address:  defaultTUNIPv4Address,
+			TUNIPv6Address:  defaultTUNIPv6Address,
 			LogLevel:        s.store.GetLogLevel(),
 		}
 	}
 	req := *stored
+	if strings.TrimSpace(req.TUNIPv4Address) == "" {
+		req.TUNIPv4Address = defaultTUNIPv4Address
+	}
+	if strings.TrimSpace(req.TUNIPv6Address) == "" {
+		req.TUNIPv6Address = defaultTUNIPv6Address
+	}
 	if defaultOutbound != "" {
 		req.DefaultOutbound = defaultOutbound
 	}

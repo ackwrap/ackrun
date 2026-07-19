@@ -3,7 +3,11 @@ import { computed } from "vue";
 import type { ProxyNode } from "@/services/clash";
 import ProxyLatencyTag from "./ProxyLatencyTag.vue";
 import NodeFlagName from "@/components/NodeFlagName.vue";
-import { latestDelay, proxyNodeDescription } from "./proxyGroupUtils";
+import {
+  displayProxyName,
+  latestDelay,
+  proxyNodeDescription,
+} from "./proxyGroupUtils";
 
 const props = withDefaults(
   defineProps<{
@@ -46,7 +50,8 @@ function select() {
       :name="name"
       :flag="flag"
       class="w-full text-[13px] leading-5 font-semibold"
-    />
+      >{{ displayProxyName(name) }}</NodeFlagName
+    >
     <span class="flex h-4 w-full items-center justify-between gap-2">
       <small class="truncate text-[10px] tracking-tight uppercase opacity-65">{{
         description

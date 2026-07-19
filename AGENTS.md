@@ -22,6 +22,7 @@ npm run build
 
 **构建：**
 - 前端构建输出到 `backend/internal/webui/dist/`，通过 `go:embed` 打包进后端二进制
+- `backend/internal/webui/dist/` 是本地生成目录，除嵌入占位文件外禁止提交其中的 hashed JS/CSS、HTML、图片或其他编译产物
 - 发布构建统一从仓库根目录运行 `python build.py`，默认生成 Windows、Linux、OpenWrt amd64 单文件产物；OpenWrt 目标同时生成包含核心、LuCI 和 iStoreOS app-meta 的单一 IPK
 - 后端入口：`backend/cmd/server/main.go`
 
@@ -36,6 +37,13 @@ npm run build
 4. 这个功能有没有最小验证命令？
 
 如果不能，不要进入下一步。
+
+## 审核与提交规则
+
+- 每轮功能审核或自审完成后，必须先修复全部确认问题并执行对应验证；审核无剩余问题时，立即提交本轮全部预期改动，避免下一轮重复审核已经确认的差异。
+- 提交前必须检查 `git status`、`git diff`、最近提交和子模块状态，只暂存本轮预期文件；用户或其他代理的无关改动保持未暂存，不得顺带提交、还原或删除。
+- 审核未通过、验证失败或仍有明确阻塞时禁止提交；修复后重新审核和验证，再创建新提交。
+- 禁止提交 `backend/internal/webui/dist/` 中由 Vite 生成的 hashed JS/CSS 等构建产物；发布包必须通过 `npm run build` 或根目录 `build.py` 在本地重新生成并嵌入。
 
 ## devel 与子模块保护规则
 

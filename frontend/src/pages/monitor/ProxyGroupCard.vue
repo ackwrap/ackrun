@@ -9,7 +9,11 @@ import ProxyNodeCard from "./ProxyNodeCard.vue";
 import ProxyNodeGrid from "./ProxyNodeGrid.vue";
 import NodeFlagName from "@/components/NodeFlagName.vue";
 import type { ProxyMap } from "./proxyGroupUtils";
-import { availableProxyCount, latestDelay } from "./proxyGroupUtils";
+import {
+  availableProxyCount,
+  displayProxyName,
+  latestDelay,
+} from "./proxyGroupUtils";
 
 const props = withDefaults(
   defineProps<{
@@ -119,7 +123,8 @@ function updateSearch(event: Event) {
             :name="group.now"
             :flag="nodeFlags[group.now]"
             class="w-full"
-          />
+            >{{ displayProxyName(group.now) }}</NodeFlagName
+          >
           <template v-else>未选择节点</template>
         </span>
       </div>
