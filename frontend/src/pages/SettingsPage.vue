@@ -6,13 +6,7 @@ import PageHeader from "@/components/layout/PageHeader.vue";
 import Toast from "@/components/ui/Toast.vue";
 import ConnectivityResourcesPanel from "./settings/ConnectivityResourcesPanel.vue";
 import GeoIPProvidersPanel from "./settings/GeoIPProvidersPanel.vue";
-import {
-  Clock3,
-  Download,
-  FileText,
-  FlaskConical,
-  Settings,
-} from "lucide-vue-next";
+import { Clock3, Download, FlaskConical, Settings } from "lucide-vue-next";
 type SettingsTab = "general" | "experimental";
 const acceleration = ref(""),
   customMirror = ref(""),
@@ -26,8 +20,6 @@ const activeTab = ref<SettingsTab>("general"),
   cacheFileEnabled = ref(true),
   cacheFileStoreFakeIP = ref(true),
   cacheFileStoreDNS = ref(true),
-  logLevel = ref("info"),
-  logTimestamp = ref(true),
   ntpEnabled = ref(true),
   ntpServer = ref("time.apple.com"),
   ntpServerPort = ref(123),
@@ -56,13 +48,6 @@ onMounted(() => {
       cacheFileEnabled.value = d.cache_file_enabled !== false;
       cacheFileStoreFakeIP.value = d.cache_file_store_fakeip !== false;
       cacheFileStoreDNS.value = d.cache_file_store_dns !== false;
-    })
-    .catch(() => {});
-  api
-    .getLogSettings()
-    .then((d) => {
-      logLevel.value = d.level || "info";
-      logTimestamp.value = d.timestamp !== false;
     })
     .catch(() => {});
   api
@@ -100,17 +85,6 @@ async function saveExperimental() {
       cache_file_store_dns: cacheFileStoreDNS.value,
     });
     notify("实验性功能设置已保存");
-  } catch (e: any) {
-    notify(`保存失败: ${e.message}`, "error");
-  }
-}
-async function saveLog() {
-  try {
-    await api.setLogSettings({
-      level: logLevel.value,
-      timestamp: logTimestamp.value,
-    });
-    notify("日志配置已保存（下次生成配置时生效）");
   } catch (e: any) {
     notify(`保存失败: ${e.message}`, "error");
   }
@@ -254,48 +228,6 @@ const input =
               :class="input" /></label
           ><Button class="mt-auto self-start" size="sm" @click="saveUpdate"
             >保存更新设置</Button
-          >
-        </div>
-      </section>
-
-      <section :class="panel" class="flex h-full flex-col">
-        <div class="mb-4 flex items-center gap-2">
-          <FileText :size="18" class="text-[var(--color-primary)]" />
-          <h2 class="font-semibold">
-            日志配置
-            <span class="text-xs text-[var(--color-primary)]">sing-box</span>
-          </h2>
-        </div>
-        <div class="flex flex-1 flex-col gap-4">
-          <label class="block text-xs"
-            >日志级别<select v-model="logLevel" :class="input">
-              <option
-                v-for="l in [
-                  'trace',
-                  'debug',
-                  'info',
-                  'warn',
-                  'error',
-                  'fatal',
-                  'panic',
-                ]"
-                :key="l"
-              >
-                {{ l }}
-              </option></select
-            ><small class="text-[var(--text-tertiary)]"
-              >控制 sing-box 日志输出详细程度</small
-            ></label
-          ><label class="flex justify-between text-xs"
-            >启用时间戳<input v-model="logTimestamp" type="checkbox"
-          /></label>
-          <div
-            class="rounded-[var(--radius-md)] bg-[var(--color-primary-bg)] p-2 text-xs text-[var(--color-primary)]"
-          >
-            生产环境建议使用 info，调试时可用 debug 或 trace。
-          </div>
-          <Button class="mt-auto self-start" size="sm" @click="saveLog"
-            >保存日志配置</Button
           >
         </div>
       </section>

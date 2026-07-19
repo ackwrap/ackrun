@@ -29,8 +29,9 @@ var ErrInvalidConfigFileName = errors.New("配置文件名无效")
 
 const (
 	defaultRuleSetHTTPClientTag = "ackwrap-rule-set-direct"
-	defaultTUNIPv4Address       = "172.19.0.1/30"
+	defaultTUNIPv4Address       = "172.254.0.1/30"
 	defaultTUNIPv6Address       = "fdfe:dcba:9876::1/126"
+	legacyDefaultTUNIPv4Address = "172.19.0.1/30"
 )
 
 // ConfigGeneratorService 配置生成服务
@@ -110,8 +111,8 @@ func (s *ConfigGeneratorService) generateCurrentLocked() (*model.ConfigGenerateR
 	}
 	if req == nil {
 		req = &model.ConfigGenerateRequest{
-			DefaultOutbound: "proxy",
-			InboundListen:   "127.0.0.1",
+			DefaultOutbound: "direct",
+			InboundListen:   "0.0.0.0",
 			InboundPort:     model.DefaultMixedInboundPort,
 			TUNIPv4Address:  defaultTUNIPv4Address,
 			TUNIPv6Address:  defaultTUNIPv6Address,
@@ -2003,7 +2004,7 @@ func writeActiveConfigMarker(p *paths.Paths, targetPath string) error {
 // generateInbounds 生成入站配置
 func (s *ConfigGeneratorService) generateInbounds(listen string, port int, tunIPv4Address, tunIPv6Address string) ([]interface{}, error) {
 	if listen == "" {
-		listen = "127.0.0.1"
+		listen = "0.0.0.0"
 	}
 	if port == 0 {
 		port = model.DefaultMixedInboundPort
@@ -2155,8 +2156,8 @@ func (s *ConfigGeneratorService) previewRequest(defaultOutbound string) (*model.
 	}
 	if stored == nil {
 		stored = &model.ConfigGenerateRequest{
-			DefaultOutbound: "proxy",
-			InboundListen:   "127.0.0.1",
+			DefaultOutbound: "direct",
+			InboundListen:   "0.0.0.0",
 			InboundPort:     model.DefaultMixedInboundPort,
 			TUNIPv4Address:  defaultTUNIPv4Address,
 			TUNIPv6Address:  defaultTUNIPv6Address,

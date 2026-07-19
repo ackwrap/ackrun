@@ -65,11 +65,16 @@ func TestGenerateDefaultUsesOnlyBackendMixedPort(t *testing.T) {
 		t.Fatal(err)
 	}
 	ports := make(map[string]int)
+	listens := make(map[string]string)
 	for _, inbound := range config.Inbounds {
 		ports[inbound.Tag] = inbound.ListenPort
+		listens[inbound.Tag] = inbound.Listen
 	}
 	if len(config.Inbounds) != 1 || ports["mixed-in"] != model.DefaultMixedInboundPort {
 		t.Fatalf("generated ports = %+v", ports)
+	}
+	if listens["mixed-in"] != "0.0.0.0" {
+		t.Fatalf("generated listen addresses = %+v", listens)
 	}
 	if len(config.Route.Rules) != 0 {
 		t.Fatalf("default config contains unexpected route rules: %+v", config.Route.Rules)

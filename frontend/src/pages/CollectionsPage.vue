@@ -518,6 +518,7 @@ async function removeCol(x: Col) {
   await load();
 }
 async function moveCollection(index: number, direction: -1 | 1) {
+  if (collectionMoveDisabled(index, direction)) return;
   const currentIndex =
     (collectionPage.value - 1) * collectionPageSize.value + index;
   const nextIndex = currentIndex + direction;
@@ -536,6 +537,14 @@ async function moveCollection(index: number, direction: -1 | 1) {
     show(`策略组排序失败: ${e.message}`, "error");
     await load();
   }
+}
+function collectionMoveDisabled(index: number, direction: -1 | 1) {
+  const currentIndex =
+    (collectionPage.value - 1) * collectionPageSize.value + index;
+  const nextIndex = currentIndex + direction;
+  const current = collections.value[currentIndex];
+  const next = collections.value[nextIndex];
+  return !current || !next || system(current) || system(next);
 }
 const preview = computed(() =>
   previewCol.value
@@ -744,13 +753,8 @@ onMounted(load);
             <tr v-for="(x, i) in pagedCols" :key="x.id">
               <td>
                 <OrderButtons
-                  :up-disabled="
-                    (collectionPage - 1) * collectionPageSize + i === 0
-                  "
-                  :down-disabled="
-                    (collectionPage - 1) * collectionPageSize + i ===
-                    collections.length - 1
-                  "
+                  :up-disabled="collectionMoveDisabled(i, -1)"
+                  :down-disabled="collectionMoveDisabled(i, 1)"
                   @up="moveCollection(i, -1)"
                   @down="moveCollection(i, 1)"
                 />

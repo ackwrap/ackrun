@@ -831,7 +831,7 @@ func TestGenerateRouteOmitsLegacyInternalNodeCheckRule(t *testing.T) {
 	}
 }
 
-func TestGenerateInboundsDefaultsToLoopback(t *testing.T) {
+func TestGenerateInboundsUsesPublicMixedDefaults(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -866,8 +866,8 @@ func TestGenerateInboundsDefaultsToLoopback(t *testing.T) {
 		switch inbound["tag"] {
 		case "mixed-in":
 			foundMixed = true
-			if inbound["listen"] != "127.0.0.1" || inbound["listen_port"] != model.DefaultMixedInboundPort {
-				t.Fatalf("mixed inbound = %+v, want loopback:%d", inbound, model.DefaultMixedInboundPort)
+			if inbound["listen"] != "0.0.0.0" || inbound["listen_port"] != model.DefaultMixedInboundPort {
+				t.Fatalf("mixed inbound = %+v, want 0.0.0.0:%d", inbound, model.DefaultMixedInboundPort)
 			}
 		}
 	}
@@ -975,6 +975,9 @@ func TestGetGenerateRequestUsesPersistedLogLevelByDefault(t *testing.T) {
 	}
 	if request.LogLevel != "debug" {
 		t.Fatalf("default generation log level = %q, want debug", request.LogLevel)
+	}
+	if request.DefaultOutbound != "direct" || request.InboundListen != "0.0.0.0" || request.InboundPort != model.DefaultMixedInboundPort {
+		t.Fatalf("default generation request = %+v", request)
 	}
 	if request.TUNIPv4Address != defaultTUNIPv4Address || request.TUNIPv6Address != defaultTUNIPv6Address {
 		t.Fatalf("default TUN addresses = %q, %q", request.TUNIPv4Address, request.TUNIPv6Address)

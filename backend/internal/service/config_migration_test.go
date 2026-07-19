@@ -334,6 +334,28 @@ func TestMigrateAckwrapTUNInboundsAddsMissingDefaultsAndPreservesExplicitSetting
 	}
 }
 
+func TestMigrateAckwrapTUNInboundsRecognizesLegacyDefaultAddress(t *testing.T) {
+	inbounds := []interface{}{
+		map[string]interface{}{
+			"type":           "tun",
+			"tag":            "tun-in",
+			"interface_name": "tun0",
+			"address":        []string{legacyDefaultTUNIPv4Address},
+			"auto_route":     true,
+			"strict_route":   true,
+		},
+	}
+	if !isAckwrapManagedConfig(map[string]interface{}{}, inbounds, map[string]interface{}{}) {
+		t.Fatal("legacy default TUN address was not recognized as Ackwrap-managed")
+	}
+	if migrated := migrateAckwrapTUNInbounds(inbounds, false); migrated != 1 {
+		t.Fatalf("legacy TUN migrated fields = %d, want IPv6 address only", migrated)
+	}
+	if !stringListContains(inbounds[0].(map[string]interface{})["address"], defaultTUNIPv6Address) {
+		t.Fatalf("legacy TUN missing default IPv6 address: %+v", inbounds[0])
+	}
+}
+
 func TestMigrateManagedConfigDoesNotEnableCustomTUN(t *testing.T) {
 	input := []byte(`{
   "inbounds": [{"type":"tun","tag":"custom-tun","auto_route":true}],

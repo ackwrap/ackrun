@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -54,7 +55,7 @@ func (s *Store) GetProxyCollection(id int) (*model.ProxyCollection, error) {
 func (s *Store) ListProxyCollections() ([]*model.ProxyCollection, error) {
 	rows, err := s.db.Query(
 		`SELECT id, name, type, source_type, referenced_group_ids, route_rule_ids, node_uids, test_url, test_interval, tolerance, enabled, priority, created_at, updated_at
-			FROM proxy_collections ORDER BY priority ASC, id DESC`,
+			FROM proxy_collections ORDER BY CASE WHEN name = '全球直连' THEN 0 ELSE 1 END, priority ASC, id DESC`,
 	)
 	if err != nil {
 		return nil, err
@@ -104,6 +105,14 @@ func (s *Store) ReorderProxyCollections(ids []int) error {
 	defer tx.Rollback()
 	if err := validateCompleteReorderIDs(tx, "proxy_collections", ids); err != nil {
 		return err
+	}
+	var directID int
+	err = tx.QueryRow(`SELECT id FROM proxy_collections WHERE name = '全球直连' LIMIT 1`).Scan(&directID)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if err == nil && (len(ids) == 0 || ids[0] != directID) {
+		return fmt.Errorf("全球直连必须保持在策略组第一位")
 	}
 	now := time.Now().UnixMilli()
 	for priority, id := range ids {

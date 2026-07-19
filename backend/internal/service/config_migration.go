@@ -288,7 +288,7 @@ func isAckwrapManagedConfig(config map[string]interface{}, inbounds []interface{
 	}
 	for _, rawInbound := range inbounds {
 		inbound, ok := rawInbound.(map[string]interface{})
-		if ok && inbound["type"] == "tun" && inbound["tag"] == "tun-in" && inbound["interface_name"] == "tun0" && stringListContains(inbound["address"], defaultTUNIPv4Address) {
+		if ok && inbound["type"] == "tun" && inbound["tag"] == "tun-in" && inbound["interface_name"] == "tun0" && hasDefaultTUNIPv4Address(inbound["address"]) {
 			return true
 		}
 	}
@@ -310,7 +310,7 @@ func migrateAckwrapTUNInbounds(inbounds []interface{}, linux bool) int {
 			inbound["strict_route"] = true
 			migrated++
 		}
-		if stringListContains(inbound["address"], defaultTUNIPv4Address) && !stringListHasIPv6(inbound["address"]) {
+		if hasDefaultTUNIPv4Address(inbound["address"]) && !stringListHasIPv6(inbound["address"]) {
 			inbound["address"] = appendStringList(inbound["address"], defaultTUNIPv6Address)
 			migrated++
 		}
@@ -322,6 +322,10 @@ func migrateAckwrapTUNInbounds(inbounds []interface{}, linux bool) int {
 		}
 	}
 	return migrated
+}
+
+func hasDefaultTUNIPv4Address(value interface{}) bool {
+	return stringListContains(value, defaultTUNIPv4Address) || stringListContains(value, legacyDefaultTUNIPv4Address)
 }
 
 func stringListHasIPv6(value interface{}) bool {

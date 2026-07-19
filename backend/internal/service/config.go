@@ -204,7 +204,7 @@ func (svc *ConfigService) GenerateDefault() error {
 			{
 				Type:       "mixed",
 				Tag:        "mixed-in",
-				Listen:     "127.0.0.1",
+				Listen:     "0.0.0.0",
 				ListenPort: model.DefaultMixedInboundPort,
 			},
 		},

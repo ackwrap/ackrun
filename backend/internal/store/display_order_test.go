@@ -58,6 +58,36 @@ func TestProxyCollectionStoreReorderRejectsIncompleteOrUnknownIDs(t *testing.T) 
 	}
 }
 
+func TestProxyCollectionStoreKeepsGlobalDirectFirst(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	collections := []*model.ProxyCollection{
+		{Name: "全球直连", Type: "selector", SourceType: "manual", ReferencedGroupIDs: "[]", RouteRuleIDs: "[]", NodeUIDs: `["direct"]`, Enabled: true},
+		{Name: "Google", Type: "selector", SourceType: "manual", ReferencedGroupIDs: "[]", RouteRuleIDs: "[]", NodeUIDs: "[]", Enabled: true},
+	}
+	for _, collection := range collections {
+		if err := db.CreateProxyCollection(collection); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.ReorderProxyCollections([]int{collections[1].ID, collections[0].ID}); err == nil {
+		t.Fatal("expected moving 全球直连 away from first place to fail")
+	}
+	if _, err := db.db.Exec(`UPDATE proxy_collections SET priority = CASE WHEN name = '全球直连' THEN 99 ELSE 0 END`); err != nil {
+		t.Fatal(err)
+	}
+	items, err := db.ListProxyCollections()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 || items[0].Name != "全球直连" {
+		t.Fatalf("collection order = %+v, want 全球直连 first", items)
+	}
+}
+
 func TestDNSServerAndOutboundBindingOrderPersist(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {

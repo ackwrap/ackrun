@@ -6,6 +6,8 @@ backend/ui/
 backend/internal/webui/dist/*
 !backend/internal/webui/dist/embed-placeholder.txt
 backend/.air/
+backend/.air.env
+backend/.dev/
 mihomo-Alpha
 # Frontend
 frontend/node_modules/

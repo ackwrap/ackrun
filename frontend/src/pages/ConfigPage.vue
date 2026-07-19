@@ -358,6 +358,24 @@ onMounted(async () => {
               <option value="direct">direct（直连）</option>
             </select></label
           ><label
+            ><span class="text-xs">日志级别</span
+            ><select v-model="request.log_level" class="aw-input mt-1 w-full">
+              <option
+                v-for="l in [
+                  'trace',
+                  'debug',
+                  'info',
+                  'warn',
+                  'error',
+                  'fatal',
+                  'panic',
+                ]"
+                :key="l"
+              >
+                {{ l }}
+              </option>
+            </select></label
+          ><label
             ><span class="text-xs">Mixed 监听地址</span
             ><input
               v-model="request.inbound_listen"
@@ -373,7 +391,7 @@ onMounted(async () => {
             ><input
               v-model="request.tun_ipv4_address"
               class="aw-input mt-1 w-full"
-              placeholder="172.19.0.1/30"
+              placeholder="172.254.0.1/30"
             /><small class="mt-1 block text-[var(--text-tertiary)]"
               >使用 CIDR，需避开 LAN、Docker 和 VPN 已占用网段。</small
             ></label
@@ -386,16 +404,6 @@ onMounted(async () => {
             /><small class="mt-1 block text-[var(--text-tertiary)]"
               >使用 IPv6 CIDR；修改后需重新生成并应用配置。</small
             ></label
-          ><label
-            ><span class="text-xs">日志级别</span
-            ><select v-model="request.log_level" class="aw-input mt-1 w-full">
-              <option
-                v-for="l in ['trace', 'debug', 'info', 'warn', 'error']"
-                :key="l"
-              >
-                {{ l }}
-              </option>
-            </select></label
           >
         </div>
         <p v-else class="mt-4 text-xs text-[var(--text-tertiary)]">
