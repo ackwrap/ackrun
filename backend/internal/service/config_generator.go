@@ -1570,10 +1570,10 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase() map[string]interface{
 		rules = append(rules, ruleMap)
 	}
 	if globalSettings.FakeIPEnabled {
-		rules = append([]map[string]interface{}{{
+		rules = append(rules, map[string]interface{}{
 			"query_type": []string{"A", "AAAA"},
 			"server":     "fakeip",
-		}}, rules...)
+		})
 	}
 
 	// 4. 组装完整 DNS 配置

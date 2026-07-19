@@ -56,6 +56,7 @@ const defaults = {
   messageType = ref<"success" | "error">("success"),
   serverForm = ref<Partial<Server> | null>(null),
   ruleForm = ref<any | null>(null),
+  ruleOrderPending = ref(false),
   bindings = ref<Record<string, string>>({}),
   outboundOrder = ref<string[]>([]),
   preview = ref("");
@@ -302,6 +303,25 @@ async function moveServer(index: number, direction: -1 | 1) {
     await load();
   }
 }
+async function moveRule(index: number, direction: -1 | 1) {
+  if (ruleOrderPending.value) return;
+  const next = swapped(rules.value, index, direction);
+  if (!next) return;
+  ruleOrderPending.value = true;
+  rules.value = next;
+  try {
+    await request("/api/v1/dns/rules/reorder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(next.map((item) => item.id)),
+    });
+  } catch (e: any) {
+    show(`DNS 规则排序失败: ${e.message}`, "error");
+    await load();
+  } finally {
+    ruleOrderPending.value = false;
+  }
+}
 async function moveBinding(index: number, direction: -1 | 1) {
   const next = swapped(targets.value, index, direction);
   if (!next) return;
@@ -502,6 +522,7 @@ onMounted(load);
         </div>
         <p class="mt-2 text-xs text-[var(--text-tertiary)]">
           FakeIP 由运行模式自动管理：TUN / TUN + Mixed 启用，Mixed 停用。
+          用户 DNS 规则按页面顺序优先匹配，未命中的 A/AAAA 查询才使用 FakeIP。
         </p>
         <div class="mt-3 grid gap-3 md:grid-cols-3">
           <input v-model="global.fakeip_inet4_range" /><input
@@ -689,7 +710,12 @@ onMounted(load);
         class="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
       >
         <header class="flex items-center justify-between gap-3">
-          <h3 class="font-semibold">DNS 规则</h3>
+          <div>
+            <h3 class="font-semibold">DNS 规则</h3>
+            <p class="mt-1 text-xs text-[var(--text-tertiary)]">
+              从上到下匹配；TUN 模式下 FakeIP 是列表之后的最终兜底。
+            </p>
+          </div>
           <button class="aw-action-button aw-action-neutral" @click="newRule">
             <Plus :size="13" />新增规则
           </button>
@@ -698,6 +724,7 @@ onMounted(load);
           <table class="aw-data-table min-w-[760px]">
             <thead>
               <tr>
+                <th>排序</th>
                 <th>匹配条件</th>
                 <th>DNS 服务器</th>
                 <th>禁用缓存</th>
@@ -707,9 +734,17 @@ onMounted(load);
             </thead>
             <tbody>
               <tr v-if="!rules.length">
-                <td colspan="5" class="py-10 text-center">暂无 DNS 规则</td>
+                <td colspan="6" class="py-10 text-center">暂无 DNS 规则</td>
               </tr>
-              <tr v-for="r in rules" :key="r.id">
+              <tr v-for="(r, i) in rules" :key="r.id">
+                <td>
+                  <OrderButtons
+                    :up-disabled="ruleOrderPending || i === 0"
+                    :down-disabled="ruleOrderPending || i === rules.length - 1"
+                    @up="moveRule(i, -1)"
+                    @down="moveRule(i, 1)"
+                  />
+                </td>
                 <td class="max-w-[520px] truncate" :title="conditionText(r)">
                   {{ conditionText(r) }}
                 </td>

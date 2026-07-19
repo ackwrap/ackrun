@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -944,6 +945,27 @@ func TestGenerateDNSFakeIPFollowsTUNMode(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	ruleIDs := make([]int64, 0, 3)
+	for _, item := range []struct {
+		domain   string
+		priority int
+	}{
+		{domain: "third.cn", priority: 30},
+		{domain: "first.cn", priority: 10},
+		{domain: "second.cn", priority: 20},
+	} {
+		created, err := db.CreateDNSRule(&model.DNSRuleRequest{
+			Enabled:    true,
+			Priority:   item.priority,
+			RuleType:   "default",
+			Conditions: map[string]interface{}{"domain_suffix": []string{item.domain}},
+			Server:     "dns_direct",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ruleIDs = append(ruleIDs, created.ID)
+	}
 	settings, err := db.GetDNSGlobalSettings()
 	if err != nil {
 		t.Fatal(err)
@@ -958,6 +980,23 @@ func TestGenerateDNSFakeIPFollowsTUNMode(t *testing.T) {
 	dns := service.generateDNSFromDatabase()
 	if !generatedDNSHasServerType(dns, "fakeip") || !generatedDNSHasRuleServer(dns, "fakeip") {
 		t.Fatalf("TUN mode DNS does not contain fakeip server and rule: %+v", dns)
+	}
+	rules, _ := dns["rules"].([]map[string]interface{})
+	if got := generatedDNSDomainSuffixOrder(rules); !reflect.DeepEqual(got, []string{"first.cn", "second.cn", "third.cn"}) {
+		t.Fatalf("DNS priority order = %v", got)
+	}
+	if len(rules) < 4 || rules[len(rules)-1]["server"] != "fakeip" {
+		t.Fatalf("DNS rule order = %+v, want user rules before FakeIP fallback", rules)
+	}
+	if err := db.ReorderDNSRules(ruleIDs); err != nil {
+		t.Fatal(err)
+	}
+	rules, _ = service.generateDNSFromDatabase()["rules"].([]map[string]interface{})
+	if got := generatedDNSDomainSuffixOrder(rules); !reflect.DeepEqual(got, []string{"third.cn", "first.cn", "second.cn"}) {
+		t.Fatalf("reordered DNS rule order = %v", got)
+	}
+	if rules[len(rules)-1]["server"] != "fakeip" {
+		t.Fatalf("FakeIP rule is not the final fallback after reorder: %+v", rules)
 	}
 
 	if err := db.SetInboundMode("mixed"); err != nil {
@@ -994,6 +1033,20 @@ func generatedDNSHasRuleServer(dns map[string]interface{}, serverTag string) boo
 		}
 	}
 	return false
+}
+
+func generatedDNSDomainSuffixOrder(rules []map[string]interface{}) []string {
+	result := make([]string, 0, len(rules))
+	for _, rule := range rules {
+		values, _ := rule["domain_suffix"].([]interface{})
+		if len(values) == 0 {
+			continue
+		}
+		if value, ok := values[0].(string); ok {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func TestGenerateInboundsAllowsFormerUpdateProxyPort(t *testing.T) {

@@ -103,6 +103,17 @@ func (svc *DNSService) DeleteDNSRule(id int64) error {
 }
 
 func (svc *DNSService) ReorderDNSRules(ids []int64) error {
+	if len(ids) == 0 {
+		return fmt.Errorf("DNS 规则 ID 不能为空")
+	}
+	seen := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		if id <= 0 || seen[id] {
+			return fmt.Errorf("DNS 规则 ID 无效或重复")
+		}
+		seen[id] = true
+	}
+	logging.Info("dns.rule.reorder", "调整 %d 条 DNS 规则的顺序", len(ids))
 	return svc.store.ReorderDNSRules(ids)
 }
 
