@@ -1,11 +1,48 @@
 package store
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/ackwrap/ackwrap/internal/model"
 )
+
+func TestGeoAssetAvailabilityTracksLocalFile(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+
+	assets, err := db.ListGeoAssets()
+	if err != nil {
+		t.Fatalf("list geo assets: %v", err)
+	}
+	if len(assets) == 0 || assets[0].Type != "geoip" {
+		t.Fatalf("unexpected default geo assets: %+v", assets)
+	}
+
+	path := filepath.Join(t.TempDir(), "geoip.db")
+	item, err := db.UpdateGeoAssetSyncResult(assets[0].ID, path)
+	if err != nil {
+		t.Fatalf("set geo asset path: %v", err)
+	}
+	if item.Available {
+		t.Fatal("missing geo database must not be available")
+	}
+
+	if err := os.WriteFile(path, []byte("geo database"), 0o600); err != nil {
+		t.Fatalf("create geo database: %v", err)
+	}
+	item, err = db.GetGeoAsset(assets[0].ID)
+	if err != nil {
+		t.Fatalf("get geo asset: %v", err)
+	}
+	if !item.Available {
+		t.Fatal("existing regular geo database must be available")
+	}
+}
 
 func TestRouteRuleStoreCRUDAndReorder(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))

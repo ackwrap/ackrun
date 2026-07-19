@@ -56,6 +56,10 @@ function formatUpdatedAt(value: number) {
 async function lookup() {
   try {
     error.value = "";
+    if (!p.geoAssets.some((x) => x.type === "geoip" && x.available)) {
+      error.value = "GeoIP 数据库文件不存在，请先更新 GeoIP 数据库";
+      return;
+    }
     result.value = await api.lookupGeo(target.value.trim(), dns.value);
   } catch (e: any) {
     error.value = e.message;
@@ -64,6 +68,10 @@ async function lookup() {
 async function lookupTag(offset = 0) {
   try {
     tagError.value = "";
+    if (!p.geoAssets.some((x) => x.type === "geosite" && x.available)) {
+      tagError.value = "GeoSite 数据库文件不存在，请先更新 GeoSite 数据库";
+      return;
+    }
     tags.value = await api.lookupGeositeDomains(tag.value.trim(), 100, offset);
   } catch (e: any) {
     tagError.value = e.message;
@@ -170,10 +178,18 @@ async function lookupTag(offset = 0) {
                 {{ server }}
               </option>
             </select>
-            <button class="aw-action-button aw-action-neutral" @click="lookup">
+            <button
+              class="aw-action-button aw-action-neutral"
+              :disabled="!x.available"
+              :title="x.available ? '查询 GeoIP' : '数据库文件不存在，请先更新'"
+              @click="lookup"
+            >
               查询
             </button>
           </div>
+          <p v-if="!x.available" class="mt-2 text-xs text-[var(--text-tertiary)]">
+            数据库文件不存在，请先点击“更新”后查询。
+          </p>
           <p v-if="error" class="mt-2 text-xs text-red-400">{{ error }}</p>
         </div>
         <div
@@ -189,11 +205,16 @@ async function lookupTag(offset = 0) {
             />
             <button
               class="aw-action-button aw-action-neutral"
+              :disabled="!x.available"
+              :title="x.available ? '反查 GeoSite 条目' : '数据库文件不存在，请先更新'"
               @click="lookupTag()"
             >
               反查条目
             </button>
           </div>
+          <p v-if="!x.available" class="mt-2 text-xs text-[var(--text-tertiary)]">
+            数据库文件不存在，请先点击“更新”后反查。
+          </p>
           <p class="mt-2 text-xs text-[var(--text-tertiary)]">
             查询标签包含的域名、CIDR 或关联条目。
           </p>

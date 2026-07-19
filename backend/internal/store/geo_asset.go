@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"os"
 	"time"
 
 	"github.com/ackwrap/ackwrap/internal/model"
@@ -94,5 +95,9 @@ func scanGeoAsset(scanner geoAssetScanner) (*model.GeoAsset, error) {
 		return nil, err
 	}
 	item.UseProxy = useProxy != 0
+	if item.LocalPath != "" {
+		info, err := os.Stat(item.LocalPath)
+		item.Available = err == nil && info.Mode().IsRegular()
+	}
 	return &item, nil
 }

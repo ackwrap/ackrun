@@ -621,6 +621,7 @@ export interface GeoAsset {
   sync_error: string;
   last_sync_at: number;
   local_path: string;
+  available: boolean;
   cached_updated_at: number;
   created_at: number;
   updated_at: number;

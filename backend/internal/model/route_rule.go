@@ -87,6 +87,7 @@ type GeoAsset struct {
 	SyncError       string `json:"sync_error"`
 	LastSyncAt      int64  `json:"last_sync_at"`
 	LocalPath       string `json:"local_path"`
+	Available       bool   `json:"available"`
 	CachedUpdatedAt int64  `json:"cached_updated_at"`
 	CreatedAt       int64  `json:"created_at"`
 	UpdatedAt       int64  `json:"updated_at"`
