@@ -190,7 +190,7 @@ onMounted(load);
                   class="aw-action-button aw-action-neutral"
                   @click="toggle(target)"
                 >
-                  {{ target.enabled ? "启用" : "停用" }}
+                  {{ target.enabled ? "停用" : "启用" }}
                 </button>
               </td>
               <td>

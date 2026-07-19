@@ -198,7 +198,7 @@ onMounted(load);
                 class="aw-action-button aw-action-neutral"
                 @click="toggle(provider)"
               >
-                {{ provider.enabled ? "启用" : "停用" }}
+                {{ provider.enabled ? "停用" : "启用" }}
               </button>
             </td>
             <td>
