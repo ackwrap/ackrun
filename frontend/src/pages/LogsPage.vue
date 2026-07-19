@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
 import PageHeader from "@/components/layout/PageHeader.vue";
 import Button from "@/components/ui/Button.vue";
 import { useRealtimeSocket } from "@/composables/useRealtimeSocket";
@@ -9,11 +9,15 @@ import type { CoreLogEntry, ToolLogEntry, WSEvent } from "@/services/types";
 type LogTab = "core" | "tool";
 type LogFilter = "all" | "stdout" | "stderr" | "info" | "error";
 interface DisplayLogEntry {
-  id: number;
+  key: string;
   time: number;
   source: string;
   line: string;
   error: boolean;
+}
+interface ClearContext<T> {
+  clearedIdentities: Set<string>;
+  events: T[];
 }
 
 const retainedLogLimit = 1000;
@@ -21,10 +25,23 @@ const activeTab = ref<LogTab>("core");
 const coreLogs = ref<CoreLogEntry[]>([]);
 const toolLogs = ref<ToolLogEntry[]>([]);
 const logFilter = ref<LogFilter>("all");
-const autoScroll = ref(false);
-const loading = ref(true);
-const error = ref("");
+const autoScroll = ref(true);
+const loadingTabs = reactive<Record<LogTab, boolean>>({
+  core: true,
+  tool: false,
+});
+const tabErrors = reactive<Record<LogTab, string>>({ core: "", tool: "" });
+const requestGenerations: Record<LogTab, number> = { core: 0, tool: 0 };
+const clearingTabs = reactive<Record<LogTab, boolean>>({
+  core: false,
+  tool: false,
+});
+let coreClearContext: ClearContext<CoreLogEntry> | null = null;
+let toolClearContext: ClearContext<ToolLogEntry> | null = null;
 const logPanel = ref<HTMLDivElement | null>(null);
+const loading = computed(() => loadingTabs[activeTab.value]);
+const error = computed(() => tabErrors[activeTab.value]);
+const clearing = computed(() => clearingTabs[activeTab.value]);
 const filters = computed<LogFilter[]>(() =>
   activeTab.value === "core"
     ? ["all", "stdout", "stderr"]
@@ -37,7 +54,7 @@ const displayLogs = computed<DisplayLogEntry[]>(() => {
         (item) => logFilter.value === "all" || item.source === logFilter.value,
       )
       .map((item) => ({
-        id: item.id,
+        key: coreLogIdentity(item),
         time: item.time,
         source: item.source,
         line: item.line,
@@ -49,7 +66,7 @@ const displayLogs = computed<DisplayLogEntry[]>(() => {
       (item) => logFilter.value === "all" || item.level === logFilter.value,
     )
     .map((item) => ({
-      id: item.id,
+      key: toolLogIdentity(item),
       time: item.time,
       source: item.level,
       line: `[${item.tag}] ${item.message}`,
@@ -62,51 +79,173 @@ const cachedCount = computed(() =>
 const formatTime = (value: number) =>
   value ? new Date(value).toLocaleTimeString() : "--:--:--";
 
-async function loadLogs() {
-  loading.value = true;
-  error.value = "";
+function coreLogIdentity(item: CoreLogEntry) {
+  return JSON.stringify([item.id, item.time, item.source, item.line]);
+}
+
+function toolLogIdentity(item: ToolLogEntry) {
+  return JSON.stringify([
+    item.id,
+    item.time,
+    item.level,
+    item.tag,
+    item.message,
+  ]);
+}
+
+function mergeLogEntries<T extends { time: number }>(
+  first: T[],
+  second: T[],
+  identity: (item: T) => string,
+) {
+  const seen = new Set<string>();
+  return [...first, ...second]
+    .filter((item) => {
+      const key = identity(item);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((left, right) => left.time - right.time)
+    .slice(-retainedLogLimit);
+}
+
+function invalidateLoad(tab: LogTab) {
+  requestGenerations[tab]++;
+  loadingTabs[tab] = false;
+}
+
+async function loadLogs(tab: LogTab = activeTab.value) {
+  const generation = ++requestGenerations[tab];
+  loadingTabs[tab] = true;
+  tabErrors[tab] = "";
   try {
-    if (activeTab.value === "core") coreLogs.value = await api.getCoreLogs(500);
-    else toolLogs.value = await api.getToolLogs(500);
+    if (tab === "core") {
+      const existingIdentities = new Set(coreLogs.value.map(coreLogIdentity));
+      const snapshot = await api.getCoreLogs(retainedLogLimit);
+      if (generation !== requestGenerations[tab]) return;
+      const liveEntries = coreLogs.value.filter(
+        (entry) => !existingIdentities.has(coreLogIdentity(entry)),
+      );
+      coreLogs.value = mergeLogEntries(
+        snapshot,
+        liveEntries,
+        coreLogIdentity,
+      );
+    } else {
+      const existingIdentities = new Set(toolLogs.value.map(toolLogIdentity));
+      const snapshot = await api.getToolLogs(retainedLogLimit);
+      if (generation !== requestGenerations[tab]) return;
+      const liveEntries = toolLogs.value.filter(
+        (entry) => !existingIdentities.has(toolLogIdentity(entry)),
+      );
+      toolLogs.value = mergeLogEntries(
+        snapshot,
+        liveEntries,
+        toolLogIdentity,
+      );
+    }
   } catch (e: any) {
-    error.value = e.message || "日志加载失败";
+    if (generation === requestGenerations[tab])
+      tabErrors[tab] = e.message || "日志加载失败";
   } finally {
-    loading.value = false;
+    if (generation === requestGenerations[tab]) loadingTabs[tab] = false;
   }
+  if (
+    generation === requestGenerations[tab] &&
+    activeTab.value === tab &&
+    autoScroll.value
+  )
+    await scrollToLatest();
 }
 
 async function clearLogs() {
-  error.value = "";
+  const tab = activeTab.value;
+  if (clearingTabs[tab]) return;
+  invalidateLoad(tab);
+  clearingTabs[tab] = true;
+  tabErrors[tab] = "";
   try {
-    if (activeTab.value === "core") {
+    if (tab === "core") {
+      coreClearContext = {
+        clearedIdentities: new Set(coreLogs.value.map(coreLogIdentity)),
+        events: [],
+      };
       await api.clearCoreLogs();
-      coreLogs.value = [];
+      const context = coreClearContext;
+      coreClearContext = null;
+      coreLogs.value = mergeLogEntries(
+        [],
+        context.events.filter(
+          (entry) => !context.clearedIdentities.has(coreLogIdentity(entry)),
+        ),
+        coreLogIdentity,
+      );
     } else {
+      toolClearContext = {
+        clearedIdentities: new Set(toolLogs.value.map(toolLogIdentity)),
+        events: [],
+      };
       await api.clearToolLogs();
-      toolLogs.value = [];
+      const context = toolClearContext;
+      toolClearContext = null;
+      toolLogs.value = mergeLogEntries(
+        [],
+        context.events.filter(
+          (entry) => !context.clearedIdentities.has(toolLogIdentity(entry)),
+        ),
+        toolLogIdentity,
+      );
     }
+    await loadLogs(tab);
   } catch (e: any) {
-    error.value = e.message || "日志清空失败";
+    tabErrors[tab] = e.message || "日志清空失败";
+  } finally {
+    if (tab === "core") coreClearContext = null;
+    else toolClearContext = null;
+    clearingTabs[tab] = false;
   }
 }
 
 function switchTab(tab: LogTab) {
   if (activeTab.value === tab) return;
+  invalidateLoad(activeTab.value);
   activeTab.value = tab;
   logFilter.value = "all";
-  autoScroll.value = false;
-  void loadLogs();
+  void loadLogs(tab);
 }
 
-useRealtimeSocket((event: WSEvent) => {
-  if (event.type !== "core.log") return;
-  const entry = event.data as CoreLogEntry;
-  if (!entry?.line) return;
-  const nextLogs = [...coreLogs.value, entry];
-  coreLogs.value =
-    autoScroll.value && nextLogs.length > retainedLogLimit
-      ? nextLogs.slice(-retainedLogLimit)
-      : nextLogs;
+const { connected } = useRealtimeSocket((event: WSEvent) => {
+  if (event.type === "core.log") {
+    const entry = event.data as CoreLogEntry;
+    if (!entry?.line) return;
+    coreClearContext?.events.push(entry);
+    coreLogs.value = mergeLogEntries(coreLogs.value, [entry], coreLogIdentity);
+  } else if (event.type === "tool.log") {
+    const entry = event.data as ToolLogEntry;
+    if (!entry?.message) return;
+    toolClearContext?.events.push(entry);
+    toolLogs.value = mergeLogEntries(toolLogs.value, [entry], toolLogIdentity);
+  }
+});
+const hasConnected = ref(connected.value);
+const reconnectingAfterDisconnect = ref(false);
+const connectionLabel = computed(() => {
+  if (connected.value) return "实时连接正常";
+  if (hasConnected.value) return "实时连接已断开，正在重连…";
+  return "正在建立实时连接…";
+});
+
+watch(connected, (isConnected, wasConnected) => {
+  if (!isConnected && wasConnected) {
+    reconnectingAfterDisconnect.value = true;
+    return;
+  }
+  if (!isConnected) return;
+  hasConnected.value = true;
+  if (!reconnectingAfterDisconnect.value) return;
+  reconnectingAfterDisconnect.value = false;
+  void Promise.allSettled([loadLogs("core"), loadLogs("tool")]);
 });
 
 async function scrollToLatest() {
@@ -119,10 +258,6 @@ async function toggleAutoScroll() {
     autoScroll.value = false;
     return;
   }
-  if (activeTab.value === "core" && coreLogs.value.length > retainedLogLimit)
-    coreLogs.value = coreLogs.value.slice(-retainedLogLimit);
-  if (activeTab.value === "tool" && toolLogs.value.length > retainedLogLimit)
-    toolLogs.value = toolLogs.value.slice(-retainedLogLimit);
   autoScroll.value = true;
   await scrollToLatest();
 }
@@ -144,7 +279,7 @@ function handleLogScroll() {
 watch(displayLogs, () => {
   if (autoScroll.value) void scrollToLatest();
 });
-onMounted(loadLogs);
+onMounted(() => void loadLogs());
 </script>
 
 <template>
@@ -194,12 +329,20 @@ onMounted(loadLogs);
           <Button
             size="sm"
             :variant="autoScroll ? 'primary' : 'secondary'"
+            :aria-pressed="autoScroll"
             @click="toggleAutoScroll"
           >
-            {{ autoScroll ? "跟随最新" : "定屏" }}
+            {{ autoScroll ? "跟随中" : "跟随" }}
           </Button>
-          <Button size="sm" @click="loadLogs">刷新</Button>
-          <Button size="sm" variant="danger" @click="clearLogs">清空</Button>
+          <Button size="sm" @click="loadLogs()">刷新</Button>
+          <Button
+            size="sm"
+            variant="danger"
+            :loading="clearing"
+            @click="clearLogs"
+          >
+            清空
+          </Button>
         </div>
       </div>
       <div
@@ -207,6 +350,17 @@ onMounted(loadLogs);
       >
         <span>已缓存 {{ cachedCount }} 行</span>
         <span>当前显示 {{ displayLogs.length }} 行</span>
+        <span
+          :class="
+            connected
+              ? 'text-[var(--color-success)]'
+              : hasConnected
+                ? 'text-[var(--color-error)]'
+                : 'text-[var(--text-tertiary)]'
+          "
+        >
+          {{ connectionLabel }}
+        </span>
         <span v-if="error" class="text-[var(--color-error)]">{{ error }}</span>
       </div>
       <div
@@ -223,7 +377,7 @@ onMounted(loadLogs);
         <div
           v-for="item in displayLogs"
           v-else
-          :key="item.id"
+          :key="item.key"
           class="grid grid-cols-[82px_58px_minmax(0,1fr)] gap-2 whitespace-pre-wrap break-all py-0.5 hover:bg-[var(--table-row-hover)]"
         >
           <span class="text-[var(--text-muted)]">{{

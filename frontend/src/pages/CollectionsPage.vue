@@ -9,6 +9,7 @@ import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
 import OrderButtons from "@/components/ui/OrderButtons.vue";
 import NodeFlagName from "@/components/NodeFlagName.vue";
 import NodeGroupDetailModal from "./collections/NodeGroupDetailModal.vue";
+import { subscriptionFilterLabel } from "./collections/nodeGroupLabels";
 import {
   findDNSOutboundBinding,
   saveDNSOutboundBinding,
@@ -685,7 +686,14 @@ onMounted(load);
               </td>
               <td>{{ x.type === "urltest" ? "自动" : "手动" }}</td>
               <td>{{ x.filter_protocols || "全部" }}</td>
-              <td>{{ x.filter_subscriptions || "全部" }}</td>
+              <td>
+                {{
+                  subscriptionFilterLabel(
+                    x.filter_subscriptions,
+                    facets.subscriptions,
+                  )
+                }}
+              </td>
               <td>{{ x.filter_include }}</td>
               <td>{{ x.filter_exclude || "-" }}</td>
               <td>{{ x.matched_node_count || 0 }} 个</td>

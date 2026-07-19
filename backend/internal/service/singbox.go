@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -26,20 +27,20 @@ import (
 )
 
 type SingboxService struct {
-	paths       *paths.Paths
-	realtime    *RealtimeService
-	coreLogs    *CoreLogService
-	store       *store.Store
-	cmd         *exec.Cmd
-	pid         int
-	mu          sync.Mutex
-	lifecycleMu sync.Mutex
-	cancel      context.CancelFunc
-	done        chan struct{}
-	stopping    bool
-	stopReason  string
-	cachedVer   string
-	lastError   string
+	paths              *paths.Paths
+	realtime           *RealtimeService
+	coreLogs           *CoreLogService
+	store              *store.Store
+	cmd                *exec.Cmd
+	pid                int
+	mu                 sync.Mutex
+	lifecycleMu        sync.Mutex
+	networkLifecycleMu sync.Mutex
+	done               chan error
+	stopping           bool
+	stopReason         string
+	cachedVer          string
+	lastError          string
 }
 
 var (
@@ -57,6 +58,9 @@ func (svc *SingboxService) Start() (*model.ActionResponse, error) {
 }
 
 func (svc *SingboxService) start() (*model.ActionResponse, error) {
+	svc.networkLifecycleMu.Lock()
+	defer svc.networkLifecycleMu.Unlock()
+
 	svc.mu.Lock()
 	defer svc.mu.Unlock()
 
@@ -65,6 +69,9 @@ func (svc *SingboxService) start() (*model.ActionResponse, error) {
 	}
 	if svc.isRunning() {
 		return nil, fmt.Errorf("sing-box is already running (pid=%d)", svc.pid)
+	}
+	if err := svc.recoverStoppedState(false, true); err != nil {
+		return nil, err
 	}
 
 	if _, err := os.Stat(svc.paths.BinaryPath); os.IsNotExist(err) {
@@ -80,7 +87,6 @@ func (svc *SingboxService) start() (*model.ActionResponse, error) {
 		})
 		return nil, err
 	}
-
 	logging.Info("core.start", "starting sing-box")
 	svc.realtime.Broadcast("core.status", map[string]any{
 		"status": "starting",
@@ -88,42 +94,76 @@ func (svc *SingboxService) start() (*model.ActionResponse, error) {
 		"error":  "",
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	svc.cancel = cancel
 	svc.lastError = ""
 	svc.stopReason = ""
 
-	cmd := exec.CommandContext(ctx, svc.paths.BinaryPath, "run", "-c", configPath, "--disable-color")
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		cancel()
-		svc.cancel = nil
-		return nil, fmt.Errorf("capture sing-box stdout: %w", err)
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		cancel()
-		svc.cancel = nil
-		return nil, fmt.Errorf("capture sing-box stderr: %w", err)
-	}
-
-	if err := cmd.Start(); err != nil {
-		cancel()
-		svc.cancel = nil
+	cmd := exec.Command(svc.paths.BinaryPath, "run", "-c", configPath, "--disable-color")
+	if err := prepareProcessCommand(cmd); err != nil {
 		svc.realtime.Broadcast("core.status", map[string]any{
 			"status": "error",
 			"pid":    0,
 			"error":  err.Error(),
 		})
-		return nil, fmt.Errorf("start sing-box: %w", err)
+		return nil, fmt.Errorf("prepare sing-box process: %w", err)
 	}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("capture sing-box stdout: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("capture sing-box stderr: %w", err)
+	}
+	processStarted := false
+	defer func() {
+		if !processStarted {
+			_ = stdout.Close()
+			_ = stderr.Close()
+		}
+	}()
+	tunState, err := readActiveTUNState(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("read active TUN state: %w", err)
+	}
+	routeTableBaseline, err := snapshotPlatformPriorityOneTables(tunState)
+	if err != nil {
+		logging.Error("core.start", "network ownership preflight failed: %v", err)
+		return nil, fmt.Errorf("snapshot network state before starting sing-box: %w", err)
+	}
+	pendingOwnership := routeTableBaseline.Required
+	if pendingOwnership {
+		pendingState, err := pendingSingboxRouteTableState(routeTableBaseline)
+		if err != nil {
+			return nil, fmt.Errorf("prepare pending sing-box network ownership: %w", err)
+		}
+		if err := writeSingboxRouteTableState(svc.routeTableStatePath(), pendingState); err != nil {
+			return nil, fmt.Errorf("persist pending sing-box network ownership: %w", err)
+		}
+	}
+
+	if err := cmd.Start(); err != nil {
+		startErr := fmt.Errorf("start sing-box: %w", err)
+		if pendingOwnership {
+			if discardErr := discardPendingSingboxRouteTableState(svc.routeTableStatePath()); discardErr != nil {
+				startErr = errors.Join(startErr, discardErr)
+			}
+		}
+		svc.realtime.Broadcast("core.status", map[string]any{
+			"status": "error",
+			"pid":    0,
+			"error":  startErr.Error(),
+		})
+		return nil, startErr
+	}
+	processStarted = true
 
 	svc.cmd = cmd
 	svc.pid = cmd.Process.Pid
-	svc.done = make(chan struct{})
+	svc.done = make(chan error, 1)
 	svc.stopping = false
 	done := svc.done
+	processExited := make(chan struct{})
 
 	logging.Info("core.start", "sing-box started, pid=%d", svc.pid)
 	svc.realtime.Broadcast("core.status", map[string]any{
@@ -142,10 +182,25 @@ func (svc *SingboxService) start() (*model.ActionResponse, error) {
 		defer logWG.Done()
 		svc.captureCoreLog(stderr, "stderr")
 	}()
+	ownershipResult := make(chan error, 1)
+	if pendingOwnership {
+		go func() {
+			ownershipErr := recordPlatformSingboxRouteTables(svc.routeTableStatePath(), processExited)
+			if ownershipErr != nil {
+				logging.Error("core.cleanup", "record sing-box route-table ownership failed: %v", ownershipErr)
+			}
+			ownershipResult <- ownershipErr
+		}()
+	} else {
+		ownershipResult <- nil
+	}
 
 	go func() {
 		err := cmd.Wait()
+		close(processExited)
+		svc.networkLifecycleMu.Lock()
 		logWG.Wait()
+		<-ownershipResult
 		svc.mu.Lock()
 		intentionalStop := svc.cmd == cmd && svc.stopping
 		stopReason := svc.stopReason
@@ -153,12 +208,21 @@ func (svc *SingboxService) start() (*model.ActionResponse, error) {
 			svc.stopping = true
 			svc.pid = 0
 			svc.cmd = nil
-			svc.cancel = nil
 			svc.done = nil
 		}
 		svc.mu.Unlock()
 
 		statusMsg, runtimeStatus, errorMessage := coreExitState(err, intentionalStop, svc.lastError)
+		cleanupErr := svc.recoverStoppedState(true, false)
+		if cleanupErr != nil {
+			statusMsg = "error"
+			runtimeStatus = model.RuntimeError
+			if errorMessage != "" {
+				errorMessage += "；"
+			}
+			errorMessage += "sing-box 已停止，但系统网络残留清理失败：" + cleanupErr.Error()
+			logging.Error("core.cleanup", "cleanup after sing-box exit failed: %v", cleanupErr)
+		}
 		if intentionalStop {
 			logging.Info("core.stop", "sing-box stopped, reason=%s", stopReason)
 		} else if err != nil {
@@ -175,6 +239,8 @@ func (svc *SingboxService) start() (*model.ActionResponse, error) {
 		svc.mu.Lock()
 		svc.stopping = false
 		svc.mu.Unlock()
+		svc.networkLifecycleMu.Unlock()
+		done <- cleanupErr
 		close(done)
 	}()
 
@@ -202,7 +268,6 @@ func (svc *SingboxService) stop(reason string) (*model.ActionResponse, error) {
 
 	pid := svc.pid
 	cmd := svc.cmd
-	cancel := svc.cancel
 	done := svc.done
 	svc.stopping = true
 	svc.stopReason = reason
@@ -215,19 +280,31 @@ func (svc *SingboxService) stop(reason string) (*model.ActionResponse, error) {
 		"pid":    pid,
 	})
 
-	if cancel != nil {
-		cancel()
+	if cmd == nil || cmd.Process == nil {
+		return nil, fmt.Errorf("sing-box process handle is unavailable (pid=%d)", pid)
+	}
+	if err := requestProcessShutdown(cmd.Process); err != nil {
+		logging.Error("core.stop", "graceful stop signal failed, force killing sing-box, pid=%d: %v", pid, err)
+		if killErr := cmd.Process.Kill(); killErr != nil {
+			return nil, fmt.Errorf("request sing-box shutdown: %v; force kill: %w", err, killErr)
+		}
 	}
 	if done != nil {
 		select {
-		case <-done:
+		case cleanupErr := <-done:
+			if cleanupErr != nil {
+				return nil, fmt.Errorf("sing-box stopped but network cleanup failed: %w", cleanupErr)
+			}
 		case <-time.After(10 * time.Second):
 			logging.Info("core.stop", "force killing sing-box, pid=%d", pid)
 			if cmd != nil && cmd.Process != nil {
 				_ = cmd.Process.Kill()
 			}
 			select {
-			case <-done:
+			case cleanupErr := <-done:
+				if cleanupErr != nil {
+					return nil, fmt.Errorf("sing-box stopped but network cleanup failed: %w", cleanupErr)
+				}
 			case <-time.After(2 * time.Second):
 				return nil, fmt.Errorf("sing-box process did not exit after force kill (pid=%d)", pid)
 			}
@@ -235,6 +312,51 @@ func (svc *SingboxService) stop(reason string) (*model.ActionResponse, error) {
 	}
 
 	return &model.ActionResponse{Success: true, Message: "service stopped"}, nil
+}
+
+// RecoverStaleState removes sing-box-owned OpenWrt state left by an unclean
+// process exit. It is safe to call on every Ackwrap startup.
+func (svc *SingboxService) RecoverStaleState() error {
+	svc.lifecycleMu.Lock()
+	defer svc.lifecycleMu.Unlock()
+	svc.networkLifecycleMu.Lock()
+	defer svc.networkLifecycleMu.Unlock()
+
+	svc.mu.Lock()
+	running := svc.isRunning()
+	svc.mu.Unlock()
+	if running {
+		return nil
+	}
+	return svc.recoverStoppedState(false, false)
+}
+
+func (svc *SingboxService) recoverStoppedState(forceDNS, rejectRunning bool) error {
+	result, cleanupErr := cleanupPlatformSingboxState(svc.routeTableStatePath())
+	if result.ProcessRunning {
+		if rejectRunning {
+			return fmt.Errorf("an unmanaged sing-box process is already running")
+		}
+		logging.Info("core.cleanup", "skipping stale-state cleanup because a sing-box process is running")
+		return nil
+	}
+	if result.Cleaned && cleanupErr == nil {
+		logging.Info("core.cleanup", "removed stale sing-box OpenWrt network state")
+	}
+	var failures []error
+	if cleanupErr != nil {
+		failures = append(failures, fmt.Errorf("cleanup sing-box network state: %w", cleanupErr))
+	}
+	if forceDNS || result.Cleaned {
+		if err := flushSystemDNS(false); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
+}
+
+func (svc *SingboxService) routeTableStatePath() string {
+	return filepath.Join(svc.paths.DataDir, ".singbox-route-tables.json")
 }
 
 func (svc *SingboxService) Restart() (*model.ActionResponse, error) {
@@ -521,8 +643,16 @@ func (svc *SingboxService) NetworkCheck() (*model.MaintenanceCheckResponse, erro
 }
 
 type activeTUNState struct {
-	Enabled bool
-	IPv6    bool
+	Enabled                  bool
+	IPv4                     bool
+	IPv6                     bool
+	ManagesRoutes            bool
+	AutoRedirect             bool
+	RouteManagingInbounds    int
+	ExpectedIPv4             bool
+	ExpectedIPv6             bool
+	AutoRouteWithoutRedirect bool
+	CleanupIdentityError     string
 }
 
 func readActiveTUNState(configPath string) (activeTUNState, error) {
@@ -532,27 +662,106 @@ func readActiveTUNState(configPath string) (activeTUNState, error) {
 	}
 	var config struct {
 		Inbounds []struct {
-			Type    string   `json:"type"`
-			Address []string `json:"address"`
+			Type                          string          `json:"type"`
+			Address                       []string        `json:"address"`
+			AutoRoute                     bool            `json:"auto_route"`
+			AutoRedirect                  bool            `json:"auto_redirect"`
+			IPRoute2TableIndex            json.RawMessage `json:"iproute2_table_index"`
+			IPRoute2RuleIndex             json.RawMessage `json:"iproute2_rule_index"`
+			AutoRedirectFallbackRuleIndex json.RawMessage `json:"auto_redirect_iproute2_fallback_rule_index"`
+			AutoRedirectInputMark         json.RawMessage `json:"auto_redirect_input_mark"`
+			AutoRedirectOutputMark        json.RawMessage `json:"auto_redirect_output_mark"`
 		} `json:"inbounds"`
 	}
 	if err := json.Unmarshal(data, &config); err != nil {
 		return activeTUNState{}, err
 	}
 	state := activeTUNState{}
-	for _, inbound := range config.Inbounds {
+	for index, inbound := range config.Inbounds {
 		if inbound.Type != "tun" {
 			continue
 		}
 		state.Enabled = true
+		managesRoutes := inbound.AutoRoute || inbound.AutoRedirect
+		if managesRoutes {
+			state.ManagesRoutes = true
+			state.RouteManagingInbounds++
+			state.AutoRedirect = state.AutoRedirect || inbound.AutoRedirect
+			state.AutoRouteWithoutRedirect = state.AutoRouteWithoutRedirect || inbound.AutoRoute && !inbound.AutoRedirect
+			identityFields := []struct {
+				name string
+				raw  json.RawMessage
+				want uint64
+			}{
+				{name: "iproute2_table_index", raw: inbound.IPRoute2TableIndex, want: defaultIPRoute2TableIndex},
+				{name: "iproute2_rule_index", raw: inbound.IPRoute2RuleIndex, want: defaultIPRoute2RuleIndex},
+				{name: "auto_redirect_iproute2_fallback_rule_index", raw: inbound.AutoRedirectFallbackRuleIndex, want: defaultFallbackRuleIndex},
+				{name: "auto_redirect_input_mark", raw: inbound.AutoRedirectInputMark, want: defaultAutoRedirectInputMark},
+				{name: "auto_redirect_output_mark", raw: inbound.AutoRedirectOutputMark, want: defaultAutoRedirectMark},
+			}
+			for _, field := range identityFields {
+				value, present, parseErr := parseOptionalTUNUint(field.raw)
+				if parseErr != nil {
+					return activeTUNState{}, fmt.Errorf("parse TUN inbound %d %s: %w", index, field.name, parseErr)
+				}
+				if present && value != 0 && value != field.want && state.CleanupIdentityError == "" {
+					state.CleanupIdentityError = fmt.Sprintf("TUN inbound %d uses non-default %s=%d; cleanup identity requires %d", index, field.name, value, field.want)
+				}
+			}
+		}
 		for _, address := range inbound.Address {
 			prefix, err := netip.ParsePrefix(address)
-			if err == nil && prefix.Addr().Is6() {
+			if err != nil {
+				continue
+			}
+			if prefix.Addr().Is4() {
+				state.IPv4 = true
+				state.ExpectedIPv4 = state.ExpectedIPv4 || managesRoutes
+			} else if prefix.Addr().Is6() {
 				state.IPv6 = true
+				state.ExpectedIPv6 = state.ExpectedIPv6 || managesRoutes
 			}
 		}
 	}
 	return state, nil
+}
+
+func parseOptionalTUNUint(raw json.RawMessage) (uint64, bool, error) {
+	value := strings.TrimSpace(string(raw))
+	if value == "" || value == "null" {
+		return 0, false, nil
+	}
+	if strings.HasPrefix(value, `"`) {
+		var text string
+		if err := json.Unmarshal(raw, &text); err != nil {
+			return 0, true, err
+		}
+		value = strings.TrimSpace(text)
+	}
+	parsed, err := strconv.ParseUint(value, 0, 32)
+	if err != nil {
+		return 0, true, fmt.Errorf("expected an unsigned 32-bit integer: %w", err)
+	}
+	return parsed, true, nil
+}
+
+func validateLinuxTUNCompatibility(state activeTUNState) error {
+	if !state.ManagesRoutes {
+		return nil
+	}
+	if state.RouteManagingInbounds != 1 {
+		return fmt.Errorf("Linux route-managing TUN requires exactly one route-managing inbound, found %d", state.RouteManagingInbounds)
+	}
+	if !state.ExpectedIPv4 && !state.ExpectedIPv6 {
+		return fmt.Errorf("Linux route-managing TUN requires at least one parseable IPv4 or IPv6 address family")
+	}
+	if state.AutoRouteWithoutRedirect {
+		return fmt.Errorf("Linux auto_route without auto_redirect is not lifecycle-safe and cannot be started")
+	}
+	if state.CleanupIdentityError != "" {
+		return fmt.Errorf("Linux TUN cleanup identity mismatch: %s", state.CleanupIdentityError)
+	}
+	return nil
 }
 
 func (svc *SingboxService) networkCheck() *model.MaintenanceCheckResponse {
@@ -708,19 +917,67 @@ func (svc *SingboxService) ResetFirewall() (*model.ActionResponse, error) {
 	return &model.ActionResponse{Success: true, Message: "firewall rules reset"}, nil
 }
 
-// FlushDNS clears the local DNS cache on Windows.
+type systemDNSFlushCommand struct {
+	name string
+	path string
+	args []string
+}
+
+func systemDNSFlushCommands(platform string, lookPath func(string) (string, error)) []systemDNSFlushCommand {
+	if platform == "windows" {
+		return []systemDNSFlushCommand{{name: "ipconfig", path: "ipconfig", args: []string{"/flushdns"}}}
+	}
+	if platform != "linux" {
+		return nil
+	}
+	path, err := lookPath("ubus")
+	if err != nil {
+		return nil
+	}
+	return []systemDNSFlushCommand{{
+		name: "OpenWrt dnsmasq",
+		path: path,
+		args: []string{"call", "service", "signal", `{"name":"dnsmasq","signal":1}`},
+	}}
+}
+
+func flushSystemDNS(required bool) error {
+	commands := systemDNSFlushCommands(goruntime.GOOS, exec.LookPath)
+	if len(commands) == 0 {
+		if required {
+			return fmt.Errorf("当前系统未找到可用的 DNS 缓存清理工具")
+		}
+		return nil
+	}
+	failures := make([]string, 0, len(commands))
+	for _, command := range commands {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		output, err := exec.CommandContext(ctx, command.path, command.args...).CombinedOutput()
+		cancel()
+		if err == nil {
+			logging.Info("core.flush_dns", "DNS cache flushed successfully via %s", command.name)
+			return nil
+		}
+		details := strings.Join(strings.Fields(string(output)), " ")
+		if len(details) > 512 {
+			details = details[:512]
+		}
+		logging.Error("core.flush_dns", "%s failed: %v, output: %s", command.name, err, details)
+		failure := fmt.Sprintf("%s: %v", command.name, err)
+		if details != "" {
+			failure += ": " + details
+		}
+		failures = append(failures, failure)
+	}
+	return fmt.Errorf("清理系统 DNS 缓存失败: %s", strings.Join(failures, "; "))
+}
+
+// FlushDNS clears the operating system DNS cache.
 func (svc *SingboxService) FlushDNS() (*model.ActionResponse, error) {
 	logging.Info("core.flush_dns", "flushing DNS cache")
-	if goruntime.GOOS != "windows" {
-		return nil, fmt.Errorf("flush DNS is only supported on Windows")
+	if err := flushSystemDNS(true); err != nil {
+		return nil, err
 	}
-	cmd := exec.Command("ipconfig", "/flushdns")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		logging.Info("core.flush_dns", "failed: %v, output: %s", err, string(output))
-		return nil, fmt.Errorf("failed to flush DNS cache: %w", err)
-	}
-	logging.Info("core.flush_dns", "DNS cache flushed successfully")
 	return &model.ActionResponse{Success: true, Message: "DNS cache flushed"}, nil
 }
 

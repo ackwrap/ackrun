@@ -24,6 +24,13 @@ import NodeExitIPModal from "@/pages/nodes/NodeExitIPModal.vue";
 import { api } from "@/services/api";
 import type { NodeFacetItem, NodeItem, Subscription } from "@/services/types";
 
+function compareNodes(a: NodeItem, b: NodeItem) {
+  if (a.subscription_id !== b.subscription_id) {
+    return a.subscription_id - b.subscription_id;
+  }
+  return a.uid < b.uid ? -1 : a.uid > b.uid ? 1 : 0;
+}
+
 const route = useRoute(),
   router = useRouter(),
   subscriptions = ref<Subscription[]>([]),
@@ -94,7 +101,7 @@ async function loadNodes() {
       limit: pageSize.value,
       offset: (page.value - 1) * pageSize.value,
     });
-    nodes.value = r.items;
+    nodes.value = [...r.items].sort(compareNodes);
     total.value = r.total;
     selected.value = new Set();
     flags.value = r.items.length

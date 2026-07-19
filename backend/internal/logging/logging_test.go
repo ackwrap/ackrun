@@ -41,6 +41,22 @@ func TestToolLogsRetainBoundedTail(t *testing.T) {
 	ClearToolLogs()
 }
 
+func TestSubscribeToolLogsPublishesAndCancels(t *testing.T) {
+	ClearToolLogs()
+	defer ClearToolLogs()
+	events, cancel := SubscribeToolLogs(1)
+	defer cancel()
+	appendToolLog("info", "test.stream", "streamed")
+	entry, ok := <-events
+	if !ok || entry.Level != "info" || entry.Tag != "test.stream" || entry.Message != "streamed" {
+		t.Fatalf("unexpected streamed entry: %+v, open=%t", entry, ok)
+	}
+	cancel()
+	if _, ok := <-events; ok {
+		t.Fatal("tool log subscription must close when cancelled")
+	}
+}
+
 func TestRedactAccessToken(t *testing.T) {
 	values := []string{
 		`GET /api/v1/rules/content?access_token=secret-value&format=source`,

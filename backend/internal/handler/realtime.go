@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 
+	"github.com/ackwrap/ackwrap/internal/model"
 	"github.com/ackwrap/ackwrap/internal/service"
 )
 
@@ -43,10 +44,11 @@ func (h *RealtimeHandler) HandleWS(c *gin.Context) {
 		return
 	}
 
-	h.svc.AddClient(conn)
+	initialEvents := h.initialState()
+	if !h.svc.AddClient(conn, initialEvents...) {
+		return
+	}
 	defer h.svc.RemoveClient(conn)
-
-	h.pushInitialState(conn)
 
 	for {
 		_, _, err := conn.ReadMessage()
@@ -56,50 +58,40 @@ func (h *RealtimeHandler) HandleWS(c *gin.Context) {
 	}
 }
 
-func (h *RealtimeHandler) pushInitialState(conn *websocket.Conn) {
+func (h *RealtimeHandler) initialState() []model.WSEvent {
+	events := make([]model.WSEvent, 0, 4)
 	var runtimeStatus string
 	if rt, err := h.runtime.GetStatus(); err == nil {
 		runtimeStatus = string(rt.Status)
-		conn.WriteJSON(map[string]any{
-			"type": "runtime.status",
-			"time": 0,
-			"data": rt,
-		})
+		events = append(events, model.WSEvent{Type: "runtime.status", Time: 0, Data: rt})
 	}
 	if inst, err := h.installer.GetStatus(); err == nil {
-		conn.WriteJSON(map[string]any{
-			"type": "installer.status",
-			"time": 0,
-			"data": inst,
-		})
+		events = append(events, model.WSEvent{Type: "installer.status", Time: 0, Data: inst})
 	}
 	if runtimeStatus != "not_installed" {
 		if status, err := h.config.GetConfigStatus(); err == nil {
-			conn.WriteJSON(map[string]any{
-				"type": "config.status",
-				"time": 0,
-				"data": status,
-			})
+			events = append(events, model.WSEvent{Type: "config.status", Time: 0, Data: status})
 		}
 	}
 	pid := h.singbox.GetPID()
 	if pid > 0 {
-		conn.WriteJSON(map[string]any{
-			"type": "core.status",
-			"time": 0,
-			"data": map[string]any{
+		events = append(events, model.WSEvent{
+			Type: "core.status",
+			Time: 0,
+			Data: map[string]any{
 				"status": "running",
 				"pid":    pid,
 			},
 		})
 	} else if runtimeStatus != "not_installed" && runtimeStatus != "no_config" {
-		conn.WriteJSON(map[string]any{
-			"type": "core.status",
-			"time": 0,
-			"data": map[string]any{
+		events = append(events, model.WSEvent{
+			Type: "core.status",
+			Time: 0,
+			Data: map[string]any{
 				"status": "stopped",
 				"pid":    0,
 			},
 		})
 	}
+	return events
 }

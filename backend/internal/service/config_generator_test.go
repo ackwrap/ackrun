@@ -333,13 +333,20 @@ func TestGenerateRouteIncludesDefaultLoopBypassRules(t *testing.T) {
 	if !ok {
 		t.Fatalf("route rules type = %T", route["rules"])
 	}
-	var processRule, processRuleScoped, domainRule, ipRule bool
+	var processRule, processRuleScoped, domainRule, ipRule, reachedSniff bool
 	for _, rule := range rules {
 		if stringListContains(rule["inbound"], legacyUpdateProxyInboundTag) {
 			t.Fatalf("generated route contains legacy update proxy rule: %+v", rule)
 		}
+		if rule["action"] == "sniff" {
+			reachedSniff = true
+			continue
+		}
 		if rule["outbound"] != "direct" {
 			continue
+		}
+		if reachedSniff || rule["action"] != "bypass" {
+			t.Fatalf("loop bypass rule must use bypass before sniff: %+v", rules)
 		}
 		if rule["process_name"] != nil {
 			processRule = true
@@ -359,12 +366,26 @@ func TestGeneratedTUNInboundUsesAutoRedirectOnLinux(t *testing.T) {
 	if inbound["auto_route"] != true || inbound["strict_route"] != true || inbound["auto_redirect"] != true {
 		t.Fatalf("OpenWrt TUN inbound = %+v", inbound)
 	}
+	if inbound["auto_redirect_output_mark"] != "0x2024" {
+		t.Fatalf("OpenWrt TUN output mark = %v, want 0x2024", inbound["auto_redirect_output_mark"])
+	}
+	if inbound["iproute2_table_index"] != 2022 || inbound["iproute2_rule_index"] != 9000 || inbound["auto_redirect_iproute2_fallback_rule_index"] != 32768 {
+		t.Fatalf("OpenWrt TUN lifecycle identity = %+v", inbound)
+	}
 	if !stringListContains(inbound["address"], defaultTUNIPv4Address) || !stringListContains(inbound["address"], defaultTUNIPv6Address) {
 		t.Fatalf("OpenWrt TUN inbound is not dual-stack: %+v", inbound)
 	}
 	withoutRedirect := generatedTUNInbound(false, defaultTUNIPv4Address, defaultTUNIPv6Address)
 	if _, exists := withoutRedirect["auto_redirect"]; exists {
 		t.Fatalf("non-Linux TUN inbound contains auto_redirect: %+v", withoutRedirect)
+	}
+	if _, exists := withoutRedirect["auto_redirect_output_mark"]; exists {
+		t.Fatalf("non-Linux TUN inbound contains auto_redirect output mark: %+v", withoutRedirect)
+	}
+	for _, field := range []string{"iproute2_table_index", "iproute2_rule_index", "auto_redirect_iproute2_fallback_rule_index"} {
+		if _, exists := withoutRedirect[field]; exists {
+			t.Fatalf("non-auto-redirect TUN inbound contains %s: %+v", field, withoutRedirect)
+		}
 	}
 }
 

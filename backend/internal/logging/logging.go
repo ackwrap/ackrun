@@ -25,6 +25,11 @@ var toolLogs = struct {
 	nextID  int64
 }{entries: make([]ToolLogEntry, 0, defaultToolLogLimit)}
 
+var toolLogSubscribers = struct {
+	sync.RWMutex
+	channels map[chan ToolLogEntry]struct{}
+}{channels: make(map[chan ToolLogEntry]struct{})}
+
 func Info(tag string, format string, args ...any) {
 	message := RedactAccessToken(fmt.Sprintf(format, args...))
 	appendToolLog("info", tag, message)
@@ -82,18 +87,47 @@ func isQueryValueDelimiter(value byte) bool {
 
 func appendToolLog(level, tag, message string) {
 	toolLogs.Lock()
-	defer toolLogs.Unlock()
 	toolLogs.nextID++
-	toolLogs.entries = append(toolLogs.entries, ToolLogEntry{
+	entry := ToolLogEntry{
 		ID:      toolLogs.nextID,
 		Time:    time.Now().UnixMilli(),
 		Level:   level,
 		Tag:     tag,
 		Message: message,
-	})
+	}
+	toolLogs.entries = append(toolLogs.entries, entry)
 	if len(toolLogs.entries) > defaultToolLogLimit {
 		copy(toolLogs.entries, toolLogs.entries[len(toolLogs.entries)-defaultToolLogLimit:])
 		toolLogs.entries = toolLogs.entries[:defaultToolLogLimit]
+	}
+	toolLogs.Unlock()
+
+	toolLogSubscribers.RLock()
+	defer toolLogSubscribers.RUnlock()
+	for channel := range toolLogSubscribers.channels {
+		select {
+		case channel <- entry:
+		default:
+		}
+	}
+}
+
+func SubscribeToolLogs(buffer int) (<-chan ToolLogEntry, func()) {
+	if buffer < 1 {
+		buffer = 1
+	}
+	channel := make(chan ToolLogEntry, buffer)
+	toolLogSubscribers.Lock()
+	toolLogSubscribers.channels[channel] = struct{}{}
+	toolLogSubscribers.Unlock()
+	var once sync.Once
+	return channel, func() {
+		once.Do(func() {
+			toolLogSubscribers.Lock()
+			delete(toolLogSubscribers.channels, channel)
+			close(channel)
+			toolLogSubscribers.Unlock()
+		})
 	}
 }
 

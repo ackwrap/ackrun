@@ -31,6 +31,7 @@ const (
 	defaultRuleSetHTTPClientTag = "ackwrap-rule-set-direct"
 	defaultTUNIPv4Address       = "172.254.0.1/30"
 	defaultTUNIPv6Address       = "fdfe:dcba:9876::1/126"
+	defaultAutoRedirectMark     = 0x2024
 	legacyDefaultTUNIPv4Address = "172.19.0.1/30"
 )
 
@@ -1200,6 +1201,14 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 	var ruleSets []map[string]interface{}
 	ruleSetTags := make(map[string]bool)
 
+	// 内核级绕过必须先于 sniff；TCP 预匹配遇到 sniff 后不会继续匹配后续规则。
+	bypassRules, err := s.defaultBypassRules()
+	if err != nil {
+		return nil, err
+	}
+	routeRules = append(routeRules, bypassRules...)
+	route["find_process"] = true
+
 	// sing-box 1.13 已移除 inbound sniff 字段，嗅探和 DNS 劫持必须使用 rule action。
 	routeRules = append(routeRules, map[string]interface{}{
 		"action": "sniff",
@@ -1215,14 +1224,6 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 			route["default_domain_resolver"] = resolver
 		}
 	}
-
-	// AckWrap、sing-box 和节点服务器必须优先直连，避免 TUN/全局模式形成代理回环。
-	bypassRules, err := s.defaultBypassRules()
-	if err != nil {
-		return nil, err
-	}
-	routeRules = append(routeRules, bypassRules...)
-	route["find_process"] = true
 
 	// 获取代理模式
 	proxyMode := s.store.GetProxyMode()
@@ -1336,7 +1337,7 @@ func (s *ConfigGeneratorService) defaultBypassRules() ([]map[string]interface{},
 		{
 			"process_name": processNames,
 			"inbound":      []string{"tun-in"},
-			"action":       "route",
+			"action":       "bypass",
 			"outbound":     "direct",
 		},
 	}
@@ -1349,14 +1350,14 @@ func (s *ConfigGeneratorService) defaultBypassRules() ([]map[string]interface{},
 	if len(domains) > 0 {
 		rules = append(rules, map[string]interface{}{
 			"domain":   domains,
-			"action":   "route",
+			"action":   "bypass",
 			"outbound": "direct",
 		})
 	}
 	if len(ipCIDRs) > 0 {
 		rules = append(rules, map[string]interface{}{
 			"ip_cidr":  ipCIDRs,
-			"action":   "route",
+			"action":   "bypass",
 			"outbound": "direct",
 		})
 	}
@@ -2065,6 +2066,10 @@ func generatedTUNInbound(autoRedirect bool, tunIPv4Address, tunIPv6Address strin
 	}
 	if autoRedirect {
 		inbound["auto_redirect"] = true
+		inbound["iproute2_table_index"] = defaultIPRoute2TableIndex
+		inbound["iproute2_rule_index"] = defaultIPRoute2RuleIndex
+		inbound["auto_redirect_iproute2_fallback_rule_index"] = defaultFallbackRuleIndex
+		inbound["auto_redirect_output_mark"] = fmt.Sprintf("0x%x", defaultAutoRedirectMark)
 	}
 	return inbound
 }

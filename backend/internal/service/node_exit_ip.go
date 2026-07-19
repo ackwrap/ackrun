@@ -154,7 +154,7 @@ func (svc *NodeService) resolveActiveNodeOutboundTag(ctx context.Context, node m
 	}
 	response, err := svc.nodeHTTPClient().Do(request)
 	if err != nil {
-		return "", errors.New("无法连接 sing-box Clash API，请确认核心正在运行")
+		return "", errors.New("无法连接 sing-box，请确认核心正在运行")
 	}
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
@@ -214,7 +214,7 @@ func (svc *NodeService) lookupNodeExitIP(ctx context.Context, outboundTag string
 	}
 	response, err := svc.nodeHTTPClient().Do(request)
 	if err != nil {
-		return nil, errors.New("无法连接 sing-box Clash API，请确认核心正在运行")
+		return nil, errors.New("无法连接 sing-box，请确认核心正在运行")
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {

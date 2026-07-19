@@ -2,6 +2,7 @@
 import { computed } from "vue";
 import Modal from "@/components/ui/Modal.vue";
 import NodeFlagName from "@/components/NodeFlagName.vue";
+import { subscriptionFilterLabel } from "./nodeGroupLabels";
 
 interface FacetItem {
   value: string;
@@ -34,15 +35,10 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ close: [] }>();
 const subscriptionLabel = computed(() =>
-  props.group.filter_subscriptions
-    ? props.group.filter_subscriptions
-        .split(",")
-        .map(
-          (id) =>
-            props.subscriptions.find((item) => item.value === id)?.label || id,
-        )
-        .join("、")
-    : "全部",
+  subscriptionFilterLabel(
+    props.group.filter_subscriptions,
+    props.subscriptions,
+  ),
 );
 </script>
 

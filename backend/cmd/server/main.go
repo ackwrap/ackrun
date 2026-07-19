@@ -127,8 +127,18 @@ func main() {
 	defer db.Close()
 
 	realtimeSvc := service.NewRealtimeService()
+	toolLogEvents, stopToolLogEvents := logging.SubscribeToolLogs(256)
+	defer stopToolLogEvents()
+	go func() {
+		for entry := range toolLogEvents {
+			realtimeSvc.Broadcast("tool.log", entry)
+		}
+	}()
 	coreLogSvc := service.NewCoreLogService()
 	singboxSvc := service.NewSingboxService(p, realtimeSvc, coreLogSvc, db)
+	if err := singboxSvc.RecoverStaleState(); err != nil {
+		logging.Error("core.cleanup", "启动时清理 sing-box 网络残留失败: %v", err)
+	}
 	runtimeSvc := service.NewRuntimeService(p, db, singboxSvc)
 	installerSvc := service.NewInstallerService(db, p, realtimeSvc)
 	configSvc := service.NewConfigService(p, db, realtimeSvc)

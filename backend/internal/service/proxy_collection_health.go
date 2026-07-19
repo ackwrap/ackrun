@@ -267,7 +267,7 @@ func (s *ProxyCollectionService) testNode(uid, outboundTag, testURL string) mode
 	}
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return model.CollectionTestNodeResult{UID: uid, Error: "无法连接 sing-box Clash API: " + err.Error()}
+		return model.CollectionTestNodeResult{UID: uid, Error: "无法连接 sing-box: " + err.Error()}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {

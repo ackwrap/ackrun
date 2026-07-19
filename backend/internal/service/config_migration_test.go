@@ -316,21 +316,77 @@ func TestMigrateManagedConfigAddsTUNRoutingSafetyAndRemovesLegacyProxy(t *testin
 	}
 }
 
+func TestMigrateManagedConfigMovesAckwrapKernelBypassBeforeSniff(t *testing.T) {
+	input := []byte(`{
+  "http_clients": [{"tag":"ackwrap-rule-set-direct"}],
+  "inbounds": [{"type":"tun","tag":"tun-in","interface_name":"tun0","address":["172.254.0.1/30","fdfe:dcba:9876::1/126"],"auto_route":true,"strict_route":true,"auto_redirect":true}],
+  "outbounds": [{"type":"direct","tag":"direct"},{"type":"selector","tag":"proxy","outbounds":["direct"]}],
+  "route": {"rules":[
+    {"action":"sniff"},
+    {"process_name":["ackwrap","ackwrap.exe","sing-box","sing-box.exe"],"inbound":["tun-in"],"action":"route","outbound":"direct"},
+    {"domain_suffix":["example.com"],"action":"route","outbound":"proxy"}
+  ]}
+}`)
+	result, migrated, err := migrateManagedConfigData(input)
+	if err != nil {
+		t.Fatalf("migrate kernel bypass: %v", err)
+	}
+	if migrated != 3 {
+		t.Fatalf("migrated = %d, want route safety, bypass action and ordering", migrated)
+	}
+	var config map[string]interface{}
+	if err := json.Unmarshal(result, &config); err != nil {
+		t.Fatal(err)
+	}
+	rules := config["route"].(map[string]interface{})["rules"].([]interface{})
+	first := rules[0].(map[string]interface{})
+	if first["action"] != "bypass" || first["outbound"] != "direct" || !stringListContains(first["process_name"], "ackwrap") {
+		t.Fatalf("kernel bypass is not first: %+v", rules)
+	}
+	if rules[1].(map[string]interface{})["action"] != "sniff" {
+		t.Fatalf("sniff rule ordering changed unexpectedly: %+v", rules)
+	}
+	secondResult, secondMigrated, err := migrateManagedConfigData(result)
+	if err != nil || secondMigrated != 0 || string(secondResult) != string(result) {
+		t.Fatalf("kernel bypass migration is not idempotent: migrated=%d err=%v", secondMigrated, err)
+	}
+}
+
 func TestMigrateAckwrapTUNInboundsAddsMissingDefaultsAndPreservesExplicitSettings(t *testing.T) {
 	inbounds := []interface{}{
 		map[string]interface{}{"type": "tun", "tag": "tun-in", "interface_name": "tun0", "address": []string{defaultTUNIPv4Address}},
 		map[string]interface{}{"type": "tun", "tag": "tun-in", "address": []string{"10.0.0.1/30"}, "auto_route": false, "strict_route": false, "auto_redirect": false},
 		map[string]interface{}{"type": "mixed"},
 	}
-	if migrated := migrateAckwrapTUNInbounds(inbounds, true); migrated != 4 {
-		t.Fatalf("migrated = %d, want 4", migrated)
+	if migrated := migrateAckwrapTUNInbounds(inbounds, true); migrated != 5 {
+		t.Fatalf("migrated = %d, want 5", migrated)
 	}
 	first := inbounds[0].(map[string]interface{})
-	if first["auto_route"] != true || first["strict_route"] != true || first["auto_redirect"] != true || !stringListContains(first["address"], defaultTUNIPv6Address) {
+	if first["auto_route"] != true || first["strict_route"] != true || first["auto_redirect"] != true || first["auto_redirect_output_mark"] != "0x2024" || !stringListContains(first["address"], defaultTUNIPv6Address) {
 		t.Fatalf("missing Ackwrap TUN defaults: %+v", first)
 	}
 	if inbounds[1].(map[string]interface{})["auto_route"] != false || inbounds[1].(map[string]interface{})["strict_route"] != false || inbounds[1].(map[string]interface{})["auto_redirect"] != false {
 		t.Fatalf("explicit auto_redirect changed: %+v", inbounds[1])
+	}
+}
+
+func TestMigrateAckwrapTUNInboundsAddsOutputMarkForExplicitAutoRedirect(t *testing.T) {
+	inbounds := []interface{}{
+		map[string]interface{}{
+			"type":          "tun",
+			"tag":           "tun-in",
+			"address":       []string{defaultTUNIPv4Address, defaultTUNIPv6Address},
+			"auto_route":    false,
+			"strict_route":  false,
+			"auto_redirect": true,
+		},
+	}
+	if migrated := migrateAckwrapTUNInbounds(inbounds, true); migrated != 1 {
+		t.Fatalf("migrated = %d, want output mark only", migrated)
+	}
+	inbound := inbounds[0].(map[string]interface{})
+	if inbound["auto_route"] != false || inbound["auto_redirect_output_mark"] != "0x2024" {
+		t.Fatalf("explicit auto-redirect migration = %+v", inbound)
 	}
 }
 

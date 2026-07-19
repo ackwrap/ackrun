@@ -189,7 +189,8 @@ func migrateManagedConfig(config map[string]interface{}) (int, error) {
 		config["route"] = route
 		migrated++
 	}
-	if hasTUNInbound(inbounds) && isAckwrapManagedConfig(config, inbounds, route) {
+	managedTUNConfig := hasTUNInbound(inbounds) && isAckwrapManagedConfig(config, inbounds, route)
+	if managedTUNConfig {
 		if _, exists := route["auto_detect_interface"]; !exists {
 			route["auto_detect_interface"] = true
 			migrated++
@@ -267,7 +268,46 @@ func migrateManagedConfig(config map[string]interface{}) (int, error) {
 		rules = scopedRules
 		route["rules"] = rules
 	}
+	if managedTUNConfig {
+		var bypassMigrated int
+		rules, bypassMigrated = migrateAckwrapProcessBypassRules(rules)
+		if bypassMigrated > 0 {
+			route["rules"] = rules
+			migrated += bypassMigrated
+		}
+	}
 	return migrated, nil
+}
+
+func migrateAckwrapProcessBypassRules(rules []interface{}) ([]interface{}, int) {
+	bypassRules := make([]interface{}, 0, 1)
+	remainingRules := make([]interface{}, 0, len(rules))
+	migrated := 0
+	reachedOtherRule := false
+	needsReorder := false
+	for _, rawRule := range rules {
+		rule, ok := rawRule.(map[string]interface{})
+		ackwrapNames, _ := splitAckwrapProcessNames(rule["process_name"])
+		managedBypass := ok && rule["outbound"] == "direct" && stringListContains(rule["inbound"], "tun-in") && len(ackwrapNames) > 0
+		if !managedBypass {
+			reachedOtherRule = true
+			remainingRules = append(remainingRules, rawRule)
+			continue
+		}
+		if rule["action"] != "bypass" {
+			rule["action"] = "bypass"
+			migrated++
+		}
+		if reachedOtherRule {
+			needsReorder = true
+		}
+		bypassRules = append(bypassRules, rawRule)
+	}
+	if !needsReorder {
+		return rules, migrated
+	}
+	orderedRules := append(bypassRules, remainingRules...)
+	return orderedRules, migrated + 1
 }
 
 func hasTUNInbound(inbounds []interface{}) bool {
@@ -314,10 +354,18 @@ func migrateAckwrapTUNInbounds(inbounds []interface{}, linux bool) int {
 			inbound["address"] = appendStringList(inbound["address"], defaultTUNIPv6Address)
 			migrated++
 		}
-		if linux && inbound["auto_route"] == true {
-			if _, exists := inbound["auto_redirect"]; !exists {
-				inbound["auto_redirect"] = true
-				migrated++
+		if linux {
+			if inbound["auto_route"] == true {
+				if _, exists := inbound["auto_redirect"]; !exists {
+					inbound["auto_redirect"] = true
+					migrated++
+				}
+			}
+			if inbound["auto_redirect"] == true {
+				if _, exists := inbound["auto_redirect_output_mark"]; !exists {
+					inbound["auto_redirect_output_mark"] = fmt.Sprintf("0x%x", defaultAutoRedirectMark)
+					migrated++
+				}
 			}
 		}
 	}

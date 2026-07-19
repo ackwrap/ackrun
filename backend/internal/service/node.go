@@ -38,6 +38,7 @@ type NodeService struct {
 	httpClient     *http.Client
 	realtime       *RealtimeService
 	localGeoLookup func(net.IP) (traceroute.GeoData, error)
+	resolveTCPing  func(context.Context, string) ([]net.IP, error)
 	traceMu        sync.Mutex
 	traces         map[string]nodeTracerouteTask
 }
@@ -439,7 +440,7 @@ func (svc *NodeService) urlTestNode(node model.Node, outboundTag string) model.N
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return model.NodeTCPingResult{UID: node.UID, Error: "无法连接 sing-box Clash API: " + err.Error()}
+		return model.NodeTCPingResult{UID: node.UID, Error: "无法连接 sing-box: " + err.Error()}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -481,14 +482,42 @@ func (svc *NodeService) nodeClashAPI() (string, string, error) {
 }
 
 func (svc *NodeService) tcpingNode(node model.Node) model.NodeTCPingResult {
-	start := time.Now()
-	dialer := net.Dialer{Timeout: 5 * time.Second}
-	conn, err := dialer.Dial("tcp", net.JoinHostPort(node.Server, fmt.Sprintf("%d", node.ServerPort)))
-	if err != nil {
+	resolve := resolveTCPingServer
+	if svc.resolveTCPing != nil {
+		resolve = svc.resolveTCPing
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	addresses, err := resolve(ctx, node.Server)
+	cancel()
+	if err != nil || len(addresses) == 0 {
+		if err == nil {
+			err = errors.New("未解析到节点服务器地址")
+		}
 		return model.NodeTCPingResult{UID: node.UID, Success: false, Error: err.Error()}
 	}
-	_ = conn.Close()
-	return model.NodeTCPingResult{UID: node.UID, Success: true, LatencyMS: int(time.Since(start).Milliseconds())}
+
+	dialer := tcpingDialer(5 * time.Second)
+	var lastErr error
+	for _, address := range addresses {
+		start := time.Now()
+		conn, dialErr := dialer.Dial("tcp", net.JoinHostPort(address.String(), fmt.Sprintf("%d", node.ServerPort)))
+		if dialErr != nil {
+			lastErr = dialErr
+			continue
+		}
+		_ = conn.Close()
+		latency := elapsedLatencyMilliseconds(time.Since(start))
+		return model.NodeTCPingResult{UID: node.UID, Success: true, LatencyMS: latency}
+	}
+	return model.NodeTCPingResult{UID: node.UID, Success: false, Error: lastErr.Error()}
+}
+
+func elapsedLatencyMilliseconds(elapsed time.Duration) int {
+	latency := int(elapsed.Milliseconds())
+	if latency < 1 {
+		return 1
+	}
+	return latency
 }
 
 func (svc *NodeService) AddEmoji(uids []string) (*model.NodeBatchResult, error) {

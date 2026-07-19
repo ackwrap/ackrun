@@ -82,6 +82,11 @@ const rt = computed(() => runtime.value?.status || "not_installed"),
     ["downloading", "extracting"].includes(installStatus.value?.status),
   ),
   isWindows = computed(() => runtime.value?.platform === "windows"),
+  systemDNSUnsupported = computed(
+    () =>
+      !!runtime.value?.platform &&
+      !["windows", "linux"].includes(runtime.value.platform),
+  ),
   unsupported = computed(() => !!runtime.value?.platform && !isWindows.value),
   currentVersion = computed(
     () => runtime.value?.version || installStatus.value?.version,
@@ -699,7 +704,7 @@ onBeforeUnmount(() => {
             <Activity :size="13" />网络自检</button
           ><button
             class="aw-control-action"
-            :disabled="!!runtimeAction || unsupported"
+            :disabled="!!runtimeAction || systemDNSUnsupported"
             @click="action(api.flushDNS, '清理系统 DNS')"
           >
             <RefreshCw :size="13" />清理系统 DNS</button
