@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { RefreshCw, Search, ShieldCheck } from "lucide-vue-next";
+import { ref } from "vue";
+import { Eye, RefreshCw, Search, ShieldCheck } from "lucide-vue-next";
+import Modal from "@/components/ui/Modal.vue";
 import type { Rule } from "@/services/clash";
 
 defineProps<{
@@ -10,6 +12,14 @@ defineProps<{
 }>();
 
 defineEmits<{ searchChange: [string]; refresh: [] }>();
+
+const detailRule = ref<Rule | null>(null);
+
+function openDetailsFromKeyboard(event: KeyboardEvent, rule: Rule) {
+  if (event.target !== event.currentTarget) return;
+  if (event.key === " ") event.preventDefault();
+  detailRule.value = rule;
+}
 
 function proxyTone(proxy: string) {
   const value = proxy.toLowerCase();
@@ -91,22 +101,27 @@ function proxyTone(proxy: string) {
       >
         {{ search ? "没有匹配的规则" : "暂无规则" }}
       </div>
-      <table v-else class="w-full min-w-[760px] border-collapse text-xs">
+      <table v-else class="w-full min-w-[720px] table-fixed border-collapse text-xs">
         <thead
           class="sticky top-0 z-10 bg-[var(--bg-elevated)] text-[var(--text-secondary)]"
         >
           <tr>
-            <th class="w-44 px-4 py-3 text-left font-semibold">类型</th>
+            <th class="w-32 px-4 py-3 text-left font-semibold">类型</th>
             <th class="px-4 py-3 text-left font-semibold">匹配值</th>
-            <th class="w-64 px-4 py-3 text-left font-semibold">策略</th>
+            <th class="w-56 px-4 py-3 text-left font-semibold">策略</th>
+            <th class="w-24 px-3 py-3 text-center font-semibold">操作</th>
           </tr>
         </thead>
         <tbody>
           <tr
             v-for="(rule, index) in rules"
             :key="`${rule.type}-${rule.payload}-${rule.proxy}-${index}`"
-            class="border-t border-[var(--border-light)] transition-colors hover:bg-[var(--color-primary-bg)]"
+            class="cursor-pointer border-t border-[var(--border-light)] transition-colors hover:bg-[var(--color-primary-bg)] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--color-primary)]"
             :class="index % 2 ? 'bg-[var(--bg-base)]' : ''"
+            tabindex="0"
+            @click="detailRule = rule"
+            @keydown.enter="openDetailsFromKeyboard($event, rule)"
+            @keydown.space="openDetailsFromKeyboard($event, rule)"
           >
             <td class="px-4 py-3 align-middle">
               <span
@@ -131,9 +146,55 @@ function proxyTone(proxy: string) {
                 {{ rule.proxy || "-" }}
               </span>
             </td>
+            <td class="px-3 py-3 text-center align-middle">
+              <button
+                type="button"
+                class="inline-flex h-7 items-center gap-1 whitespace-nowrap rounded-md border border-[var(--border-default)] bg-[var(--button-secondary-bg)] px-2.5 text-[var(--text-secondary)] transition hover:border-[var(--color-primary)] hover:text-[var(--color-primary)]"
+                title="查看完整规则"
+                @click.stop="detailRule = rule"
+              >
+                <Eye :size="13" />详情
+              </button>
+            </td>
           </tr>
         </tbody>
       </table>
     </div>
+
+    <Modal
+      :open="!!detailRule"
+      title="规则详情"
+      size="lg"
+      @close="detailRule = null"
+    >
+      <div v-if="detailRule" class="grid gap-4 text-sm md:grid-cols-2">
+        <div class="rounded-lg bg-[var(--bg-base)] p-3">
+          <span class="text-xs text-[var(--text-tertiary)]">类型</span>
+          <p class="mt-1 break-all font-mono">{{ detailRule.type || "-" }}</p>
+        </div>
+        <div class="rounded-lg bg-[var(--bg-base)] p-3">
+          <span class="text-xs text-[var(--text-tertiary)]">策略</span>
+          <p class="mt-1 break-all font-mono">{{ detailRule.proxy || "-" }}</p>
+        </div>
+        <div
+          class="rounded-lg border border-[var(--border-default)] bg-[var(--bg-base)] p-3 md:col-span-2"
+        >
+          <span class="text-xs text-[var(--text-tertiary)]">完整匹配值</span>
+          <pre
+            class="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all font-mono text-xs leading-5 text-[var(--text-primary)]"
+          >{{ detailRule.payload || "-" }}</pre>
+        </div>
+        <details
+          class="rounded-lg border border-[var(--border-default)] bg-[var(--bg-base)] p-3 md:col-span-2"
+        >
+          <summary class="cursor-pointer text-xs font-medium text-[var(--text-secondary)]">
+            原始 JSON
+          </summary>
+          <pre
+            class="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-all font-mono text-xs leading-5 text-[var(--text-primary)]"
+          >{{ JSON.stringify(detailRule, null, 2) }}</pre>
+        </details>
+      </div>
+    </Modal>
   </div>
 </template>

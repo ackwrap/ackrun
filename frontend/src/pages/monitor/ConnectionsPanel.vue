@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
-import { Link, Pause, Play, RefreshCw, Search, X } from "lucide-vue-next";
+import { Eye, Pause, Play, RefreshCw, X } from "lucide-vue-next";
 import type { Connection } from "@/services/clash";
+import Modal from "@/components/ui/Modal.vue";
 import NodeFlagName from "@/components/NodeFlagName.vue";
 import { formatBytes, formatSpeed } from "./monitorUtils";
 import { displayProxyName } from "./proxyGroupUtils";
@@ -33,11 +34,19 @@ const tab = ref<"active" | "closed">("active");
 const search = ref("");
 const source = ref("");
 const paused = ref(false);
+const detailConnectionID = ref("");
 const activeRows = ref<ConnectionRow[]>([]);
 const closedRows = ref<ConnectionRow[]>([]);
+const detailRow = computed(() =>
+  detailConnectionID.value
+    ? [...activeRows.value, ...closedRows.value].find(
+        (row) => row.connection.id === detailConnectionID.value,
+      ) || null
+    : null,
+);
 const previous = new Map<string, Snapshot>();
 const columns = [
-  { key: "close", label: "关闭", width: 52, min: 44, align: "center" },
+  { key: "close", label: "操作", width: 72, min: 64, align: "center" },
   { key: "host", label: "主机", width: 220, min: 120, align: "left" },
   { key: "type", label: "类型", width: 180, min: 110, align: "left" },
   { key: "rule", label: "规则", width: 170, min: 100, align: "left" },
@@ -246,6 +255,22 @@ function elapsed(connection: Connection, closedAt?: number) {
   if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟前`;
   return `${Math.floor(seconds / 3600)} 小时前`;
 }
+
+function endpoint(address?: string, port?: string) {
+  if (!address) return "-";
+  return port ? `${address}:${port}` : address;
+}
+
+function startedAt(connection: Connection) {
+  const value = new Date(connection.start);
+  return Number.isNaN(value.getTime()) ? connection.start || "-" : value.toLocaleString();
+}
+
+function openDetailsFromKeyboard(event: KeyboardEvent, row: ConnectionRow) {
+  if (event.target !== event.currentTarget) return;
+  if (event.key === " ") event.preventDefault();
+  detailConnectionID.value = row.connection.id;
+}
 </script>
 
 <template>
@@ -381,25 +406,33 @@ function elapsed(connection: Connection, closedAt?: number) {
           <tr
             v-for="(row, index) in rows"
             :key="`${tab}-${row.connection.id}`"
-            class="border-t border-[var(--border-light)] transition hover:bg-[var(--color-primary-bg)]"
+            class="cursor-pointer border-t border-[var(--border-light)] transition hover:bg-[var(--color-primary-bg)] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--color-primary)]"
             :class="index % 2 ? 'bg-[var(--bg-base)]' : ''"
+            tabindex="0"
+            @click="detailConnectionID = row.connection.id"
+            @keydown.enter="openDetailsFromKeyboard($event, row)"
+            @keydown.space="openDetailsFromKeyboard($event, row)"
           >
             <td class="px-2 py-2 text-center">
-              <button
-                v-if="tab === 'active'"
-                type="button"
-                class="inline-flex size-5 items-center justify-center rounded-full bg-[var(--bg-base)] text-[var(--text-secondary)] hover:bg-[var(--color-error-bg)] hover:text-[var(--color-error)]"
-                title="关闭连接"
-                @click="emit('closeConnection', row.connection.id)"
-              >
-                <X :size="12" />
-              </button>
-              <span
-                v-else
-                class="inline-flex size-5 items-center justify-center"
-              >
-                <Link :size="12" class="opacity-40" />
-              </span>
+              <div class="flex items-center justify-center gap-1">
+                <button
+                  type="button"
+                  class="inline-flex size-6 items-center justify-center rounded-full bg-[var(--bg-base)] text-[var(--text-secondary)] hover:bg-[var(--color-primary-bg)] hover:text-[var(--color-primary)]"
+                  title="查看连接详情"
+                  @click.stop="detailConnectionID = row.connection.id"
+                >
+                  <Eye :size="12" />
+                </button>
+                <button
+                  v-if="tab === 'active'"
+                  type="button"
+                  class="inline-flex size-6 items-center justify-center rounded-full bg-[var(--bg-base)] text-[var(--text-secondary)] hover:bg-[var(--color-error-bg)] hover:text-[var(--color-error)]"
+                  title="关闭连接"
+                  @click.stop="emit('closeConnection', row.connection.id)"
+                >
+                  <X :size="12" />
+                </button>
+              </div>
             </td>
             <td
               class="max-w-80 truncate px-3 py-2 font-medium text-[var(--text-primary)]"
@@ -452,5 +485,92 @@ function elapsed(connection: Connection, closedAt?: number) {
         </tbody>
       </table>
     </div>
+
+    <Modal
+      :open="!!detailRow"
+      title="连接详情"
+      size="xl"
+      @close="detailConnectionID = ''"
+    >
+      <div v-if="detailRow" class="grid gap-4 text-sm lg:grid-cols-2">
+        <section class="rounded-lg border border-[var(--border-default)] bg-[var(--bg-base)] p-4">
+          <h4 class="font-semibold text-[var(--color-primary)]">基本信息</h4>
+          <dl class="mt-3 grid grid-cols-[6rem_minmax(0,1fr)] gap-x-3 gap-y-2 text-xs">
+            <dt class="text-[var(--text-tertiary)]">状态</dt>
+            <dd>{{ detailRow.closedAt ? "已关闭" : "活跃" }}</dd>
+            <dt class="text-[var(--text-tertiary)]">ID</dt>
+            <dd class="break-all font-mono">{{ detailRow.connection.id }}</dd>
+            <dt class="text-[var(--text-tertiary)]">类型</dt>
+            <dd>{{ connectionType(detailRow.connection) || "-" }}</dd>
+            <dt class="text-[var(--text-tertiary)]">开始时间</dt>
+            <dd>{{ startedAt(detailRow.connection) }}</dd>
+            <dt class="text-[var(--text-tertiary)]">连接时长</dt>
+            <dd>{{ elapsed(detailRow.connection, detailRow.closedAt) }}</dd>
+          </dl>
+        </section>
+
+        <section class="rounded-lg border border-[var(--border-default)] bg-[var(--bg-base)] p-4">
+          <h4 class="font-semibold text-[var(--color-primary)]">来源与目的</h4>
+          <dl class="mt-3 grid grid-cols-[6rem_minmax(0,1fr)] gap-x-3 gap-y-2 text-xs">
+            <dt class="text-[var(--text-tertiary)]">来源</dt>
+            <dd class="break-all font-mono">
+              {{ endpoint(detailRow.connection.metadata.sourceIP, detailRow.connection.metadata.sourcePort) }}
+            </dd>
+            <dt class="text-[var(--text-tertiary)]">主机</dt>
+            <dd class="break-all font-mono">{{ target(detailRow.connection) || "-" }}</dd>
+            <dt class="text-[var(--text-tertiary)]">目的地址</dt>
+            <dd class="break-all font-mono">
+              {{ endpoint(detailRow.connection.metadata.destinationIP, detailRow.connection.metadata.destinationPort) }}
+            </dd>
+            <dt class="text-[var(--text-tertiary)]">DNS 模式</dt>
+            <dd>{{ detailRow.connection.metadata.dnsMode || "-" }}</dd>
+          </dl>
+        </section>
+
+        <section class="rounded-lg border border-[var(--border-default)] bg-[var(--bg-base)] p-4">
+          <h4 class="font-semibold text-[var(--color-primary)]">规则与代理链</h4>
+          <dl class="mt-3 grid grid-cols-[6rem_minmax(0,1fr)] gap-x-3 gap-y-2 text-xs">
+            <dt class="text-[var(--text-tertiary)]">命中规则</dt>
+            <dd class="break-all font-mono">{{ ruleDescription(detailRow.connection) }}</dd>
+            <dt class="text-[var(--text-tertiary)]">代理链</dt>
+            <dd class="flex flex-wrap items-center gap-1">
+              <template v-if="detailRow.connection.chains?.length">
+                <template
+                  v-for="(chain, index) in displayChains(detailRow.connection)"
+                  :key="`${chain}-${index}`"
+                >
+                  <span v-if="index">→</span>
+                  <NodeFlagName :name="chain" :flag="nodeFlags[chain]">
+                    {{ displayProxyName(chain) }}
+                  </NodeFlagName>
+                </template>
+              </template>
+              <template v-else>DIRECT</template>
+            </dd>
+          </dl>
+        </section>
+
+        <section class="rounded-lg border border-[var(--border-default)] bg-[var(--bg-base)] p-4">
+          <h4 class="font-semibold text-[var(--color-primary)]">流量</h4>
+          <dl class="mt-3 grid grid-cols-[6rem_minmax(0,1fr)] gap-x-3 gap-y-2 text-xs">
+            <dt class="text-[var(--text-tertiary)]">下载</dt>
+            <dd>{{ formatBytes(detailRow.connection.download) }} / {{ formatSpeed(detailRow.downloadSpeed) }}</dd>
+            <dt class="text-[var(--text-tertiary)]">上传</dt>
+            <dd>{{ formatBytes(detailRow.connection.upload) }} / {{ formatSpeed(detailRow.uploadSpeed) }}</dd>
+          </dl>
+        </section>
+
+        <details
+          class="rounded-lg border border-[var(--border-default)] bg-[var(--bg-base)] p-4 lg:col-span-2"
+        >
+          <summary class="cursor-pointer text-xs font-medium text-[var(--text-secondary)]">
+            原始 JSON
+          </summary>
+          <pre
+            class="mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-all font-mono text-xs leading-5 text-[var(--text-primary)]"
+          >{{ JSON.stringify(detailRow.connection, null, 2) }}</pre>
+        </details>
+      </div>
+    </Modal>
   </div>
 </template>
