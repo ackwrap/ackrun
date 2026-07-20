@@ -206,7 +206,7 @@ func (s *Store) ListNodes(req model.NodeListRequest) (*model.NodeListResponse, e
 			n.name, n.name_overridden, n.type, n.server, n.server_port, n.raw, n.raw_json, n.enabled, n.preferred,
 			n.latency_ms, n.status, n.last_test_at, n.test_latency_ms, n.test_success, n.created_at, n.updated_at
 		FROM nodes n LEFT JOIN subscriptions s ON s.id = n.subscription_id` + where + `
-		ORDER BY n.subscription_id ASC, n.uid ASC LIMIT ? OFFSET ?`
+		ORDER BY n.name COLLATE NOCASE ASC, n.subscription_id ASC, n.uid ASC LIMIT ? OFFSET ?`
 	queryArgs := append(args, limit, req.Offset)
 	rows, err := s.db.Query(query, queryArgs...)
 	if err != nil {

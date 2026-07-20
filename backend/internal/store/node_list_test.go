@@ -8,7 +8,7 @@ import (
 	"github.com/ackwrap/ackwrap/internal/model"
 )
 
-func TestListNodesUsesStableSubscriptionAndUIDOrder(t *testing.T) {
+func TestListNodesUsesStableNameOrder(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -33,6 +33,7 @@ func TestListNodesUsesStableSubscriptionAndUIDOrder(t *testing.T) {
 	if err := db.ReplaceSubscriptionNodes(first.ID, []model.ParsedNode{
 		{UID: "uid-z", Name: "A", Type: "vless", Server: "192.0.2.1", ServerPort: 443},
 		{UID: "uid-a", Name: "Z", Type: "ssr", Server: "192.0.2.2", ServerPort: 443},
+		{UID: "uid-c", Name: "B", Type: "vmess", Server: "192.0.2.4", ServerPort: 443},
 	}); err != nil {
 		t.Fatalf("replace first subscription nodes: %v", err)
 	}
@@ -57,7 +58,7 @@ func TestListNodesUsesStableSubscriptionAndUIDOrder(t *testing.T) {
 		}
 	}
 
-	assertUIDs(50, 0, []string{"uid-a", "uid-z", "uid-b"})
+	assertUIDs(50, 0, []string{"uid-z", "uid-c", "uid-b", "uid-a"})
 	if err := db.UpdateNodeTCPing("uid-z", 8, "available"); err != nil {
 		t.Fatalf("update node latency: %v", err)
 	}
@@ -67,6 +68,6 @@ func TestListNodesUsesStableSubscriptionAndUIDOrder(t *testing.T) {
 	if err := db.SetNodePreferred("uid-b", true); err != nil {
 		t.Fatalf("update node preferred state: %v", err)
 	}
-	assertUIDs(50, 0, []string{"uid-a", "uid-z", "uid-b"})
-	assertUIDs(2, 1, []string{"uid-z", "uid-b"})
+	assertUIDs(50, 0, []string{"uid-z", "uid-c", "uid-b", "uid-a"})
+	assertUIDs(2, 1, []string{"uid-c", "uid-b"})
 }
