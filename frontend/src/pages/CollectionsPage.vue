@@ -10,7 +10,6 @@ import { api } from "@/services/api";
 import { authenticatedFetch } from "@/services/apiAuth";
 import type {
   CollectionTestResponse,
-  ProxyCollectionWithNodes,
   StrategyItem,
   WSEvent,
 } from "@/services/types";
@@ -66,7 +65,6 @@ const strategySaving = ref(false);
 const previewStrategy = ref<StrategyItem | null>(null);
 const connectivitySettings = ref({ test_url: "", interval_seconds: 300 });
 const tests = ref<Record<number, CollectionTestResponse>>({});
-const testingCollectionIDs = ref<Set<number>>(new Set());
 const deleteAction = ref<null | (() => Promise<void>)>(null);
 const deleteMessage = ref("");
 
@@ -305,31 +303,6 @@ function requestRemoveStrategy(strategy: StrategyItem) {
   );
 }
 
-async function testCollection(collection: ProxyCollectionWithNodes) {
-  if (testingCollectionIDs.value.has(collection.id)) return;
-  testingCollectionIDs.value = new Set([
-    ...testingCollectionIDs.value,
-    collection.id,
-  ]);
-  try {
-    const result = await api.testProxyCollection(collection.id);
-    if (result?.collection_id) tests.value[result.collection_id] = result;
-    show(
-      `策略组测试完成：${result.available}/${result.tested} 个节点可用`,
-      "info",
-    );
-  } catch (error) {
-    show(
-      `策略组测试失败: ${error instanceof Error ? error.message : "请求失败"}`,
-      "error",
-    );
-  } finally {
-    const pending = new Set(testingCollectionIDs.value);
-    pending.delete(collection.id);
-    testingCollectionIDs.value = pending;
-  }
-}
-
 useRealtimeSocket((event: WSEvent) => {
   if (event.type === "collection.test") {
     const result = event.data as CollectionTestResponse;
@@ -406,10 +379,8 @@ onMounted(load);
       v-else
       :strategies="strategies"
       :tests="tests"
-      :testing-collection-ids="testingCollectionIDs"
       @configure="configureStrategy"
       @preview="previewStrategy = $event"
-      @test="testCollection"
       @remove="requestRemoveStrategy"
     />
 

@@ -67,10 +67,6 @@ function isGeoRuleType(ruleType: string): ruleType is GeoRuleType {
   return ruleType === "geoip" || ruleType === "geosite";
 }
 
-function geoTagListID(ruleType: string) {
-  return isGeoRuleType(ruleType) ? `route-rule-${ruleType}-tags` : undefined;
-}
-
 async function searchGeoTags(ruleType: string, query: string) {
   if (!isGeoRuleType(ruleType)) return;
   const requestID = ++geoTagRequest[ruleType];
@@ -481,7 +477,6 @@ onBeforeUnmount(() => {
                 匹配值
                 <input
                   :value="block.value"
-                  :list="geoTagListID(block.ruleType)"
                   class="font-mono"
                   :disabled="editing?.is_system"
                   :placeholder="
@@ -550,7 +545,6 @@ onBeforeUnmount(() => {
           <div class="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
             <input
               v-model="geoTagDraft"
-              :list="geoTagListID(ruleType)"
               :disabled="editing?.is_system"
               :placeholder="
                 ruleType === 'geosite' ? '例如 geolocation-!cn' : '例如 cn'
@@ -596,17 +590,6 @@ onBeforeUnmount(() => {
             标签加载失败：{{ geoTagError[ruleType] }}
           </p>
         </div>
-
-        <datalist id="route-rule-geosite-tags">
-          <option
-            v-for="tag in geoTagOptions.geosite"
-            :key="tag"
-            :value="tag"
-          />
-        </datalist>
-        <datalist id="route-rule-geoip-tags">
-          <option v-for="tag in geoTagOptions.geoip" :key="tag" :value="tag" />
-        </datalist>
 
         <div v-if="ruleType === 'rule_set' && subscriptions.length">
           <div class="mb-2 text-xs font-medium">可用规则集</div>

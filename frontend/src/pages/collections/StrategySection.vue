@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Edit, Eye, Trash2, Zap } from "lucide-vue-next";
+import { Edit, Eye, Trash2 } from "lucide-vue-next";
 import type {
   CollectionTestResponse,
   ProxyCollectionWithNodes,
@@ -10,12 +10,10 @@ import type { DetailedProxyCollection } from "./collectionTypes";
 defineProps<{
   strategies: StrategyItem[];
   tests: Record<number, CollectionTestResponse>;
-  testingCollectionIds: Set<number>;
 }>();
 const emit = defineEmits<{
   configure: [StrategyItem];
   preview: [StrategyItem];
-  test: [ProxyCollectionWithNodes];
   remove: [StrategyItem];
 }>();
 
@@ -135,17 +133,6 @@ function sourceLabel(strategy: StrategyItem) {
                     @click="emit('preview', strategy)"
                   >
                     <Eye :size="12" />预览
-                  </button>
-                  <button
-                    class="aw-action-button aw-action-neutral"
-                    :disabled="testingCollectionIds.has(strategy.collection.id)"
-                    @click="emit('test', strategy.collection)"
-                  >
-                    <Zap :size="12" />{{
-                      testingCollectionIds.has(strategy.collection.id)
-                        ? "测试中"
-                        : "测试"
-                    }}
                   </button>
                   <button
                     class="aw-action-button aw-action-danger"
