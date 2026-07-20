@@ -119,6 +119,22 @@ export interface UpdateSettingsResponse {
   custom_mirror_url: string;
 }
 
+export type TrafficBypassRuleType =
+  | "process_name"
+  | "interface"
+  | "ip_cidr"
+  | "source_ip_cidr"
+  | "domain_suffix";
+
+export interface TrafficBypassRule {
+  type: TrafficBypassRuleType;
+  value: string;
+}
+
+export interface TrafficBypassSettings {
+  rules: TrafficBypassRule[];
+}
+
 export interface LogSettings {
   level: string;
   timestamp: boolean;

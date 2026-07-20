@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -27,6 +28,7 @@ type modeConfigGenerator interface {
 
 var ErrModeChangeWhileRunning = errors.New("核心运行时不能切换模式，请先停止核心")
 var ErrConnectivitySettingsInvalid = errors.New("连通性测速设置无效")
+var ErrTrafficBypassSettingsInvalid = errors.New("流量排除设置无效")
 
 func NewSettingsService(s *store.Store) *SettingsService {
 	return &SettingsService{store: s}
@@ -62,6 +64,59 @@ func (svc *SettingsService) SetUpdateSettings(req *model.UpdateSettings) error {
 		}
 	}
 	return svc.store.SetUpdateSettings(req)
+}
+
+func (svc *SettingsService) GetTrafficBypassSettings() (*model.TrafficBypassSettings, error) {
+	return svc.store.GetTrafficBypassSettings()
+}
+
+func (svc *SettingsService) SetTrafficBypassSettings(settings *model.TrafficBypassSettings) error {
+	if settings == nil {
+		return fmt.Errorf("%w: 设置不能为空", ErrTrafficBypassSettingsInvalid)
+	}
+	normalized := make([]model.TrafficBypassRule, 0, len(settings.Rules))
+	seen := make(map[string]bool)
+	for _, rule := range settings.Rules {
+		rule.Type = strings.TrimSpace(rule.Type)
+		rule.Value = strings.TrimSpace(rule.Value)
+		if rule.Value == "" {
+			continue
+		}
+		switch rule.Type {
+		case "process_name":
+			if len(rule.Value) > 255 || strings.ContainsAny(rule.Value, "\r\n\x00") {
+				return fmt.Errorf("%w: 进程名称无效", ErrTrafficBypassSettingsInvalid)
+			}
+		case "interface":
+			if len(rule.Value) > 64 || !regexp.MustCompile(`^[A-Za-z0-9_.:@-]+$`).MatchString(rule.Value) {
+				return fmt.Errorf("%w: 网络接口名称无效", ErrTrafficBypassSettingsInvalid)
+			}
+		case "ip_cidr", "source_ip_cidr":
+			prefix, err := netip.ParsePrefix(rule.Value)
+			if err != nil {
+				return fmt.Errorf("%w: %s 不是有效 CIDR", ErrTrafficBypassSettingsInvalid, rule.Value)
+			}
+			rule.Value = prefix.Masked().String()
+		case "domain_suffix":
+			rule.Value = strings.ToLower(strings.TrimSuffix(rule.Value, "."))
+			if len(rule.Value) > 253 || !regexp.MustCompile(`^[a-z0-9_*.-]+$`).MatchString(rule.Value) {
+				return fmt.Errorf("%w: 域名后缀无效", ErrTrafficBypassSettingsInvalid)
+			}
+		default:
+			return fmt.Errorf("%w: 不支持类型 %s", ErrTrafficBypassSettingsInvalid, rule.Type)
+		}
+		key := rule.Type + "\x00" + strings.ToLower(rule.Value)
+		if !seen[key] {
+			seen[key] = true
+			normalized = append(normalized, rule)
+		}
+	}
+	settings.Rules = normalized
+	if err := svc.store.SetTrafficBypassSettings(settings); err != nil {
+		return err
+	}
+	logging.Info("settings.traffic_bypass", "流量排除设置已更新，规则数: %d", len(normalized))
+	return nil
 }
 
 func validateUpdateURL(value, field string) error {

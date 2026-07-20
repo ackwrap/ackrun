@@ -392,7 +392,7 @@ func TestGenerateRouteIncludesDefaultLoopBypassRules(t *testing.T) {
 }
 
 func TestGeneratedTUNInboundUsesAutoRedirectOnLinux(t *testing.T) {
-	inbound := generatedTUNInbound(true, defaultTUNIPv4Address, defaultTUNIPv6Address)
+	inbound := generatedTUNInbound(true, defaultTUNIPv4Address, defaultTUNIPv6Address, nil, nil)
 	if inbound["auto_route"] != true || inbound["strict_route"] != true || inbound["auto_redirect"] != true {
 		t.Fatalf("OpenWrt TUN inbound = %+v", inbound)
 	}
@@ -405,7 +405,7 @@ func TestGeneratedTUNInboundUsesAutoRedirectOnLinux(t *testing.T) {
 	if !stringListContains(inbound["address"], defaultTUNIPv4Address) || !stringListContains(inbound["address"], defaultTUNIPv6Address) {
 		t.Fatalf("OpenWrt TUN inbound is not dual-stack: %+v", inbound)
 	}
-	withoutRedirect := generatedTUNInbound(false, defaultTUNIPv4Address, defaultTUNIPv6Address)
+	withoutRedirect := generatedTUNInbound(false, defaultTUNIPv4Address, defaultTUNIPv6Address, nil, nil)
 	if _, exists := withoutRedirect["auto_redirect"]; exists {
 		t.Fatalf("non-Linux TUN inbound contains auto_redirect: %+v", withoutRedirect)
 	}
@@ -687,6 +687,124 @@ func TestGenerateNodeOutboundNormalizesLegacyVLESSRealityOptions(t *testing.T) {
 	reality, ok := tlsMap["reality"].(map[string]interface{})
 	if !ok || reality["public_key"] != "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" || reality["short_id"] != "01234567" {
 		t.Fatalf("unexpected Reality options: %+v", tlsMap)
+	}
+}
+
+func TestGenerateNodeOutboundNormalizesLegacyV2RayTransport(t *testing.T) {
+	svc := &ConfigGeneratorService{}
+	outbound, err := svc.generateNodeOutbound(&model.Node{
+		Type:    "vless",
+		RawJSON: `{"type":"vless","server":"example.com","server_port":443,"uuid":"00000000-0000-0000-0000-000000000000","network":"ws","ws-opts":{"path":"/socket","headers":{"Host":"edge.example.com"}}}`,
+	}, "ws-node", nil)
+	if err != nil {
+		t.Fatalf("generate legacy WebSocket outbound: %v", err)
+	}
+	transport, ok := outbound["transport"].(map[string]interface{})
+	if !ok || transport["type"] != "ws" || transport["path"] != "/socket" {
+		t.Fatalf("unexpected WebSocket transport: %+v", outbound)
+	}
+	for _, legacyKey := range []string{"network", "ws-opts"} {
+		if _, exists := outbound[legacyKey]; exists {
+			t.Fatalf("legacy transport field %q leaked into outbound: %+v", legacyKey, outbound)
+		}
+	}
+}
+
+func TestGenerateNodeOutboundNormalizesLegacyProtocolFields(t *testing.T) {
+	svc := &ConfigGeneratorService{}
+	tests := []struct {
+		name    string
+		typ     string
+		rawJSON string
+		check   func(*testing.T, map[string]interface{})
+	}{
+		{
+			name:    "hysteria",
+			typ:     "hysteria",
+			rawJSON: `{"type":"hysteria","server":"example.com","server_port":443,"auth_str":"redacted","obfs-param":"secret","receive-window":"1024","receive-window-conn":"512"}`,
+			check: func(t *testing.T, outbound map[string]interface{}) {
+				if outbound["obfs"] != "secret" || outbound["recv_window"] != 1024 || outbound["recv_window_conn"] != 512 {
+					t.Fatalf("unexpected Hysteria fields: %+v", outbound)
+				}
+			},
+		},
+		{
+			name:    "tuic",
+			typ:     "tuic",
+			rawJSON: `{"type":"tuic","server":"example.com","server_port":443,"uuid":"00000000-0000-0000-0000-000000000000","password":"redacted","udp-relay-mode":"native","reduce-rtt":true}`,
+			check: func(t *testing.T, outbound map[string]interface{}) {
+				if outbound["udp_relay_mode"] != "native" || outbound["zero_rtt_handshake"] != true {
+					t.Fatalf("unexpected TUIC fields: %+v", outbound)
+				}
+			},
+		},
+		{
+			name:    "shadowsocks-v2ray-plugin",
+			typ:     "shadowsocks",
+			rawJSON: `{"type":"shadowsocks","server":"example.com","server_port":8388,"method":"aes-128-gcm","password":"redacted","network":"ws","ws-opts":{"path":"/socket","headers":{"Host":"edge.example.com"}},"tls":{"enabled":true,"server_name":"edge.example.com"}}`,
+			check: func(t *testing.T, outbound map[string]interface{}) {
+				options, _ := outbound["plugin_opts"].(string)
+				if outbound["plugin"] != "v2ray-plugin" || !strings.Contains(options, "mode=websocket") || !strings.Contains(options, "host=edge.example.com") || !strings.Contains(options, "path=/socket") || !strings.Contains(options, "tls") {
+					t.Fatalf("unexpected Shadowsocks plugin fields: %+v", outbound)
+				}
+				for _, legacyKey := range []string{"network", "ws-opts", "tls"} {
+					if _, exists := outbound[legacyKey]; exists {
+						t.Fatalf("legacy Shadowsocks field %q leaked into outbound: %+v", legacyKey, outbound)
+					}
+				}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			outbound, err := svc.generateNodeOutbound(&model.Node{Type: test.typ, RawJSON: test.rawJSON}, test.name, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.check(t, outbound)
+		})
+	}
+}
+
+func TestGenerateNodeOutboundRejectsLossyShadowsocksPluginMigration(t *testing.T) {
+	svc := &ConfigGeneratorService{}
+	_, err := svc.generateNodeOutbound(&model.Node{
+		Type:    "shadowsocks",
+		RawJSON: `{"type":"shadowsocks","server":"example.com","server_port":8388,"method":"aes-128-gcm","password":"redacted","network":"ws","ws-opts":{"headers":{"Host":"ws.example.com"}},"tls":{"enabled":true,"server_name":"tls.example.com"}}`,
+	}, "conflicting-ss", nil)
+	if err == nil || !strings.Contains(err.Error(), "无法同时映射") {
+		t.Fatalf("expected lossless migration error, got %v", err)
+	}
+}
+
+func TestGenerateNodeOutboundValidatesShadowsocksPluginStrings(t *testing.T) {
+	svc := &ConfigGeneratorService{}
+	outbound, err := svc.generateNodeOutbound(&model.Node{
+		Type:    "shadowsocks",
+		RawJSON: `{"type":"shadowsocks","server":"example.com","server_port":8388,"method":"aes-128-gcm","password":"redacted","plugin":"obfs","plugin_opts":"host=edge.example;mode=tls"}`,
+	}, "obfs-node", nil)
+	if err != nil {
+		t.Fatalf("normalize supported obfs migration: %v", err)
+	}
+	if outbound["plugin"] != "obfs-local" || outbound["plugin_opts"] != "obfs=tls;obfs-host=edge.example" {
+		t.Fatalf("unexpected normalized obfs plugin: %+v", outbound)
+	}
+
+	for _, options := range []string{"unknown=value", "mux=invalid", `path=/socket\`} {
+		_, err := svc.generateNodeOutbound(&model.Node{
+			Type:    "shadowsocks",
+			RawJSON: fmt.Sprintf(`{"type":"shadowsocks","server":"example.com","server_port":8388,"method":"aes-128-gcm","password":"redacted","plugin":"v2ray-plugin","plugin_opts":%q}`, options),
+		}, "invalid-plugin", nil)
+		if err == nil {
+			t.Fatal("expected invalid Shadowsocks plugin options to be rejected")
+		}
+	}
+	_, err = svc.generateNodeOutbound(&model.Node{
+		Type:    "shadowsocks",
+		RawJSON: `{"type":"shadowsocks","server":"example.com","server_port":8388,"method":"aes-128-gcm","password":"redacted","plugin":"v2ray-plugin","plugin_opts":"tls","alpn":["h2"]}`,
+	}, "invalid-tls-migration", nil)
+	if err == nil || !strings.Contains(err.Error(), "alpn") {
+		t.Fatalf("expected unsupported legacy TLS field error, got %v", err)
 	}
 }
 
@@ -1165,6 +1283,62 @@ func TestGenerateInboundsUsesPublicMixedDefaults(t *testing.T) {
 	}
 	if !foundTUN || !foundMixed {
 		t.Fatalf("generated inbounds missing tun=%t mixed=%t: %+v", foundTUN, foundMixed, inbounds)
+	}
+}
+
+func TestTrafficBypassSettingsApplyToTUNAndRoute(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	settingsService := NewSettingsService(db)
+	if err := settingsService.SetTrafficBypassSettings(&model.TrafficBypassSettings{Rules: []model.TrafficBypassRule{
+		{Type: "process_name", Value: "mesh-agent"},
+		{Type: "interface", Value: "mesh-tun"},
+		{Type: "ip_cidr", Value: "10.20.0.0/16"},
+		{Type: "source_ip_cidr", Value: "192.168.50.0/24"},
+		{Type: "domain_suffix", Value: "mesh.example"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	service := NewConfigGeneratorService(db, nil)
+	inbounds, err := service.generateInbounds("", 0, defaultTUNIPv4Address, defaultTUNIPv6Address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tun map[string]interface{}
+	for _, item := range inbounds {
+		candidate, _ := item.(map[string]interface{})
+		if candidate["type"] == "tun" {
+			tun = candidate
+			break
+		}
+	}
+	if tun == nil || !stringListContains(tun["exclude_interface"], "mesh-tun") || !stringListContains(tun["route_exclude_address"], "10.20.0.0/16") {
+		t.Fatalf("TUN bypass settings missing: %+v", tun)
+	}
+	rules, err := service.defaultBypassRules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"process_name":   "mesh-agent",
+		"ip_cidr":        "10.20.0.0/16",
+		"source_ip_cidr": "192.168.50.0/24",
+		"domain_suffix":  "mesh.example",
+	}
+	for key, value := range want {
+		found := false
+		for _, rule := range rules {
+			if stringListContains(rule[key], value) && rule["action"] == "bypass" && rule["outbound"] == "direct" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("missing %s bypass for %s: %+v", key, value, rules)
+		}
 	}
 }
 

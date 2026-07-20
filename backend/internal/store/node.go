@@ -2,6 +2,7 @@ package store
 
 import (
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -306,6 +307,13 @@ func (s *Store) DeleteNode(uid string) error {
 		return err
 	}
 	defer tx.Rollback()
+	var subscriptionID int64
+	if err := tx.QueryRow(`SELECT subscription_id FROM nodes WHERE uid = ?`, uid).Scan(&subscriptionID); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("node not found: %s", uid)
+		}
+		return err
+	}
 	res, err := tx.Exec(`DELETE FROM nodes WHERE uid = ?`, uid)
 	if err != nil {
 		return err
@@ -318,6 +326,13 @@ func (s *Store) DeleteNode(uid string) error {
 		return fmt.Errorf("node not found: %s", uid)
 	}
 	if _, err := s.cleanInvalidNodeUIDsTx(tx, []string{uid}); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`
+		UPDATE subscriptions
+		SET node_count = (SELECT COUNT(*) FROM nodes WHERE subscription_id = ?), updated_at = ?
+		WHERE id = ?
+	`, subscriptionID, time.Now().UnixMilli(), subscriptionID); err != nil {
 		return err
 	}
 	return tx.Commit()

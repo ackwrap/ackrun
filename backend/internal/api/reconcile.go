@@ -6,21 +6,40 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/ackwrap/ackwrap/internal/handler"
 	"github.com/ackwrap/ackwrap/internal/service"
 )
 
 func configMutationMiddleware(reconciler *service.ConfigReconcileService) gin.HandlerFunc {
+	if reconciler == nil {
+		return configMutationMiddlewareWithTrigger(nil)
+	}
+	return configMutationMiddlewareWithTrigger(reconciler.Trigger)
+}
+
+func configMutationMiddlewareWithTrigger(trigger func(string)) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Next()
-		if reconciler == nil || c.Writer.Status() >= http.StatusBadRequest || !shouldReconcileRequest(c.Request.Method, c.Request.URL.Path) {
+		if trigger == nil || c.Writer.Status() >= http.StatusBadRequest {
 			return
 		}
-		reconciler.Trigger(c.Request.Method + " " + c.Request.URL.Path)
+		if decision, decided := c.Get(handler.ConfigReconcileContextKey); decided {
+			required, valid := decision.(bool)
+			if !valid || !required {
+				return
+			}
+		} else if !shouldReconcileRequest(c.Request.Method, c.Request.URL.Path) {
+			return
+		}
+		trigger(c.Request.Method + " " + c.Request.URL.Path)
 	}
 }
 
 func shouldReconcileRequest(method, path string) bool {
 	if method == http.MethodGet || strings.HasPrefix(path, "/api/v1/config/") || strings.HasPrefix(path, "/api/v1/core/") {
+		return false
+	}
+	if method == http.MethodPost && path == "/api/v1/rules" {
 		return false
 	}
 	if path == "/api/v1/nodes/flag" || path == "/api/v1/nodes/flags" || path == "/api/v1/nodes/import/preview" {

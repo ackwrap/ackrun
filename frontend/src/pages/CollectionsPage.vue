@@ -244,15 +244,25 @@ async function showGroupDetail(group: NodeGroup) {
 async function quickSetup() {
   quickRunning.value = true;
   try {
+    const subscriptionFilter = facets.value.subscriptions.every((item) =>
+      quickSubscriptions.value.includes(item.value),
+    )
+      ? ""
+      : quickSubscriptions.value.join(",");
+    const protocolFilter = facets.value.protocols.every((item) =>
+      quickProtocols.value.includes(item.value),
+    )
+      ? ""
+      : quickProtocols.value.join(",");
     await json("/api/v1/node-groups/quick-setup", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        filter_subscriptions: quickSubscriptions.value.join(","),
-        filter_protocols: quickProtocols.value.join(","),
+        filter_subscriptions: subscriptionFilter,
+        filter_protocols: protocolFilter,
       }),
     });
-    show("节点组已创建");
+    show("节点组已同步");
     quickOpen.value = false;
     await load();
   } catch (error) {
@@ -420,7 +430,7 @@ onMounted(load);
           <legend
             class="mb-1 text-xs font-semibold text-[var(--text-secondary)]"
           >
-            按订阅筛选
+            按订阅筛选（不选或全选表示全部，包含未来新增订阅）
           </legend>
           <div class="grid gap-2 sm:grid-cols-2">
             <label
@@ -444,7 +454,7 @@ onMounted(load);
           <legend
             class="mb-1 text-xs font-semibold text-[var(--text-secondary)]"
           >
-            按协议筛选
+            按协议筛选（不选或全选表示全部）
           </legend>
           <div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
             <label

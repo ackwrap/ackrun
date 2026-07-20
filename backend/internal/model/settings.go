@@ -10,6 +10,15 @@ type UpdateSettingsResponse struct {
 	CustomMirrorURL string `json:"custom_mirror_url"`
 }
 
+type TrafficBypassRule struct {
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
+
+type TrafficBypassSettings struct {
+	Rules []TrafficBypassRule `json:"rules"`
+}
+
 type LogSettings struct {
 	Level     string `json:"level"`
 	Timestamp bool   `json:"timestamp"`

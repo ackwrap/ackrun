@@ -224,7 +224,7 @@ type InvalidNodeCleanupResult struct {
 	DeletedNodeGroups  int
 }
 
-// CleanInvalidNodeUIDs 清理失效节点引用、零节点节点组及业务策略组引用。
+// CleanInvalidNodeUIDs 清理失效节点引用、空手动节点组及业务策略组引用。
 func (s *Store) CleanInvalidNodeUIDs(removedUIDs []string) (InvalidNodeCleanupResult, error) {
 	result := InvalidNodeCleanupResult{}
 	if len(removedUIDs) == 0 {

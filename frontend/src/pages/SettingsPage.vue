@@ -6,8 +6,15 @@ import PageHeader from "@/components/layout/PageHeader.vue";
 import Toast from "@/components/ui/Toast.vue";
 import ConnectivityResourcesPanel from "./settings/ConnectivityResourcesPanel.vue";
 import GeoIPProvidersPanel from "./settings/GeoIPProvidersPanel.vue";
-import { Clock3, Download, FlaskConical, Settings } from "lucide-vue-next";
-type SettingsTab = "general" | "experimental";
+import TrafficBypassPanel from "./settings/TrafficBypassPanel.vue";
+import {
+  Clock3,
+  Download,
+  FlaskConical,
+  Settings,
+  ShieldOff,
+} from "lucide-vue-next";
+type SettingsTab = "general" | "bypass" | "experimental";
 const acceleration = ref("ghproxy"),
   customMirror = ref(""),
   message = ref(""),
@@ -117,6 +124,19 @@ const input =
       role="tablist"
       aria-label="设置分类"
     >
+      <button
+        class="relative flex items-center gap-2 px-4 py-2.5 text-sm font-medium outline-none"
+        :class="
+          activeTab === 'bypass'
+            ? 'text-[var(--color-primary)]'
+            : 'text-[var(--text-secondary)] hover:bg-[var(--bg-sidebar-hover)]'
+        "
+        role="tab"
+        :aria-selected="activeTab === 'bypass'"
+        @click="activeTab = 'bypass'"
+      >
+        <ShieldOff :size="16" />流量排除
+      </button>
       <button
         class="relative flex items-center gap-2 px-4 py-2.5 text-sm font-medium outline-none"
         :class="
@@ -232,6 +252,11 @@ const input =
         </div>
       </section>
     </div>
+
+    <TrafficBypassPanel
+      v-else-if="activeTab === 'bypass'"
+      @notify="notify"
+    />
 
     <section v-else :class="panel" class="flex flex-col" role="tabpanel">
       <div class="mb-4 flex items-center gap-2">

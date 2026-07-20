@@ -53,6 +53,7 @@ const rules = ref<RouteRule[]>([]),
   content = ref<{ title: string; content: string } | null>(null),
   geoSyncing = ref(false);
 let poll: number | undefined;
+let loadVersion = 0;
 const show = (s: string, t: "success" | "error" = "success") => {
     message.value = s;
     messageType.value = t;
@@ -70,6 +71,9 @@ const show = (s: string, t: "success" | "error" = "success") => {
       geoSyncing.value ||
       geoAssets.value.some((x) => x.sync_status === "syncing"),
   ),
+  isRuleSubscriptionSyncing = computed(() =>
+    subscriptions.value.some((x) => x.sync_status === "syncing"),
+  ),
   previewText = computed(
     () =>
       content.value?.content ||
@@ -80,16 +84,20 @@ const show = (s: string, t: "success" | "error" = "success") => {
       ),
   );
 async function load() {
+  const version = ++loadVersion;
   try {
-    [rules.value, subscriptions.value, geoAssets.value] = await Promise.all([
+    const result = await Promise.all([
       api.getRouteRules(),
       api.getRouteRuleSubscriptions(),
       api.getGeoAssets(),
     ]);
+    if (version !== loadVersion) return;
+    [rules.value, subscriptions.value, geoAssets.value] = result;
   } catch (e: any) {
+    if (version !== loadVersion) return;
     show(`规则加载失败: ${e.message}`, "error");
   } finally {
-    loading.value = false;
+    if (version === loadVersion) loading.value = false;
   }
 }
 function resetRule() {
@@ -362,6 +370,18 @@ useRealtimeSocket((event: WSEvent) => {
     if (data.status === "failed") {
       show(`Geo 数据库更新失败: ${data.error || "请求失败"}`, "error");
     }
+  } else if (event.type === "route_rule_subscription.sync") {
+    const subscription = subscriptions.value.find((item) => item.id === data.id);
+    if (subscription) {
+      subscription.sync_status = data.status ?? subscription.sync_status;
+      subscription.sync_progress = data.progress ?? subscription.sync_progress;
+      subscription.sync_error = data.error ?? "";
+    }
+    if (data.status === "failed") {
+      show(`规则订阅更新失败: ${data.error || "请求失败"}`, "error");
+    } else if (data.status === "updated") {
+      void load();
+    }
   } else if (event.type === "geo.sync_all" && data.status === "completed") {
     void load();
     if (data.failed) show(`Geo 数据库更新完成，${data.failed} 项失败`, "error");
@@ -379,7 +399,7 @@ async function updateGeo(x: GeoAsset, b: any) {
 onMounted(() => {
   load();
   poll = window.setInterval(() => {
-    if (isGeoSyncing.value) load();
+    if (isGeoSyncing.value || isRuleSubscriptionSyncing.value) load();
   }, 2000);
 });
 onBeforeUnmount(() => clearInterval(poll));

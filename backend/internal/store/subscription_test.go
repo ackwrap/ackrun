@@ -1,7 +1,9 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -156,6 +158,10 @@ func TestDeleteSubscriptionCascadesNodesGroupsAndStrategyRefs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create subscription: %v", err)
 	}
+	otherSub, err := db.CreateSubscription(&model.SubscriptionRequest{Name: "other-sub", URL: "https://example.com/other", UserAgent: "clash-meta/2.4.0", SyncMode: "off", SyncTimeoutSecs: 60})
+	if err != nil {
+		t.Fatalf("create other subscription: %v", err)
+	}
 	if err := db.ReplaceSubscriptionNodes(sub.ID, []model.ParsedNode{
 		{Name: "TW-01", Type: "vless", Server: "tw.example.com", ServerPort: 443, Raw: "raw-tw", RawJSON: `{"type":"vless","server":"tw.example.com","server_port":443,"uuid":"uuid-tw"}`},
 	}); err != nil {
@@ -177,7 +183,15 @@ func TestDeleteSubscriptionCascadesNodesGroupsAndStrategyRefs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create filter group: %v", err)
 	}
-	refs, _ := json.Marshal([]int64{manualGroup.ID, filterGroup.ID})
+	allSubscriptionsGroup, err := db.CreateNodeGroup(&model.NodeGroupRequest{Name: "all subscriptions", Type: "selector", FilterInclude: ".*", Enabled: true})
+	if err != nil {
+		t.Fatalf("create all-subscriptions group: %v", err)
+	}
+	multiSubscriptionGroup, err := db.CreateNodeGroup(&model.NodeGroupRequest{Name: "multiple subscriptions", Type: "selector", FilterSubscriptions: fmt.Sprintf("%d,%d", sub.ID, otherSub.ID), FilterInclude: ".*", Enabled: true})
+	if err != nil {
+		t.Fatalf("create multi-subscription group: %v", err)
+	}
+	refs, _ := json.Marshal([]int64{manualGroup.ID, filterGroup.ID, allSubscriptionsGroup.ID, multiSubscriptionGroup.ID})
 	collection := &model.ProxyCollection{Name: "策略", Type: "selector", SourceType: "node_groups", ReferencedGroupIDs: string(refs), RouteRuleIDs: "[]", NodeUIDs: "[]", Enabled: true}
 	if err := db.CreateProxyCollection(collection); err != nil {
 		t.Fatalf("create proxy collection: %v", err)
@@ -197,15 +211,89 @@ func TestDeleteSubscriptionCascadesNodesGroupsAndStrategyRefs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list node groups: %v", err)
 	}
-	if len(groups) != 0 {
-		t.Fatalf("expected empty node groups deleted, got %+v", groups)
+	if len(groups) != 2 || groups[0].ID != allSubscriptionsGroup.ID || groups[1].ID != multiSubscriptionGroup.ID {
+		t.Fatalf("expected only all-subscription and remaining-scoped groups, got %+v", groups)
+	}
+	if groups[0].FilterSubscriptions != "" || groups[1].FilterSubscriptions != fmt.Sprintf("%d", otherSub.ID) {
+		t.Fatalf("unexpected remaining subscription filters: %+v", groups)
 	}
 	updatedCollection, err := db.GetProxyCollection(collection.ID)
 	if err != nil {
 		t.Fatalf("get proxy collection: %v", err)
 	}
-	if updatedCollection.ReferencedGroupIDs != "[]" {
-		t.Fatalf("expected strategy group refs removed, got %s", updatedCollection.ReferencedGroupIDs)
+	keptRefs, _ := json.Marshal([]int64{allSubscriptionsGroup.ID, multiSubscriptionGroup.ID})
+	if updatedCollection.ReferencedGroupIDs != string(keptRefs) {
+		t.Fatalf("expected only deleted group refs removed, got %s", updatedCollection.ReferencedGroupIDs)
+	}
+}
+
+func TestClearSubscriptionNodesPreservesDynamicGroupAndReference(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+
+	sub, err := db.CreateSubscription(&model.SubscriptionRequest{Name: "sub", URL: "https://example.com/sub", SyncMode: "off", SyncTimeoutSecs: 60})
+	if err != nil {
+		t.Fatalf("create subscription: %v", err)
+	}
+	const uid = "dynamic-node"
+	node := model.ParsedNode{UID: uid, Name: "HK-01", Type: "vless", Server: "hk.example.com", ServerPort: 443, Raw: "raw", RawJSON: `{"type":"vless"}`}
+	if err := db.ReplaceSubscriptionNodes(sub.ID, []model.ParsedNode{node}); err != nil {
+		t.Fatalf("replace subscription nodes: %v", err)
+	}
+	group, err := db.CreateNodeGroup(&model.NodeGroupRequest{Name: "dynamic", Type: "selector", FilterSubscriptions: fmt.Sprintf("%d", sub.ID), FilterInclude: "HK", Enabled: true})
+	if err != nil {
+		t.Fatalf("create dynamic group: %v", err)
+	}
+	refs, _ := json.Marshal([]int64{group.ID})
+	collection := &model.ProxyCollection{Name: "strategy", Type: "selector", SourceType: "node_groups", ReferencedGroupIDs: string(refs), RouteRuleIDs: "[]", NodeUIDs: "[]", Enabled: true}
+	if err := db.CreateProxyCollection(collection); err != nil {
+		t.Fatalf("create proxy collection: %v", err)
+	}
+
+	if err := db.ClearSubscriptionNodes(sub.ID); err != nil {
+		t.Fatalf("clear subscription nodes: %v", err)
+	}
+	groups, err := db.ListNodeGroups()
+	if err != nil {
+		t.Fatalf("list groups after clear: %v", err)
+	}
+	if len(groups) != 1 || groups[0].ID != group.ID || groups[0].MatchedNodeCount != 0 {
+		t.Fatalf("dynamic group not preserved empty: %+v", groups)
+	}
+	updatedCollection, err := db.GetProxyCollection(collection.ID)
+	if err != nil {
+		t.Fatalf("get collection after clear: %v", err)
+	}
+	if updatedCollection.ReferencedGroupIDs != string(refs) {
+		t.Fatalf("dynamic group reference changed after clear: %s", updatedCollection.ReferencedGroupIDs)
+	}
+
+	if err := db.ReplaceSubscriptionNodes(sub.ID, []model.ParsedNode{node}); err != nil {
+		t.Fatalf("restore matching node: %v", err)
+	}
+	groups, err = db.ListNodeGroups()
+	if err != nil {
+		t.Fatalf("list groups after restore: %v", err)
+	}
+	if len(groups) != 1 || groups[0].MatchedNodeCount != 1 {
+		t.Fatalf("restored node was not counted: %+v", groups)
+	}
+	matches, err := db.PreviewNodeGroupMatches(group.FilterProtocols, group.FilterSubscriptions, group.FilterInclude, group.FilterExclude)
+	if err != nil {
+		t.Fatalf("resolve restored dynamic group matches: %v", err)
+	}
+	if len(matches) != 1 || matches[0].UID != uid {
+		t.Fatalf("restored node was not resolved by dynamic filters: %+v", matches)
+	}
+	resolved, err := db.GetProxyCollectionWithNodes(collection.ID)
+	if err != nil {
+		t.Fatalf("resolve collection groups: %v", err)
+	}
+	if len(resolved.ReferencedGroups) != 1 || resolved.ReferencedGroups[0].ID != group.ID {
+		t.Fatalf("restored dynamic group was not resolved: %+v", resolved.ReferencedGroups)
 	}
 }
 
@@ -266,7 +354,7 @@ func TestCleanInvalidNodeUIDsDeletesEmptyGroupsAndUpdatesStrategyRefs(t *testing
 	if err != nil {
 		t.Fatalf("clean invalid node UIDs: %v", err)
 	}
-	if cleanup.UpdatedCollections != 1 || cleanup.DeletedNodeGroups != 2 {
+	if cleanup.UpdatedCollections != 1 || cleanup.DeletedNodeGroups != 1 {
 		t.Fatalf("unexpected cleanup result: %+v", cleanup)
 	}
 
@@ -274,8 +362,8 @@ func TestCleanInvalidNodeUIDsDeletesEmptyGroupsAndUpdatesStrategyRefs(t *testing
 	if err != nil {
 		t.Fatalf("list node groups: %v", err)
 	}
-	if len(groups) != 2 || groups[0].ID != keptGroup.ID || groups[1].ID != keptDynamic.ID {
-		t.Fatalf("expected manual and dynamic groups with matches to remain, got %+v", groups)
+	if len(groups) != 3 || groups[0].ID != emptyDynamic.ID || groups[1].ID != keptGroup.ID || groups[2].ID != keptDynamic.ID {
+		t.Fatalf("expected empty dynamic and groups with matches to remain, got %+v", groups)
 	}
 	updatedGroupCollection, err := db.GetProxyCollection(groupCollection.ID)
 	if err != nil {
@@ -285,8 +373,8 @@ func TestCleanInvalidNodeUIDsDeletesEmptyGroupsAndUpdatesStrategyRefs(t *testing
 	if err := json.Unmarshal([]byte(updatedGroupCollection.ReferencedGroupIDs), &updatedRefs); err != nil {
 		t.Fatalf("unmarshal group strategy refs: %v", err)
 	}
-	if len(updatedRefs) != 2 || updatedRefs[0] != keptGroup.ID || updatedRefs[1] != keptDynamic.ID {
-		t.Fatalf("expected empty group refs removed, got %+v", updatedRefs)
+	if len(updatedRefs) != 3 || updatedRefs[0] != emptyDynamic.ID || updatedRefs[1] != keptGroup.ID || updatedRefs[2] != keptDynamic.ID {
+		t.Fatalf("expected only empty manual group ref removed, got %+v", updatedRefs)
 	}
 	updatedManualCollection, err := db.GetProxyCollection(manualCollection.ID)
 	if err != nil {
@@ -422,23 +510,34 @@ func TestCleanInvalidNodeUIDsKeepsUIDReferencedByAnotherSubscription(t *testing.
 	if err != nil {
 		t.Fatalf("clean shared UID: %v", err)
 	}
-	if cleanup.UpdatedCollections != 0 || cleanup.DeletedNodeGroups != 1 {
-		t.Fatalf("expected shared UID retained and empty dynamic group deleted, got %+v", cleanup)
+	if cleanup.UpdatedCollections != 0 || cleanup.DeletedNodeGroups != 0 {
+		t.Fatalf("expected shared UID and empty dynamic group retained, got %+v", cleanup)
 	}
 	groups, err := db.ListNodeGroups()
 	if err != nil {
 		t.Fatalf("list node groups: %v", err)
 	}
-	if len(groups) != 1 || groups[0].ID != group.ID {
-		t.Fatalf("expected shared node group retained, got %+v", groups)
+	if len(groups) != 2 || groups[0].ID != group.ID || groups[1].ID != emptyDynamic.ID {
+		t.Fatalf("expected shared manual and dynamic groups retained, got %+v", groups)
 	}
 	updated, err := db.GetProxyCollection(collection.ID)
 	if err != nil {
 		t.Fatalf("get shared strategy: %v", err)
 	}
-	keptRefs, _ := json.Marshal([]int64{group.ID})
-	if updated.NodeUIDs != string(uids) || updated.ReferencedGroupIDs != string(keptRefs) {
+	if updated.NodeUIDs != string(uids) || updated.ReferencedGroupIDs != string(refs) {
 		t.Fatalf("expected shared references retained, got node_uids=%s group_refs=%s", updated.NodeUIDs, updated.ReferencedGroupIDs)
+	}
+}
+
+func TestUpdateNodeGroupFiltersReturnsNoRowsForMissingGroup(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.UpdateNodeGroupFilters(9999, "vless", "1"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("missing group error = %v, want sql.ErrNoRows", err)
 	}
 }
 

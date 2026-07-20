@@ -4,8 +4,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"time"
-
-	"github.com/ackwrap/ackwrap/internal/model"
 )
 
 type proxyCollectionRefUpdate struct {
@@ -64,50 +62,33 @@ func globallyMissingNodeUIDsTx(tx *sql.Tx, removedUIDs []string) (map[string]boo
 }
 
 func (s *Store) emptyNodeGroupIDsTx(tx *sql.Tx, remove map[string]bool) ([]int64, error) {
-	nodes, err := listEnabledNodeRefsTx(tx)
-	if err != nil {
-		return nil, err
-	}
-	rows, err := tx.Query(`SELECT id, node_uids, filter_protocols, filter_subscriptions, filter_include, filter_exclude FROM node_groups`)
+	rows, err := tx.Query(`SELECT id, node_uids FROM node_groups`)
 	if err != nil {
 		return nil, err
 	}
 	emptyIDs := make([]int64, 0)
 	for rows.Next() {
 		var id int64
-		var nodeUIDs, filterProtocols, filterSubscriptions, filterInclude, filterExclude string
-		if err := rows.Scan(&id, &nodeUIDs, &filterProtocols, &filterSubscriptions, &filterInclude, &filterExclude); err != nil {
+		var nodeUIDs string
+		if err := rows.Scan(&id, &nodeUIDs); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		matchedCount := 0
-		if hasManualNodeUIDs(nodeUIDs) {
-			var values []string
-			if err := json.Unmarshal([]byte(nodeUIDs), &values); err != nil {
-				rows.Close()
-				return nil, err
-			}
-			kept := values[:0]
-			for _, uid := range values {
-				if !remove[uid] {
-					kept = append(kept, uid)
-				}
-			}
-			data, err := json.Marshal(kept)
-			if err != nil {
-				rows.Close()
-				return nil, err
-			}
-			matched, err := filterNodesByUIDs(nodes, string(data))
-			if err != nil {
-				rows.Close()
-				return nil, err
-			}
-			matchedCount = len(matched)
-		} else {
-			matchedCount = len(s.filterNodes(nodes, filterProtocols, filterSubscriptions, filterInclude, filterExclude))
+		if !hasManualNodeUIDs(nodeUIDs) {
+			continue
 		}
-		if matchedCount == 0 {
+		var values []string
+		if err := json.Unmarshal([]byte(nodeUIDs), &values); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		keptCount := 0
+		for _, uid := range values {
+			if !remove[uid] {
+				keptCount++
+			}
+		}
+		if keptCount == 0 {
 			emptyIDs = append(emptyIDs, id)
 		}
 	}
@@ -119,30 +100,6 @@ func (s *Store) emptyNodeGroupIDsTx(tx *sql.Tx, remove map[string]bool) ([]int64
 		return nil, err
 	}
 	return emptyIDs, nil
-}
-
-func listEnabledNodeRefsTx(tx *sql.Tx) ([]model.Node, error) {
-	rows, err := tx.Query(`SELECT uid, subscription_id, name, type FROM nodes WHERE enabled = 1`)
-	if err != nil {
-		return nil, err
-	}
-	items := make([]model.Node, 0)
-	for rows.Next() {
-		var item model.Node
-		if err := rows.Scan(&item.UID, &item.SubscriptionID, &item.Name, &item.Type); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		items = append(items, item)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return nil, err
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }
 
 func (s *Store) removeNodeGroupRefsFromProxyCollections(ids []int64) error {

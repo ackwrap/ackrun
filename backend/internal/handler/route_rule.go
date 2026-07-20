@@ -15,6 +15,9 @@ type RouteRuleHandler struct {
 	svc *service.RouteRuleService
 }
 
+// ConfigReconcileContextKey carries a handler decision for config reconciliation.
+const ConfigReconcileContextKey = "ackwrap.config_reconcile"
+
 func NewRouteRuleHandler(svc *service.RouteRuleService) *RouteRuleHandler {
 	return &RouteRuleHandler{svc: svc}
 }
@@ -48,6 +51,7 @@ func (h *RouteRuleHandler) Create(c *gin.Context) {
 		writeRouteRuleMutationError(c, http.StatusBadRequest, "ROUTE_RULE_CREATE_FAILED", err)
 		return
 	}
+	c.Set(ConfigReconcileContextKey, item.Outbound != "proxy")
 	c.JSON(http.StatusOK, item)
 }
 

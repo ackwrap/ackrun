@@ -119,12 +119,13 @@ func TestParseAdvancedTransportFields(t *testing.T) {
 	if err := json.Unmarshal([]byte(node.RawJSON), &cfg); err != nil {
 		t.Fatalf("unmarshal raw json: %v", err)
 	}
-	if cfg["network"] != "grpc" {
-		t.Fatalf("missing advanced fields: %+v", cfg)
+	transport, ok := cfg["transport"].(map[string]any)
+	if !ok || transport["type"] != "grpc" || transport["service_name"] != "svc" {
+		t.Fatalf("missing normalized gRPC transport: %+v", cfg)
 	}
 	assertUTLSFingerprint(t, cfg, "chrome")
-	if _, ok := cfg["grpc-opts"].(map[string]any); !ok {
-		t.Fatalf("missing grpc opts: %+v", cfg)
+	if _, exists := cfg["grpc-opts"]; exists {
+		t.Fatalf("legacy gRPC options leaked into sing-box config: %+v", cfg)
 	}
 	if _, exists := cfg["reality-opts"]; exists {
 		t.Fatalf("legacy reality opts leaked into sing-box config: %+v", cfg)
@@ -142,10 +143,11 @@ func TestParseAdvancedTransportFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse ss plugin: %v", err)
 	}
+	cfg = nil
 	if err := json.Unmarshal([]byte(ss.RawJSON), &cfg); err != nil {
 		t.Fatalf("unmarshal ss raw json: %v", err)
 	}
-	if cfg["plugin"] != "obfs" {
+	if cfg["plugin"] != "obfs-local" || cfg["plugin_opts"] != "obfs=http;obfs-host=example.com" {
 		t.Fatalf("missing ss plugin: %+v", cfg)
 	}
 }
@@ -187,11 +189,11 @@ func TestHysteriaAdvancedFields(t *testing.T) {
 	if tlsMap["insecure"] != true {
 		t.Fatalf("expected tls.insecure, got %v", tlsMap["insecure"])
 	}
-	if cfg["obfs"] != "salamander" {
+	if cfg["obfs"] != "obfsval" {
 		t.Fatalf("expected obfs, got %v", cfg["obfs"])
 	}
-	if cfg["obfs-param"] != "obfsval" {
-		t.Fatalf("expected obfs-param, got %v", cfg["obfs-param"])
+	if _, exists := cfg["obfs-param"]; exists {
+		t.Fatalf("legacy obfs-param leaked into sing-box config: %+v", cfg)
 	}
 	alpn, ok := tlsMap["alpn"].([]any)
 	if !ok || len(alpn) != 2 {
@@ -248,11 +250,11 @@ func TestTuicAdvancedFields(t *testing.T) {
 	if cfg["congestion_control"] != "bbr" {
 		t.Fatalf("expected congestion_control=bbr, got %v", cfg["congestion_control"])
 	}
-	if cfg["udp-relay-mode"] != "datagram" {
-		t.Fatalf("expected udp-relay-mode=datagram, got %v", cfg["udp-relay-mode"])
+	if cfg["udp_relay_mode"] != "datagram" {
+		t.Fatalf("expected udp_relay_mode=datagram, got %v", cfg["udp_relay_mode"])
 	}
-	if cfg["reduce-rtt"] != true {
-		t.Fatalf("expected reduce-rtt=true, got %v", cfg["reduce-rtt"])
+	if cfg["zero_rtt_handshake"] != true {
+		t.Fatalf("expected zero_rtt_handshake=true, got %v", cfg["zero_rtt_handshake"])
 	}
 	assertUTLSFingerprint(t, cfg, "safari")
 }
@@ -297,7 +299,7 @@ func TestAnytlsTLSFields(t *testing.T) {
 }
 
 func TestSocksTLSAndVersion(t *testing.T) {
-	node, err := ParseProxyURI("socks5://user:pass@socks.example.com:1080?tls=1&sni=socks.example.com#SOCKS-TLS")
+	node, err := ParseProxyURI("socks5://user:pass@socks.example.com:1080#SOCKS5")
 	if err != nil {
 		t.Fatalf("parse socks: %v", err)
 	}
@@ -308,10 +310,8 @@ func TestSocksTLSAndVersion(t *testing.T) {
 	if cfg["version"] != "5" {
 		t.Fatalf("expected version=5, got %v", cfg["version"])
 	}
-	assertTLSEnabled(t, cfg)
-	tlsMap, _ := cfg["tls"].(map[string]any)
-	if tlsMap["server_name"] != "socks.example.com" {
-		t.Fatalf("expected tls.server_name=socks.example.com, got %v", tlsMap)
+	if _, err := ParseProxyURI("socks5://user:pass@socks.example.com:1080?tls=1&sni=socks.example.com#SOCKS-TLS"); err == nil {
+		t.Fatal("expected TLS-wrapped SOCKS to be rejected before config generation")
 	}
 }
 
@@ -511,28 +511,135 @@ func TestWireguardMTUAndAddress(t *testing.T) {
 }
 
 func TestSSTLSAndTransport(t *testing.T) {
-	node, err := ParseProxyURI("ss://aes-128-gcm:pass@ss.example.com:8388?tls=1&sni=ss.example.com&type=ws&host=ws.example.com&path=%2Fws#SS-TLS-WS")
+	if _, err := ParseProxyURI("ss://aes-128-gcm:pass@ss.example.com:8388?tls=1&sni=ss.example.com&type=ws&host=ws.example.com&path=%2Fws#SS-TLS-WS"); err == nil {
+		t.Fatal("expected Shadowsocks transport without an explicit SIP003 plugin to be rejected")
+	}
+	node, err := ParseProxyURI("ss://aes-128-gcm:pass@ss.example.com:8388?plugin=v2ray-plugin%3Btls%3D1%3Bhost%3Dss.example.com%3Bpath%3D%2Fws#SS-Plugin")
 	if err != nil {
-		t.Fatalf("parse ss: %v", err)
+		t.Fatalf("parse explicit v2ray-plugin: %v", err)
 	}
 	var cfg map[string]any
 	if err := json.Unmarshal([]byte(node.RawJSON), &cfg); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	assertTLSEnabled(t, cfg)
-	tlsMap, _ := cfg["tls"].(map[string]any)
-	if tlsMap["server_name"] != "ss.example.com" {
-		t.Fatalf("expected tls.server_name=ss.example.com, got %v", tlsMap)
+	if cfg["plugin"] != "v2ray-plugin" {
+		t.Fatalf("expected v2ray-plugin, got %v", cfg["plugin"])
 	}
-	if cfg["network"] != "ws" {
-		t.Fatalf("expected network=ws, got %v", cfg["network"])
+	pluginOptions, ok := cfg["plugin_opts"].(string)
+	if !ok || !strings.Contains(pluginOptions, "host=ss.example.com") || !strings.Contains(pluginOptions, "path=/ws") || !strings.Contains(pluginOptions, "tls") {
+		t.Fatalf("expected normalized v2ray-plugin options, got %v", cfg["plugin_opts"])
 	}
-	wsOpts, ok := cfg["ws-opts"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected ws-opts map, got %v", cfg["ws-opts"])
+	if _, exists := cfg["tls"]; exists {
+		t.Fatalf("top-level Shadowsocks TLS leaked into sing-box config: %+v", cfg)
 	}
-	if wsOpts["path"] != "/ws" {
-		t.Fatalf("expected ws path=/ws, got %v", wsOpts["path"])
+}
+
+func TestShadowsocksTLSAliasesAreRejectedAfterNormalization(t *testing.T) {
+	tests := []struct {
+		name  string
+		field string
+		value any
+	}{
+		{name: "TLS map", field: "tls", value: map[string]any{"enabled": true}},
+		{name: "SNI", field: "sni", value: "edge.example"},
+		{name: "server name", field: "server_name", value: "edge.example"},
+		{name: "ALPN", field: "alpn", value: []any{"h2"}},
+		{name: "client fingerprint", field: "client-fingerprint", value: "chrome"},
+		{name: "fingerprint", field: "fingerprint", value: "firefox"},
+		{name: "invalid fingerprint", field: "fingerprint", value: "not-a-sha256-pin"},
+		{name: "certificate fingerprint", field: "certificate_sha256", value: strings.Repeat("a", 64)},
+		{name: "skip cert verify", field: "skip-cert-verify", value: true},
+		{name: "insecure", field: "insecure", value: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := map[string]any{
+				"type": "shadowsocks", "server": "ss.example", "port": 8388,
+				"cipher": "aes-128-gcm", "password": "redacted", test.field: test.value,
+			}
+			if _, err := normalizeToSingbox(config, "shadowsocks"); err == nil || !strings.Contains(err.Error(), "TLS-wrapped Shadowsocks") {
+				t.Fatalf("expected normalized TLS rejection, got %v", err)
+			}
+		})
+	}
+}
+
+func TestShadowsocksSIP003PluginOptionsAreValidatedAndNormalized(t *testing.T) {
+	v2ray, err := normalizeToSingbox(map[string]any{
+		"type": "shadowsocks", "server": "ss.example", "port": 8388,
+		"cipher": "aes-128-gcm", "password": "redacted", "plugin": "v2ray-plugin",
+		"plugin-opts": `tls=1;mode=websocket;host=edge.example;path=/socket;mux=0`,
+	}, "shadowsocks")
+	if err != nil {
+		t.Fatalf("normalize v2ray-plugin: %v", err)
+	}
+	if v2ray["plugin_opts"] != "host=edge.example;mode=websocket;mux=0;path=/socket;tls" {
+		t.Fatalf("unexpected v2ray-plugin options: %v", v2ray["plugin_opts"])
+	}
+	escapedPlugin, escapedOptions, err := NormalizeShadowsocksSIP003Plugin("v2ray-plugin", `host=edge.example;path=/a\;b\=c\\d`)
+	if err != nil || escapedPlugin != "v2ray-plugin" || escapedOptions != `host=edge.example;path=/a\;b\=c\\d` {
+		t.Fatalf("escaped SIP003 options were not preserved: plugin=%q options=%q err=%v", escapedPlugin, escapedOptions, err)
+	}
+
+	obfs, err := normalizeToSingbox(map[string]any{
+		"type": "shadowsocks", "server": "ss.example", "port": 8388,
+		"cipher": "aes-128-gcm", "password": "redacted", "plugin": "obfs",
+		"plugin-opts": map[string]any{"mode": "tls", "host": "edge.example"},
+	}, "shadowsocks")
+	if err != nil {
+		t.Fatalf("normalize obfs-local: %v", err)
+	}
+	if obfs["plugin"] != "obfs-local" || obfs["plugin_opts"] != "obfs=tls;obfs-host=edge.example" {
+		t.Fatalf("unexpected obfs-local options: %+v", obfs)
+	}
+
+	invalid := []string{
+		"skip-cert-verify=1",
+		"mode=grpc",
+		"mux=not-a-number",
+		"host=one;host=two",
+		`path=/socket\`,
+	}
+	for _, options := range invalid {
+		if _, err := normalizeToSingbox(map[string]any{
+			"type": "shadowsocks", "server": "ss.example", "port": 8388,
+			"cipher": "aes-128-gcm", "password": "redacted", "plugin": "v2ray-plugin", "plugin-opts": options,
+		}, "shadowsocks"); err == nil {
+			t.Fatalf("expected plugin options to be rejected")
+		}
+	}
+}
+
+func TestSubscriptionShadowsocksValidationMarksUnsupportedInputs(t *testing.T) {
+	clashNodes, err := ParseSubscriptionNodes([]byte(`proxies:
+  - name: SS-SNI
+    type: ss
+    server: ss.example
+    port: 8388
+    cipher: aes-128-gcm
+    password: redacted
+    sni: edge.example
+  - name: SS-Plugin
+    type: ss
+    server: ss.example
+    port: 8388
+    cipher: aes-128-gcm
+    password: redacted
+    plugin: v2ray-plugin
+    plugin-opts: unknown=value
+`))
+	if err != nil || len(clashNodes) != 2 {
+		t.Fatalf("parse Clash Shadowsocks validation cases: count=%d err=%v", len(clashNodes), err)
+	}
+	for _, node := range clashNodes {
+		if node.UnsupportedReason == "" {
+			t.Fatalf("Clash Shadowsocks input was not rejected during normalization")
+		}
+	}
+
+	singboxNodes, err := ParseSubscriptionNodes([]byte(`{"outbounds":[{"type":"shadowsocks","tag":"SS-TLS","server":"ss.example","server_port":8388,"method":"aes-128-gcm","password":"redacted","tls":{"enabled":true}}]}`))
+	if err != nil || len(singboxNodes) != 1 || singboxNodes[0].UnsupportedReason == "" {
+		t.Fatalf("sing-box Shadowsocks TLS was not rejected during normalization: count=%d err=%v", len(singboxNodes), err)
 	}
 }
 

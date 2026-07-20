@@ -83,6 +83,8 @@ func RegisterRoutes(
 
 		v1.GET("/settings/update", settingsH.GetUpdateSettings)
 		v1.PUT("/settings/update", settingsH.SetUpdateSettings)
+		v1.GET("/settings/traffic-bypass", settingsH.GetTrafficBypassSettings)
+		v1.PUT("/settings/traffic-bypass", settingsH.SetTrafficBypassSettings)
 		v1.GET("/settings/log", settingsH.GetLogSettings)
 		v1.PUT("/settings/log", settingsH.SetLogSettings)
 		v1.GET("/settings/connectivity", settingsH.GetConnectivitySettings)

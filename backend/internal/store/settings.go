@@ -1,12 +1,56 @@
 package store
 
 import (
+	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"time"
 
 	"github.com/ackwrap/ackwrap/internal/model"
 )
+
+func defaultTrafficBypassSettings() *model.TrafficBypassSettings {
+	return &model.TrafficBypassSettings{Rules: []model.TrafficBypassRule{
+		{Type: "process_name", Value: "easytier-core"},
+		{Type: "interface", Value: "easytier-tun"},
+		{Type: "ip_cidr", Value: "10.0.0.0/8"},
+		{Type: "ip_cidr", Value: "172.16.0.0/12"},
+		{Type: "ip_cidr", Value: "192.168.0.0/16"},
+	}}
+}
+
+func (s *Store) GetTrafficBypassSettings() (*model.TrafficBypassSettings, error) {
+	settings := defaultTrafficBypassSettings()
+	var raw string
+	err := s.db.QueryRow(`SELECT value FROM app_settings WHERE key = 'traffic_bypass.rules'`).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return settings, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal([]byte(raw), &settings.Rules); err != nil {
+		return nil, fmt.Errorf("解析流量排除设置失败: %w", err)
+	}
+	if settings.Rules == nil {
+		settings.Rules = []model.TrafficBypassRule{}
+	}
+	return settings, nil
+}
+
+func (s *Store) SetTrafficBypassSettings(settings *model.TrafficBypassSettings) error {
+	raw, err := json.Marshal(settings.Rules)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`
+		INSERT INTO app_settings (key, value, updated_at)
+		VALUES ('traffic_bypass.rules', ?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+	`, string(raw), time.Now().Unix())
+	return err
+}
 
 const (
 	DefaultConnectivityTestURL         = "http://www.gstatic.com/generate_204"

@@ -96,6 +96,9 @@ func NewRouteRuleService(s *store.Store, p *paths.Paths, rt *RealtimeService) *R
 }
 
 func (svc *RouteRuleService) StartScheduler() {
+	if err := svc.store.ResetInterruptedRouteRuleSubscriptionSyncs(); err != nil {
+		logging.Error("route_rule_subscription.scheduler", "reset interrupted syncs failed: %v", err)
+	}
 	items, err := svc.store.ListRouteRuleSubscriptions()
 	if err != nil {
 		logging.Error("route_rule_subscription.scheduler", "load rule subscriptions failed: %v", err)
@@ -510,7 +513,7 @@ func (svc *RouteRuleService) DeleteSubscription(id int64) (*model.ActionResponse
 }
 
 func (svc *RouteRuleService) SyncSubscription(id int64) (*model.ActionResponse, error) {
-	item, err := svc.store.GetRouteRuleSubscription(id)
+	item, started, err := svc.prepareRuleSubscriptionSync(id)
 	if err != nil {
 		return nil, err
 	}
@@ -518,7 +521,9 @@ func (svc *RouteRuleService) SyncSubscription(id int64) (*model.ActionResponse, 
 		return nil, fmt.Errorf("route rule subscription not found")
 	}
 	logging.Info("route_rule_subscription.sync", "syncing route rule subscription: %d", id)
-	go svc.runRuleSubscriptionSync(id)
+	if started {
+		go svc.executeRuleSubscriptionSync(item)
+	}
 	return &model.ActionResponse{Success: true, Message: "route rule subscription sync started"}, nil
 }
 
@@ -1183,27 +1188,57 @@ func (svc *RouteRuleService) SubscriptionContent(id int64) ([]byte, string, erro
 }
 
 func (svc *RouteRuleService) runRuleSubscriptionSync(id int64) {
-	item, err := svc.store.GetRouteRuleSubscription(id)
-	if err != nil || item == nil {
+	item, started, err := svc.prepareRuleSubscriptionSync(id)
+	if err != nil {
 		logging.Error("route_rule_subscription.sync", "get route rule subscription %d failed: %v", id, err)
 		return
 	}
-	if item.SyncStatus == "syncing" {
+	if item == nil || !started {
 		return
 	}
-	if err := svc.store.SetRouteRuleSubscriptionSyncState(id, "syncing", 30, ""); err != nil {
-		logging.Error("route_rule_subscription.sync", "set sync state failed: %v", err)
-		return
+	svc.executeRuleSubscriptionSync(item)
+}
+
+func (svc *RouteRuleService) prepareRuleSubscriptionSync(id int64) (*model.RouteRuleSubscription, bool, error) {
+	item, claimed, err := svc.store.ClaimRouteRuleSubscriptionSync(id, 30)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
 	}
+	if err != nil || !claimed {
+		return item, false, err
+	}
+	svc.broadcastRuleSubscriptionSync(id, "syncing", 30, "")
+	return item, true, nil
+}
+
+func (svc *RouteRuleService) executeRuleSubscriptionSync(item *model.RouteRuleSubscription) {
+	id := item.ID
 	_, _, cachedPath, err := svc.fetchAndCacheRouteRuleSubscription(item)
 	if err != nil {
 		logging.Error("route_rule_subscription.sync", "sync rule subscription %d failed: %v", id, err)
 		_ = svc.store.SetRouteRuleSubscriptionSyncState(id, "failed", 0, err.Error())
+		svc.broadcastRuleSubscriptionSync(id, "failed", 0, err.Error())
 		return
 	}
 	if _, err := svc.store.UpdateRouteRuleSubscriptionSyncResult(id, cachedPath); err != nil {
 		logging.Error("route_rule_subscription.sync", "update sync result failed: %v", err)
+		_ = svc.store.SetRouteRuleSubscriptionSyncState(id, "failed", 0, err.Error())
+		svc.broadcastRuleSubscriptionSync(id, "failed", 0, err.Error())
+		return
 	}
+	svc.broadcastRuleSubscriptionSync(id, "updated", 100, "")
+}
+
+func (svc *RouteRuleService) broadcastRuleSubscriptionSync(id int64, status string, progress float64, syncError string) {
+	if svc.realtime == nil {
+		return
+	}
+	svc.realtime.Broadcast("route_rule_subscription.sync", map[string]any{
+		"id":       id,
+		"status":   status,
+		"progress": progress,
+		"error":    syncError,
+	})
 }
 
 func (svc *RouteRuleService) fetchAndCacheRouteRuleSubscription(item *model.RouteRuleSubscription) ([]byte, string, string, error) {
@@ -1832,11 +1867,14 @@ func isRouteRuleSubscriptionTag(value string) bool {
 }
 
 func isGeneratedGeoRuleSetTag(value string) bool {
-	if strings.HasPrefix(value, "geoip-") || strings.HasPrefix(value, "geosite-") {
-		if isRouteRuleSubscriptionTag(value) {
-			return true
-		}
+	if !strings.HasPrefix(value, "geoip-") && !strings.HasPrefix(value, "geosite-") {
+		return false
 	}
-	const geolocationNotPrefix = "geosite-geolocation-!"
-	return strings.HasPrefix(value, geolocationNotPrefix) && isRouteRuleSubscriptionTag(strings.TrimPrefix(value, geolocationNotPrefix))
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '@' || r == '!' {
+			continue
+		}
+		return false
+	}
+	return true
 }

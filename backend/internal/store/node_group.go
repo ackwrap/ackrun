@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -101,6 +102,25 @@ func (s *Store) UpdateNodeGroup(id int64, req *model.NodeGroupRequest) error {
 	_, err := s.db.Exec(`UPDATE node_groups SET name = ?, type = ?, filter_protocols = ?, filter_subscriptions = ?, filter_include = ?, filter_exclude = ?, node_uids = ?, test_url = ?, test_interval = ?, tolerance = ?, enabled = ?, priority = ?, updated_at = ? WHERE id = ?`,
 		req.Name, req.Type, req.FilterProtocols, req.FilterSubscriptions, req.FilterInclude, req.FilterExclude, nodeUIDsJSON, testURL, testInterval, tolerance, req.Enabled, req.Priority, now, id)
 	return err
+}
+
+func (s *Store) UpdateNodeGroupFilters(id int64, filterProtocols, filterSubscriptions string) error {
+	s.nodeRefsMu.Lock()
+	defer s.nodeRefsMu.Unlock()
+
+	result, err := s.db.Exec(`UPDATE node_groups SET filter_protocols = ?, filter_subscriptions = ?, updated_at = ? WHERE id = ?`,
+		filterProtocols, filterSubscriptions, time.Now().Unix(), id)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func (s *Store) DeleteNodeGroup(id int64) error {

@@ -49,6 +49,34 @@ func (h *SettingsHandler) SetUpdateSettings(c *gin.Context) {
 	c.JSON(http.StatusOK, model.ActionResponse{Success: true, Message: "settings updated"})
 }
 
+func (h *SettingsHandler) GetTrafficBypassSettings(c *gin.Context) {
+	settings, err := h.svc.GetTrafficBypassSettings()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Error: model.APIError{Code: "TRAFFIC_BYPASS_SETTINGS_FAILED", Message: err.Error()}})
+		return
+	}
+	c.JSON(http.StatusOK, settings)
+}
+
+func (h *SettingsHandler) SetTrafficBypassSettings(c *gin.Context) {
+	var settings model.TrafficBypassSettings
+	if err := c.ShouldBindJSON(&settings); err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "TRAFFIC_BYPASS_SETTINGS_INVALID", Message: err.Error()}})
+		return
+	}
+	if err := h.svc.SetTrafficBypassSettings(&settings); err != nil {
+		status := http.StatusInternalServerError
+		code := "TRAFFIC_BYPASS_SETTINGS_SAVE_FAILED"
+		if errors.Is(err, service.ErrTrafficBypassSettingsInvalid) {
+			status = http.StatusBadRequest
+			code = "TRAFFIC_BYPASS_SETTINGS_INVALID"
+		}
+		c.JSON(status, model.ErrorResponse{Error: model.APIError{Code: code, Message: err.Error()}})
+		return
+	}
+	c.JSON(http.StatusOK, model.ActionResponse{Success: true, Message: "traffic bypass settings updated"})
+}
+
 func (h *SettingsHandler) GetLogSettings(c *gin.Context) {
 	resp, err := h.svc.GetLogSettings()
 	if err != nil {

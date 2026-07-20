@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/ackwrap/ackwrap/internal/model"
@@ -192,5 +193,61 @@ func TestRouteRuleSubscriptionStoreCRUD(t *testing.T) {
 	}
 	if len(items) != 0 {
 		t.Fatalf("unexpected subscriptions after delete: %+v", items)
+	}
+}
+
+func TestClaimRouteRuleSubscriptionSyncAllowsOneConcurrentWinner(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+
+	created, err := db.CreateRouteRuleSubscription(&model.RouteRuleSubscriptionRequest{
+		Name: "Concurrent", Enabled: true, Tag: "concurrent", URL: "https://example.com/rules.srs", Format: "binary",
+	})
+	if err != nil {
+		t.Fatalf("create rule subscription: %v", err)
+	}
+
+	const contenders = 2
+	start := make(chan struct{})
+	results := make(chan bool, contenders)
+	errorsFound := make(chan error, contenders)
+	var wg sync.WaitGroup
+	for i := 0; i < contenders; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, claimed, claimErr := db.ClaimRouteRuleSubscriptionSync(created.ID, 30)
+			if claimErr != nil {
+				errorsFound <- claimErr
+				return
+			}
+			results <- claimed
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	close(errorsFound)
+
+	for claimErr := range errorsFound {
+		t.Errorf("claim sync: %v", claimErr)
+	}
+	winners := 0
+	for claimed := range results {
+		if claimed {
+			winners++
+		}
+	}
+	if winners != 1 {
+		t.Fatalf("claim winners = %d, want 1", winners)
+	}
+
+	item, claimed, err := db.ClaimRouteRuleSubscriptionSync(999999, 30)
+	if !errors.Is(err, sql.ErrNoRows) || item != nil || claimed {
+		t.Fatalf("missing claim = item=%v claimed=%v err=%v, want sql.ErrNoRows", item, claimed, err)
 	}
 }

@@ -668,6 +668,14 @@ func TestBuildGitHubDownloadAttemptsUsesAllAcceleratorsAndOfficialFallback(t *te
 	}
 }
 
+func TestBuildGitHubDownloadAttemptsDoesNotRewriteNonGitHubURL(t *testing.T) {
+	upstream := "http://127.0.0.1:18080/rules.srs"
+	attempts := buildGitHubDownloadAttempts(&model.UpdateSettingsResponse{Acceleration: "ghproxy"}, upstream)
+	if len(attempts) != 1 || attempts[0].name != "official_direct" || attempts[0].url != upstream {
+		t.Fatalf("non-GitHub attempts = %+v, want direct only", attempts)
+	}
+}
+
 func TestGeneratedGeoRuleSetContentUsesConfiguredMirror(t *testing.T) {
 	payload := testBinaryRuleSet(t, 1)
 	requests := 0
@@ -783,7 +791,7 @@ func TestGeneratedGeoRuleSetContentRejectsInvalidTag(t *testing.T) {
 	}
 }
 
-func TestGeneratedGeoRuleSetContentAllowsGeolocationNotCN(t *testing.T) {
+func TestGeneratedGeoRuleSetContentAllowsLogicalTags(t *testing.T) {
 	payload := testBinaryRuleSet(t, 1)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(payload)
@@ -796,13 +804,60 @@ func TestGeneratedGeoRuleSetContentAllowsGeolocationNotCN(t *testing.T) {
 	}
 	defer db.Close()
 	svc := newTestRouteRuleService(t, db)
-	data, _, err := svc.generatedGeoRuleSetContent("geosite-geolocation-!cn", upstream.URL)
+	for _, tag := range []string{"geosite-geolocation-!cn", "geosite-apple@cn", "geosite-category-ai-!cn"} {
+		t.Run(tag, func(t *testing.T) {
+			data, _, err := svc.generatedGeoRuleSetContent(tag, upstream.URL)
+			if err != nil {
+				t.Fatalf("generated geo content: %v", err)
+			}
+			if !bytes.Equal(data, payload) {
+				t.Fatal("unexpected generated geo rule set content")
+			}
+		})
+	}
+}
+
+func TestSyncRouteRuleSubscriptionClaimsStateBeforeReturning(t *testing.T) {
+	payload := testBinaryRuleSet(t, 1)
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		<-release
+		_, _ = w.Write(payload)
+	}))
+	defer upstream.Close()
+
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {
-		t.Fatalf("generated geo content: %v", err)
+		t.Fatalf("open store: %v", err)
 	}
-	if !bytes.Equal(data, payload) {
-		t.Fatal("unexpected generated geo rule set content")
+	defer db.Close()
+	item, err := db.CreateRouteRuleSubscription(&model.RouteRuleSubscriptionRequest{
+		Name: "Blocking", Enabled: true, Tag: "blocking", URL: upstream.URL, Format: "binary",
+	})
+	if err != nil {
+		t.Fatalf("create subscription: %v", err)
 	}
+	svc := newTestRouteRuleService(t, db)
+	if _, err := svc.SyncSubscription(item.ID); err != nil {
+		t.Fatalf("start sync: %v", err)
+	}
+	updated, err := db.GetRouteRuleSubscription(item.ID)
+	if err != nil {
+		t.Fatalf("get subscription: %v", err)
+	}
+	if updated.SyncStatus != "syncing" || updated.SyncProgress != 30 {
+		t.Fatalf("sync state = %s %.0f, want syncing 30", updated.SyncStatus, updated.SyncProgress)
+	}
+	close(release)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		updated, err = db.GetRouteRuleSubscription(item.ID)
+		if err == nil && updated.SyncStatus == "updated" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("sync did not complete after release: status=%s error=%v", updated.SyncStatus, err)
 }
 
 func TestRouteRulePreviewSupportsGeolocationNotCN(t *testing.T) {

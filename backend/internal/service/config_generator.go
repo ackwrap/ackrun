@@ -19,6 +19,7 @@ import (
 
 	"github.com/ackwrap/ackwrap/internal/logging"
 	"github.com/ackwrap/ackwrap/internal/model"
+	"github.com/ackwrap/ackwrap/internal/parser"
 	"github.com/ackwrap/ackwrap/internal/paths"
 	"github.com/ackwrap/ackwrap/internal/store"
 )
@@ -1124,6 +1125,9 @@ func normalizeLegacyOutboundFields(nodeData map[string]interface{}, outboundType
 	if err := normalizeLegacyRealityOptions(nodeData); err != nil {
 		return err
 	}
+	if err := normalizeLegacyV2RayTransport(nodeData, outboundType); err != nil {
+		return err
+	}
 	if cipher, exists := nodeData["cipher"]; exists {
 		switch outboundType {
 		case "vmess":
@@ -1140,6 +1144,41 @@ func normalizeLegacyOutboundFields(nodeData map[string]interface{}, outboundType
 			}
 		}
 		delete(nodeData, "cipher")
+	}
+	switch outboundType {
+	case "hysteria":
+		moveConfigField(nodeData, "obfs-param", "obfs")
+		moveConfigField(nodeData, "obfs_param", "obfs")
+		moveConfigField(nodeData, "receive-window", "recv_window")
+		moveConfigField(nodeData, "receive_window", "recv_window")
+		moveConfigField(nodeData, "receive-window-conn", "recv_window_conn")
+		moveConfigField(nodeData, "receive_window_conn", "recv_window_conn")
+		moveConfigField(nodeData, "disable-mtu-discovery", "disable_mtu_discovery")
+		for _, key := range []string{"recv_window", "recv_window_conn"} {
+			if value := intValue(nodeData[key]); value > 0 {
+				nodeData[key] = value
+			}
+		}
+	case "tuic":
+		moveConfigField(nodeData, "udp-relay-mode", "udp_relay_mode")
+		moveConfigField(nodeData, "reduce-rtt", "zero_rtt_handshake")
+		moveConfigField(nodeData, "reduce_rtt", "zero_rtt_handshake")
+		moveConfigField(nodeData, "zero-rtt-handshake", "zero_rtt_handshake")
+		if token := firstStringValue(nodeData, "token"); token != "" {
+			delete(nodeData, "token")
+			if firstStringValue(nodeData, "uuid") == "" || firstStringValue(nodeData, "password") == "" {
+				return fmt.Errorf("旧版 TUIC token 认证不受当前 sing-box 版本支持")
+			}
+		}
+	case "shadowsocks":
+		moveConfigField(nodeData, "plugin-opts", "plugin_opts")
+		if err := normalizeLegacyShadowsocksPlugin(nodeData); err != nil {
+			return err
+		}
+	case "socks":
+		if tlsEnabledValue(nodeData["tls"]) {
+			return fmt.Errorf("当前 sing-box 版本不支持 TLS 封装的 SOCKS 节点")
+		}
 	}
 	if outboundType == "ssr" {
 		nodeData["type"] = "shadowsocksr"
@@ -1177,6 +1216,284 @@ func normalizeLegacyOutboundFields(nodeData map[string]interface{}, outboundType
 		}
 	}
 	return fmt.Errorf("旧版 VMess alter_id 节点不受当前 sing-box 版本支持")
+}
+
+func normalizeLegacyV2RayTransport(nodeData map[string]interface{}, outboundType string) error {
+	if outboundType != "vmess" && outboundType != "vless" && outboundType != "trojan" {
+		return nil
+	}
+	network := strings.ToLower(firstStringValue(nodeData, "network"))
+	legacyKeys := []string{"ws-opts", "grpc-opts", "h2-opts", "http-upgrade-opts", "xhttp-opts"}
+	defer func() {
+		for _, key := range legacyKeys {
+			delete(nodeData, key)
+		}
+	}()
+	if network == "" || network == "tcp" || network == "udp" {
+		return nil
+	}
+	if _, exists := nodeData["transport"]; exists {
+		delete(nodeData, "network")
+		return nil
+	}
+
+	transport := map[string]interface{}{"type": network}
+	switch network {
+	case "ws":
+		if options, ok := nodeData["ws-opts"].(map[string]interface{}); ok {
+			if path := firstStringValue(options, "path"); path != "" {
+				transport["path"] = path
+			}
+			if headers, ok := options["headers"].(map[string]interface{}); ok && len(headers) > 0 {
+				transport["headers"] = headers
+			}
+			if maxEarlyData := intValue(options["max-early-data"]); maxEarlyData > 0 {
+				transport["max_early_data"] = maxEarlyData
+			}
+			if headerName := firstStringValue(options, "early-data-header-name"); headerName != "" {
+				transport["early_data_header_name"] = headerName
+			}
+		}
+	case "grpc":
+		if options, ok := nodeData["grpc-opts"].(map[string]interface{}); ok {
+			if serviceName := firstStringValue(options, "grpc-service-name", "service-name", "service_name"); serviceName != "" {
+				transport["service_name"] = serviceName
+			}
+		}
+	case "http", "h2":
+		transport["type"] = "http"
+		if options, ok := nodeData["h2-opts"].(map[string]interface{}); ok {
+			if path := firstStringValue(options, "path"); path != "" {
+				transport["path"] = path
+			}
+			if host, exists := options["host"]; exists {
+				transport["host"] = host
+			}
+		}
+	case "httpupgrade":
+		if options, ok := nodeData["http-upgrade-opts"].(map[string]interface{}); ok {
+			for _, key := range []string{"host", "path", "headers"} {
+				if value, exists := options[key]; exists {
+					transport[key] = value
+				}
+			}
+		}
+	default:
+		return fmt.Errorf("旧版 %s transport 不受当前 sing-box 版本支持", network)
+	}
+	nodeData["transport"] = transport
+	delete(nodeData, "network")
+	return nil
+}
+
+func normalizeLegacyShadowsocksPlugin(nodeData map[string]interface{}) error {
+	plugin := strings.ToLower(firstStringValue(nodeData, "plugin"))
+	network := strings.ToLower(firstStringValue(nodeData, "network"))
+	existingOptions, _ := nodeData["plugin_opts"].(string)
+	pluginOptions, _ := nodeData["plugin_opts"].(map[string]interface{})
+	if pluginOptions == nil {
+		pluginOptions = map[string]interface{}{}
+	}
+	legacyTransport := network == "ws" || network == "websocket" || network == "quic"
+	if plugin == "" && legacyTransport {
+		plugin = "v2ray-plugin"
+	}
+	if plugin != "v2ray-plugin" && network != "" && network != "tcp" && network != "udp" {
+		return fmt.Errorf("Shadowsocks network %q 缺少兼容的 SIP003 plugin", network)
+	}
+	if plugin != "v2ray-plugin" {
+		if field := legacyShadowsocksTLSField(nodeData); field != "" {
+			return fmt.Errorf("Shadowsocks TLS 字段 %s 需要 v2ray-plugin 才能迁移", field)
+		}
+		normalizedPlugin, normalizedOptions, err := parser.NormalizeShadowsocksSIP003Plugin(plugin, nodeData["plugin_opts"])
+		if err != nil {
+			return err
+		}
+		if normalizedPlugin == "" {
+			delete(nodeData, "plugin")
+			delete(nodeData, "plugin_opts")
+			return nil
+		}
+		nodeData["plugin"] = normalizedPlugin
+		if normalizedOptions == "" {
+			delete(nodeData, "plugin_opts")
+		} else {
+			nodeData["plugin_opts"] = normalizedOptions
+		}
+		return nil
+	}
+	if existingOptions != "" {
+		if field := legacyShadowsocksTLSField(nodeData); field != "" {
+			return fmt.Errorf("旧版 Shadowsocks TLS 字段 %s 无法与已有 v2ray-plugin 选项安全合并", field)
+		}
+		hasLegacyFields := legacyTransport || nodeData["ws-opts"] != nil ||
+			firstStringValue(nodeData, "host", "path") != "" ||
+			nodeData["skip-cert-verify"] != nil || nodeData["skip_cert_verify"] != nil || nodeData["insecure"] != nil
+		if hasLegacyFields {
+			return fmt.Errorf("旧版 Shadowsocks transport 无法与已有 v2ray-plugin 选项安全合并")
+		}
+		normalizedPlugin, normalizedOptions, err := parser.NormalizeShadowsocksSIP003Plugin(plugin, existingOptions)
+		if err != nil {
+			return err
+		}
+		nodeData["plugin"] = normalizedPlugin
+		if normalizedOptions == "" {
+			delete(nodeData, "plugin_opts")
+		} else {
+			nodeData["plugin_opts"] = normalizedOptions
+		}
+		return nil
+	}
+
+	mode := ""
+	if legacyTransport {
+		if network == "quic" {
+			mode = "quic"
+		} else {
+			mode = "websocket"
+		}
+		if configuredMode := firstStringValue(pluginOptions, "mode"); configuredMode != "" && configuredMode != mode {
+			return fmt.Errorf("Shadowsocks network 与 v2ray-plugin mode 冲突")
+		}
+		pluginOptions["mode"] = mode
+		delete(nodeData, "network")
+	}
+
+	wsHost := ""
+	wsPath := ""
+	if value, exists := nodeData["ws-opts"]; exists {
+		options, ok := value.(map[string]interface{})
+		if !ok || mode != "websocket" {
+			return fmt.Errorf("无法识别旧版 Shadowsocks ws-opts")
+		}
+		for key := range options {
+			if key != "path" && key != "headers" {
+				return fmt.Errorf("旧版 Shadowsocks ws-opts.%s 无法映射到 v2ray-plugin", key)
+			}
+		}
+		wsPath = firstStringValue(options, "path")
+		if headersValue, exists := options["headers"]; exists {
+			headers, ok := headersValue.(map[string]interface{})
+			if !ok {
+				return fmt.Errorf("无法识别旧版 Shadowsocks WebSocket headers")
+			}
+			for key := range headers {
+				if !strings.EqualFold(key, "host") {
+					return fmt.Errorf("旧版 Shadowsocks WebSocket header %s 无法映射到 v2ray-plugin", key)
+				}
+			}
+			wsHost = firstStringValue(headers, "Host", "host")
+		}
+		delete(nodeData, "ws-opts")
+	}
+	for _, key := range []string{"alpn", "fingerprint", "certificate-sha256", "certificate_sha256", "client-fingerprint", "client_fingerprint", "reality-opts"} {
+		if value, exists := nodeData[key]; exists && value != nil {
+			return fmt.Errorf("Shadowsocks TLS 字段 %s 无法映射到 v2ray-plugin", key)
+		}
+	}
+
+	tlsEnabled := tlsEnabledValue(nodeData["tls"])
+	tlsHost := ""
+	if tlsValue, exists := nodeData["tls"]; exists {
+		switch tlsOptions := tlsValue.(type) {
+		case bool:
+		case map[string]interface{}:
+			for key, value := range tlsOptions {
+				switch key {
+				case "enabled":
+				case "server_name":
+					tlsHost = configStringValue(value)
+				case "insecure":
+					if configBoolValue(value) {
+						return fmt.Errorf("v2ray-plugin 不支持 insecure TLS，无法无损迁移 Shadowsocks 节点")
+					}
+				default:
+					return fmt.Errorf("Shadowsocks TLS 字段 %s 无法映射到 v2ray-plugin", key)
+				}
+			}
+		default:
+			return fmt.Errorf("无法识别旧版 Shadowsocks TLS 配置")
+		}
+	}
+	for _, key := range []string{"skip-cert-verify", "skip_cert_verify", "insecure"} {
+		if configBoolValue(nodeData[key]) {
+			return fmt.Errorf("v2ray-plugin 不支持 %s，无法无损迁移 Shadowsocks 节点", key)
+		}
+		delete(nodeData, key)
+	}
+	topHost := firstStringValue(nodeData, "host", "sni", "servername", "server_name")
+	pluginHost := firstStringValue(pluginOptions, "host")
+	for _, candidate := range []string{wsHost, tlsHost, topHost} {
+		if candidate == "" {
+			continue
+		}
+		if pluginHost != "" && !strings.EqualFold(pluginHost, candidate) {
+			return fmt.Errorf("Shadowsocks WebSocket Host 与 TLS SNI 无法同时映射到 v2ray-plugin host")
+		}
+		pluginHost = candidate
+	}
+	if pluginHost != "" {
+		pluginOptions["host"] = pluginHost
+	}
+	delete(nodeData, "host")
+	delete(nodeData, "sni")
+	delete(nodeData, "servername")
+	delete(nodeData, "server_name")
+	pluginPath := firstStringValue(pluginOptions, "path")
+	topPath := firstStringValue(nodeData, "path")
+	for _, candidate := range []string{wsPath, topPath} {
+		if candidate == "" {
+			continue
+		}
+		if pluginPath != "" && pluginPath != candidate {
+			return fmt.Errorf("Shadowsocks WebSocket path 与 v2ray-plugin path 冲突")
+		}
+		pluginPath = candidate
+	}
+	if pluginPath != "" {
+		pluginOptions["path"] = pluginPath
+	}
+	delete(nodeData, "path")
+	if tlsEnabled {
+		pluginOptions["tls"] = true
+	}
+	delete(nodeData, "tls")
+	if boolValue, exists := pluginOptions["skip-cert-verify"]; exists && configBoolValue(boolValue) {
+		return fmt.Errorf("v2ray-plugin 不支持 skip-cert-verify")
+	}
+	delete(pluginOptions, "skip-cert-verify")
+	delete(pluginOptions, "skip_cert_verify")
+
+	normalizedPlugin, normalizedOptions, err := parser.NormalizeShadowsocksSIP003Plugin(plugin, pluginOptions)
+	if err != nil {
+		return err
+	}
+	nodeData["plugin"] = normalizedPlugin
+	if normalizedOptions == "" {
+		delete(nodeData, "plugin_opts")
+	} else {
+		nodeData["plugin_opts"] = normalizedOptions
+	}
+	return nil
+}
+
+func legacyShadowsocksTLSField(nodeData map[string]interface{}) string {
+	for _, key := range []string{
+		"tls", "sni", "servername", "server_name", "alpn", "fingerprint", "certificate-sha256", "certificate_sha256",
+		"client-fingerprint", "client_fingerprint", "skip-cert-verify", "skip_cert_verify", "insecure", "reality-opts",
+	} {
+		if value, exists := nodeData[key]; exists && value != nil {
+			return key
+		}
+	}
+	return ""
+}
+
+func tlsEnabledValue(value interface{}) bool {
+	if tlsOptions, ok := value.(map[string]interface{}); ok {
+		return configBoolValue(tlsOptions["enabled"])
+	}
+	return configBoolValue(value)
 }
 
 func normalizeLegacyRealityOptions(nodeData map[string]interface{}) error {
@@ -1583,6 +1900,12 @@ func (s *ConfigGeneratorService) defaultBypassRules() ([]map[string]interface{},
 		coreBinaryPath = s.paths.BinaryPath
 	}
 	processNames := defaultBypassProcessNames(currentExecutable, coreBinaryPath)
+	bypassSettings, err := s.store.GetTrafficBypassSettings()
+	if err != nil {
+		return nil, fmt.Errorf("加载流量排除设置失败: %w", err)
+	}
+	customProcesses, _, targetCIDRs, sourceCIDRs, domainSuffixes := trafficBypassValues(bypassSettings)
+	processNames = appendUniqueStrings(processNames, customProcesses...)
 
 	rules := []map[string]interface{}{
 		{
@@ -1591,6 +1914,28 @@ func (s *ConfigGeneratorService) defaultBypassRules() ([]map[string]interface{},
 			"action":       "bypass",
 			"outbound":     "direct",
 		},
+	}
+
+	if len(targetCIDRs) > 0 {
+		rules = append(rules, map[string]interface{}{
+			"ip_cidr":  targetCIDRs,
+			"action":   "bypass",
+			"outbound": "direct",
+		})
+	}
+	if len(sourceCIDRs) > 0 {
+		rules = append(rules, map[string]interface{}{
+			"source_ip_cidr": sourceCIDRs,
+			"action":         "bypass",
+			"outbound":       "direct",
+		})
+	}
+	if len(domainSuffixes) > 0 {
+		rules = append(rules, map[string]interface{}{
+			"domain_suffix": domainSuffixes,
+			"action":        "bypass",
+			"outbound":      "direct",
+		})
 	}
 
 	nodes, err := s.store.ListEnabledNodes()
@@ -1613,6 +1958,41 @@ func (s *ConfigGeneratorService) defaultBypassRules() ([]map[string]interface{},
 		})
 	}
 	return rules, nil
+}
+
+func trafficBypassValues(settings *model.TrafficBypassSettings) (processes, interfaces, targetCIDRs, sourceCIDRs, domainSuffixes []string) {
+	if settings == nil {
+		return
+	}
+	for _, rule := range settings.Rules {
+		switch rule.Type {
+		case "process_name":
+			processes = appendUniqueStrings(processes, rule.Value)
+		case "interface":
+			interfaces = appendUniqueStrings(interfaces, rule.Value)
+		case "ip_cidr":
+			targetCIDRs = appendUniqueStrings(targetCIDRs, rule.Value)
+		case "source_ip_cidr":
+			sourceCIDRs = appendUniqueStrings(sourceCIDRs, rule.Value)
+		case "domain_suffix":
+			domainSuffixes = appendUniqueStrings(domainSuffixes, rule.Value)
+		}
+	}
+	return
+}
+
+func appendUniqueStrings(values []string, additions ...string) []string {
+	seen := make(map[string]bool, len(values)+len(additions))
+	for _, value := range values {
+		seen[value] = true
+	}
+	for _, value := range additions {
+		if value != "" && !seen[value] {
+			seen[value] = true
+			values = append(values, value)
+		}
+	}
+	return values
 }
 
 func defaultBypassProcessNames(currentExecutable, coreBinaryPath string) []string {
@@ -2413,6 +2793,11 @@ func (s *ConfigGeneratorService) generateInbounds(listen string, port int, tunIP
 	// 获取运行模式设置
 	mode := s.store.GetInboundMode()
 	autoRedirect := runtime.GOOS == "linux"
+	bypassSettings, err := s.store.GetTrafficBypassSettings()
+	if err != nil {
+		return nil, fmt.Errorf("加载流量排除设置失败: %w", err)
+	}
+	_, excludedInterfaces, excludedCIDRs, _, _ := trafficBypassValues(bypassSettings)
 
 	var inbounds []interface{}
 
@@ -2420,7 +2805,7 @@ func (s *ConfigGeneratorService) generateInbounds(listen string, port int, tunIP
 	case "tun":
 		// 纯 TUN 模式
 		inbounds = []interface{}{
-			generatedTUNInbound(autoRedirect, tunIPv4Address, tunIPv6Address),
+			generatedTUNInbound(autoRedirect, tunIPv4Address, tunIPv6Address, excludedInterfaces, excludedCIDRs),
 		}
 	case "mixed":
 		// 纯 Mixed 模式
@@ -2437,7 +2822,7 @@ func (s *ConfigGeneratorService) generateInbounds(listen string, port int, tunIP
 	default:
 		// TUN + Mixed 双模式（默认）
 		inbounds = []interface{}{
-			generatedTUNInbound(autoRedirect, tunIPv4Address, tunIPv6Address),
+			generatedTUNInbound(autoRedirect, tunIPv4Address, tunIPv6Address, excludedInterfaces, excludedCIDRs),
 			map[string]interface{}{
 				"type":        "mixed",
 				"tag":         "mixed-in",
@@ -2453,7 +2838,7 @@ func (s *ConfigGeneratorService) generateInbounds(listen string, port int, tunIP
 	return inbounds, nil
 }
 
-func generatedTUNInbound(autoRedirect bool, tunIPv4Address, tunIPv6Address string) map[string]interface{} {
+func generatedTUNInbound(autoRedirect bool, tunIPv4Address, tunIPv6Address string, excludedInterfaces, excludedCIDRs []string) map[string]interface{} {
 	inbound := map[string]interface{}{
 		"type":           "tun",
 		"tag":            "tun-in",
@@ -2462,6 +2847,12 @@ func generatedTUNInbound(autoRedirect bool, tunIPv4Address, tunIPv6Address strin
 		"auto_route":     true,
 		"strict_route":   true,
 		"stack":          "system",
+	}
+	if len(excludedInterfaces) > 0 {
+		inbound["exclude_interface"] = excludedInterfaces
+	}
+	if len(excludedCIDRs) > 0 {
+		inbound["route_exclude_address"] = excludedCIDRs
 	}
 	if autoRedirect {
 		inbound["auto_redirect"] = true

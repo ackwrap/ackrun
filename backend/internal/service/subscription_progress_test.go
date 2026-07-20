@@ -63,3 +63,30 @@ func TestResetInterruptedSubscriptionSyncs(t *testing.T) {
 		t.Fatalf("reset state = %s %.0f", updated.SyncStatus, updated.SyncProgress)
 	}
 }
+
+func TestResetInterruptedRouteRuleSubscriptionSyncs(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	subscription, err := db.CreateRouteRuleSubscription(&model.RouteRuleSubscriptionRequest{
+		Name: "synthetic", URL: "https://example.com/rules.srs", Tag: "synthetic", Format: "binary",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetRouteRuleSubscriptionSyncState(subscription.ID, "syncing", 30, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ResetInterruptedRouteRuleSubscriptionSyncs(); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := db.GetRouteRuleSubscription(subscription.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.SyncStatus != "failed" || updated.SyncProgress != 0 || updated.SyncError == "" {
+		t.Fatalf("reset state = %s %.0f %q", updated.SyncStatus, updated.SyncProgress, updated.SyncError)
+	}
+}

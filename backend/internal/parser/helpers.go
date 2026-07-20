@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -23,14 +24,17 @@ func parsedNodeFromMap(raw string, cfg map[string]any) (*model.ParsedNode, error
 	}
 
 	// 统一字段转换为 sing-box 格式
-	normalized := normalizeToSingbox(cfg, typ)
+	normalized, err := normalizeToSingbox(cfg, typ)
+	if err != nil {
+		return nil, err
+	}
 
 	rawJSON, _ := json.Marshal(normalized)
 	return &model.ParsedNode{Name: name, Type: typ, Server: server, ServerPort: port, Raw: raw, RawJSON: string(rawJSON)}, nil
 }
 
 // normalizeToSingbox 将通用字段转换为 sing-box 格式
-func normalizeToSingbox(cfg map[string]any, typ string) map[string]any {
+func normalizeToSingbox(cfg map[string]any, typ string) (map[string]any, error) {
 	result := make(map[string]any)
 
 	// 复制所有字段
@@ -78,6 +82,32 @@ func normalizeToSingbox(cfg map[string]any, typ string) map[string]any {
 		result["plugin_opts"] = pluginOpts
 		delete(result, "plugin-opts")
 	}
+	if typ == "hysteria" {
+		moveKey(result, "obfs-param", "obfs")
+		moveKey(result, "obfs_param", "obfs")
+		moveKey(result, "receive-window", "recv_window")
+		moveKey(result, "receive_window", "recv_window")
+		moveKey(result, "receive-window-conn", "recv_window_conn")
+		moveKey(result, "receive_window_conn", "recv_window_conn")
+		moveKey(result, "disable-mtu-discovery", "disable_mtu_discovery")
+		for _, key := range []string{"recv_window", "recv_window_conn"} {
+			if value := getInt(result, key); value > 0 {
+				result[key] = value
+			}
+		}
+	}
+	if typ == "tuic" {
+		moveKey(result, "udp-relay-mode", "udp_relay_mode")
+		moveKey(result, "reduce-rtt", "zero_rtt_handshake")
+		moveKey(result, "reduce_rtt", "zero_rtt_handshake")
+		moveKey(result, "zero-rtt-handshake", "zero_rtt_handshake")
+		if token := getString(result, "token"); token != "" {
+			delete(result, "token")
+			if getString(result, "uuid") == "" || getString(result, "password") == "" {
+				return nil, fmt.Errorf("legacy TUIC token authentication is not supported by the current sing-box version")
+			}
+		}
+	}
 
 	if typ == "wireguard" {
 		moveKey(result, "private-key", "private_key")
@@ -99,7 +129,7 @@ func normalizeToSingbox(cfg map[string]any, typ string) map[string]any {
 
 	// servername / sni 移入 TLS 对象
 	tlsObj, tlsIsMap := result["tls"].(map[string]any)
-	sniKeys := []string{"servername", "sni"}
+	sniKeys := []string{"servername", "server_name", "sni"}
 	for _, key := range sniKeys {
 		if val, ok := result[key]; ok {
 			if str, isStr := val.(string); isStr && str != "" {
@@ -123,23 +153,32 @@ func normalizeToSingbox(cfg map[string]any, typ string) map[string]any {
 		tlsObj["alpn"] = alpn
 		delete(result, "alpn")
 	}
-	if insecure, ok := result["skip-cert-verify"]; ok {
-		if !tlsIsMap {
-			result["tls"] = map[string]any{"enabled": true}
-			tlsObj = result["tls"].(map[string]any)
-			tlsIsMap = true
+	for _, key := range []string{"skip-cert-verify", "skip_cert_verify", "insecure"} {
+		if insecure, ok := result[key]; ok {
+			if !tlsIsMap {
+				result["tls"] = map[string]any{"enabled": true}
+				tlsObj = result["tls"].(map[string]any)
+				tlsIsMap = true
+			}
+			tlsObj["insecure"] = boolOrString(insecure)
+			delete(result, key)
 		}
-		tlsObj["insecure"] = boolOrString(insecure)
-		delete(result, "skip-cert-verify")
 	}
 
-	clientFingerprint := getString(result, "client-fingerprint")
-	certFingerprint := firstNonEmpty(getString(result, "certificate-sha256"), getString(result, "fingerprint"))
+	clientFingerprint := firstNonEmpty(getString(result, "client-fingerprint"), getString(result, "client_fingerprint"))
+	certFingerprint := firstNonEmpty(getString(result, "certificate-sha256"), getString(result, "certificate_sha256"), getString(result, "fingerprint"))
 	if clientFingerprint == "" && isKnownUTLSFingerprint(certFingerprint) {
 		clientFingerprint = certFingerprint
 		certFingerprint = ""
 	}
 	normalizedCertificateFingerprint, hasCertificateFingerprint := normalizeSHA256Hex(certFingerprint)
+	if typ == "shadowsocks" && certFingerprint != "" && !hasCertificateFingerprint && clientFingerprint == "" {
+		if !tlsIsMap {
+			result["tls"] = map[string]any{"enabled": true}
+			tlsObj = result["tls"].(map[string]any)
+			tlsIsMap = true
+		}
+	}
 	if clientFingerprint != "" || hasCertificateFingerprint {
 		if !tlsIsMap {
 			result["tls"] = map[string]any{"enabled": true}
@@ -154,11 +193,281 @@ func normalizeToSingbox(cfg map[string]any, typ string) map[string]any {
 		}
 	}
 	delete(result, "client-fingerprint")
+	delete(result, "client_fingerprint")
 	delete(result, "fingerprint")
 	delete(result, "certificate-sha256")
+	delete(result, "certificate_sha256")
 	normalizeRealityOptions(result)
+	if typ == "shadowsocks" {
+		if err := normalizeShadowsocksPlugin(result); err != nil {
+			return nil, err
+		}
+	}
+	if reason := normalizeV2RayTransport(result, result, typ); reason != "" {
+		return nil, fmt.Errorf("%s", reason)
+	}
+	if typ == "socks" {
+		if tlsOptions, ok := result["tls"].(map[string]any); ok && boolOrString(tlsOptions["enabled"]) {
+			return nil, fmt.Errorf("TLS-wrapped SOCKS is not supported by the current sing-box version")
+		}
+	}
 
-	return result
+	return result, nil
+}
+
+func normalizeShadowsocksPlugin(config map[string]any) error {
+	if tlsValue, exists := config["tls"]; exists {
+		switch value := tlsValue.(type) {
+		case nil:
+			delete(config, "tls")
+		case bool:
+			if !value {
+				delete(config, "tls")
+			} else {
+				return fmt.Errorf("TLS-wrapped Shadowsocks is not supported by the current sing-box version")
+			}
+		case string:
+			switch strings.ToLower(strings.TrimSpace(value)) {
+			case "", "0", "false":
+				delete(config, "tls")
+			case "1", "true":
+				return fmt.Errorf("TLS-wrapped Shadowsocks is not supported by the current sing-box version")
+			default:
+				return fmt.Errorf("invalid Shadowsocks TLS value")
+			}
+		default:
+			return fmt.Errorf("TLS-wrapped Shadowsocks is not supported by the current sing-box version")
+		}
+	}
+
+	plugin := strings.TrimSpace(getString(config, "plugin"))
+	network := strings.ToLower(strings.TrimSpace(getString(config, "network")))
+	if network != "" && network != "tcp" && network != "udp" {
+		return fmt.Errorf("shadowsocks transport %q must be configured through an explicit SIP003 plugin", network)
+	}
+	normalizedPlugin, normalizedOptions, err := NormalizeShadowsocksSIP003Plugin(plugin, config["plugin_opts"])
+	if err != nil {
+		return err
+	}
+	if normalizedPlugin == "" {
+		delete(config, "plugin")
+		delete(config, "plugin_opts")
+		return nil
+	}
+	config["plugin"] = normalizedPlugin
+	if normalizedOptions == "" {
+		delete(config, "plugin_opts")
+	} else {
+		config["plugin_opts"] = normalizedOptions
+	}
+	return nil
+}
+
+type sip003PluginOption struct {
+	value    string
+	hasValue bool
+}
+
+// NormalizeShadowsocksSIP003Plugin validates the SIP003 plugins implemented by
+// the bundled sing-box and emits a stable option string without dropping fields.
+func NormalizeShadowsocksSIP003Plugin(plugin string, rawOptions any) (string, string, error) {
+	plugin = strings.ToLower(strings.TrimSpace(plugin))
+	switch plugin {
+	case "obfs", "simple-obfs":
+		plugin = "obfs-local"
+	case "", "obfs-local", "v2ray-plugin":
+	default:
+		return "", "", fmt.Errorf("unsupported Shadowsocks SIP003 plugin %q", plugin)
+	}
+
+	options, err := normalizeSIP003OptionInput(rawOptions)
+	if err != nil {
+		return "", "", fmt.Errorf("invalid Shadowsocks plugin_opts: %w", err)
+	}
+	if plugin == "" {
+		if len(options) > 0 {
+			return "", "", fmt.Errorf("Shadowsocks plugin_opts requires an explicit SIP003 plugin")
+		}
+		return "", "", nil
+	}
+
+	canonical := make(map[string]sip003PluginOption, len(options))
+	for key, option := range options {
+		normalizedKey := key
+		if plugin == "obfs-local" {
+			switch key {
+			case "mode":
+				normalizedKey = "obfs"
+			case "host":
+				normalizedKey = "obfs-host"
+			case "obfs", "obfs-host":
+			default:
+				return "", "", fmt.Errorf("unsupported obfs-local option %q", key)
+			}
+			if _, exists := canonical[normalizedKey]; exists {
+				return "", "", fmt.Errorf("duplicate obfs-local option %q", normalizedKey)
+			}
+			if normalizedKey == "obfs" {
+				mode := strings.ToLower(option.value)
+				if mode != "http" && mode != "tls" {
+					return "", "", fmt.Errorf("unsupported obfs-local mode %q", option.value)
+				}
+				option = sip003PluginOption{value: mode, hasValue: true}
+			} else {
+				option = sip003PluginOption{value: option.value, hasValue: true}
+			}
+			canonical[normalizedKey] = option
+			continue
+		}
+
+		switch key {
+		case "tls":
+			canonical[key] = sip003PluginOption{}
+		case "mode":
+			mode := strings.ToLower(option.value)
+			if mode != "websocket" && mode != "quic" {
+				return "", "", fmt.Errorf("unsupported v2ray-plugin mode %q", option.value)
+			}
+			canonical[key] = sip003PluginOption{value: mode, hasValue: true}
+		case "mux":
+			mux, parseErr := strconv.Atoi(strings.TrimSpace(option.value))
+			if parseErr != nil || mux < 0 {
+				return "", "", fmt.Errorf("invalid v2ray-plugin mux value %q", option.value)
+			}
+			canonical[key] = sip003PluginOption{value: strconv.Itoa(mux), hasValue: true}
+		case "host", "path", "cert", "certRaw":
+			canonical[key] = sip003PluginOption{value: option.value, hasValue: true}
+		default:
+			return "", "", fmt.Errorf("unsupported v2ray-plugin option %q", key)
+		}
+	}
+	return plugin, encodeSIP003PluginOptions(canonical), nil
+}
+
+func normalizeSIP003OptionInput(raw any) (map[string]sip003PluginOption, error) {
+	switch options := raw.(type) {
+	case nil:
+		return map[string]sip003PluginOption{}, nil
+	case string:
+		return parseSIP003PluginOptions(options)
+	case map[string]any:
+		result := make(map[string]sip003PluginOption, len(options))
+		for rawKey, rawValue := range options {
+			key := strings.TrimSpace(rawKey)
+			if key == "" {
+				return nil, fmt.Errorf("empty option key")
+			}
+			switch value := rawValue.(type) {
+			case string:
+				result[key] = sip003PluginOption{value: value, hasValue: true}
+			case bool:
+				switch key {
+				case "tls":
+					if value {
+						result[key] = sip003PluginOption{}
+					}
+				case "mux":
+					if value {
+						result[key] = sip003PluginOption{value: "1", hasValue: true}
+					} else {
+						result[key] = sip003PluginOption{value: "0", hasValue: true}
+					}
+				default:
+					return nil, fmt.Errorf("boolean value is not valid for option %q", key)
+				}
+			case int:
+				result[key] = sip003PluginOption{value: strconv.Itoa(value), hasValue: true}
+			case int64:
+				result[key] = sip003PluginOption{value: strconv.FormatInt(value, 10), hasValue: true}
+			case float64:
+				if value != float64(int64(value)) {
+					return nil, fmt.Errorf("non-integer value is not valid for option %q", key)
+				}
+				result[key] = sip003PluginOption{value: strconv.FormatInt(int64(value), 10), hasValue: true}
+			default:
+				return nil, fmt.Errorf("option %q has unsupported value type %T", key, rawValue)
+			}
+		}
+		return result, nil
+	default:
+		return nil, fmt.Errorf("unsupported option container %T", raw)
+	}
+}
+
+func parseSIP003PluginOptions(value string) (map[string]sip003PluginOption, error) {
+	result := map[string]sip003PluginOption{}
+	for offset := 0; offset < len(value); {
+		key, hasValue, optionValue, next, err := parseSIP003PluginOption(value, offset)
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := result[key]; exists {
+			return nil, fmt.Errorf("duplicate option %q", key)
+		}
+		result[key] = sip003PluginOption{value: optionValue, hasValue: hasValue}
+		offset = next
+	}
+	return result, nil
+}
+
+func parseSIP003PluginOption(value string, offset int) (string, bool, string, int, error) {
+	readPart := func(start int, stopAtEquals bool) (string, byte, int, error) {
+		var part strings.Builder
+		for i := start; i < len(value); i++ {
+			switch value[i] {
+			case '\\':
+				i++
+				if i >= len(value) {
+					return "", 0, 0, fmt.Errorf("nothing follows final escape")
+				}
+				part.WriteByte(value[i])
+			case ';':
+				return part.String(), ';', i + 1, nil
+			case '=':
+				if stopAtEquals {
+					return part.String(), '=', i + 1, nil
+				}
+				part.WriteByte(value[i])
+			default:
+				part.WriteByte(value[i])
+			}
+		}
+		return part.String(), 0, len(value), nil
+	}
+	key, delimiter, next, err := readPart(offset, true)
+	if err != nil {
+		return "", false, "", 0, err
+	}
+	if key == "" {
+		return "", false, "", 0, fmt.Errorf("empty option key")
+	}
+	if delimiter != '=' {
+		return key, false, "1", next, nil
+	}
+	optionValue, _, end, err := readPart(next, false)
+	return key, true, optionValue, end, err
+}
+
+func encodeSIP003PluginOptions(options map[string]sip003PluginOption) string {
+	keys := make([]string, 0, len(options))
+	for key := range options {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		option := options[key]
+		part := escapePluginOption(key)
+		if option.hasValue {
+			part += "=" + escapePluginOption(option.value)
+		}
+		parts = append(parts, part)
+	}
+	return strings.Join(parts, ";")
+}
+
+func escapePluginOption(value string) string {
+	return strings.NewReplacer("\\", "\\\\", ";", "\\;", "=", "\\=").Replace(value)
 }
 
 func normalizeRealityOptions(result map[string]any) {
@@ -182,6 +491,83 @@ func normalizeRealityOptions(result map[string]any) {
 		reality["short_id"] = shortID
 	}
 	tls["reality"] = reality
+}
+
+func normalizeV2RayTransport(source, result map[string]any, typ string) string {
+	usesV2RayTransport := typ == "vmess" || typ == "vless" || typ == "trojan"
+	network := strings.ToLower(getString(source, "network"))
+	legacyOptionKeys := []string{"ws-opts", "grpc-opts", "h2-opts", "http-upgrade-opts", "xhttp-opts"}
+	defer func() {
+		for _, key := range legacyOptionKeys {
+			delete(result, key)
+		}
+	}()
+	if !usesV2RayTransport || network == "" || network == "tcp" || network == "udp" {
+		return ""
+	}
+	transport := map[string]any{"type": network}
+	switch network {
+	case "ws":
+		if options, ok := source["ws-opts"].(map[string]any); ok {
+			transport["path"] = firstNonEmpty(getString(options, "path"), "/")
+			if headers := stringMap(options["headers"]); len(headers) > 0 {
+				transport["headers"] = headers
+			}
+			if maxEarlyData := getInt(options, "max-early-data"); maxEarlyData > 0 {
+				transport["max_early_data"] = maxEarlyData
+			}
+			if headerName := getString(options, "early-data-header-name"); headerName != "" {
+				transport["early_data_header_name"] = headerName
+			}
+		}
+	case "grpc":
+		if options, ok := source["grpc-opts"].(map[string]any); ok {
+			if serviceName := getString(options, "grpc-service-name"); serviceName != "" {
+				transport["service_name"] = serviceName
+			}
+		}
+	case "http", "h2":
+		transport["type"] = "http"
+		if options, ok := source["h2-opts"].(map[string]any); ok {
+			transport["path"] = firstNonEmpty(getString(options, "path"), "/")
+			if host, exists := options["host"]; exists {
+				transport["host"] = host
+			}
+		}
+	case "httpupgrade":
+		if options, ok := source["http-upgrade-opts"].(map[string]any); ok {
+			if host := getString(options, "host"); host != "" {
+				transport["host"] = host
+			}
+			if path := getString(options, "path"); path != "" {
+				transport["path"] = path
+			}
+			if headers := stringMap(options["headers"]); len(headers) > 0 {
+				transport["headers"] = headers
+			}
+		}
+	default:
+		delete(result, "network")
+		return fmt.Sprintf("%s transport is not supported by sing-box", network)
+	}
+	result["transport"] = transport
+	delete(result, "network")
+	return ""
+}
+
+func stringMap(value any) map[string]any {
+	result := map[string]any{}
+	switch headers := value.(type) {
+	case map[string]any:
+		for key, item := range headers {
+			result[key] = toStringValue(item)
+		}
+	case map[string]string:
+		for key, item := range headers {
+			result[key] = item
+		}
+	}
+	return result
 }
 
 func moveKey(data map[string]any, from string, to string) {

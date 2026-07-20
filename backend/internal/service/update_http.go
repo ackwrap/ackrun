@@ -86,19 +86,21 @@ func buildGitHubDownloadAttempts(settings *model.UpdateSettingsResponse, rawURL 
 		attempts = append(attempts, attempt)
 	}
 
-	if preferred, err := buildUpdateRequestAttempts(settings, rawURL); err == nil {
-		for _, attempt := range preferred {
-			if attempt.url == rawURL {
-				continue
+	isGitHubURL := isGitHubFileURL(rawURL)
+	if isGitHubURL || (settings != nil && settings.Acceleration == "custom") {
+		if preferred, err := buildUpdateRequestAttempts(settings, rawURL); err == nil {
+			for _, attempt := range preferred {
+				if attempt.url == rawURL {
+					continue
+				}
+				client := *attempt.client
+				client.Timeout = generatedGeoRuleSetAttemptTimeout
+				attempt.client = &client
+				appendAttempt(attempt)
 			}
-			client := *attempt.client
-			client.Timeout = generatedGeoRuleSetAttemptTimeout
-			attempt.client = &client
-			appendAttempt(attempt)
 		}
 	}
-
-	if isGitHubFileURL(rawURL) {
+	if isGitHubURL {
 		appendAttempt(updateRequestAttempt{name: "ghproxy", url: "https://gh-proxy.com/" + rawURL, client: direct})
 		appendAttempt(updateRequestAttempt{name: "ghproxy_vip", url: "https://ghproxy.vip/" + rawURL, client: direct})
 		for _, name := range []string{"jsdelivr_fastly", "jsdelivr_testingcf", "jsdelivr_cdn"} {

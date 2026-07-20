@@ -52,6 +52,41 @@ func TestSetUpdateSettingsRejectsRemovedProxyMode(t *testing.T) {
 	}
 }
 
+func TestTrafficBypassSettingsDefaultsAndValidation(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	svc := NewSettingsService(db)
+	defaults, err := svc.GetTrafficBypassSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(defaults.Rules) != 5 ||
+		defaults.Rules[0].Value != "easytier-core" ||
+		defaults.Rules[1].Value != "easytier-tun" ||
+		defaults.Rules[2].Value != "10.0.0.0/8" ||
+		defaults.Rules[3].Value != "172.16.0.0/12" ||
+		defaults.Rules[4].Value != "192.168.0.0/16" {
+		t.Fatalf("unexpected traffic bypass defaults: %+v", defaults.Rules)
+	}
+	settings := &model.TrafficBypassSettings{Rules: []model.TrafficBypassRule{
+		{Type: "ip_cidr", Value: "10.9.8.7/8"},
+		{Type: "domain_suffix", Value: "Example.COM."},
+		{Type: "process_name", Value: "custom-agent"},
+	}}
+	if err := svc.SetTrafficBypassSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+	if settings.Rules[0].Value != "10.0.0.0/8" || settings.Rules[1].Value != "example.com" {
+		t.Fatalf("traffic bypass settings were not normalized: %+v", settings.Rules)
+	}
+	if err := svc.SetTrafficBypassSettings(&model.TrafficBypassSettings{Rules: []model.TrafficBypassRule{{Type: "ip_cidr", Value: "invalid"}}}); !errors.Is(err, ErrTrafficBypassSettingsInvalid) {
+		t.Fatalf("expected invalid CIDR error, got %v", err)
+	}
+}
+
 func TestSetProxyModeReconcilesConfig(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {

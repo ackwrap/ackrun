@@ -125,17 +125,24 @@ func (svc *NodeGroupService) QuickSetup(req model.NodeGroupQuickSetupRequest) er
 	if err != nil {
 		return err
 	}
-	existingNames := make(map[string]bool, len(existingGroups))
+	existingByName := make(map[string]model.NodeGroupWithStats, len(existingGroups))
 	for _, group := range existingGroups {
-		existingNames[group.Name] = true
+		existingByName[group.Name] = group
 	}
 
 	createdCount := 0
 	skippedExistingCount := 0
+	updatedCount := 0
 	for _, tmpl := range templates {
 		tmpl.FilterProtocols = req.FilterProtocols
 		tmpl.FilterSubscriptions = req.FilterSubscriptions
-		if existingNames[tmpl.Name] {
+		if existing, ok := existingByName[tmpl.Name]; ok {
+			if quickSetupTemplateIdentityMatches(existing.NodeGroup, tmpl) && (existing.FilterProtocols != tmpl.FilterProtocols || existing.FilterSubscriptions != tmpl.FilterSubscriptions) {
+				if err := svc.store.UpdateNodeGroupFilters(existing.ID, tmpl.FilterProtocols, tmpl.FilterSubscriptions); err != nil {
+					return err
+				}
+				updatedCount++
+			}
 			skippedExistingCount++
 			continue
 		}
@@ -166,8 +173,20 @@ func (svc *NodeGroupService) QuickSetup(req model.NodeGroupQuickSetupRequest) er
 		return err
 	}
 
-	logging.Info("node_group.quick_setup", "智能快速配置完成，创建节点组数: %d，已存在跳过: %d，创建默认策略组数: %d，默认策略组已存在跳过: %d，参与匹配的启用节点数: %d，订阅筛选: %s，协议筛选: %s", createdCount, skippedExistingCount, strategyCreatedCount, strategySkippedCount, len(allNodes), req.FilterSubscriptions, req.FilterProtocols)
+	logging.Info("node_group.quick_setup", "智能快速配置完成，创建节点组数: %d，更新节点组数: %d，已存在跳过: %d，创建默认策略组数: %d，默认策略组已存在跳过: %d，参与匹配的启用节点数: %d，订阅筛选: %s，协议筛选: %s", createdCount, updatedCount, skippedExistingCount, strategyCreatedCount, strategySkippedCount, len(allNodes), req.FilterSubscriptions, req.FilterProtocols)
 	return nil
+}
+
+func quickSetupTemplateIdentityMatches(existing model.NodeGroup, template model.NodeGroupRequest) bool {
+	if existing.Type != template.Type || existing.FilterInclude != template.FilterInclude || existing.FilterExclude != template.FilterExclude || existing.Priority != template.Priority {
+		return false
+	}
+	rawUIDs := strings.TrimSpace(existing.NodeUIDs)
+	if rawUIDs == "" || rawUIDs == "null" {
+		return true
+	}
+	var nodeUIDs []string
+	return json.Unmarshal([]byte(rawUIDs), &nodeUIDs) == nil && len(nodeUIDs) == 0
 }
 
 func (svc *NodeGroupService) createDefaultProxyCollections() (int, int, error) {

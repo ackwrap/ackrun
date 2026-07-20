@@ -3,7 +3,6 @@ package parser
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -432,6 +431,10 @@ func normalizeClashProxy(proxy map[string]any, typ string) (map[string]any, stri
 	if _, hasReality := proxy["reality-opts"]; hasReality {
 		needsTLS = true
 	}
+	shadowsocksTLSInput := typ == "shadowsocks" && hasShadowsocksTLSInput(proxy)
+	if shadowsocksTLSInput {
+		needsTLS = true
+	}
 	// AnyTLS / Hysteria / Hysteria2 / Naive / Trojan / TUIC 必须使用 TLS
 	switch typ {
 	case "anytls", "hysteria", "hysteria2", "naive", "trojan", "tuic":
@@ -441,20 +444,22 @@ func normalizeClashProxy(proxy map[string]any, typ string) (map[string]any, stri
 
 	tls := map[string]any{}
 	if needsTLS {
-		if hasExplicitTLS || net == "h2" || net == "http" {
+		if hasExplicitTLS || net == "h2" || net == "http" || shadowsocksTLSInput {
 			tls["enabled"] = true
 		}
-		if sni := firstNonEmpty(getString(proxy, "sni"), getString(proxy, "servername")); sni != "" {
+		if sni := firstNonEmpty(getString(proxy, "sni"), getString(proxy, "servername"), getString(proxy, "server_name")); sni != "" {
 			tls["server_name"] = sni
 		}
-		if skip, ok := proxy["skip-cert-verify"]; ok && boolOrString(skip) {
-			tls["insecure"] = true
+		for _, key := range []string{"skip-cert-verify", "skip_cert_verify", "insecure"} {
+			if skip, ok := proxy[key]; ok && boolOrString(skip) {
+				tls["insecure"] = true
+			}
 		}
 		// TUIC disable-sni
 		if disableSni, ok := proxy["disable-sni"]; ok && boolOrString(disableSni) {
 			tls["disable_sni"] = true
 		}
-		clientFingerprint := getString(proxy, "client-fingerprint")
+		clientFingerprint := firstNonEmpty(getString(proxy, "client-fingerprint"), getString(proxy, "client_fingerprint"))
 		certificateFingerprint := getString(proxy, "fingerprint")
 		if clientFingerprint == "" && isKnownUTLSFingerprint(certificateFingerprint) {
 			clientFingerprint = certificateFingerprint
@@ -524,97 +529,21 @@ func normalizeClashProxy(proxy map[string]any, typ string) (map[string]any, stri
 		network = "tcp"
 	}
 
-	usesV2RayTransport := typ == "vmess" || typ == "vless" || typ == "trojan"
-	if usesV2RayTransport && network != "" && network != "tcp" {
-		transport := map[string]any{"type": network}
-		switch network {
-		case "ws":
-			if wsOpts, ok := proxy["ws-opts"].(map[string]any); ok {
-				transport["path"] = firstNonEmpty(getString(wsOpts, "path"), "/")
-				if headers, ok := wsOpts["headers"].(map[string]any); ok {
-					h := make(map[string]any)
-					for k, v := range headers {
-						h[k] = toStringValue(v)
-					}
-					transport["headers"] = h
-				}
-				if maxEarlyData := getInt(wsOpts, "max-early-data"); maxEarlyData > 0 {
-					transport["max_early_data"] = maxEarlyData
-				}
-				if headerName := getString(wsOpts, "early-data-header-name"); headerName != "" {
-					transport["early_data_header_name"] = headerName
-				}
-			}
-		case "grpc":
-			if grpcOpts, ok := proxy["grpc-opts"].(map[string]any); ok {
-				if sn, ok := grpcOpts["grpc-service-name"]; ok {
-					transport["service_name"] = sn
-				}
-			}
-		case "http", "h2":
-			transport["type"] = "http"
-			if h2Opts, ok := proxy["h2-opts"].(map[string]any); ok {
-				transport["path"] = firstNonEmpty(getString(h2Opts, "path"), "/")
-				if host, ok := h2Opts["host"]; ok {
-					transport["host"] = host
-				}
-			}
-		case "httpupgrade":
-			if upgradeOptions, ok := proxy["http-upgrade-opts"].(map[string]any); ok {
-				if host := getString(upgradeOptions, "host"); host != "" {
-					transport["host"] = host
-				}
-				if path := getString(upgradeOptions, "path"); path != "" {
-					transport["path"] = path
-				}
-				if headers, ok := upgradeOptions["headers"].(map[string]any); ok {
-					h := make(map[string]any)
-					for k, v := range headers {
-						h[k] = toStringValue(v)
-					}
-					transport["headers"] = h
-				}
-			}
-		case "xhttp", "mkcp", "mekya":
-			unsupportedReason = fmt.Sprintf("%s transport is not supported by sing-box", network)
-			delete(transport, "type")
-		default:
-			unsupportedReason = fmt.Sprintf("%s transport is not supported by sing-box", network)
-			delete(transport, "type")
-		}
-		if len(transport) > 0 {
-			result["transport"] = transport
-		}
-		delete(result, "network")
+	if reason := normalizeV2RayTransport(proxy, result, typ); reason != "" {
+		unsupportedReason = reason
 	}
 
-	// Plugin 配置
-	if pluginOpts, ok := proxy["plugin-opts"]; typ == "shadowsocks" && ok {
-		// sing-box plugin_opts 需要字符串格式：key=value;key2=value2
-		if optsMap, isMap := pluginOpts.(map[string]any); isMap {
-			// 对 key 排序以确保 UID 稳定性
-			keys := make([]string, 0, len(optsMap))
-			for k := range optsMap {
-				keys = append(keys, k)
-			}
-			sort.Strings(keys)
-			var parts []string
-			for _, k := range keys {
-				v := optsMap[k]
-				// 简单值直接拼接，嵌套值转 JSON
-				switch v.(type) {
-				case string, bool, int, int64, float64:
-					parts = append(parts, fmt.Sprintf("%s=%v", k, v))
-				default:
-					if b, err := json.Marshal(v); err == nil {
-						parts = append(parts, fmt.Sprintf("%s=%s", k, string(b)))
-					}
-				}
-			}
-			result["plugin_opts"] = strings.Join(parts, ";")
-		} else {
-			// 如果已经是字符串，直接使用
+	// Shadowsocks plugin configuration is validated only after TLS fields have
+	// been fully collected, so aliases cannot bypass the TLS-wrapper rejection.
+	if typ == "shadowsocks" {
+		if network != "" {
+			result["network"] = network
+		}
+		if pluginOpts, ok := proxy["plugin-opts"]; ok {
 			result["plugin_opts"] = pluginOpts
+		}
+		if err := normalizeShadowsocksPlugin(result); err != nil {
+			unsupportedReason = err.Error()
 		}
 	}
 
@@ -626,6 +555,38 @@ func normalizeClashProxy(proxy map[string]any, typ string) (map[string]any, stri
 	}
 
 	return result, unsupportedReason
+}
+
+func hasShadowsocksTLSInput(proxy map[string]any) bool {
+	if tlsValue, exists := proxy["tls"]; exists {
+		switch value := tlsValue.(type) {
+		case nil:
+		case bool:
+			if value {
+				return true
+			}
+		case string:
+			if strings.TrimSpace(value) != "" && !strings.EqualFold(strings.TrimSpace(value), "false") && strings.TrimSpace(value) != "0" {
+				return true
+			}
+		default:
+			return true
+		}
+	}
+	for _, key := range []string{
+		"sni", "servername", "server_name", "alpn", "fingerprint", "certificate-sha256", "certificate_sha256",
+		"client-fingerprint", "client_fingerprint", "certificate", "private-key", "ech-opts", "reality-opts",
+	} {
+		if value, exists := proxy[key]; exists && value != nil {
+			return true
+		}
+	}
+	for _, key := range []string{"skip-cert-verify", "skip_cert_verify", "insecure"} {
+		if boolOrString(proxy[key]) {
+			return true
+		}
+	}
+	return false
 }
 
 func copyClashField(dst, src map[string]any, key string) {

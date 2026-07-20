@@ -7,6 +7,7 @@ import type {
   ActionResponse,
   UpdateSettings,
   UpdateSettingsResponse,
+  TrafficBypassSettings,
   LogSettings,
   LogSettingsResponse,
   ConnectivitySettings,
@@ -155,6 +156,13 @@ export const api = {
   getUpdateSettings: () => request<UpdateSettingsResponse>("/settings/update"),
   setUpdateSettings: (body: UpdateSettings) =>
     request<ActionResponse>("/settings/update", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  getTrafficBypassSettings: () =>
+    request<TrafficBypassSettings>("/settings/traffic-bypass"),
+  setTrafficBypassSettings: (body: TrafficBypassSettings) =>
+    request<ActionResponse>("/settings/traffic-bypass", {
       method: "PUT",
       body: JSON.stringify(body),
     }),
