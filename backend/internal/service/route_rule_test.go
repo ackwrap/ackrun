@@ -314,7 +314,7 @@ func TestRouteRuleSubscriptionContentConvertsClashYAML(t *testing.T) {
 	defer db.Close()
 
 	svc := newTestRouteRuleService(t, db)
-	created, err := svc.CreateSubscription(&model.RouteRuleSubscriptionRequest{Name: "Other AI", Enabled: true, URL: server.URL + "/OtherAI.yml", Format: "clash"})
+	created, err := db.CreateRouteRuleSubscription(&model.RouteRuleSubscriptionRequest{Name: "Other AI", Enabled: true, Tag: "other-ai", URL: server.URL + "/OtherAI.yml", Format: "clash", SyncMode: "off"})
 	if err != nil {
 		t.Fatalf("create rule subscription: %v", err)
 	}

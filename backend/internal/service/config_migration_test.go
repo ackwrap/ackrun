@@ -319,7 +319,7 @@ func TestMigrateManagedConfigAddsTUNRoutingSafetyAndRemovesLegacyProxy(t *testin
 func TestMigrateManagedConfigMovesAckwrapKernelBypassBeforeSniff(t *testing.T) {
 	input := []byte(`{
   "http_clients": [{"tag":"ackwrap-rule-set-direct"}],
-  "inbounds": [{"type":"tun","tag":"tun-in","interface_name":"tun0","address":["172.254.0.1/30","fdfe:dcba:9876::1/126"],"auto_route":true,"strict_route":true,"auto_redirect":true}],
+  "inbounds": [{"type":"tun","tag":"tun-in","interface_name":"tun0","address":["172.254.0.1/30","fdfe:dcba:9876::1/126"],"auto_route":true,"strict_route":true,"auto_redirect":true,"auto_redirect_output_mark":"0x2024"}],
   "outbounds": [{"type":"direct","tag":"direct"},{"type":"selector","tag":"proxy","outbounds":["direct"]}],
   "route": {"rules":[
     {"action":"sniff"},
