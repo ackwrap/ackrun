@@ -618,6 +618,7 @@ export interface GeoAsset {
   sync_time: string;
   sync_weekday: number;
   sync_status: string;
+  sync_progress?: number;
   sync_error: string;
   last_sync_at: number;
   local_path: string;

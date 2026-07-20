@@ -14,7 +14,7 @@ const (
 )
 
 func (s *Store) GetUpdateSettings() (*model.UpdateSettingsResponse, error) {
-	r := &model.UpdateSettingsResponse{}
+	r := &model.UpdateSettingsResponse{Acceleration: "ghproxy"}
 	rows, err := s.db.Query(`SELECT key, value FROM app_settings WHERE key IN ('update.acceleration', 'update.custom_mirror_url')`)
 	if err != nil {
 		return nil, err

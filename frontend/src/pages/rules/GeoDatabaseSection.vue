@@ -16,7 +16,7 @@ const p = defineProps<{ geoAssets: GeoAsset[]; syncing: boolean }>(),
     update: [GeoAsset, GeoAssetRequest];
   }>(),
   target = ref(""),
-  dns = ref("cloudflare-doh"),
+  dns = ref("aliyun-doh"),
   result = ref<GeoLookupResponse | null>(null),
   error = ref(""),
   tag = ref(""),
@@ -24,6 +24,11 @@ const p = defineProps<{ geoAssets: GeoAsset[]; syncing: boolean }>(),
   tagError = ref(""),
   drafts = ref<Record<number, GeoAssetRequest>>({}),
   editing = ref<number | null>(null);
+const activeSyncProgress = computed(() =>
+  Math.round(
+    p.geoAssets.find((item) => item.sync_status === "syncing")?.sync_progress || 0,
+  ),
+);
 watch(
   () => p.geoAssets,
   (a) =>
@@ -96,7 +101,7 @@ async function lookupTag(offset = 0) {
         :disabled="syncing"
         @click="$emit('syncAll')"
       >
-        {{ syncing ? "更新中..." : "更新全部 Geo" }}
+        {{ syncing ? `更新中 ${activeSyncProgress}%` : "更新全部 Geo" }}
       </button>
     </header>
     <div class="grid gap-3 lg:grid-cols-2">
@@ -124,7 +129,11 @@ async function lookupTag(offset = 0) {
                       : 'text-[var(--text-tertiary)]'
                 "
               >
-                {{ x.sync_status }}
+                {{
+                  x.sync_status === "syncing"
+                    ? `更新中 ${Math.round(x.sync_progress || 0)}%`
+                    : x.sync_status
+                }}
               </span>
             </div>
             <small
@@ -140,7 +149,11 @@ async function lookupTag(offset = 0) {
               :disabled="syncing"
               @click="$emit('syncOne', x)"
             >
-              更新
+              {{
+                x.sync_status === "syncing"
+                  ? `${Math.round(x.sync_progress || 0)}%`
+                  : "更新"
+              }}
             </button>
             <button
               class="aw-action-button aw-action-neutral"
@@ -153,6 +166,15 @@ async function lookupTag(offset = 0) {
         <p v-if="x.sync_error" class="mt-2 text-xs text-red-400">
           {{ x.sync_error }}
         </p>
+        <div
+          v-if="x.sync_status === 'syncing'"
+          class="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--button-secondary-bg)]"
+        >
+          <div
+            class="h-full rounded-full bg-[var(--color-info)] transition-[width] duration-200"
+            :style="{ width: `${Math.max(2, x.sync_progress || 0)}%` }"
+          />
+        </div>
         <div
           v-if="x.type === 'geoip'"
           class="mt-4 border-t border-[var(--border-light)] pt-4"

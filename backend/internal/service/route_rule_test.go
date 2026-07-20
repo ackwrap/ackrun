@@ -698,6 +698,46 @@ func TestGeneratedGeoRuleSetContentUsesConfiguredMirror(t *testing.T) {
 	}
 }
 
+func TestGeoAssetSyncUsesConfiguredAcceleration(t *testing.T) {
+	payload := []byte("geo-database")
+	requests := 0
+	mirror := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.URL.Path != "/https://github.com/SagerNet/sing-geoip/releases/latest/download/geoip.db" {
+			t.Errorf("unexpected mirror path: %s", r.URL.Path)
+		}
+		_, _ = w.Write(payload)
+	}))
+	defer mirror.Close()
+
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+	if err := db.SetUpdateSettings(&model.UpdateSettings{Acceleration: "custom", CustomMirrorURL: mirror.URL}); err != nil {
+		t.Fatalf("set update settings: %v", err)
+	}
+	assets, err := db.ListGeoAssets()
+	if err != nil || len(assets) == 0 {
+		t.Fatalf("list geo assets: %v", err)
+	}
+	svc := newTestRouteRuleService(t, db)
+	svc.runGeoAssetSync(assets[0].ID)
+
+	updated, err := db.GetGeoAsset(assets[0].ID)
+	if err != nil {
+		t.Fatalf("get geo asset: %v", err)
+	}
+	data, readErr := os.ReadFile(updated.LocalPath)
+	if readErr != nil {
+		t.Fatalf("read geo database: %v", readErr)
+	}
+	if updated.SyncStatus != "updated" || requests != 1 || !bytes.Equal(data, payload) {
+		t.Fatalf("unexpected geo sync result: status=%s requests=%d data=%q", updated.SyncStatus, requests, data)
+	}
+}
+
 func TestGeneratedGeoRuleSetContentFallsBackToOfficialURL(t *testing.T) {
 	payload := testBinaryRuleSet(t, 1)
 	mirrorRequests := 0

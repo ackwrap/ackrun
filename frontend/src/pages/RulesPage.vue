@@ -5,12 +5,14 @@ import PageHeader from "@/components/layout/PageHeader.vue";
 import Modal from "@/components/ui/Modal.vue";
 import Toast from "@/components/ui/Toast.vue";
 import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
+import { useRealtimeSocket } from "@/composables/useRealtimeSocket";
 import { api } from "@/services/api";
 import type {
   GeoAsset,
   RouteRule,
   RouteRulePreviewResponse,
   RouteRuleSubscription,
+  WSEvent,
 } from "@/services/types";
 import GeoDatabaseSection from "./rules/GeoDatabaseSection.vue";
 import RuleListSection from "./rules/RuleListSection.vue";
@@ -332,6 +334,12 @@ async function previewSub(x: RouteRuleSubscription) {
 }
 async function syncGeo(x?: GeoAsset) {
   geoSyncing.value = true;
+  const targets = x ? [x] : geoAssets.value;
+  targets.forEach((item) => {
+    item.sync_status = "syncing";
+    item.sync_progress = 0;
+    item.sync_error = "";
+  });
   try {
     x ? await api.syncGeoAsset(x.id) : await api.syncAllGeoAssets();
     show("Geo 数据库已开始更新");
@@ -342,6 +350,23 @@ async function syncGeo(x?: GeoAsset) {
     geoSyncing.value = false;
   }
 }
+useRealtimeSocket((event: WSEvent) => {
+  const data: any = event.data;
+  if (event.type === "geo.sync") {
+    const asset = geoAssets.value.find((item) => item.id === data.id);
+    if (asset) {
+      asset.sync_status = data.status ?? asset.sync_status;
+      asset.sync_progress = data.progress ?? asset.sync_progress;
+      asset.sync_error = data.error ?? "";
+    }
+    if (data.status === "failed") {
+      show(`Geo 数据库更新失败: ${data.error || "请求失败"}`, "error");
+    }
+  } else if (event.type === "geo.sync_all" && data.status === "completed") {
+    void load();
+    if (data.failed) show(`Geo 数据库更新完成，${data.failed} 项失败`, "error");
+  }
+});
 async function updateGeo(x: GeoAsset, b: any) {
   try {
     await api.updateGeoAsset(x.id, b);

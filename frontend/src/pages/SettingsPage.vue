@@ -8,7 +8,7 @@ import ConnectivityResourcesPanel from "./settings/ConnectivityResourcesPanel.vu
 import GeoIPProvidersPanel from "./settings/GeoIPProvidersPanel.vue";
 import { Clock3, Download, FlaskConical, Settings } from "lucide-vue-next";
 type SettingsTab = "general" | "experimental";
-const acceleration = ref(""),
+const acceleration = ref("ghproxy"),
   customMirror = ref(""),
   message = ref(""),
   messageType = ref<"success" | "error" | "info">("success");
@@ -33,7 +33,7 @@ onMounted(() => {
   api
     .getUpdateSettings()
     .then((d) => {
-      acceleration.value = d.acceleration || "";
+      acceleration.value = d.acceleration || "ghproxy";
       customMirror.value = d.custom_mirror_url || "";
     })
     .catch(() => {});

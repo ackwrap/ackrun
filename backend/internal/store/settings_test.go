@@ -92,7 +92,7 @@ func TestDNSGlobalSettingsFallBackToLegacySettingsWhenUnmigrated(t *testing.T) {
 	}
 }
 
-func TestUpdateSettingsDefaultsToDirectAndPreservesCustomMirror(t *testing.T) {
+func TestUpdateSettingsDefaultsToGHProxyAndPreservesCustomMirror(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -103,8 +103,8 @@ func TestUpdateSettingsDefaultsToDirectAndPreservesCustomMirror(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.Acceleration != "" || settings.CustomMirrorURL != "" {
-		t.Fatalf("default update settings = %+v, want direct without mirror", settings)
+	if settings.Acceleration != "ghproxy" || settings.CustomMirrorURL != "" {
+		t.Fatalf("default update settings = %+v, want ghproxy without custom mirror", settings)
 	}
 	customMirrorURL := "https://mirror.example"
 	if err := s.SetUpdateSettings(&model.UpdateSettings{Acceleration: "custom", CustomMirrorURL: customMirrorURL}); err != nil {

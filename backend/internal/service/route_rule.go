@@ -1054,25 +1054,94 @@ func (svc *RouteRuleService) runGeoAssetSync(id int64) {
 		logging.Error("geo.sync", "set geo sync state failed: %v", err)
 		return
 	}
-	localPath, err := svc.fetchAndCacheGeoAsset(item)
+	svc.broadcastGeoSync(id, "syncing", 0, "")
+	localPath, err := svc.fetchAndCacheGeoAsset(item, func(progress float64) {
+		svc.broadcastGeoSync(id, "syncing", progress, "")
+	})
 	if err != nil {
 		logging.Error("geo.sync", "sync geo asset %d failed: %v", id, err)
 		_ = svc.store.SetGeoAssetSyncState(id, "failed", err.Error())
+		svc.broadcastGeoSync(id, "failed", 0, err.Error())
 		return
 	}
 	if _, err := svc.store.UpdateGeoAssetSyncResult(id, localPath); err != nil {
 		logging.Error("geo.sync", "update geo sync result failed: %v", err)
 		_ = svc.store.SetGeoAssetSyncState(id, "failed", err.Error())
+		svc.broadcastGeoSync(id, "failed", 0, err.Error())
+		return
 	}
+	svc.broadcastGeoSync(id, "updated", 100, "")
 }
 
-func (svc *RouteRuleService) fetchAndCacheGeoAsset(item *model.GeoAsset) (string, error) {
+func (svc *RouteRuleService) broadcastGeoSync(id int64, status string, progress float64, syncError string) {
+	if svc.realtime == nil {
+		return
+	}
+	svc.realtime.Broadcast("geo.sync", map[string]any{
+		"id":       id,
+		"status":   status,
+		"progress": progress,
+		"error":    syncError,
+	})
+}
+
+func (svc *RouteRuleService) fetchAndCacheGeoAsset(item *model.GeoAsset, reportProgress func(float64)) (string, error) {
 	if svc.paths == nil {
 		return "", fmt.Errorf("geo directory is not configured")
 	}
-	body, err := fetchRouteRuleSubscriptionContent(item.URL, item.UseProxy)
+	settings, err := svc.store.GetUpdateSettings()
+	if err != nil {
+		return "", fmt.Errorf("读取下载加速设置失败: %w", err)
+	}
+	if !isGitHubFileURL(item.URL) {
+		settings = nil
+	}
+	attempts, err := buildUpdateRequestAttempts(settings, item.URL)
 	if err != nil {
 		return "", err
+	}
+	var body []byte
+	var lastErr error
+	lastProgress := -1
+	for index, attempt := range attempts {
+		client := attempt.client
+		if item.UseProxy {
+			clientCopy := *client
+			if transport, ok := client.Transport.(*http.Transport); ok {
+				transportCopy := transport.Clone()
+				transportCopy.Proxy = http.ProxyFromEnvironment
+				clientCopy.Transport = transportCopy
+			}
+			client = &clientCopy
+		}
+		logging.Info("geo.sync", "download attempt: %s", attempt.name)
+		if reportProgress != nil {
+			reportProgress(float64(5 + index*5))
+		}
+		body, err = fetchRouteRuleSubscriptionContentWithClientProgress(client, attempt.url, func(read, total int64) {
+			progress := 20
+			if total > 0 {
+				progress = 10 + int(float64(read)*75/float64(total))
+				if progress > 85 {
+					progress = 85
+				}
+			}
+			if reportProgress != nil && progress >= lastProgress+2 {
+				lastProgress = progress
+				reportProgress(float64(progress))
+			}
+		})
+		if err == nil {
+			break
+		}
+		lastErr = err
+		logging.Info("geo.sync", "download attempt failed: %s: %v", attempt.name, err)
+	}
+	if err != nil {
+		return "", lastErr
+	}
+	if reportProgress != nil {
+		reportProgress(90)
 	}
 	localPath := filepath.Join(svc.paths.GeoDir, item.Type+".db")
 	if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
@@ -1080,6 +1149,9 @@ func (svc *RouteRuleService) fetchAndCacheGeoAsset(item *model.GeoAsset) (string
 	}
 	if err := os.WriteFile(localPath, body, 0644); err != nil {
 		return "", fmt.Errorf("write geo database: %w", err)
+	}
+	if reportProgress != nil {
+		reportProgress(95)
 	}
 	return localPath, nil
 }
@@ -1595,7 +1667,15 @@ func fetchRouteRuleSubscriptionContentWithClient(client *http.Client, rawURL str
 	return fetchRouteRuleSubscriptionContentWithClientContext(context.Background(), client, rawURL)
 }
 
+func fetchRouteRuleSubscriptionContentWithClientProgress(client *http.Client, rawURL string, progress func(read, total int64)) ([]byte, error) {
+	return fetchRouteRuleSubscriptionContentWithClientContextProgress(context.Background(), client, rawURL, progress)
+}
+
 func fetchRouteRuleSubscriptionContentWithClientContext(ctx context.Context, client *http.Client, rawURL string) ([]byte, error) {
+	return fetchRouteRuleSubscriptionContentWithClientContextProgress(ctx, client, rawURL, nil)
+}
+
+func fetchRouteRuleSubscriptionContentWithClientContextProgress(ctx context.Context, client *http.Client, rawURL string, progress func(read, total int64)) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create rule subscription request: %w", err)
@@ -1609,7 +1689,11 @@ func fetchRouteRuleSubscriptionContentWithClientContext(ctx context.Context, cli
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("fetch rule subscription failed: http %d", resp.StatusCode)
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, routeRuleSubscriptionContentMaxSize+1))
+	reader := io.Reader(io.LimitReader(resp.Body, routeRuleSubscriptionContentMaxSize+1))
+	if progress != nil {
+		reader = &downloadProgressReader{Reader: reader, total: resp.ContentLength, report: progress}
+	}
+	data, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, fmt.Errorf("read rule subscription: %w", err)
 	}
@@ -1620,6 +1704,22 @@ func fetchRouteRuleSubscriptionContentWithClientContext(ctx context.Context, cli
 		return nil, fmt.Errorf("rule subscription response exceeds %d bytes", routeRuleSubscriptionContentMaxSize)
 	}
 	return data, nil
+}
+
+type downloadProgressReader struct {
+	io.Reader
+	total  int64
+	read   int64
+	report func(read, total int64)
+}
+
+func (reader *downloadProgressReader) Read(buffer []byte) (int, error) {
+	count, err := reader.Reader.Read(buffer)
+	if count > 0 {
+		reader.read += int64(count)
+		reader.report(reader.read, reader.total)
+	}
+	return count, err
 }
 
 func detectRouteRuleSubscriptionFormat(rawURL string) string {
