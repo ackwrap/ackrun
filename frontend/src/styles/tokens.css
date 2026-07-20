@@ -58,6 +58,7 @@
   --duration-normal: 250ms;
   --easing-default: cubic-bezier(0.4, 0, 0.2, 1);
   --z-modal: 1000;
+  --z-toast: 1100;
 }
 
 :root[data-theme='light'] {

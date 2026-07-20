@@ -173,9 +173,9 @@ function ruleValuePlaceholder(ruleType: string) {
 
 function ruleValueHelp(ruleType: string) {
   if (ruleType === "geosite")
-    return "填写 geosite 分类名，生成时自动转换为对应 rule_set。";
+    return "填写 geosite 分类名，生成时自动转换为对应 rule_set；不要添加 !，排除请使用“反向匹配”。";
   if (ruleType === "geoip")
-    return "填写 GeoIP 区域代码，例如 cn、private、us。";
+    return "填写 GeoIP 区域代码，例如 cn、private、us；不要添加 !，排除请使用“反向匹配”。";
   if (ruleType === "rule_set") return "填写已有规则订阅或生成规则集的 tag。";
   if (ruleType === "mixed")
     return "可组合域名、GeoIP、GeoSite、CIDR 等条件；任一条件命中即执行同一出站。";
@@ -408,6 +408,12 @@ function updateRuleType(event: Event) {
                     })
                   "
                 />
+                <span
+                  v-if="['geoip', 'geosite'].includes(block.ruleType)"
+                  class="mt-1.5 block text-[11px] font-normal text-[var(--text-tertiary)]"
+                >
+                  仅填写分类名（如 cn），不要添加 !；“反向匹配”会作用于全部混合条件。
+                </span>
               </label>
             </div>
           </div>

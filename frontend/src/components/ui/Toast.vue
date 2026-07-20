@@ -29,22 +29,24 @@ watch(
 onBeforeUnmount(() => window.clearTimeout(timer));
 </script>
 <template>
-  <div
-    v-if="message"
-    class="pointer-events-none fixed bottom-[13vh] left-1/2 z-[70] w-full max-w-xl -translate-x-1/2 px-4"
-  >
+  <Teleport to="body">
     <div
-      class="aw-toast"
-      :class="`aw-toast-${type}`"
-      :role="type === 'error' ? 'alert' : 'status'"
+      v-if="message"
+      class="pointer-events-none fixed bottom-[13vh] left-1/2 z-[var(--z-toast)] w-full max-w-xl -translate-x-1/2 px-4"
     >
-      <span class="aw-toast-icon"><component :is="icon" :size="19" /></span
-      ><span
-        ><span class="aw-toast-label">{{
-          type === "success" ? "成功" : type === "error" ? "失败" : "提示"
-        }}</span
-        ><span class="aw-toast-message">{{ message }}</span></span
+      <div
+        class="aw-toast"
+        :class="`aw-toast-${type}`"
+        :role="type === 'error' ? 'alert' : 'status'"
       >
+        <span class="aw-toast-icon"><component :is="icon" :size="19" /></span
+        ><span
+          ><span class="aw-toast-label">{{
+            type === "success" ? "成功" : type === "error" ? "失败" : "提示"
+          }}</span
+          ><span class="aw-toast-message">{{ message }}</span></span
+        >
+      </div>
     </div>
-  </div>
+  </Teleport>
 </template>
