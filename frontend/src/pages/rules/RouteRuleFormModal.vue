@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onBeforeUnmount, ref } from "vue";
 import { FileJson2, Plus, Route, Save, Trash2 } from "lucide-vue-next";
 import Modal from "@/components/ui/Modal.vue";
 import EmojiPicker, { defaultEmojis } from "@/components/ui/EmojiPicker.vue";
+import { api } from "@/services/api";
 import type { RouteRule, RouteRuleSubscription } from "@/services/types";
 
 const props = defineProps<{
@@ -40,8 +41,84 @@ const types = [
 ] as const;
 
 type MixedBlock = { ruleType: string; value: string };
+type GeoRuleType = "geoip" | "geosite";
 
 const mixedRuleTypes = types.filter((item) => item[0] !== "mixed");
+const geoTagDraft = ref("");
+const geoTagOptions = ref<Record<GeoRuleType, string[]>>({
+  geoip: [],
+  geosite: [],
+});
+const geoTagMessage = ref<Record<GeoRuleType, string>>({
+  geoip: "",
+  geosite: "",
+});
+const geoTagError = ref<Record<GeoRuleType, string>>({
+  geoip: "",
+  geosite: "",
+});
+const geoTagRequest = { geoip: 0, geosite: 0 };
+const geoTagSearchTimer: Record<
+  GeoRuleType,
+  ReturnType<typeof setTimeout> | undefined
+> = { geoip: undefined, geosite: undefined };
+
+function isGeoRuleType(ruleType: string): ruleType is GeoRuleType {
+  return ruleType === "geoip" || ruleType === "geosite";
+}
+
+function geoTagListID(ruleType: string) {
+  return isGeoRuleType(ruleType) ? `route-rule-${ruleType}-tags` : undefined;
+}
+
+async function searchGeoTags(ruleType: string, query: string) {
+  if (!isGeoRuleType(ruleType)) return;
+  const requestID = ++geoTagRequest[ruleType];
+  try {
+    geoTagError.value[ruleType] = "";
+    const response = await api.getGeoTags(ruleType, query.trim());
+    if (requestID !== geoTagRequest[ruleType]) return;
+    geoTagOptions.value[ruleType] = response.tags;
+    geoTagMessage.value[ruleType] = response.ready
+      ? response.tags.length
+        ? ""
+        : "未找到匹配分类"
+      : response.message;
+  } catch (error: any) {
+    if (requestID !== geoTagRequest[ruleType]) return;
+    geoTagOptions.value[ruleType] = [];
+    geoTagMessage.value[ruleType] = "";
+    geoTagError.value[ruleType] = error.message;
+  }
+}
+
+function scheduleGeoTagSearch(ruleType: string, query: string) {
+  if (!isGeoRuleType(ruleType)) return;
+  clearTimeout(geoTagSearchTimer[ruleType]);
+  geoTagSearchTimer[ruleType] = setTimeout(
+    () => searchGeoTags(ruleType, query),
+    200,
+  );
+}
+
+function searchGeoTagsFromEvent(ruleType: string, event: Event) {
+  scheduleGeoTagSearch(ruleType, (event.target as HTMLInputElement).value);
+}
+
+function appendGeoTag(tag = geoTagDraft.value) {
+  const normalized = tag.trim();
+  if (!normalized || !isGeoRuleType(props.ruleType)) return;
+  const current = props.valuesText
+    .split("\n")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (
+    !current.some((value) => value.toLowerCase() === normalized.toLowerCase())
+  ) {
+    emit("update:valuesText", [...current, normalized].join("\n"));
+  }
+  geoTagDraft.value = "";
+}
 
 function parseMixedBlocks(valuesText: string): MixedBlock[] {
   const blocks = valuesText
@@ -49,8 +126,7 @@ function parseMixedBlocks(valuesText: string): MixedBlock[] {
     .map((line) => {
       const trimmed = line.trim();
       const separator = trimmed.search(/[:=]/);
-      if (separator <= 0)
-        return { ruleType: "domain_suffix", value: trimmed };
+      if (separator <= 0) return { ruleType: "domain_suffix", value: trimmed };
       return {
         ruleType: trimmed.slice(0, separator).trim(),
         value: trimmed.slice(separator + 1).trim(),
@@ -71,6 +147,12 @@ function updateMixedBlock(index: number, patch: Partial<MixedBlock>) {
     itemIndex === index ? { ...item, ...patch } : item,
   );
   emit("update:valuesText", serializeMixedBlocks(next));
+}
+
+function updateMixedValue(index: number, ruleType: string, event: Event) {
+  const value = (event.target as HTMLInputElement).value;
+  updateMixedBlock(index, { value });
+  scheduleGeoTagSearch(ruleType, value);
 }
 
 function addMixedBlock() {
@@ -149,10 +231,7 @@ function previewRules() {
     const value = block.value.trim();
     if (!value) continue;
     if (["geoip", "geosite"].includes(block.ruleType)) {
-      appendGrouped(
-        "rule_set",
-        generatedGeoRuleSetTag(block.ruleType, value),
-      );
+      appendGrouped("rule_set", generatedGeoRuleSetTag(block.ruleType, value));
     } else if (block.ruleType === "rule_set") {
       appendGrouped("rule_set", value);
     } else {
@@ -164,7 +243,7 @@ function previewRules() {
 
 function ruleValuePlaceholder(ruleType: string) {
   if (ruleType === "rule_set") return "geosite-cn\ngeoip-cn";
-  if (ruleType === "geosite") return "youtube\ngoogle\nnetflix";
+  if (ruleType === "geosite") return "geolocation-!cn\nyoutube\ngoogle";
   if (ruleType === "geoip") return "cn\nprivate\nus";
   if (ruleType === "process_name") return "chrome.exe\nsing-box";
   if (ruleType === "ip_cidr") return "192.0.2.0/24\n2001:db8::/32";
@@ -173,7 +252,7 @@ function ruleValuePlaceholder(ruleType: string) {
 
 function ruleValueHelp(ruleType: string) {
   if (ruleType === "geosite")
-    return "填写 geosite 分类名，生成时自动转换为对应 rule_set；不要添加 !，排除请使用“反向匹配”。";
+    return "填写或搜索 GeoSite 分类名；geolocation-!cn 中的 ! 是官方分类名的一部分，其他排除请使用“反向匹配”。";
   if (ruleType === "geoip")
     return "填写 GeoIP 区域代码，例如 cn、private、us；不要添加 !，排除请使用“反向匹配”。";
   if (ruleType === "rule_set") return "填写已有规则订阅或生成规则集的 tag。";
@@ -243,10 +322,7 @@ const title = computed(() =>
 
 const preview = computed(() => JSON.stringify(previewRules(), null, 2));
 
-function update(
-  event: Event,
-  field: "valuesText" | "outbound",
-) {
+function update(event: Event, field: "valuesText" | "outbound") {
   const value = (
     event.target as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
   ).value;
@@ -256,6 +332,7 @@ function update(
 
 function updateRuleType(event: Event) {
   const next = (event.target as HTMLSelectElement).value;
+  geoTagDraft.value = "";
   if (next === "mixed" && props.ruleType !== "mixed") {
     const values = props.valuesText
       .split("\n")
@@ -280,6 +357,11 @@ function updateRuleType(event: Event) {
   }
   emit("update:ruleType", next);
 }
+
+onBeforeUnmount(() => {
+  clearTimeout(geoTagSearchTimer.geoip);
+  clearTimeout(geoTagSearchTimer.geosite);
+});
 </script>
 
 <template>
@@ -399,20 +481,41 @@ function updateRuleType(event: Event) {
                 匹配值
                 <input
                   :value="block.value"
+                  :list="geoTagListID(block.ruleType)"
                   class="font-mono"
                   :disabled="editing?.is_system"
-                  :placeholder="ruleValuePlaceholder(block.ruleType).split('\n')[0]"
-                  @input="
-                    updateMixedBlock(index, {
-                      value: ($event.target as HTMLInputElement).value,
-                    })
+                  :placeholder="
+                    ruleValuePlaceholder(block.ruleType).split('\n')[0]
                   "
+                  @focus="searchGeoTags(block.ruleType, block.value)"
+                  @input="updateMixedValue(index, block.ruleType, $event)"
                 />
                 <span
                   v-if="['geoip', 'geosite'].includes(block.ruleType)"
                   class="mt-1.5 block text-[11px] font-normal text-[var(--text-tertiary)]"
                 >
-                  仅填写分类名（如 cn），不要添加 !；“反向匹配”会作用于全部混合条件。
+                  {{
+                    block.ruleType === "geosite"
+                      ? "可搜索数据库分类；geolocation-!cn 中的 ! 属于分类名。"
+                      : "仅填写区域代码（如 cn），排除请使用“反向匹配”。"
+                  }}
+                </span>
+                <span
+                  v-if="
+                    isGeoRuleType(block.ruleType) && geoTagError[block.ruleType]
+                  "
+                  class="mt-1.5 block text-[11px] font-normal text-[var(--color-error)]"
+                >
+                  标签加载失败：{{ geoTagError[block.ruleType] }}
+                </span>
+                <span
+                  v-else-if="
+                    isGeoRuleType(block.ruleType) &&
+                    geoTagMessage[block.ruleType]
+                  "
+                  class="mt-1.5 block text-[11px] font-normal text-[var(--text-tertiary)]"
+                >
+                  {{ geoTagMessage[block.ruleType] }}
                 </span>
               </label>
             </div>
@@ -435,6 +538,75 @@ function updateRuleType(event: Event) {
             {{ ruleValueHelp(ruleType) }}
           </span>
         </label>
+
+        <div
+          v-if="isGeoRuleType(ruleType)"
+          class="rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--bg-base)] p-3"
+        >
+          <div class="mb-2 text-xs font-medium">
+            搜索并添加
+            {{ ruleType === "geosite" ? "GeoSite 分类" : "GeoIP 区域" }}
+          </div>
+          <div class="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+            <input
+              v-model="geoTagDraft"
+              :list="geoTagListID(ruleType)"
+              :disabled="editing?.is_system"
+              :placeholder="
+                ruleType === 'geosite' ? '例如 geolocation-!cn' : '例如 cn'
+              "
+              @focus="searchGeoTags(ruleType, geoTagDraft)"
+              @input="searchGeoTagsFromEvent(ruleType, $event)"
+              @keydown.enter.prevent="appendGeoTag()"
+            />
+            <button
+              type="button"
+              class="aw-action-button aw-action-neutral"
+              :disabled="editing?.is_system || !geoTagDraft.trim()"
+              @click="appendGeoTag()"
+            >
+              <Plus :size="13" />添加
+            </button>
+          </div>
+          <div
+            v-if="geoTagOptions[ruleType].length"
+            class="mt-2 flex max-h-24 flex-wrap gap-2 overflow-auto"
+          >
+            <button
+              v-for="tag in geoTagOptions[ruleType]"
+              :key="tag"
+              type="button"
+              class="aw-filter-chip"
+              :disabled="editing?.is_system"
+              @click="appendGeoTag(tag)"
+            >
+              {{ tag }}
+            </button>
+          </div>
+          <p
+            v-if="geoTagMessage[ruleType]"
+            class="mt-2 text-xs text-[var(--text-tertiary)]"
+          >
+            {{ geoTagMessage[ruleType] }}
+          </p>
+          <p
+            v-if="geoTagError[ruleType]"
+            class="mt-2 text-xs text-[var(--color-error)]"
+          >
+            标签加载失败：{{ geoTagError[ruleType] }}
+          </p>
+        </div>
+
+        <datalist id="route-rule-geosite-tags">
+          <option
+            v-for="tag in geoTagOptions.geosite"
+            :key="tag"
+            :value="tag"
+          />
+        </datalist>
+        <datalist id="route-rule-geoip-tags">
+          <option v-for="tag in geoTagOptions.geoip" :key="tag" :value="tag" />
+        </datalist>
 
         <div v-if="ruleType === 'rule_set' && subscriptions.length">
           <div class="mb-2 text-xs font-medium">可用规则集</div>

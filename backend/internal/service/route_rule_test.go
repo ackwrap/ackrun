@@ -746,6 +746,69 @@ func TestGeneratedGeoRuleSetContentRejectsInvalidTag(t *testing.T) {
 	}
 }
 
+func TestGeneratedGeoRuleSetContentAllowsGeolocationNotCN(t *testing.T) {
+	payload := testBinaryRuleSet(t, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(payload)
+	}))
+	defer upstream.Close()
+
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+	svc := newTestRouteRuleService(t, db)
+	data, _, err := svc.generatedGeoRuleSetContent("geosite-geolocation-!cn", upstream.URL)
+	if err != nil {
+		t.Fatalf("generated geo content: %v", err)
+	}
+	if !bytes.Equal(data, payload) {
+		t.Fatal("unexpected generated geo rule set content")
+	}
+}
+
+func TestRouteRulePreviewSupportsGeolocationNotCN(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+	svc := newTestRouteRuleService(t, db)
+	if _, err := svc.Create(&model.RouteRuleRequest{
+		Name: "Non-CN Proxy", Enabled: true, RuleType: "geosite", Values: []string{"geolocation-!cn"}, Outbound: "proxy",
+	}); err != nil {
+		t.Fatalf("create geosite rule: %v", err)
+	}
+
+	preview, err := svc.PreviewWithBaseURL("http://127.0.0.1:8080")
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	const tag = "geosite-geolocation-!cn"
+	foundRuleSet := false
+	for _, ruleSet := range preview.RuleSets {
+		if ruleSet["tag"] == tag {
+			foundRuleSet = ruleSet["url"] == "http://127.0.0.1:8080/api/v1/rules/geo/rule-sets/geosite-geolocation-!cn/content"
+		}
+	}
+	if !foundRuleSet {
+		t.Fatalf("missing generated geosite rule set: %+v", preview.RuleSets)
+	}
+	foundRule := false
+	for _, rule := range preview.Rules {
+		values, _ := rule["rule_set"].([]string)
+		for _, value := range values {
+			if value == tag {
+				foundRule = true
+			}
+		}
+	}
+	if !foundRule {
+		t.Fatalf("missing generated geosite route rule: %+v", preview.Rules)
+	}
+}
+
 func TestPreviewUsesGeneratedGeoRuleSetCacheEndpoint(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {

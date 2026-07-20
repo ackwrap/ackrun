@@ -49,6 +49,7 @@ import type {
   GeoAsset,
   GeoAssetRequest,
   GeoDomainsResponse,
+  GeoTagsResponse,
   GeoLookupResponse,
   ProxyCollectionWithNodes,
   ProxyCollectionRequest,
@@ -412,6 +413,11 @@ export const api = {
     request<GeoDomainsResponse>(
       `/rules/geo/domains?tag=${encodeURIComponent(tag)}&limit=${limit}&offset=${offset}`,
     ),
+  getGeoTags: (type: "geoip" | "geosite", query = "", limit = 100) => {
+    const search = new URLSearchParams({ type, limit: String(limit) });
+    if (query) search.set("q", query);
+    return request<GeoTagsResponse>(`/rules/geo/tags?${search.toString()}`);
+  },
 
   generateConfig: (data: ConfigGenerateRequest) =>
     request<ConfigGenerateResponse>("/config/generate", {

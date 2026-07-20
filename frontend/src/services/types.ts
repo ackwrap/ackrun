@@ -665,6 +665,14 @@ export interface GeoDomainsResponse {
   message: string;
 }
 
+export interface GeoTagsResponse {
+  type: "geoip" | "geosite";
+  tags: string[];
+  total: number;
+  ready: boolean;
+  message: string;
+}
+
 export interface ApiError {
   error: {
     code: string;

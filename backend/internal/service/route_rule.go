@@ -1099,7 +1099,7 @@ func (svc *RouteRuleService) generatedGeoRuleSetContent(tag, upstreamURL string)
 
 func (svc *RouteRuleService) generatedGeoRuleSetContentContext(ctx context.Context, tag, upstreamURL string) ([]byte, string, error) {
 	tag = strings.ToLower(strings.TrimSpace(tag))
-	if (!strings.HasPrefix(tag, "geoip-") && !strings.HasPrefix(tag, "geosite-")) || !isRouteRuleSubscriptionTag(tag) {
+	if !isGeneratedGeoRuleSetTag(tag) {
 		return nil, "", fmt.Errorf("invalid generated geo rule set tag")
 	}
 	if svc.paths == nil || svc.paths.RulesDir == "" {
@@ -1581,4 +1581,14 @@ func isRouteRuleSubscriptionTag(value string) bool {
 		return false
 	}
 	return value != ""
+}
+
+func isGeneratedGeoRuleSetTag(value string) bool {
+	if strings.HasPrefix(value, "geoip-") || strings.HasPrefix(value, "geosite-") {
+		if isRouteRuleSubscriptionTag(value) {
+			return true
+		}
+	}
+	const geolocationNotPrefix = "geosite-geolocation-!"
+	return strings.HasPrefix(value, geolocationNotPrefix) && isRouteRuleSubscriptionTag(strings.TrimPrefix(value, geolocationNotPrefix))
 }
