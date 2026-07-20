@@ -90,7 +90,9 @@ type receivedProbe struct {
 var echoIDCounter atomic.Uint32
 
 type icmpProber struct {
-	conn          *icmp.PacketConn
+	conn          net.PacketConn
+	ipv4Conn      *ipv4.PacketConn
+	ipv6Conn      *ipv6.PacketConn
 	dstIP         net.IP
 	ipv4          bool
 	protocol      int
@@ -344,11 +346,16 @@ func newICMPProber(dstIP net.IP, timeout, probeInterval time.Duration) (*icmpPro
 		p.echoType = ipv4.ICMPTypeEcho
 		p.echoReplyType = ipv4.ICMPTypeEchoReply
 	}
-	conn, err := icmp.ListenPacket(network, listenAddr)
+	conn, err := listenICMPPacket(network, listenAddr)
 	if err != nil {
 		return nil, err
 	}
 	p.conn = conn
+	if p.ipv4 {
+		p.ipv4Conn = ipv4.NewPacketConn(conn)
+	} else {
+		p.ipv6Conn = ipv6.NewPacketConn(conn)
+	}
 	return p, nil
 }
 
@@ -485,9 +492,9 @@ func (p *icmpProber) stopReader(done <-chan error) {
 
 func (p *icmpProber) setTTL(ttl int) error {
 	if p.ipv4 {
-		return p.conn.IPv4PacketConn().SetTTL(ttl)
+		return p.ipv4Conn.SetTTL(ttl)
 	}
-	return p.conn.IPv6PacketConn().SetHopLimit(ttl)
+	return p.ipv6Conn.SetHopLimit(ttl)
 }
 
 func (p *icmpProber) sequence() int {
