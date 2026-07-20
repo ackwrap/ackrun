@@ -488,7 +488,6 @@ func (svc *RouteRuleService) UpdateSubscription(id int64, req *model.RouteRuleSu
 		return nil, err
 	}
 	logging.Info("route_rule_subscription.update", "updating route rule subscription: %d", id)
-	old, _ := svc.store.GetRouteRuleSubscription(id)
 	item, err := svc.store.UpdateRouteRuleSubscription(id, req)
 	if err != nil {
 		return nil, err
@@ -497,9 +496,7 @@ func (svc *RouteRuleService) UpdateSubscription(id int64, req *model.RouteRuleSu
 		return nil, fmt.Errorf("route rule subscription not found")
 	}
 	svc.refreshRuleSubscriptionJob(id)
-	if old == nil || old.URL != item.URL || old.Format != item.Format || old.UseProxy != item.UseProxy {
-		go svc.runRuleSubscriptionSync(id)
-	}
+	go svc.runRuleSubscriptionSync(id)
 	return item, nil
 }
 
@@ -1180,9 +1177,21 @@ func (svc *RouteRuleService) SubscriptionContent(id int64) ([]byte, string, erro
 	if err != nil {
 		return nil, "", err
 	}
-	if _, err := svc.store.UpdateRouteRuleSubscriptionSyncResult(id, cachedPath); err != nil {
+	updated, applied, err := svc.store.UpdateRouteRuleSubscriptionSyncResultIfCurrent(id, item.UpdatedAt, cachedPath)
+	if err != nil {
 		logging.Error("route_rule_subscription.sync", "update sync result failed: %v", err)
-		_ = svc.store.SetRouteRuleSubscriptionSyncState(id, "failed", 0, err.Error())
+		_ = os.Remove(cachedPath)
+		return nil, "", err
+	}
+	if !applied {
+		_ = os.Remove(cachedPath)
+		if updated != nil && updated.URL == item.URL && updated.Format == item.Format && updated.UseProxy == item.UseProxy && updated.Tag == item.Tag {
+			return data, contentType, nil
+		}
+		return nil, "", fmt.Errorf("route rule subscription changed while content was loading")
+	}
+	if item.CachedPath != "" && updated != nil && item.CachedPath != updated.CachedPath {
+		_ = os.Remove(item.CachedPath)
 	}
 	return data, contentType, nil
 }
@@ -1216,15 +1225,27 @@ func (svc *RouteRuleService) executeRuleSubscriptionSync(item *model.RouteRuleSu
 	_, _, cachedPath, err := svc.fetchAndCacheRouteRuleSubscription(item)
 	if err != nil {
 		logging.Error("route_rule_subscription.sync", "sync rule subscription %d failed: %v", id, err)
-		_ = svc.store.SetRouteRuleSubscriptionSyncState(id, "failed", 0, err.Error())
-		svc.broadcastRuleSubscriptionSync(id, "failed", 0, err.Error())
+		applied, stateErr := svc.store.SetRouteRuleSubscriptionSyncStateIfCurrent(id, item.UpdatedAt, "failed", 0, err.Error())
+		if stateErr != nil {
+			logging.Error("route_rule_subscription.sync", "set failed state failed: %v", stateErr)
+		} else if applied {
+			svc.broadcastRuleSubscriptionSync(id, "failed", 0, err.Error())
+		}
 		return
 	}
-	if _, err := svc.store.UpdateRouteRuleSubscriptionSyncResult(id, cachedPath); err != nil {
+	updated, applied, err := svc.store.UpdateRouteRuleSubscriptionSyncResultIfCurrent(id, item.UpdatedAt, cachedPath)
+	if err != nil {
 		logging.Error("route_rule_subscription.sync", "update sync result failed: %v", err)
-		_ = svc.store.SetRouteRuleSubscriptionSyncState(id, "failed", 0, err.Error())
-		svc.broadcastRuleSubscriptionSync(id, "failed", 0, err.Error())
+		_ = os.Remove(cachedPath)
 		return
+	}
+	if !applied {
+		_ = os.Remove(cachedPath)
+		logging.Info("route_rule_subscription.sync", "discarded stale sync result for rule subscription %d", id)
+		return
+	}
+	if item.CachedPath != "" && updated != nil && item.CachedPath != updated.CachedPath {
+		_ = os.Remove(item.CachedPath)
 	}
 	svc.broadcastRuleSubscriptionSync(id, "updated", 100, "")
 }
@@ -1265,6 +1286,10 @@ func (svc *RouteRuleService) fetchAndCacheRouteRuleSubscription(item *model.Rout
 		}
 	}
 	cachedPath := svc.routeRuleSubscriptionCachePath(item)
+	if item.UpdatedAt > 0 {
+		ext := filepath.Ext(cachedPath)
+		cachedPath = strings.TrimSuffix(cachedPath, ext) + fmt.Sprintf("-%d%s", item.UpdatedAt, ext)
+	}
 	if err := os.MkdirAll(filepath.Dir(cachedPath), 0755); err != nil {
 		return nil, "", "", fmt.Errorf("create rules cache dir: %w", err)
 	}

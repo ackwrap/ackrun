@@ -251,3 +251,42 @@ func TestClaimRouteRuleSubscriptionSyncAllowsOneConcurrentWinner(t *testing.T) {
 		t.Fatalf("missing claim = item=%v claimed=%v err=%v, want sql.ErrNoRows", item, claimed, err)
 	}
 }
+
+func TestRouteRuleSubscriptionRejectsStaleSyncResultAfterUpdate(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+
+	created, err := db.CreateRouteRuleSubscription(&model.RouteRuleSubscriptionRequest{
+		Name: "Original", Enabled: true, Tag: "original", URL: "https://example.com/old.srs", Format: "binary",
+	})
+	if err != nil {
+		t.Fatalf("create rule subscription: %v", err)
+	}
+	claimed, ok, err := db.ClaimRouteRuleSubscriptionSync(created.ID, 30)
+	if err != nil || !ok {
+		t.Fatalf("claim sync: item=%+v claimed=%v err=%v", claimed, ok, err)
+	}
+	updated, err := db.UpdateRouteRuleSubscription(created.ID, &model.RouteRuleSubscriptionRequest{
+		Name: "Updated", Enabled: true, Tag: "updated", URL: "https://example.com/new.srs", Format: "binary",
+	})
+	if err != nil {
+		t.Fatalf("update rule subscription: %v", err)
+	}
+	if updated.SyncStatus != "idle" || updated.UpdatedAt == claimed.UpdatedAt {
+		t.Fatalf("update did not invalidate claim: claimed=%+v updated=%+v", claimed, updated)
+	}
+
+	current, applied, err := db.UpdateRouteRuleSubscriptionSyncResultIfCurrent(created.ID, claimed.UpdatedAt, "old-cache.srs")
+	if err != nil {
+		t.Fatalf("apply stale result: %v", err)
+	}
+	if applied || current == nil || current.URL != updated.URL || current.CachedPath != "" {
+		t.Fatalf("stale result was applied: applied=%v current=%+v", applied, current)
+	}
+	if _, ok, err := db.ClaimRouteRuleSubscriptionSync(created.ID, 30); err != nil || !ok {
+		t.Fatalf("updated subscription could not start a new sync: claimed=%v err=%v", ok, err)
+	}
+}

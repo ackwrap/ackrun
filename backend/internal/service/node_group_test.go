@@ -94,6 +94,14 @@ func TestQuickSetupUpdatesOnlyMatchingBuiltInTemplates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	settingsCollision, err := db.CreateNodeGroup(&model.NodeGroupRequest{
+		Name: "台湾节点", Type: "selector", FilterProtocols: "trojan", FilterSubscriptions: "1",
+		FilterInclude: "🇹🇼|TW|tw|台湾|台|Taiwan", FilterExclude: "免费|过期",
+		Enabled: true, Priority: 1, Tolerance: 999,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	builtin, err := db.CreateNodeGroup(&model.NodeGroupRequest{
 		Name: "全部节点", Type: "selector", FilterProtocols: "trojan", FilterSubscriptions: "1",
 		FilterInclude: ".*", FilterExclude: "", Enabled: true, Priority: 101,
@@ -119,6 +127,13 @@ func TestQuickSetupUpdatesOnlyMatchingBuiltInTemplates(t *testing.T) {
 	}
 	if updatedManualCollision.FilterProtocols != "trojan" || updatedManualCollision.FilterSubscriptions != "1" {
 		t.Fatalf("manual same-name group was overwritten: %+v", updatedManualCollision)
+	}
+	updatedSettingsCollision, err := db.GetNodeGroup(settingsCollision.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedSettingsCollision.FilterProtocols != "trojan" || updatedSettingsCollision.FilterSubscriptions != "1" {
+		t.Fatalf("same-name group with custom settings was overwritten: %+v", updatedSettingsCollision)
 	}
 	updatedBuiltin, err := db.GetNodeGroup(builtin.ID)
 	if err != nil {

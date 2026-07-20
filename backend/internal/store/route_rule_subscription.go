@@ -52,7 +52,7 @@ func (s *Store) GetRouteRuleSubscription(id int64) (*model.RouteRuleSubscription
 
 func (s *Store) UpdateRouteRuleSubscription(id int64, req *model.RouteRuleSubscriptionRequest) (*model.RouteRuleSubscription, error) {
 	now := time.Now().UnixMilli()
-	_, err := s.db.Exec(`UPDATE route_rule_subscriptions SET name = ?, enabled = ?, tag = ?, url = ?, format = ?, use_proxy = ?, sync_mode = ?, sync_time = ?, sync_weekday = ?, updated_at = ? WHERE id = ?`, req.Name, boolToInt(req.Enabled), req.Tag, req.URL, req.Format, boolToInt(req.UseProxy), req.SyncMode, req.SyncTime, req.SyncWeekday, now, id)
+	_, err := s.db.Exec(`UPDATE route_rule_subscriptions SET name = ?, enabled = ?, tag = ?, url = ?, format = ?, use_proxy = ?, sync_mode = ?, sync_time = ?, sync_weekday = ?, sync_status = 'idle', sync_progress = 0, sync_error = '', updated_at = CASE WHEN updated_at >= ? THEN updated_at + 1 ELSE ? END WHERE id = ?`, req.Name, boolToInt(req.Enabled), req.Tag, req.URL, req.Format, boolToInt(req.UseProxy), req.SyncMode, req.SyncTime, req.SyncWeekday, now, now, id)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +74,7 @@ func (s *Store) SetRouteRuleSubscriptionSyncState(id int64, status string, progr
 // A missing subscription returns sql.ErrNoRows; an existing syncing subscription returns claimed=false.
 func (s *Store) ClaimRouteRuleSubscriptionSync(id int64, progress float64) (*model.RouteRuleSubscription, bool, error) {
 	now := time.Now().UnixMilli()
-	result, err := s.db.Exec(`UPDATE route_rule_subscriptions SET sync_status = 'syncing', sync_progress = ?, sync_error = '', updated_at = ? WHERE id = ? AND sync_status <> 'syncing'`, progress, now, id)
+	result, err := s.db.Exec(`UPDATE route_rule_subscriptions SET sync_status = 'syncing', sync_progress = ?, sync_error = '', updated_at = CASE WHEN updated_at >= ? THEN updated_at + 1 ELSE ? END WHERE id = ? AND sync_status <> 'syncing'`, progress, now, now, id)
 	if err != nil {
 		return nil, false, err
 	}
@@ -105,6 +105,33 @@ func (s *Store) UpdateRouteRuleSubscriptionSyncResult(id int64, cachedPath strin
 		return nil, err
 	}
 	return s.GetRouteRuleSubscription(id)
+}
+
+func (s *Store) UpdateRouteRuleSubscriptionSyncResultIfCurrent(id, expectedUpdatedAt int64, cachedPath string) (*model.RouteRuleSubscription, bool, error) {
+	now := time.Now().UnixMilli()
+	result, err := s.db.Exec(`UPDATE route_rule_subscriptions SET sync_status = 'updated', sync_progress = 100, sync_error = '', last_sync_at = ?, cached_path = ?, cached_updated_at = ?, updated_at = CASE WHEN updated_at >= ? THEN updated_at + 1 ELSE ? END WHERE id = ? AND updated_at = ?`, now, cachedPath, now, now, now, id, expectedUpdatedAt)
+	if err != nil {
+		return nil, false, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return nil, false, err
+	}
+	item, err := s.GetRouteRuleSubscription(id)
+	if err != nil {
+		return nil, false, err
+	}
+	return item, rows == 1, nil
+}
+
+func (s *Store) SetRouteRuleSubscriptionSyncStateIfCurrent(id, expectedUpdatedAt int64, status string, progress float64, syncError string) (bool, error) {
+	now := time.Now().UnixMilli()
+	result, err := s.db.Exec(`UPDATE route_rule_subscriptions SET sync_status = ?, sync_progress = ?, sync_error = ?, updated_at = CASE WHEN updated_at >= ? THEN updated_at + 1 ELSE ? END WHERE id = ? AND updated_at = ?`, status, progress, syncError, now, now, id, expectedUpdatedAt)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows == 1, err
 }
 
 type routeRuleSubscriptionScanner interface {

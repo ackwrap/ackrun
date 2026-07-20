@@ -322,7 +322,18 @@ func NormalizeShadowsocksSIP003Plugin(plugin string, rawOptions any) (string, st
 
 		switch key {
 		case "tls":
-			canonical[key] = sip003PluginOption{}
+			if !option.hasValue {
+				canonical[key] = sip003PluginOption{}
+				continue
+			}
+			switch strings.ToLower(strings.TrimSpace(option.value)) {
+			case "1", "true":
+				canonical[key] = sip003PluginOption{}
+			case "0", "false":
+				continue
+			default:
+				return "", "", fmt.Errorf("invalid v2ray-plugin tls value %q", option.value)
+			}
 		case "mode":
 			mode := strings.ToLower(option.value)
 			if mode != "websocket" && mode != "quic" {

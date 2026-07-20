@@ -178,7 +178,19 @@ func (svc *NodeGroupService) QuickSetup(req model.NodeGroupQuickSetupRequest) er
 }
 
 func quickSetupTemplateIdentityMatches(existing model.NodeGroup, template model.NodeGroupRequest) bool {
-	if existing.Type != template.Type || existing.FilterInclude != template.FilterInclude || existing.FilterExclude != template.FilterExclude || existing.Priority != template.Priority {
+	testURL := template.TestURL
+	if testURL == "" {
+		testURL = "https://www.gstatic.com/generate_204"
+	}
+	testInterval := template.TestInterval
+	if testInterval == 0 {
+		testInterval = 300
+	}
+	tolerance := template.Tolerance
+	if tolerance == 0 {
+		tolerance = 100
+	}
+	if existing.Type != template.Type || existing.FilterInclude != template.FilterInclude || existing.FilterExclude != template.FilterExclude || existing.TestURL != testURL || existing.TestInterval != testInterval || existing.Tolerance != tolerance || existing.Enabled != template.Enabled || existing.Priority != template.Priority {
 		return false
 	}
 	rawUIDs := strings.TrimSpace(existing.NodeUIDs)

@@ -576,6 +576,15 @@ func TestShadowsocksSIP003PluginOptionsAreValidatedAndNormalized(t *testing.T) {
 	if v2ray["plugin_opts"] != "host=edge.example;mode=websocket;mux=0;path=/socket;tls" {
 		t.Fatalf("unexpected v2ray-plugin options: %v", v2ray["plugin_opts"])
 	}
+	for _, disabled := range []string{"0", "false"} {
+		_, options, err := NormalizeShadowsocksSIP003Plugin("v2ray-plugin", "mode=websocket;tls="+disabled)
+		if err != nil || options != "mode=websocket" {
+			t.Fatalf("tls=%s changed disabled TLS semantics: options=%q err=%v", disabled, options, err)
+		}
+	}
+	if _, _, err := NormalizeShadowsocksSIP003Plugin("v2ray-plugin", "tls=maybe"); err == nil {
+		t.Fatal("expected invalid explicit TLS value to be rejected")
+	}
 	escapedPlugin, escapedOptions, err := NormalizeShadowsocksSIP003Plugin("v2ray-plugin", `host=edge.example;path=/a\;b\=c\\d`)
 	if err != nil || escapedPlugin != "v2ray-plugin" || escapedOptions != `host=edge.example;path=/a\;b\=c\\d` {
 		t.Fatalf("escaped SIP003 options were not preserved: plugin=%q options=%q err=%v", escapedPlugin, escapedOptions, err)
