@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { Activity, Gauge, Globe2, RefreshCw, Wifi } from "lucide-vue-next";
 import { getClashClient } from "@/services/clash";
+import { writeClipboardText } from "@/utils/clipboard";
 import { formatBytes, formatSpeed } from "./monitor/monitorUtils";
 const props = defineProps<{ isRunning: boolean; proxyPort: number }>(),
   emit = defineEmits<{ message: [string, "success" | "error" | "info"] }>();
@@ -246,10 +247,14 @@ const items = computed(() => [
 async function copy(p: IPProbe) {
   if (!p.value) return;
   try {
-    await navigator.clipboard.writeText(p.value);
+    await writeClipboardText(p.value);
     emit("message", `${p.label} 已复制`, "success");
-  } catch {
-    emit("message", `${p.label} 复制失败`, "error");
+  } catch (e: any) {
+    emit(
+      "message",
+      `${p.label} 复制失败: ${e.message || "浏览器不支持剪贴板"}`,
+      "error",
+    );
   }
 }
 watch(() => [props.isRunning, props.proxyPort], startStats);

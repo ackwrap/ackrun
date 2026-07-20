@@ -15,6 +15,7 @@ import Button from "@/components/ui/Button.vue";
 import Modal from "@/components/ui/Modal.vue";
 import Toast from "@/components/ui/Toast.vue";
 import { api } from "@/services/api";
+import { writeClipboardText } from "@/utils/clipboard";
 import type {
   ConfigBackup,
   ConfigFileItem,
@@ -210,7 +211,7 @@ function toggleRow(index: number) {
 }
 async function copy(value: any, label: string) {
   try {
-    await navigator.clipboard.writeText(JSON.stringify(value, null, 2));
+    await writeClipboardText(JSON.stringify(value, null, 2));
     showMessage(`${label} 已复制`, "success");
   } catch (e: any) {
     showMessage(`复制失败: ${e.message || "浏览器不支持剪贴板"}`);
