@@ -88,7 +88,7 @@ func TestProxyCollectionStoreKeepsGlobalDirectFirst(t *testing.T) {
 	}
 }
 
-func TestDNSServerAndOutboundBindingOrderPersist(t *testing.T) {
+func TestDNSServerOrderPersists(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -111,23 +111,6 @@ func TestDNSServerAndOutboundBindingOrderPersist(t *testing.T) {
 	}
 	if len(servers) != 2 || servers[0].ID != second.ID || servers[1].ID != first.ID {
 		t.Fatalf("unexpected DNS server order: %+v", servers)
-	}
-
-	want := []string{"proxy", "streaming", "direct"}
-	if err := db.SetDNSOutboundBindingOrder(want); err != nil {
-		t.Fatal(err)
-	}
-	got, err := db.GetDNSOutboundBindingOrder()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != len(want) {
-		t.Fatalf("outbound order = %v, want %v", got, want)
-	}
-	for index := range want {
-		if got[index] != want[index] {
-			t.Fatalf("outbound order = %v, want %v", got, want)
-		}
 	}
 }
 

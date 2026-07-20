@@ -10,12 +10,6 @@ import OrderButtons from "@/components/ui/OrderButtons.vue";
 import NodeFlagName from "@/components/NodeFlagName.vue";
 import NodeGroupDetailModal from "./collections/NodeGroupDetailModal.vue";
 import { subscriptionFilterLabel } from "./collections/nodeGroupLabels";
-import {
-  findDNSOutboundBinding,
-  saveDNSOutboundBinding,
-  type DNSBindingRule,
-  type DNSBindingServer,
-} from "./collections/dnsBinding";
 import { api } from "@/services/api";
 import { authenticatedFetch } from "@/services/apiAuth";
 import { useRealtimeSocket } from "@/composables/useRealtimeSocket";
@@ -76,20 +70,10 @@ interface Rule {
   outbound: string;
   enabled: boolean;
 }
-const strategyDNSServerTypes = new Set([
-  "udp",
-  "tcp",
-  "tls",
-  "https",
-  "quic",
-  "h3",
-]);
 const active = ref<"node-groups" | "collections">("node-groups"),
   groups = ref<NG[]>([]),
   collections = ref<Col[]>([]),
   rules = ref<Rule[]>([]),
-  dnsServers = ref<DNSBindingServer[]>([]),
-  dnsRules = ref<DNSBindingRule[]>([]),
   facets = ref<{ protocols: Facet[]; subscriptions: Facet[]; total: number }>({
     protocols: [],
     subscriptions: [],
@@ -135,7 +119,6 @@ const editingCol = ref<Col | null>(null),
   colGroups = ref<number[]>([]),
   colUIDs = ref<string[]>([]),
   colRules = ref<number[]>([]),
-  colDNSServer = ref(""),
   colEnabled = ref(true),
   colTolerance = ref(100),
   colGroupSearch = ref(""),
@@ -195,20 +178,16 @@ async function json(url: string, init?: RequestInit) {
 }
 async function load() {
   try {
-    const [g, c, f, r, ds, dr, connectivity] = await Promise.all([
+    const [g, c, f, r, connectivity] = await Promise.all([
       json("/api/v1/node-groups"),
       json("/api/v1/collections"),
       api.getNodeFacets(),
       json("/api/v1/rules"),
-      json("/api/v1/dns/servers"),
-      json("/api/v1/dns/rules"),
       api.getConnectivitySettings(),
     ]);
     groups.value = Array.isArray(g) ? g : [];
     collections.value = Array.isArray(c) ? c : [];
     rules.value = Array.isArray(r) ? r : [];
-    dnsServers.value = Array.isArray(ds) ? ds : [];
-    dnsRules.value = Array.isArray(dr) ? dr : [];
     connectivitySettings.value = connectivity;
     facets.value = {
       protocols: f.types,
@@ -395,7 +374,6 @@ function resetCol() {
   colGroups.value = [];
   colUIDs.value = [];
   colRules.value = [];
-  colDNSServer.value = "";
   colEnabled.value = true;
   colTolerance.value = 100;
   colGroupSearch.value = "";
@@ -418,8 +396,6 @@ function editCol(x: Col) {
   colGroups.value = x.referenced_groups?.map((g) => g.id) || [];
   colUIDs.value = x.node_uids || [];
   colRules.value = x.route_rule_ids || [];
-  const dnsBinding = findDNSOutboundBinding(dnsRules.value, x.name);
-  colDNSServer.value = dnsBinding?.enabled ? dnsBinding.server : "";
   colEnabled.value = x.enabled;
   colTolerance.value = x.tolerance || 100;
 }
@@ -463,13 +439,6 @@ function selectRule(id: number) {
 async function saveCol() {
   try {
     const id = editingCol.value?.id,
-      previousName = editingCol.value?.name || "",
-      previousDNSBinding = previousName
-        ? findDNSOutboundBinding(dnsRules.value, previousName)
-        : undefined,
-      previousDNS = previousDNSBinding?.enabled
-        ? previousDNSBinding.server
-        : "",
       p = {
         name: colName.value,
         type: colType.value,
@@ -489,21 +458,6 @@ async function saveCol() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(p),
     });
-    if (previousName !== colName.value || previousDNS !== colDNSServer.value) {
-      try {
-        await saveDNSOutboundBinding(
-          json,
-          dnsRules.value,
-          previousName,
-          colName.value,
-          colDNSServer.value,
-        );
-      } catch (e: any) {
-        await load();
-        show(`策略组已保存，但策略 DNS 绑定失败: ${e.message}`, "error");
-        return;
-      }
-    }
     show(id ? "策略组已更新" : "策略组已创建");
     resetCol();
     await load();
@@ -513,16 +467,6 @@ async function saveCol() {
 }
 async function removeCol(x: Col) {
   await json(`/api/v1/collections/${x.id}`, { method: "DELETE" });
-  const binding = findDNSOutboundBinding(dnsRules.value, x.name);
-  if (binding) {
-    try {
-      await saveDNSOutboundBinding(json, dnsRules.value, x.name, x.name, "");
-    } catch (e: any) {
-      await load();
-      show(`策略组已删除，但策略 DNS 绑定清理失败: ${e.message}`, "error");
-      return;
-    }
-  }
   show("策略组已删除");
   await load();
 }
@@ -1185,26 +1129,6 @@ onMounted(load);
         >
           <input v-model="colEnabled" type="checkbox" class="h-4 w-4" />
           启用此策略组
-        </label>
-        <label class="grid content-start gap-1.5 md:col-span-2">
-          <span class="aw-modal-label text-xs font-medium">策略 DNS 绑定</span>
-          <select v-model="colDNSServer" class="aw-input">
-            <option value="">不绑定（使用默认 DNS）</option>
-            <option
-              v-for="server in dnsServers.filter(
-                (item) =>
-                  item.enabled && strategyDNSServerTypes.has(item.server_type),
-              )"
-              :key="server.tag"
-              :value="server.tag"
-            >
-              {{ server.tag }}{{ server.detour ? ` · ${server.detour}` : "" }}
-            </option>
-          </select>
-          <small class="text-[11px] text-[var(--text-tertiary)]">
-            复用该策略组关联路由规则的域名、GeoSite 和 rule_set 条件生成 DNS
-            规则，并强制 DNS 查询经过当前策略 detour，避免代理域名查询直连泄漏
-          </small>
         </label>
         <template v-if="colType === 'urltest'">
           <div

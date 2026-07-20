@@ -19,7 +19,7 @@ The project is designed for iterative testing on desktop, Linux, and OpenWrt-lik
 - Node management with filtering, flags, enable/disable, preference, TCP latency checks, emoji naming, and batch rename.
 - Node groups and strategy groups for building selector/urltest/fallback outbounds from selected or filtered nodes.
 - Route rule management with manual rules, rule subscriptions, Geo asset sync, and sing-box rule-set preview.
-- DNS management for DNS servers, DNS rules, FakeIP settings, DNS outbound binding, and sing-box 1.13 `domain_resolver` generation.
+- DNS management for DNS servers, explicit real-IP rules, TUN FakeIP, and default leak protection with one proxied DNS final for non-direct traffic.
 - Config generation with modular preview, full JSON preview, validation via `sing-box check`, and apply/reload flow.
 - Realtime runtime, installer, core, config, and subscription status updates over WebSocket.
 - Custom sing-box support through `ackwrap/sing-box-wrap`, including Ackwrap-specific VLESS encryption support.

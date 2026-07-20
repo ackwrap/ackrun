@@ -128,6 +128,13 @@ func (s *Store) SetLogSettings(req *model.LogSettings) error {
 			return err
 		}
 	}
+	if _, err := tx.Exec(`
+		UPDATE app_settings
+		SET value = json_set(value, '$.log_level', ?), updated_at = ?
+		WHERE key = ?
+	`, req.Level, now, configGeneratorRequestKey); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 

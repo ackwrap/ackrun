@@ -202,7 +202,8 @@ def build_openwrt_packages(
                 "ackwrap",
                 package_version,
                 package_arch,
-                "libc, ca-bundle, kmod-tun, firewall4, luci-base, luci-compat",
+                "libc, ca-bundle, kmod-tun, firewall4, luci-base, luci-compat, "
+                "kmod-nfnetlink-queue, kmod-nft-queue",
                 "Ackwrap sing-box management service with LuCI and iStoreOS integration.",
             ),
             OPENWRT / "control" / "ackwrap",

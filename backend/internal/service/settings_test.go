@@ -114,7 +114,14 @@ func TestSetLogSettingsPersistsLevelInGenerationRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	request := &model.ConfigGenerateRequest{DefaultOutbound: "proxy", LogLevel: "info"}
+	request := &model.ConfigGenerateRequest{
+		DefaultOutbound: "proxy",
+		InboundListen:   "127.0.0.1",
+		InboundPort:     8888,
+		TUNIPv4Address:  "10.254.0.1/30",
+		TUNIPv6Address:  "fd12:3456:789a::1/126",
+		LogLevel:        "info",
+	}
 	if err := db.SetConfigGenerateRequest(request); err != nil {
 		t.Fatal(err)
 	}
@@ -129,6 +136,11 @@ func TestSetLogSettingsPersistsLevelInGenerationRequest(t *testing.T) {
 	}
 	if stored == nil || stored.LogLevel != "debug" {
 		t.Fatalf("generation log level = %+v, want debug", stored)
+	}
+	want := *request
+	want.LogLevel = "debug"
+	if *stored != want {
+		t.Fatalf("log update changed other generation settings: got %+v, want %+v", stored, want)
 	}
 }
 

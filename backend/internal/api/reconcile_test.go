@@ -30,7 +30,6 @@ func TestShouldReconcileRequest(t *testing.T) {
 		{http.MethodPost, "/api/v1/dns/rules", true},
 		{http.MethodPut, "/api/v1/dns/servers/1", true},
 		{http.MethodDelete, "/api/v1/dns/rules/1", true},
-		{http.MethodPost, "/api/v1/dns/outbound-bindings/reorder", false},
 		{http.MethodDelete, "/api/v1/subscriptions/1", true},
 		{http.MethodPost, "/api/v1/subscriptions/1/sync", false},
 		{http.MethodPost, "/api/v1/nodes/tcping", false},

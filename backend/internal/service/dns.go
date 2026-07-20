@@ -21,6 +21,9 @@ func validateDNSServerRequest(req *model.DNSServerRequest) error {
 	if req == nil {
 		return fmt.Errorf("DNS Server 请求不能为空")
 	}
+	if req.ServerType == "fakeip" {
+		return fmt.Errorf("FakeIP Server 由 TUN 模式自动管理，不能手动创建或更新")
+	}
 	if err := validateDNSServerDetour(req.Detour); err != nil {
 		return err
 	}
@@ -65,53 +68,17 @@ func (svc *DNSService) CreateDNSServer(req *model.DNSServerRequest) (*model.DNSS
 }
 
 func (svc *DNSService) UpdateDNSServer(id int64, req *model.DNSServerRequest) error {
-	server, err := svc.store.GetDNSServer(id)
-	if err != nil {
-		return err
-	}
 	if req == nil {
 		return fmt.Errorf("DNS Server 请求不能为空")
 	}
 	if err := validateDNSServerRequest(req); err != nil {
 		return err
 	}
-	if server.Tag != req.Tag || !req.Enabled || !isStrategyDNSRemoteType(req.ServerType) {
-		if err := svc.ensureDNSServerNotUsedByStrategy(server.Tag); err != nil {
-			return err
-		}
-	}
 	return svc.store.UpdateDNSServer(id, req)
 }
 
 func (svc *DNSService) DeleteDNSServer(id int64) error {
-	server, err := svc.store.GetDNSServer(id)
-	if err != nil {
-		return err
-	}
-	if err := svc.ensureDNSServerNotUsedByStrategy(server.Tag); err != nil {
-		return err
-	}
 	return svc.store.DeleteDNSServer(id)
-}
-
-func (svc *DNSService) ensureDNSServerNotUsedByStrategy(serverTag string) error {
-	rules, err := svc.store.ListDNSRules()
-	if err != nil {
-		return fmt.Errorf("读取 DNS 规则失败: %w", err)
-	}
-	for _, rule := range rules {
-		if !rule.Enabled || rule.Server != serverTag {
-			continue
-		}
-		conditions, err := parseDNSRuleConditions(rule.ConditionsJSON)
-		if err != nil {
-			return fmt.Errorf("DNS 规则 %d conditions_json 无效，请先修复该规则", rule.ID)
-		}
-		if dnsRuleHasOutboundCondition(conditions) {
-			return fmt.Errorf("DNS Server %s 正被启用的策略 DNS 规则引用，请先停用或修改该规则", serverTag)
-		}
-	}
-	return nil
 }
 
 func (svc *DNSService) ReorderDNSServers(ids []int64) error {
@@ -129,32 +96,6 @@ func (svc *DNSService) ReorderDNSServers(ids []int64) error {
 	return svc.store.ReorderDNSServers(ids)
 }
 
-func (svc *DNSService) GetDNSOutboundBindingOrder() (*model.DNSOutboundBindingOrder, error) {
-	outbounds, err := svc.store.GetDNSOutboundBindingOrder()
-	if err != nil {
-		return nil, err
-	}
-	return &model.DNSOutboundBindingOrder{Outbounds: outbounds}, nil
-}
-
-func (svc *DNSService) SetDNSOutboundBindingOrder(req *model.DNSOutboundBindingOrder) error {
-	if len(req.Outbounds) > 1000 {
-		return fmt.Errorf("DNS 出口绑定顺序数量过多")
-	}
-	seen := make(map[string]bool, len(req.Outbounds))
-	normalized := make([]string, 0, len(req.Outbounds))
-	for _, outbound := range req.Outbounds {
-		outbound = strings.TrimSpace(outbound)
-		if outbound == "" || seen[outbound] {
-			return fmt.Errorf("DNS 出口绑定顺序包含空值或重复项")
-		}
-		seen[outbound] = true
-		normalized = append(normalized, outbound)
-	}
-	logging.Info("dns.outbound_binding.reorder", "调整 %d 个 DNS 出口绑定的显示顺序", len(normalized))
-	return svc.store.SetDNSOutboundBindingOrder(normalized)
-}
-
 // DNS Rules
 
 func (svc *DNSService) ListDNSRules() ([]model.DNSRule, error) {
@@ -166,89 +107,43 @@ func (svc *DNSService) GetDNSRule(id int64) (*model.DNSRule, error) {
 }
 
 func (svc *DNSService) CreateDNSRule(req *model.DNSRuleRequest) (*model.DNSRule, error) {
-	if err := svc.validateStrategyDNSRule(0, req); err != nil {
+	if err := svc.validateDNSRuleRequest(req); err != nil {
 		return nil, err
 	}
 	return svc.store.CreateDNSRule(req)
 }
 
 func (svc *DNSService) UpdateDNSRule(id int64, req *model.DNSRuleRequest) error {
-	if err := svc.validateStrategyDNSRule(id, req); err != nil {
+	if err := svc.validateDNSRuleRequest(req); err != nil {
 		return err
 	}
 	return svc.store.UpdateDNSRule(id, req)
 }
 
-func (svc *DNSService) validateStrategyDNSRule(excludeRuleID int64, req *model.DNSRuleRequest) error {
-	if req == nil || !req.Enabled {
-		return nil
+func (svc *DNSService) validateDNSRuleRequest(req *model.DNSRuleRequest) error {
+	if req == nil {
+		return fmt.Errorf("DNS 规则请求不能为空")
 	}
-	if !dnsRuleHasOutboundCondition(req.Conditions) {
-		return nil
+	if dnsRuleHasOutboundCondition(req.Conditions) {
+		return fmt.Errorf("DNS 规则不再支持 outbound 条件，请通过 DNS Server detour 配置真实查询出口")
 	}
-	outbounds := dnsRuleOutboundConditions(req.Conditions)
-	if len(outbounds) != 1 {
-		return fmt.Errorf("策略 DNS 绑定必须且只能包含一个 outbound")
-	}
-	if len(req.Conditions) != 1 {
-		return fmt.Errorf("策略 DNS 绑定只能包含 outbound 条件")
-	}
-	outbound := strings.TrimSpace(outbounds[0])
-	if outbound == "" || outbound != outbounds[0] || outbound == "block" || outbound == "reject" {
-		return fmt.Errorf("策略 DNS 绑定引用的 outbound 无效")
-	}
-	if err := svc.validateDNSStrategyOutbound(outbound); err != nil {
-		return err
-	}
-	rules, err := svc.store.ListDNSRules()
-	if err != nil {
-		return fmt.Errorf("读取 DNS 规则失败: %w", err)
-	}
-	if err := validateEnabledDNSRuleConditions(rules); err != nil {
-		return err
-	}
-	for _, rule := range rules {
-		if rule.ID == excludeRuleID || !rule.Enabled {
-			continue
-		}
-		conditions := decodeDNSRuleConditions(rule.ConditionsJSON)
-		if isDNSStrategyBindingConditions(conditions) && strings.TrimSpace(dnsRuleOutboundConditions(conditions)[0]) == outbound {
-			return fmt.Errorf("策略 %s 已存在启用的 DNS 绑定", outbound)
-		}
+	return svc.rejectFakeIPServerReference(req.Server)
+}
+
+func (svc *DNSService) rejectFakeIPServerReference(tag string) error {
+	if tag == "fakeip" {
+		return fmt.Errorf("显式 DNS 配置不能引用 FakeIP Server，FakeIP 由 TUN A/AAAA 规则自动管理")
 	}
 	servers, err := svc.store.ListDNSServers()
 	if err != nil {
 		return fmt.Errorf("读取 DNS Server 失败: %w", err)
 	}
 	for _, server := range servers {
-		if server.Tag != req.Server {
-			continue
-		}
-		if !server.Enabled {
-			return fmt.Errorf("策略 DNS 绑定不能引用已停用的 DNS Server %s", req.Server)
-		}
-		if !isStrategyDNSRemoteType(server.ServerType) {
-			return fmt.Errorf("DNS Server %s 类型 %s 不能用于防泄漏策略绑定，仅支持 udp/tcp/tls/https/quic/h3", req.Server, server.ServerType)
-		}
-		return nil
-	}
-	return fmt.Errorf("策略 DNS 绑定引用的 DNS Server %s 不存在", req.Server)
-}
-
-func (svc *DNSService) validateDNSStrategyOutbound(outbound string) error {
-	if outbound == "direct" || outbound == "proxy" {
-		return nil
-	}
-	collections, err := svc.store.ListProxyCollections()
-	if err != nil {
-		return fmt.Errorf("读取策略组失败: %w", err)
-	}
-	for _, collection := range collections {
-		if collection.Enabled && collection.Name == outbound {
-			return nil
+		if server.Tag == tag && server.ServerType == "fakeip" {
+			return fmt.Errorf("显式 DNS 配置不能引用 FakeIP Server，FakeIP 由 TUN A/AAAA 规则自动管理")
 		}
 	}
-	return fmt.Errorf("策略 DNS 绑定引用的 outbound %s 不存在或未启用", outbound)
+	return nil
 }
 
 func (svc *DNSService) DeleteDNSRule(id int64) error {
@@ -282,6 +177,12 @@ func (svc *DNSService) GetDNSGlobalSettings() (*model.DNSGlobalSettings, error) 
 }
 
 func (svc *DNSService) SetDNSGlobalSettings(req *model.DNSGlobalSettings) error {
+	if req == nil {
+		return fmt.Errorf("DNS 全局设置不能为空")
+	}
+	if err := svc.rejectFakeIPServerReference(req.Final); err != nil {
+		return err
+	}
 	applyTUNManagedFakeIP(req, svc.store.GetInboundMode())
 	logging.Info("dns.global.update", "FakeIP 跟随 TUN 模式，当前状态: %t", req.FakeIPEnabled)
 	return svc.store.SetDNSGlobalSettings(req)

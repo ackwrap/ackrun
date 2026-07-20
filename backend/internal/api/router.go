@@ -186,8 +186,6 @@ func RegisterRoutes(
 
 		v1.GET("/dns/global", dnsH.GetDNSGlobalSettings)
 		v1.PUT("/dns/global", dnsH.SetDNSGlobalSettings)
-		v1.GET("/dns/outbound-bindings/order", dnsH.GetDNSOutboundBindingOrder)
-		v1.POST("/dns/outbound-bindings/reorder", dnsH.ReorderDNSOutboundBindings)
 
 		v1.GET("/node-groups", nodeGroupH.List)
 		v1.POST("/node-groups", nodeGroupH.Create)

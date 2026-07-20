@@ -19,7 +19,7 @@ Ackwrap 当前仍处于快速开发阶段。很多功能、协议映射、sing-b
 - 节点管理：支持筛选、国家/地区标识、启用/停用、优选、TCP 延迟测试、添加 emoji、批量重命名。
 - 节点组和策略组：可通过筛选或手动选择节点生成 selector/urltest/fallback 等策略出站。
 - 规则管理：支持手动规则、规则订阅、Geo 数据同步和 sing-box rule-set 预览。
-- DNS 管理：支持 DNS Server、DNS 规则、FakeIP、DNS 出口绑定，并生成 sing-box 1.13 的 `domain_resolver` 配置。
+- DNS 管理：支持 DNS Server、显式真实 IP 规则、TUN FakeIP 和默认 DNS 防泄漏；非直连查询统一通过代理 DNS final。
 - 配置生成：支持模块化预览、完整 JSON 预览、`sing-box check` 校验和应用/重载流程。
 - 实时事件：通过 WebSocket 推送运行时、安装器、核心、配置和订阅同步状态。
 - 定制 sing-box：通过 `ackwrap/sing-box-wrap` 支持 Ackwrap 特定改动，例如 VLESS encryption 支持。

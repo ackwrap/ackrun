@@ -350,6 +350,10 @@ func migrateAckwrapTUNInbounds(inbounds []interface{}, linux bool) int {
 			inbound["strict_route"] = true
 			migrated++
 		}
+		if addresses, changed := migrateDefaultTUNAddresses(inbound["address"]); changed {
+			inbound["address"] = addresses
+			migrated++
+		}
 		if hasDefaultTUNIPv4Address(inbound["address"]) && !stringListHasIPv6(inbound["address"]) {
 			inbound["address"] = appendStringList(inbound["address"], defaultTUNIPv6Address)
 			migrated++
@@ -373,7 +377,41 @@ func migrateAckwrapTUNInbounds(inbounds []interface{}, linux bool) int {
 }
 
 func hasDefaultTUNIPv4Address(value interface{}) bool {
-	return stringListContains(value, defaultTUNIPv4Address) || stringListContains(value, legacyDefaultTUNIPv4Address)
+	return stringListContains(value, defaultTUNIPv4Address) || stringListContains(value, legacyDefaultTUNIPv4Address) || stringListContains(value, previousDefaultTUNIPv4)
+}
+
+func migrateDefaultTUNAddresses(value interface{}) (interface{}, bool) {
+	changed := false
+	replace := func(address string) string {
+		switch address {
+		case previousDefaultTUNIPv4:
+			changed = true
+			return defaultTUNIPv4Address
+		case previousDefaultTUNIPv6:
+			changed = true
+			return defaultTUNIPv6Address
+		default:
+			return address
+		}
+	}
+	switch addresses := value.(type) {
+	case []string:
+		migrated := append([]string(nil), addresses...)
+		for i, address := range migrated {
+			migrated[i] = replace(address)
+		}
+		return migrated, changed
+	case []interface{}:
+		migrated := append([]interface{}(nil), addresses...)
+		for i, rawAddress := range migrated {
+			if address, ok := rawAddress.(string); ok {
+				migrated[i] = replace(address)
+			}
+		}
+		return migrated, changed
+	default:
+		return value, false
+	}
 }
 
 func stringListHasIPv6(value interface{}) bool {

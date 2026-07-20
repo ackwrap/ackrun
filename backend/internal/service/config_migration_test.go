@@ -189,7 +189,7 @@ func TestMigrateManagedConfigRepairsEmptyProxyGroupAndRemovesLegacyProxy(t *test
 		t.Fatalf("repair empty proxy group: %v", err)
 	}
 	if migrated != 3 {
-		t.Fatalf("migrated = %d, want 3", migrated)
+		t.Fatalf("migrated = %d, want proxy repair, inbound removal and route removal", migrated)
 	}
 	var config map[string]interface{}
 	if err := json.Unmarshal(result, &config); err != nil {
@@ -301,8 +301,8 @@ func TestMigrateManagedConfigAddsTUNRoutingSafetyAndRemovesLegacyProxy(t *testin
 	if err != nil {
 		t.Fatalf("migrate TUN routing safety: %v", err)
 	}
-	if migrated != 3 {
-		t.Fatalf("migrated = %d, want 3", migrated)
+	if migrated != 4 {
+		t.Fatalf("migrated = %d, want TUN addresses, route safety, inbound removal and route removal", migrated)
 	}
 	var config map[string]interface{}
 	if err := json.Unmarshal(result, &config); err != nil {
@@ -331,8 +331,8 @@ func TestMigrateManagedConfigMovesAckwrapKernelBypassBeforeSniff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("migrate kernel bypass: %v", err)
 	}
-	if migrated != 3 {
-		t.Fatalf("migrated = %d, want route safety, bypass action and ordering", migrated)
+	if migrated != 4 {
+		t.Fatalf("migrated = %d, want TUN addresses, route safety, bypass action and ordering", migrated)
 	}
 	var config map[string]interface{}
 	if err := json.Unmarshal(result, &config); err != nil {
@@ -409,6 +409,54 @@ func TestMigrateAckwrapTUNInboundsRecognizesLegacyDefaultAddress(t *testing.T) {
 	}
 	if !stringListContains(inbounds[0].(map[string]interface{})["address"], defaultTUNIPv6Address) {
 		t.Fatalf("legacy TUN missing default IPv6 address: %+v", inbounds[0])
+	}
+}
+
+func TestMigrateAckwrapTUNInboundsReplacesPreviousDefaults(t *testing.T) {
+	inbounds := []interface{}{
+		map[string]interface{}{
+			"type":           "tun",
+			"tag":            "tun-in",
+			"interface_name": "tun0",
+			"address":        []interface{}{previousDefaultTUNIPv4, previousDefaultTUNIPv6},
+			"auto_route":     true,
+			"strict_route":   true,
+		},
+	}
+	if !isAckwrapManagedConfig(map[string]interface{}{}, inbounds, map[string]interface{}{}) {
+		t.Fatal("previous default TUN address was not recognized as Ackwrap-managed")
+	}
+	if migrated := migrateAckwrapTUNInbounds(inbounds, false); migrated != 1 {
+		t.Fatalf("previous TUN migrated fields = %d, want address replacement only", migrated)
+	}
+	addresses := inbounds[0].(map[string]interface{})["address"]
+	if !stringListContains(addresses, defaultTUNIPv4Address) || !stringListContains(addresses, defaultTUNIPv6Address) {
+		t.Fatalf("previous TUN defaults not replaced: %+v", addresses)
+	}
+	if stringListContains(addresses, previousDefaultTUNIPv4) || stringListContains(addresses, previousDefaultTUNIPv6) {
+		t.Fatalf("previous TUN defaults remain: %+v", addresses)
+	}
+}
+
+func TestMigrateAckwrapTUNInboundsPreservesCustomAddresses(t *testing.T) {
+	customIPv4 := "10.254.0.1/30"
+	customIPv6 := "fd12:3456:789a::1/126"
+	inbounds := []interface{}{
+		map[string]interface{}{
+			"type":           "tun",
+			"tag":            "tun-in",
+			"interface_name": "tun0",
+			"address":        []interface{}{customIPv4, customIPv6},
+			"auto_route":     true,
+			"strict_route":   true,
+		},
+	}
+	if migrated := migrateAckwrapTUNInbounds(inbounds, false); migrated != 0 {
+		t.Fatalf("custom TUN migrated fields = %d, want 0", migrated)
+	}
+	addresses := inbounds[0].(map[string]interface{})["address"]
+	if !stringListContains(addresses, customIPv4) || !stringListContains(addresses, customIPv6) {
+		t.Fatalf("custom TUN addresses changed: %+v", addresses)
 	}
 }
 

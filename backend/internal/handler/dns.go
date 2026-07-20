@@ -104,28 +104,6 @@ func (h *DNSHandler) ReorderDNSServers(c *gin.Context) {
 	c.JSON(http.StatusOK, model.ActionResponse{Success: true, Message: "DNS servers reordered"})
 }
 
-func (h *DNSHandler) GetDNSOutboundBindingOrder(c *gin.Context) {
-	result, err := h.svc.GetDNSOutboundBindingOrder()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Error: model.APIError{Code: "DNS_OUTBOUND_BINDING_ORDER_FAILED", Message: err.Error()}})
-		return
-	}
-	c.JSON(http.StatusOK, result)
-}
-
-func (h *DNSHandler) ReorderDNSOutboundBindings(c *gin.Context) {
-	var req model.DNSOutboundBindingOrder
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "INVALID_REQUEST", Message: err.Error()}})
-		return
-	}
-	if err := h.svc.SetDNSOutboundBindingOrder(&req); err != nil {
-		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "DNS_OUTBOUND_BINDINGS_REORDER_FAILED", Message: err.Error()}})
-		return
-	}
-	c.JSON(http.StatusOK, model.ActionResponse{Success: true, Message: "DNS outbound bindings reordered"})
-}
-
 // DNS Rules
 
 func (h *DNSHandler) ListDNSRules(c *gin.Context) {

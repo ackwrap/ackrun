@@ -392,7 +392,7 @@ onMounted(async () => {
             ><input
               v-model="request.tun_ipv4_address"
               class="aw-input mt-1 w-full"
-              placeholder="172.254.0.1/30"
+              placeholder="172.31.255.1/30"
             /><small class="mt-1 block text-[var(--text-tertiary)]"
               >使用 CIDR，需避开 LAN、Docker 和 VPN 已占用网段。</small
             ></label
@@ -401,7 +401,7 @@ onMounted(async () => {
             ><input
               v-model="request.tun_ipv6_address"
               class="aw-input mt-1 w-full"
-              placeholder="fdfe:dcba:9876::1/126"
+              placeholder="fdfe:dcba:9875::1/126"
             /><small class="mt-1 block text-[var(--text-tertiary)]"
               >使用 IPv6 CIDR；修改后需重新生成并应用配置。</small
             ></label

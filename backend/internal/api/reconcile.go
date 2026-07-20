@@ -44,9 +44,6 @@ func shouldReconcileRequest(method, path string) bool {
 	if strings.HasPrefix(path, "/api/v1/collections/") && strings.HasSuffix(path, "/test") {
 		return false
 	}
-	if path == "/api/v1/dns/outbound-bindings/reorder" {
-		return false
-	}
 	if strings.HasPrefix(path, "/api/v1/subscriptions") {
 		return method == http.MethodDelete
 	}

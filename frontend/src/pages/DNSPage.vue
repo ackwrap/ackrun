@@ -5,10 +5,6 @@ import PageHeader from "@/components/layout/PageHeader.vue";
 import Toast from "@/components/ui/Toast.vue";
 import OrderButtons from "@/components/ui/OrderButtons.vue";
 import { authenticatedFetch } from "@/services/apiAuth";
-import {
-  dnsRuleOutbounds,
-  isDNSOutboundBinding,
-} from "./collections/dnsBinding";
 import DNSRuleFormModal from "./dns/DNSRuleFormModal.vue";
 import DNSServerFormModal from "./dns/DNSServerFormModal.vue";
 interface Server {
@@ -62,11 +58,7 @@ const defaults = {
   serverForm = ref<Partial<Server> | null>(null),
   ruleForm = ref<any | null>(null),
   ruleSaving = ref(false),
-  ruleOrderPending = ref(false),
-  bindings = ref<Record<string, string>>({}),
-  outboundOrder = ref<string[]>([]),
-  preview = ref(""),
-  previewingBinding = ref("");
+  ruleOrderPending = ref(false);
 const types = [
     "udp",
     "tcp",
@@ -77,17 +69,8 @@ const types = [
     "local",
     "hosts",
     "dhcp",
-    "fakeip",
     "rcode",
   ],
-  strategyDNSServerTypes = new Set([
-    "udp",
-    "tcp",
-    "tls",
-    "https",
-    "quic",
-    "h3",
-  ]),
   conditions = [
     "domain",
     "domain_suffix",
@@ -154,19 +137,15 @@ const show = (s: string, t: "success" | "error" = "success") => {
 };
 async function load() {
   try {
-    const [a, b, c, d, e] = await Promise.all([
+    const [a, b, c, d] = await Promise.all([
       request("/api/v1/dns/servers"),
       request("/api/v1/dns/rules"),
       request("/api/v1/dns/global"),
       request("/api/v1/collections").catch(() => []),
-      request("/api/v1/dns/outbound-bindings/order").catch(() => ({
-        outbounds: [],
-      })),
     ]);
     servers.value = Array.isArray(a) ? a : [];
     rules.value = Array.isArray(b) ? b : [];
     collections.value = Array.isArray(d) ? d : [];
-    outboundOrder.value = Array.isArray(e?.outbounds) ? e.outbounds : [];
     Object.assign(global.value, c || {});
   } catch (e: any) {
     show(`加载失败: ${e.message}`, "error");
@@ -180,19 +159,8 @@ const detours = computed(() => [
     "proxy",
     ...collections.value.filter((x) => x.enabled).map((x) => x.name),
   ]),
-  targets = computed(() => {
-    const available = detours.value.filter(Boolean);
-    return [
-      ...outboundOrder.value.filter((item) => available.includes(item)),
-      ...available.filter((item) => !outboundOrder.value.includes(item)),
-    ];
-  }),
-  bindingRule = (x: string) =>
-    rules.value.find(
-      (rule) => isDNSOutboundBinding(rule) && dnsRuleOutbounds(rule).includes(x),
-    ),
   matchingRules = computed(() =>
-    rules.value.filter((rule) => !isDNSOutboundBinding(rule)),
+    rules.value.filter((rule) => !hasLegacyOutboundCondition(rule)),
   ),
   conditionText = (r: Rule) => {
     try {
@@ -204,6 +172,14 @@ const detours = computed(() => [
       return "(空)";
     }
   };
+function hasLegacyOutboundCondition(rule: Rule) {
+  try {
+    const conditions = JSON.parse(rule.conditions_json || "{}");
+    return Object.prototype.hasOwnProperty.call(conditions, "outbound");
+  } catch {
+    return false;
+  }
+}
 async function saveGlobal() {
   try {
     await request("/api/v1/dns/global", {
@@ -320,7 +296,7 @@ async function moveRule(index: number, direction: -1 | 1) {
   if (!reordered) return;
   let nextRuleIndex = 0;
   const next = rules.value.map((rule) =>
-    isDNSOutboundBinding(rule) ? rule : reordered[nextRuleIndex++],
+    hasLegacyOutboundCondition(rule) ? rule : reordered[nextRuleIndex++],
   );
   ruleOrderPending.value = true;
   rules.value = next;
@@ -335,105 +311,6 @@ async function moveRule(index: number, direction: -1 | 1) {
     await load();
   } finally {
     ruleOrderPending.value = false;
-  }
-}
-async function moveBinding(index: number, direction: -1 | 1) {
-  const next = swapped(targets.value, index, direction);
-  if (!next) return;
-  outboundOrder.value = next;
-  try {
-    await request("/api/v1/dns/outbound-bindings/reorder", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ outbounds: next }),
-    });
-  } catch (e: any) {
-    show(`策略 DNS 绑定排序失败: ${e.message}`, "error");
-    await load();
-  }
-}
-async function saveBinding(x: string) {
-  const old = bindingRule(x),
-    server = bindings.value[x] ?? old?.server ?? "";
-  try {
-    if (!server) {
-      if (old)
-        await request(`/api/v1/dns/rules/${old.id}`, { method: "DELETE" });
-    } else
-      await request(old ? `/api/v1/dns/rules/${old.id}` : "/api/v1/dns/rules", {
-        method: old ? "PUT" : "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          enabled: true,
-          priority: old?.priority || 0,
-          rule_type: "default",
-          conditions: { outbound: [x] },
-          server,
-          disable_cache: old?.disable_cache || false,
-          rewrite_ttl: old?.rewrite_ttl || 0,
-          client_subnet: old?.client_subnet || "",
-        }),
-      });
-    show(`${x} 的策略 DNS 绑定已保存`);
-    await load();
-  } catch (e: any) {
-    show(`保存策略 DNS 绑定失败: ${e.message}`, "error");
-  }
-}
-async function previewBinding(outbound: string) {
-  const persistedServer = bindingRule(outbound)?.server ?? "";
-  const selectedServer = bindings.value[outbound] ?? persistedServer;
-  if (!selectedServer) {
-    show("请先选择并保存策略 DNS 绑定", "error");
-    return;
-  }
-  if (selectedServer !== persistedServer) {
-    show("DNS Server 选择尚未保存，请保存绑定后再预览", "error");
-    return;
-  }
-
-  previewingBinding.value = outbound;
-  try {
-    const config = await request("/api/v1/config/preview"),
-      generatedRules: Record<string, any>[] = Array.isArray(config?.dns?.rules)
-        ? config.dns.rules
-        : [],
-      requiredRuleSets = new Set<string>();
-    for (const rule of generatedRules) {
-      const tags = Array.isArray(rule?.rule_set)
-        ? rule.rule_set
-        : typeof rule?.rule_set === "string"
-          ? [rule.rule_set]
-          : [];
-      for (const tag of tags) requiredRuleSets.add(tag);
-    }
-    const routeRuleSets = Array.isArray(config?.route?.rule_set)
-      ? config.route.rule_set.filter((ruleSet: Record<string, any>) =>
-          requiredRuleSets.has(ruleSet?.tag),
-        )
-      : [];
-    const output: Record<string, any> = { dns: config?.dns || {} };
-    if (config?.route?.default_domain_resolver) {
-      output.route = {
-        default_domain_resolver: config.route.default_domain_resolver,
-      };
-    }
-    if (routeRuleSets.length) {
-      output.route = { ...(output.route || {}), rule_set: routeRuleSets };
-    }
-    const hijackRules = Array.isArray(config?.route?.rules)
-      ? config.route.rules.filter(
-          (rule: Record<string, any>) => rule?.action === "hijack-dns",
-        )
-      : [];
-    if (hijackRules.length) {
-      output.route = { ...(output.route || {}), rules: hijackRules };
-    }
-    preview.value = JSON.stringify(output, null, 2);
-  } catch (e: any) {
-    show(`生成策略 DNS 预览失败: ${e.message}`, "error");
-  } finally {
-    previewingBinding.value = "";
   }
 }
 function newRule() {
@@ -561,7 +438,7 @@ onMounted(load);
             >默认 Server<select v-model="global.final">
               <option value="">请选择</option>
               <option
-                v-for="s in servers.filter((x) => x.enabled)"
+                v-for="s in servers.filter((x) => x.enabled && x.server_type !== 'fakeip')"
                 :value="s.tag"
               >
                 {{ s.tag }}
@@ -611,7 +488,8 @@ onMounted(load);
         </div>
         <p class="mt-2 text-xs text-[var(--text-tertiary)]">
           FakeIP 由运行模式自动管理：TUN / TUN + Mixed 启用，Mixed 停用。
-          用户 DNS 规则按页面顺序优先匹配，未命中的 A/AAAA 查询才使用 FakeIP。
+          显式 DNS 规则用于国内和局域网等真实 IP 例外；TUN 未命中的 A/AAAA
+          查询使用 FakeIP，其余真实查询统一经过安全 DNS final。
         </p>
         <div class="mt-3 grid gap-3 md:grid-cols-3">
           <input v-model="global.fakeip_inet4_range" /><input
@@ -713,90 +591,12 @@ onMounted(load);
       <section
         class="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
       >
-        <h3 class="font-semibold">策略 DNS 绑定</h3>
-        <p class="mt-1 text-xs text-[var(--text-tertiary)]">
-          规则模式下复用策略关联路由规则的域名、GeoSite 和 rule_set 条件生成
-          dns.rules，并为 DNS Server 生成强制经过该策略的独立 detour，防止代理域名
-          DNS 查询直连泄漏。
-        </p>
-        <div class="aw-data-table-wrap mt-4">
-          <table class="aw-data-table min-w-[760px]">
-            <thead>
-              <tr>
-                <th>排序</th>
-                <th>策略</th>
-                <th>DNS 服务器</th>
-                <th>绑定状态</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="(x, i) in targets" :key="x">
-                <td>
-                  <OrderButtons
-                    :up-disabled="i === 0"
-                    :down-disabled="i === targets.length - 1"
-                    @up="moveBinding(i, -1)"
-                    @down="moveBinding(i, 1)"
-                  />
-                </td>
-                <td>{{ x }}</td>
-                <td>
-                  <select
-                    :value="bindings[x] ?? bindingRule(x)?.server ?? ''"
-                    @change="
-                      bindings[x] = ($event.target as HTMLSelectElement).value
-                    "
-                  >
-                    <option value="">不绑定</option>
-                    <option
-                      v-for="s in servers.filter(
-                        (s) =>
-                          s.enabled && strategyDNSServerTypes.has(s.server_type),
-                      )"
-                      :value="s.tag"
-                    >
-                      {{ s.tag }}
-                    </option>
-                  </select>
-                </td>
-                <td>
-                  {{
-                    bindingRule(x)
-                      ? `策略绑定 #${bindingRule(x)?.id}`
-                      : "未生成"
-                  }}
-                </td>
-                <td>
-                  <div class="flex gap-2">
-                    <button
-                      class="aw-action-button aw-action-neutral"
-                      :disabled="previewingBinding === x"
-                      @click="previewBinding(x)"
-                    >
-                      {{ previewingBinding === x ? "生成中..." : "预览" }}</button
-                    ><button
-                      class="aw-action-button aw-action-success"
-                      @click="saveBinding(x)"
-                    >
-                      保存绑定
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-      <section
-        class="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
-      >
         <header class="flex items-center justify-between gap-3">
           <div>
             <h3 class="font-semibold">DNS 规则</h3>
             <p class="mt-1 text-xs text-[var(--text-tertiary)]">
-              从上到下匹配；策略 DNS 绑定在上方单独管理，TUN 模式下 FakeIP
-              是列表之后的最终兜底。
+              从上到下匹配，适合配置国内、局域网等需要真实 IP 的例外；TUN
+              模式下 FakeIP 位于这些显式规则之后。
             </p>
           </div>
           <button class="aw-action-button aw-action-neutral" @click="newRule">
@@ -878,14 +678,10 @@ onMounted(load);
       v-if="ruleForm"
       :form="ruleForm"
       :conditions="conditions"
-      :servers="servers.filter((server) => server.enabled)"
-      :fake-i-p-enabled="global.fakeip_enabled"
+      :servers="servers.filter((server) => server.enabled && server.server_type !== 'fakeip')"
       :saving="ruleSaving"
       @close="ruleForm = null"
       @save="saveRule"
     />
-    <div v-if="preview" class="aw-modal-backdrop" @click="preview = ''">
-      <pre class="aw-modal-panel max-w-3xl p-5" @click.stop>{{ preview }}</pre>
-    </div>
   </div>
 </template>

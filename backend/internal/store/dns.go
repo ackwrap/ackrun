@@ -105,31 +105,6 @@ func (s *Store) ReorderDNSServers(ids []int64) error {
 	return tx.Commit()
 }
 
-func (s *Store) GetDNSOutboundBindingOrder() ([]string, error) {
-	var value string
-	err := s.db.QueryRow(`SELECT value FROM app_settings WHERE key = 'dns.outbound_binding_order'`).Scan(&value)
-	if err == sql.ErrNoRows {
-		return []string{}, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var outbounds []string
-	if err := json.Unmarshal([]byte(value), &outbounds); err != nil {
-		return nil, err
-	}
-	return outbounds, nil
-}
-
-func (s *Store) SetDNSOutboundBindingOrder(outbounds []string) error {
-	data, err := json.Marshal(outbounds)
-	if err != nil {
-		return err
-	}
-	_, err = s.db.Exec(`INSERT INTO app_settings (key, value, updated_at) VALUES ('dns.outbound_binding_order', ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`, string(data), time.Now().Unix())
-	return err
-}
-
 // DNS Rules
 
 func (s *Store) ListDNSRules() ([]model.DNSRule, error) {

@@ -59,10 +59,6 @@ type DNSRuleRequest struct {
 	ClientSubnet string                 `json:"client_subnet"`
 }
 
-type DNSOutboundBindingOrder struct {
-	Outbounds []string `json:"outbounds"`
-}
-
 // DNSGlobalSettings DNS 全局设置（复用现有 settings 表）
 type DNSGlobalSettings struct {
 	Enabled          bool   `json:"enabled"`

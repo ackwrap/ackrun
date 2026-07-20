@@ -29,10 +29,12 @@ var ErrInvalidConfigFileName = errors.New("配置文件名无效")
 
 const (
 	defaultRuleSetHTTPClientTag = "ackwrap-rule-set-direct"
-	defaultTUNIPv4Address       = "172.254.0.1/30"
-	defaultTUNIPv6Address       = "fdfe:dcba:9876::1/126"
+	defaultTUNIPv4Address       = "172.31.255.1/30"
+	defaultTUNIPv6Address       = "fdfe:dcba:9875::1/126"
 	defaultAutoRedirectMark     = 0x2024
 	legacyDefaultTUNIPv4Address = "172.19.0.1/30"
+	previousDefaultTUNIPv4      = "172.254.0.1/30"
+	previousDefaultTUNIPv6      = "fdfe:dcba:9876::1/126"
 )
 
 // ConfigGeneratorService 配置生成服务
@@ -88,6 +90,8 @@ func (s *ConfigGeneratorService) GenerateCurrent() (*model.ConfigGenerateRespons
 
 // GetGenerateRequest 返回最近一次校验通过的生成参数。
 func (s *ConfigGeneratorService) GetGenerateRequest() (*model.ConfigGenerateRequest, error) {
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
 	return s.previewRequest("")
 }
 
@@ -106,9 +110,9 @@ func (s *ConfigGeneratorService) ReconcileCurrent() (*model.ConfigGenerateRespon
 }
 
 func (s *ConfigGeneratorService) generateCurrentLocked() (*model.ConfigGenerateResponse, error) {
-	req, err := s.store.GetConfigGenerateRequest()
+	req, err := s.loadConfigGenerateRequest()
 	if err != nil {
-		return nil, fmt.Errorf("读取配置生成参数失败: %w", err)
+		return nil, err
 	}
 	if req == nil {
 		req = &model.ConfigGenerateRequest{
@@ -121,6 +125,22 @@ func (s *ConfigGeneratorService) generateCurrentLocked() (*model.ConfigGenerateR
 		}
 	}
 	return s.generateLocked(req)
+}
+
+func (s *ConfigGeneratorService) loadConfigGenerateRequest() (*model.ConfigGenerateRequest, error) {
+	req, migrated, err := s.store.MigrateConfigGenerateRequestTUNAddresses(
+		previousDefaultTUNIPv4,
+		defaultTUNIPv4Address,
+		previousDefaultTUNIPv6,
+		defaultTUNIPv6Address,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("读取配置生成参数失败: %w", err)
+	}
+	if migrated {
+		logging.Info("config_generator.migrate", "已迁移旧默认 TUN 地址")
+	}
+	return req, nil
 }
 
 func (s *ConfigGeneratorService) generateLocked(req *model.ConfigGenerateRequest) (*model.ConfigGenerateResponse, error) {
@@ -525,25 +545,54 @@ func (s *ConfigGeneratorService) dnsRequiresUsableProxy(defaultOutbound string) 
 	if err != nil || settings == nil || !settings.Enabled {
 		return false, err
 	}
-	proxyMode := s.store.GetProxyMode()
-	if proxyMode == "global" || (proxyMode == "rule" && defaultOutbound == "proxy") {
-		return true, nil
-	}
-	rules, err := s.store.ListDNSRules()
+	required, err := s.dnsNeedsProxyFinal(defaultOutbound)
 	if err != nil {
 		return false, err
 	}
-	if err := validateEnabledDNSRuleConditions(rules); err != nil {
+	if required {
+		return true, nil
+	}
+	servers, err := s.store.ListDNSServers()
+	if err != nil {
 		return false, err
 	}
-	for _, rule := range rules {
-		if !rule.Enabled {
-			continue
-		}
-		conditions := decodeDNSRuleConditions(rule.ConditionsJSON)
-		outbounds := dnsRuleOutboundConditions(conditions)
-		if isDNSStrategyBindingConditions(conditions) && len(outbounds) == 1 && outbounds[0] == "proxy" {
+	for _, server := range servers {
+		if server.Enabled && server.Detour == "proxy" {
 			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (s *ConfigGeneratorService) dnsNeedsProxyFinal(defaultOutbound string) (bool, error) {
+	switch s.store.GetProxyMode() {
+	case "global":
+		return true, nil
+	case "direct":
+		return false, nil
+	case "rule":
+		if defaultOutbound != "" && defaultOutbound != "direct" {
+			return true, nil
+		}
+		rules, err := s.store.ListRouteRules()
+		if err != nil {
+			return false, fmt.Errorf("读取 DNS 防泄漏关联路由规则失败: %w", err)
+		}
+		overrides, err := s.routeRuleOutboundOverrides()
+		if err != nil {
+			return false, err
+		}
+		for _, rule := range rules {
+			if !rule.Enabled || rule.Outbound == "block" || rule.Outbound == "reject" {
+				continue
+			}
+			outbound := rule.Outbound
+			if override, exists := overrides[rule.ID]; exists {
+				outbound = override
+			}
+			if outbound != "" && outbound != "direct" {
+				return true, nil
+			}
 		}
 	}
 	return false, nil
@@ -1143,38 +1192,10 @@ func mapMihomoUDPFlagToSingboxNetwork(nodeData map[string]interface{}) {
 	}
 }
 
-func dnsStrategyBindings(dnsRules []model.DNSRule, serverTags map[string]bool) map[string]model.DNSRule {
-	bindings := make(map[string]model.DNSRule)
-	for _, rule := range dnsRules {
-		if !rule.Enabled || rule.Server == "" {
-			continue
-		}
-		if !serverTags[rule.Server] {
-			logging.Info("config_generator.dns", "跳过引用无效 DNS server 的策略绑定: %s", rule.Server)
-			continue
-		}
-		conditions := decodeDNSRuleConditions(rule.ConditionsJSON)
-		if !isDNSStrategyBindingConditions(conditions) {
-			continue
-		}
-		for _, outbound := range dnsRuleOutboundConditions(conditions) {
-			if outbound == "" || outbound == "block" {
-				continue
-			}
-			if _, exists := bindings[outbound]; exists {
-				logging.Info("config_generator.dns", "策略 %s 绑定了多个 DNS server，保留第一个", outbound)
-				continue
-			}
-			bindings[outbound] = rule
-		}
-	}
-	return bindings
-}
-
 func enabledDNSServerTags(servers []model.DNSServer, fakeIPEnabled bool) map[string]bool {
 	tags := make(map[string]bool)
 	for _, server := range servers {
-		if server.Enabled && server.Tag != "" && (fakeIPEnabled || server.ServerType != "fakeip") {
+		if server.Enabled && server.Tag != "" && server.ServerType != "fakeip" {
 			tags[server.Tag] = true
 		}
 	}
@@ -1557,6 +1578,12 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase(routeFinal ...string) (
 	}
 	servers := []map[string]interface{}{}
 	serverTags := enabledDNSServerTags(dnsServers, globalSettings.FakeIPEnabled)
+	fakeIPServerTags := map[string]bool{"fakeip": true}
+	for _, server := range dnsServers {
+		if server.ServerType == "fakeip" {
+			fakeIPServerTags[server.Tag] = true
+		}
+	}
 	bootstrapTag := selectDNSBootstrapTag(dnsServers)
 	generatedBootstrapTag := ""
 	if bootstrapTag == "" {
@@ -1564,13 +1591,9 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase(routeFinal ...string) (
 		bootstrapTag = generatedBootstrapTag
 		serverTags[bootstrapTag] = true
 	}
-	hasFakeIPServer := false
 	for _, srv := range dnsServers {
-		if !srv.Enabled || (!globalSettings.FakeIPEnabled && srv.ServerType == "fakeip") {
+		if !srv.Enabled || srv.ServerType == "fakeip" {
 			continue
-		}
-		if srv.Tag == "fakeip" {
-			hasFakeIPServer = true
 		}
 		server := map[string]interface{}{
 			"tag":  srv.Tag,
@@ -1630,8 +1653,8 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase(routeFinal ...string) (
 			"type": "local",
 		})
 	}
-	// 3. 策略 DNS 绑定使用独立的 Server 实例，确保 DNS 查询本身经过
-	// 对应 direct/proxy/命名策略，而不是继承基础 Server 的静态 detour。
+	// 3. 读取显式 DNS 规则。旧版纯 outbound 策略绑定保留在数据库中，
+	// 但不再参与配置生成，避免每个业务策略复制一套本地 DNS。
 	dnsRules, err := s.store.ListDNSRules()
 	if err != nil {
 		return nil, fmt.Errorf("读取 DNS 规则失败: %w", err)
@@ -1639,52 +1662,27 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase(routeFinal ...string) (
 	if err := validateEnabledDNSRuleConditions(dnsRules); err != nil {
 		return nil, err
 	}
-	if err := s.validateActiveDNSStrategyRules(dnsRules, dnsServers); err != nil {
-		return nil, err
-	}
-	strategyBindings := dnsStrategyBindings(dnsRules, serverTags)
-	routeStrategyPlans := []dnsStrategyRulePlan{}
-	if s.store.GetProxyMode() == "rule" {
-		routeStrategyPlans, err = s.generateDNSStrategyRulePlans(strategyBindings)
-		if err != nil {
-			return nil, err
-		}
-	}
-	usedStrategyBindings := make([]dnsStrategyBindingUse, 0)
-	seenStrategyBindings := make(map[string]bool)
-	for _, plan := range routeStrategyPlans {
-		key := dnsStrategyServerKey(plan.Outbound, plan.Binding.Server)
-		if seenStrategyBindings[key] {
-			continue
-		}
-		seenStrategyBindings[key] = true
-		usedStrategyBindings = append(usedStrategyBindings, dnsStrategyBindingUse{Outbound: plan.Outbound, Binding: plan.Binding})
-	}
 	finalOutbound := ""
 	if len(routeFinal) > 0 {
 		finalOutbound = routeFinal[0]
 	}
-	finalBinding, hasFinalBinding := strategyBindings[finalOutbound]
-	if finalOutbound != "" && !hasFinalBinding {
-		fallbackServer := strategyDNSFallbackServerTag(globalSettings.Final, servers)
-		if fallbackServer == "" {
-			return nil, fmt.Errorf("route.final=%s 没有可用于防泄漏的远程 DNS Server，请启用 udp/tcp/tls/https/quic/h3 DNS", finalOutbound)
-		}
-		finalBinding = model.DNSRule{Enabled: true, Server: fallbackServer}
-		hasFinalBinding = true
-		logging.Info("config_generator.dns", "route.final=%s 未显式绑定 DNS，使用 %s 生成同出站 DNS final", finalOutbound, fallbackServer)
-	}
-	finalStrategyKey := dnsStrategyServerKey(finalOutbound, finalBinding.Server)
-	if hasFinalBinding && !seenStrategyBindings[finalStrategyKey] {
-		usedStrategyBindings = append(usedStrategyBindings, dnsStrategyBindingUse{Outbound: finalOutbound, Binding: finalBinding})
-	}
-	strategyServers, strategyServerTags, err := generateDNSStrategyServers(servers, usedStrategyBindings, serverTags)
+	proxyFinalRequired, err := s.dnsNeedsProxyFinal(finalOutbound)
 	if err != nil {
 		return nil, err
 	}
-	servers = append(servers, strategyServers...)
+	proxyFinalServer := ""
+	if proxyFinalRequired {
+		generatedServer, finalServer, err := generateProxyDNSFinal(globalSettings.Final, servers, serverTags)
+		if err != nil {
+			return nil, err
+		}
+		if generatedServer != nil {
+			servers = append(servers, generatedServer)
+		}
+		proxyFinalServer = finalServer
+	}
 
-	if globalSettings.FakeIPEnabled && !hasFakeIPServer {
+	if globalSettings.FakeIPEnabled {
 		fakeIP := map[string]interface{}{
 			"tag":  "fakeip",
 			"type": "fakeip",
@@ -1702,11 +1700,15 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase(routeFinal ...string) (
 		return nil, nil
 	}
 
-	// 4. 生成手工 DNS rules。outbound 仅用于纯策略绑定，实际的域名条件
-	// 由关联路由规则派生，避免手工条件与真实路由出站不一致。
+	// 4. 显式规则用于国内、局域网等真实 IP 例外。TUN 客户端未命中的
+	// A/AAAA 查询随后使用 FakeIP；其他查询进入统一 DNS final。
 	rules := []map[string]interface{}{}
 	for _, rule := range dnsRules {
 		if !rule.Enabled {
+			continue
+		}
+		if fakeIPServerTags[rule.Server] {
+			logging.Info("config_generator.dns", "忽略旧版显式 FakeIP DNS 规则: %d", rule.ID)
 			continue
 		}
 		if !serverTags[rule.Server] {
@@ -1715,6 +1717,7 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase(routeFinal ...string) (
 		}
 		conditions := normalizeDNSRuleConditions(decodeDNSRuleConditions(rule.ConditionsJSON))
 		if _, hasOutbound := conditions["outbound"]; hasOutbound {
+			logging.Info("config_generator.dns", "忽略旧版策略 DNS 绑定规则: %d", rule.ID)
 			continue
 		}
 		if len(conditions) == 0 {
@@ -1722,31 +1725,21 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase(routeFinal ...string) (
 		}
 		rules = append(rules, dnsRuleMap(conditions, &rule))
 	}
-	for _, plan := range routeStrategyPlans {
-		settings := plan.Binding
-		settings.Server = strategyServerTags[dnsStrategyServerKey(plan.Outbound, plan.Binding.Server)]
-		if settings.Server == "" {
-			continue
-		}
-		rules = append(rules, dnsRuleMap(plan.Conditions, &settings))
-	}
 	if globalSettings.FakeIPEnabled {
 		rules = append(rules, map[string]interface{}{
+			"inbound":    []string{"tun-in"},
 			"query_type": []string{"A", "AAAA"},
 			"server":     "fakeip",
 		})
 	}
 
-	// 5. 组装完整 DNS 配置。路由最终出站存在策略 DNS 绑定时，未命中
-	// DNS 规则的查询也必须使用同一出站，不能回退到可能直连的基础 Server。
+	// 5. 代理模式存在非直连路由时，所有未命中显式例外的真实查询统一经
+	// proxy 出站，代理不可用时由出站与 detour 校验 fail closed。
 	finalServer := globalSettings.Final
-	if finalOutbound != "" {
-		finalServer = strategyServerTags[finalStrategyKey]
-		if finalServer == "" {
-			return nil, fmt.Errorf("route.final=%s 未生成防泄漏 DNS final", finalOutbound)
-		}
+	if proxyFinalRequired {
+		finalServer = proxyFinalServer
 	}
-	if !serverTags[finalServer] {
+	if fakeIPServerTags[finalServer] || !serverTags[finalServer] {
 		finalServer = servers[0]["tag"].(string)
 		logging.Info("config_generator.dns", "DNS final 引用无效，回退到: %s", finalServer)
 	}
@@ -1788,148 +1781,30 @@ func dnsRuleMap(conditions map[string]interface{}, settings *model.DNSRule) map[
 	return ruleMap
 }
 
-type dnsStrategyRulePlan struct {
-	Outbound   string
-	Binding    model.DNSRule
-	Conditions map[string]interface{}
-}
-
-func (s *ConfigGeneratorService) validateActiveDNSStrategyRules(dnsRules []model.DNSRule, dnsServers []model.DNSServer) error {
-	serverByTag := make(map[string]model.DNSServer, len(dnsServers))
-	for _, server := range dnsServers {
-		serverByTag[server.Tag] = server
+func generateProxyDNSFinal(preferred string, servers []map[string]interface{}, serverTags map[string]bool) (map[string]interface{}, string, error) {
+	baseTag := strategyDNSFallbackServerTag(preferred, servers)
+	if baseTag == "" {
+		return nil, "", fmt.Errorf("DNS 防泄漏没有可用远程 Server，请启用 udp/tcp/tls/https/quic/h3 DNS")
 	}
-	validOutbounds := map[string]bool{"direct": true, "proxy": true}
-	collections, err := s.store.ListProxyCollections()
-	if err != nil {
-		return fmt.Errorf("读取策略组失败: %w", err)
-	}
-	for _, collection := range collections {
-		if collection.Enabled {
-			validOutbounds[collection.Name] = true
-		}
-	}
-	seenOutbounds := make(map[string]bool)
-	for _, rule := range dnsRules {
-		if !rule.Enabled {
+	for _, server := range servers {
+		if server["tag"] != baseTag {
 			continue
 		}
-		conditions, err := parseDNSRuleConditions(rule.ConditionsJSON)
-		if err != nil {
-			return fmt.Errorf("策略 DNS 规则 %d 条件无效: %w", rule.ID, err)
+		if server["detour"] == "proxy" {
+			return nil, baseTag, nil
 		}
-		if !dnsRuleHasOutboundCondition(conditions) {
-			continue
-		}
-		outbounds := dnsRuleOutboundConditions(conditions)
-		if len(outbounds) != 1 {
-			return fmt.Errorf("策略 DNS 规则 %d 必须且只能包含一个 outbound", rule.ID)
-		}
-		if !isDNSStrategyBindingConditions(conditions) {
-			return fmt.Errorf("策略 DNS 规则 %d 只能包含 outbound 条件", rule.ID)
-		}
-		outbound := strings.TrimSpace(outbounds[0])
-		if outbound == "" || outbound != outbounds[0] || outbound == "block" || outbound == "reject" || !validOutbounds[outbound] {
-			return fmt.Errorf("策略 DNS 规则 %d 引用了无效或未启用的 outbound %s", rule.ID, outbound)
-		}
-		if seenOutbounds[outbound] {
-			return fmt.Errorf("策略 %s 存在多个启用的 DNS 绑定", outbound)
-		}
-		seenOutbounds[outbound] = true
-		server, exists := serverByTag[rule.Server]
-		if !exists {
-			return fmt.Errorf("策略 DNS 规则 %d 引用的 DNS Server %s 不存在", rule.ID, rule.Server)
-		}
-		if !server.Enabled {
-			return fmt.Errorf("策略 DNS 规则 %d 引用了已停用的 DNS Server %s", rule.ID, rule.Server)
-		}
-		if !isStrategyDNSRemoteType(server.ServerType) {
-			return fmt.Errorf("DNS Server %s 类型 %s 不能用于防泄漏策略绑定，仅支持 udp/tcp/tls/https/quic/h3", rule.Server, server.ServerType)
-		}
-	}
-	return nil
-}
-
-type dnsStrategyBindingUse struct {
-	Outbound string
-	Binding  model.DNSRule
-}
-
-func dnsStrategyServerKey(outbound, server string) string {
-	return outbound + "\x00" + server
-}
-
-func (s *ConfigGeneratorService) generateDNSStrategyRulePlans(bindings map[string]model.DNSRule) ([]dnsStrategyRulePlan, error) {
-	if len(bindings) == 0 {
-		return nil, nil
-	}
-	routeRules, err := s.store.ListRouteRules()
-	if err != nil {
-		return nil, fmt.Errorf("读取策略关联路由规则失败: %w", err)
-	}
-	overrides, err := s.routeRuleOutboundOverrides()
-	if err != nil {
-		return nil, err
-	}
-	plans := make([]dnsStrategyRulePlan, 0)
-	for _, routeRule := range routeRules {
-		if !routeRule.Enabled || routeRule.Outbound == "block" {
-			continue
-		}
-		outbound := routeRule.Outbound
-		if override, exists := overrides[routeRule.ID]; exists {
-			outbound = override
-		}
-		binding, exists := bindings[outbound]
-		if !exists {
-			continue
-		}
-		for _, conditions := range dnsConditionsFromRouteRule(&routeRule) {
-			plans = append(plans, dnsStrategyRulePlan{Outbound: outbound, Binding: binding, Conditions: conditions})
-		}
-	}
-	logging.Info("config_generator.dns", "按策略关联路由规则生成 %d 条 DNS 规则", len(plans))
-	return plans, nil
-}
-
-func generateDNSStrategyServers(baseServers []map[string]interface{}, bindings []dnsStrategyBindingUse, serverTags map[string]bool) ([]map[string]interface{}, map[string]string, error) {
-	baseByTag := make(map[string]map[string]interface{}, len(baseServers))
-	for _, server := range baseServers {
-		if tag, _ := server["tag"].(string); tag != "" {
-			baseByTag[tag] = server
-		}
-	}
-	generated := make([]map[string]interface{}, 0, len(bindings))
-	strategyTags := make(map[string]string, len(bindings))
-	for _, binding := range bindings {
-		baseServer := baseByTag[binding.Binding.Server]
-		if baseServer == nil {
-			return nil, nil, fmt.Errorf("策略 %s 引用的 DNS Server %s 未生成", binding.Outbound, binding.Binding.Server)
-		}
-		serverType, _ := baseServer["type"].(string)
-		if !isStrategyDNSRemoteType(serverType) {
-			return nil, nil, fmt.Errorf("DNS Server %s 类型 %s 不能用于防泄漏策略绑定，仅支持 udp/tcp/tls/https/quic/h3", binding.Binding.Server, serverType)
-		}
-		baseTag := sanitizeOutboundTag(fmt.Sprintf("ackwrap-%s-via-%s", binding.Binding.Server, binding.Outbound))
-		if baseTag == "" {
-			baseTag = "ackwrap-strategy-dns"
-		}
-		tag := uniqueDNSServerTag(baseTag, serverTags)
+		tag := uniqueDNSServerTag("ackwrap-proxy-dns", serverTags)
 		serverTags[tag] = true
-		clone := make(map[string]interface{}, len(baseServer))
-		for key, value := range baseServer {
+		clone := make(map[string]interface{}, len(server))
+		for key, value := range server {
 			clone[key] = value
 		}
 		clone["tag"] = tag
-		if binding.Outbound == "direct" {
-			delete(clone, "detour")
-		} else {
-			clone["detour"] = binding.Outbound
-		}
-		generated = append(generated, clone)
-		strategyTags[dnsStrategyServerKey(binding.Outbound, binding.Binding.Server)] = tag
+		clone["detour"] = "proxy"
+		logging.Info("config_generator.dns", "使用 %s 生成统一代理 DNS final", baseTag)
+		return clone, tag, nil
 	}
-	return generated, strategyTags, nil
+	return nil, "", fmt.Errorf("DNS 防泄漏 Server %s 未生成", baseTag)
 }
 
 func isStrategyDNSRemoteType(serverType string) bool {
@@ -1959,53 +1834,6 @@ func strategyDNSFallbackServerTag(preferred string, servers []map[string]interfa
 		}
 	}
 	return ""
-}
-
-func dnsConditionsFromRouteRule(rule *model.RouteRule) []map[string]interface{} {
-	withInvert := func(conditions map[string]interface{}) map[string]interface{} {
-		if rule.Invert {
-			conditions["invert"] = true
-		}
-		return conditions
-	}
-	switch rule.RuleType {
-	case "domain", "domain_suffix", "domain_keyword":
-		return []map[string]interface{}{withInvert(map[string]interface{}{rule.RuleType: rule.Values})}
-	case "geosite":
-		return []map[string]interface{}{withInvert(map[string]interface{}{"rule_set": generatedGeoRuleSetTags("geosite", rule.Values)})}
-	case "rule_set":
-		return []map[string]interface{}{withInvert(map[string]interface{}{"rule_set": rule.Values})}
-	case "mixed":
-		items, err := parseMixedRouteRuleValues(rule.Values)
-		if err != nil {
-			logging.Info("config_generator.dns", "混合路由规则 %s 无法生成策略 DNS 条件: %v", rule.Name, err)
-			return nil
-		}
-		rules := make([]map[string]interface{}, 0)
-		indexes := make(map[string]int)
-		appendValue := func(key, value string) {
-			if index, exists := indexes[key]; exists {
-				values, _ := rules[index][key].([]string)
-				rules[index][key] = append(values, value)
-				return
-			}
-			indexes[key] = len(rules)
-			rules = append(rules, withInvert(map[string]interface{}{key: []string{value}}))
-		}
-		for _, item := range items {
-			switch item.RuleType {
-			case "domain", "domain_suffix", "domain_keyword":
-				appendValue(item.RuleType, item.Value)
-			case "geosite":
-				appendValue("rule_set", generatedGeoRuleSetTag("geosite", item.Value))
-			case "rule_set":
-				appendValue("rule_set", item.Value)
-			}
-		}
-		return rules
-	default:
-		return nil
-	}
 }
 
 func applyDNSServerAddress(server map[string]interface{}, serverType, address string) bool {
@@ -2144,17 +1972,9 @@ func validateEnabledDNSRuleConditions(rules []model.DNSRule) error {
 	return nil
 }
 
-func dnsRuleOutboundConditions(conditions map[string]interface{}) []string {
-	return dnsRuleStringConditions(conditions, "outbound")
-}
-
 func dnsRuleHasOutboundCondition(conditions map[string]interface{}) bool {
 	_, exists := conditions["outbound"]
 	return exists
-}
-
-func isDNSStrategyBindingConditions(conditions map[string]interface{}) bool {
-	return len(conditions) == 1 && len(dnsRuleOutboundConditions(conditions)) > 0
 }
 
 func dnsRuleStringConditions(conditions map[string]interface{}, key string) []string {
@@ -2535,6 +2355,12 @@ func generatedTUNInbound(autoRedirect bool, tunIPv4Address, tunIPv6Address strin
 }
 
 func normalizeTUNAddresses(ipv4Address, ipv6Address string) (string, string, error) {
+	if strings.TrimSpace(ipv4Address) == previousDefaultTUNIPv4 {
+		ipv4Address = defaultTUNIPv4Address
+	}
+	if strings.TrimSpace(ipv6Address) == previousDefaultTUNIPv6 {
+		ipv6Address = defaultTUNIPv6Address
+	}
 	normalizedIPv4, err := normalizeTUNAddress(ipv4Address, defaultTUNIPv4Address, false)
 	if err != nil {
 		return "", "", fmt.Errorf("TUN IPv4 地址无效: %w", err)
@@ -2622,9 +2448,9 @@ func (s *ConfigGeneratorService) Preview(defaultOutbound string) (map[string]int
 }
 
 func (s *ConfigGeneratorService) previewRequest(defaultOutbound string) (*model.ConfigGenerateRequest, error) {
-	stored, err := s.store.GetConfigGenerateRequest()
+	stored, err := s.loadConfigGenerateRequest()
 	if err != nil {
-		return nil, fmt.Errorf("读取配置生成参数失败: %w", err)
+		return nil, err
 	}
 	if stored == nil {
 		stored = &model.ConfigGenerateRequest{
@@ -2637,12 +2463,6 @@ func (s *ConfigGeneratorService) previewRequest(defaultOutbound string) (*model.
 		}
 	}
 	req := *stored
-	if strings.TrimSpace(req.TUNIPv4Address) == "" {
-		req.TUNIPv4Address = defaultTUNIPv4Address
-	}
-	if strings.TrimSpace(req.TUNIPv6Address) == "" {
-		req.TUNIPv6Address = defaultTUNIPv6Address
-	}
 	if defaultOutbound != "" {
 		req.DefaultOutbound = defaultOutbound
 	}

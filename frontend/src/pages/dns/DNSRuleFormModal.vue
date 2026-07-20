@@ -16,13 +16,13 @@ interface RuleForm {
 
 interface ServerOption {
   tag: string;
+  server_type: string;
 }
 
 const props = defineProps<{
   form: RuleForm;
   conditions: string[];
   servers: ServerOption[];
-  fakeIPEnabled: boolean;
   saving: boolean;
 }>();
 
@@ -75,12 +75,6 @@ const valueHelp = computed(() => {
           <option value="">请选择 Server</option>
           <option v-for="server in servers" :key="server.tag" :value="server.tag">
             {{ server.tag }}
-          </option>
-          <option
-            v-if="fakeIPEnabled && !servers.some((server) => server.tag === 'fakeip')"
-            value="fakeip"
-          >
-            fakeip
           </option>
         </select>
       </label>
