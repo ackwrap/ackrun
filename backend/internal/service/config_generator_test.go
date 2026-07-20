@@ -668,6 +668,28 @@ func TestGenerateNodeOutboundRemovesVLESSCipher(t *testing.T) {
 	}
 }
 
+func TestGenerateNodeOutboundNormalizesLegacyVLESSRealityOptions(t *testing.T) {
+	svc := &ConfigGeneratorService{}
+	outbound, err := svc.generateNodeOutbound(&model.Node{
+		Type:    "vless",
+		RawJSON: `{"type":"vless","server":"example.com","server_port":443,"uuid":"00000000-0000-0000-0000-000000000000","flow":"xtls-rprx-vision","tls":{"enabled":true,"server_name":"www.example.com","utls":{"enabled":true,"fingerprint":"chrome"}},"reality-opts":{"public-key":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","short-id":"01234567"},"network":"tcp"}`,
+	}, "reality-node", nil)
+	if err != nil {
+		t.Fatalf("generate Reality outbound: %v", err)
+	}
+	if _, exists := outbound["reality-opts"]; exists {
+		t.Fatalf("legacy reality-opts leaked into outbound: %+v", outbound)
+	}
+	tlsMap, ok := outbound["tls"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("missing TLS options: %+v", outbound)
+	}
+	reality, ok := tlsMap["reality"].(map[string]interface{})
+	if !ok || reality["public_key"] != "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" || reality["short_id"] != "01234567" {
+		t.Fatalf("unexpected Reality options: %+v", tlsMap)
+	}
+}
+
 func TestGenerateNodeOutboundRejectsNonZeroVMessAlterID(t *testing.T) {
 	service := &ConfigGeneratorService{}
 	node := &model.Node{

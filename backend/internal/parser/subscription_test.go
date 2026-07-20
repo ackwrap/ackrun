@@ -126,8 +126,16 @@ func TestParseAdvancedTransportFields(t *testing.T) {
 	if _, ok := cfg["grpc-opts"].(map[string]any); !ok {
 		t.Fatalf("missing grpc opts: %+v", cfg)
 	}
-	if _, ok := cfg["reality-opts"].(map[string]any); !ok {
-		t.Fatalf("missing reality opts: %+v", cfg)
+	if _, exists := cfg["reality-opts"]; exists {
+		t.Fatalf("legacy reality opts leaked into sing-box config: %+v", cfg)
+	}
+	tls, ok := cfg["tls"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing TLS options: %+v", cfg)
+	}
+	reality, ok := tls["reality"].(map[string]any)
+	if !ok || reality["public_key"] != "pub" || reality["short_id"] != "01" {
+		t.Fatalf("missing normalized reality options: %+v", cfg)
 	}
 
 	ss, err := ParseProxyURI("ss://aes-128-gcm:pass@example.com:8388?plugin=obfs-local%3Bobfs%3Dhttp%3Bobfs-host%3Dexample.com#SS-Plugin")

@@ -156,8 +156,32 @@ func normalizeToSingbox(cfg map[string]any, typ string) map[string]any {
 	delete(result, "client-fingerprint")
 	delete(result, "fingerprint")
 	delete(result, "certificate-sha256")
+	normalizeRealityOptions(result)
 
 	return result
+}
+
+func normalizeRealityOptions(result map[string]any) {
+	realityOpts, ok := result["reality-opts"].(map[string]any)
+	if !ok {
+		delete(result, "reality-opts")
+		return
+	}
+	delete(result, "reality-opts")
+	tls, ok := result["tls"].(map[string]any)
+	if !ok {
+		tls = map[string]any{}
+		result["tls"] = tls
+	}
+	tls["enabled"] = true
+	reality := map[string]any{"enabled": true}
+	if publicKey := firstNonEmpty(getString(realityOpts, "public-key"), getString(realityOpts, "public_key"), getString(realityOpts, "pbk")); publicKey != "" {
+		reality["public_key"] = publicKey
+	}
+	if shortID := firstNonEmpty(getString(realityOpts, "short-id"), getString(realityOpts, "short_id"), getString(realityOpts, "sid")); shortID != "" {
+		reality["short_id"] = shortID
+	}
+	tls["reality"] = reality
 }
 
 func moveKey(data map[string]any, from string, to string) {

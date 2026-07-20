@@ -1121,6 +1121,9 @@ func ensureRequiredOutboundTLS(nodeData map[string]interface{}, outboundType str
 
 func normalizeLegacyOutboundFields(nodeData map[string]interface{}, outboundType string) error {
 	outboundType = strings.ToLower(strings.TrimSpace(outboundType))
+	if err := normalizeLegacyRealityOptions(nodeData); err != nil {
+		return err
+	}
 	if cipher, exists := nodeData["cipher"]; exists {
 		switch outboundType {
 		case "vmess":
@@ -1174,6 +1177,37 @@ func normalizeLegacyOutboundFields(nodeData map[string]interface{}, outboundType
 		}
 	}
 	return fmt.Errorf("旧版 VMess alter_id 节点不受当前 sing-box 版本支持")
+}
+
+func normalizeLegacyRealityOptions(nodeData map[string]interface{}) error {
+	value, exists := nodeData["reality-opts"]
+	if !exists {
+		return nil
+	}
+	delete(nodeData, "reality-opts")
+	realityOpts, ok := value.(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("无法识别 Reality 配置")
+	}
+	tlsMap, ok := nodeData["tls"].(map[string]interface{})
+	if !ok {
+		tlsMap = map[string]interface{}{}
+		nodeData["tls"] = tlsMap
+	}
+	tlsMap["enabled"] = true
+	realityMap, ok := tlsMap["reality"].(map[string]interface{})
+	if !ok {
+		realityMap = map[string]interface{}{}
+		tlsMap["reality"] = realityMap
+	}
+	realityMap["enabled"] = true
+	if publicKey := firstStringValue(realityOpts, "public_key", "public-key", "pbk"); publicKey != "" {
+		realityMap["public_key"] = publicKey
+	}
+	if shortID := firstStringValue(realityOpts, "short_id", "short-id", "sid"); shortID != "" {
+		realityMap["short_id"] = shortID
+	}
+	return nil
 }
 
 func moveConfigField(data map[string]interface{}, source, target string) {
