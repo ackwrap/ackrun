@@ -6,11 +6,22 @@ Ackwrap 是一个本地优先的 sing-box 配置与运行管理 Web 控制台。
 
 ## 开发状态
 
-Ackwrap 当前仍处于快速开发阶段。很多功能、协议映射、sing-box 兼容细节、OpenWrt 工作流和前端交互仍在测试和调整中。在稳定版本发布前，可能会出现破坏性变更、功能不完整和配置边界问题。
+Ackwrap 首个公开测试版 `v0.0.1` 已发布。项目当前仍处于快速开发阶段，功能、协议映射、sing-box 兼容细节、OpenWrt 工作流和前端交互仍在持续测试和调整中。在稳定版本发布前，可能会出现破坏性变更、功能不完整和配置边界问题。
 
 当前更适合作为实验和开发测试使用，暂不建议直接用于生产环境。
 
 项目目标是方便在桌面、Linux、OpenWrt 类环境中迭代测试 sing-box 配置。项目包含 Go 后端、Vue 前端、SQLite 本地存储、WebSocket 实时事件，以及从 `ackwrap/sing-box-wrap` Release 下载 Ackwrap 定制版 sing-box 的安装器。
+
+## 测试版下载
+
+可从 [GitHub Releases](https://github.com/ackwrap/ackrun/releases/latest) 下载最新公开测试版。
+
+当前 `v0.0.1` 提供 OpenWrt x86_64 产物：
+
+- `ackwrap_0.0.1-1_x86_64.ipk`：包含 Ackwrap 服务、LuCI 集成和 iStoreOS 元数据的整合安装包。
+- `ackwrap-openwrt-amd64`：OpenWrt amd64 独立二进制文件。
+
+升级前请备份现有 Ackwrap 数据和配置。测试版可能包含不兼容的数据库、配置或运行行为变更。
 
 ## 功能
 

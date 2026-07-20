@@ -6,11 +6,22 @@ Ackwrap is a local-first web console for managing a custom sing-box runtime. It 
 
 ## Development Status
 
-Ackwrap is currently in active development. Many features, protocol mappings, sing-box compatibility details, OpenWrt workflows, and UI interactions are still being tested and refined. Expect breaking changes, incomplete behavior, and configuration edge cases before the project reaches a stable release.
+Ackwrap `v0.0.1`, the first public test release, is now available. The project remains in active development, and features, protocol mappings, sing-box compatibility details, OpenWrt workflows, and UI interactions are still being tested and refined. Expect breaking changes, incomplete behavior, and configuration edge cases before the project reaches a stable release.
 
 Use it for experimentation and development first. Production use is not recommended yet.
 
 The project is designed for iterative testing on desktop, Linux, and OpenWrt-like environments. It includes a Go backend, a Vue frontend, SQLite storage, WebSocket status events, and an installer that downloads Ackwrap's customized sing-box build from `ackwrap/sing-box-wrap` releases.
+
+## Test Release
+
+Download the latest public test release from [GitHub Releases](https://github.com/ackwrap/ackrun/releases/latest).
+
+The current `v0.0.1` release provides OpenWrt x86_64 artifacts:
+
+- `ackwrap_0.0.1-1_x86_64.ipk`: combined package containing the Ackwrap service, LuCI integration, and iStoreOS metadata.
+- `ackwrap-openwrt-amd64`: standalone OpenWrt amd64 binary.
+
+Back up existing Ackwrap data and configuration before upgrading. Test releases may introduce incompatible database, configuration, or runtime behavior changes.
 
 ## Features
 
