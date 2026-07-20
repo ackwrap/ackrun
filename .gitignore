@@ -41,3 +41,5 @@ Thumbs.db
 *.tmp
 /tmp/
 ackwrap.db
+dist/
+backend/.dev/
