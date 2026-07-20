@@ -18,8 +18,9 @@ export interface DNSBindingRule {
 }
 
 type JSONRequest = (url: string, init?: RequestInit) => Promise<unknown>;
+type DNSRuleWithConditions = Pick<DNSBindingRule, "conditions_json">;
 
-function ruleConditions(rule: DNSBindingRule): Record<string, unknown> {
+function ruleConditions(rule: DNSRuleWithConditions): Record<string, unknown> {
   try {
     const conditions = JSON.parse(rule.conditions_json || "{}");
     return conditions && typeof conditions === "object" ? conditions : {};
@@ -28,7 +29,7 @@ function ruleConditions(rule: DNSBindingRule): Record<string, unknown> {
   }
 }
 
-export function dnsRuleOutbounds(rule: DNSBindingRule): string[] {
+export function dnsRuleOutbounds(rule: DNSRuleWithConditions): string[] {
   const outbound = ruleConditions(rule).outbound;
   return Array.isArray(outbound)
     ? outbound.filter((value): value is string => typeof value === "string")
@@ -37,11 +38,18 @@ export function dnsRuleOutbounds(rule: DNSBindingRule): string[] {
       : [];
 }
 
+export function isDNSOutboundBinding(rule: DNSRuleWithConditions): boolean {
+  const conditions = ruleConditions(rule);
+  return Object.keys(conditions).length === 1 && dnsRuleOutbounds(rule).length > 0;
+}
+
 export function findDNSOutboundBinding(
   rules: DNSBindingRule[],
   outbound: string,
 ) {
-  return rules.find((rule) => dnsRuleOutbounds(rule).includes(outbound));
+  return rules.find(
+    (rule) => isDNSOutboundBinding(rule) && dnsRuleOutbounds(rule).includes(outbound),
+  );
 }
 
 function ruleBody(

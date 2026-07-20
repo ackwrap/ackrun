@@ -492,7 +492,7 @@ async function saveCol() {
         );
       } catch (e: any) {
         await load();
-        show(`策略组已保存，但 DNS 出口绑定失败: ${e.message}`, "error");
+        show(`策略组已保存，但策略 DNS 绑定失败: ${e.message}`, "error");
         return;
       }
     }
@@ -511,7 +511,7 @@ async function removeCol(x: Col) {
       await saveDNSOutboundBinding(json, dnsRules.value, x.name, x.name, "");
     } catch (e: any) {
       await load();
-      show(`策略组已删除，但 DNS 出口绑定清理失败: ${e.message}`, "error");
+      show(`策略组已删除，但策略 DNS 绑定清理失败: ${e.message}`, "error");
       return;
     }
   }
@@ -1179,7 +1179,7 @@ onMounted(load);
           启用此策略组
         </label>
         <label class="grid content-start gap-1.5 md:col-span-2">
-          <span class="aw-modal-label text-xs font-medium">DNS 出口绑定</span>
+          <span class="aw-modal-label text-xs font-medium">策略 DNS 绑定</span>
           <select v-model="colDNSServer" class="aw-input">
             <option value="">不绑定（使用默认 DNS）</option>
             <option
@@ -1193,8 +1193,8 @@ onMounted(load);
             </option>
           </select>
           <small class="text-[11px] text-[var(--text-tertiary)]">
-            用于该策略组节点出站的域名解析；DNS 本身走代理时会自动使用直连
-            bootstrap，避免循环依赖
+            复用该策略组关联路由规则的域名、GeoSite 和 rule_set 条件生成 DNS
+            规则；不会修改与其他策略组共享的节点
           </small>
         </label>
         <template v-if="colType === 'urltest'">

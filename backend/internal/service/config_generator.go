@@ -309,7 +309,6 @@ func redactConfigAccessTokens(value interface{}) interface{} {
 func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface{}, error) {
 	outbounds := []interface{}{}
 	endpoints := []interface{}{}
-	domainResolverBindings := s.dnsOutboundResolverBindings()
 	connectivitySettings, err := s.store.GetConnectivitySettings()
 	if err != nil {
 		return nil, nil, fmt.Errorf("读取连通性测速设置失败: %w", err)
@@ -320,7 +319,6 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface
 		"type": "direct",
 		"tag":  "direct",
 	}
-	applyDomainResolverBinding(directOutbound, domainResolverBindings["direct"])
 	outbounds = append(outbounds, directOutbound)
 
 	// 2. 获取所有启用的代理集合
@@ -393,15 +391,6 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface
 	for _, node := range nodes {
 		usedNodeUIDs[node.UID] = true
 	}
-	nodeDomainResolvers := collectionNodeDomainResolverBindings(collections, groupNodeUIDs, usedNodeUIDs, domainResolverBindings)
-	if resolver := domainResolverBindings["proxy"]; len(resolver) > 0 {
-		for _, node := range nodes {
-			if len(nodeDomainResolvers[node.UID]) == 0 {
-				nodeDomainResolvers[node.UID] = resolver
-			}
-		}
-	}
-
 	// 5. 为所有启用节点生成 outbound，供策略组和核心出口检测 API 复用。
 	nodeTags := buildNodeOutboundTags(nodes)
 	generatedNodeTags := make(map[string]string, len(nodeTags))
@@ -413,7 +402,7 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface
 		}
 
 		if node.Type == "wireguard" {
-			endpoint, err := s.generateWireGuardEndpoint(&node, nodeTags[node.UID], nodeDomainResolvers[node.UID])
+			endpoint, err := s.generateWireGuardEndpoint(&node, nodeTags[node.UID], nil)
 			if err != nil {
 				logging.Info("config_generator.node", "跳过节点 %s: %v", node.Name, err)
 				continue
@@ -422,7 +411,7 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface
 			generatedNodeTags[node.UID] = nodeTags[node.UID]
 			continue
 		}
-		nodeOutbound, err := s.generateNodeOutbound(&node, nodeTags[node.UID], nodeDomainResolvers[node.UID])
+		nodeOutbound, err := s.generateNodeOutbound(&node, nodeTags[node.UID], nil)
 		if err != nil {
 			logging.Info("config_generator.outbound", "节点 %s 生成失败: %v", node.Name, err)
 			continue
@@ -1000,59 +989,29 @@ func mapMihomoUDPFlagToSingboxNetwork(nodeData map[string]interface{}) {
 	}
 }
 
-func (s *ConfigGeneratorService) dnsOutboundResolverBindings() map[string]map[string]interface{} {
-	bindings := make(map[string]map[string]interface{})
-	globalSettings, err := s.effectiveDNSGlobalSettings()
-	if err != nil || globalSettings == nil || !globalSettings.Enabled {
-		return bindings
-	}
-	dnsServers, err := s.store.ListDNSServers()
-	if err != nil {
-		logging.Info("config_generator.dns", "读取 DNS server 失败: %v", err)
-		return bindings
-	}
-	serverTags := enabledDNSServerTags(dnsServers, globalSettings.FakeIPEnabled)
-	dnsRules, err := s.store.ListDNSRules()
-	if err != nil {
-		logging.Info("config_generator.dns", "读取 DNS 出口绑定失败: %v", err)
-		return bindings
-	}
+func dnsStrategyBindings(dnsRules []model.DNSRule, serverTags map[string]bool) map[string]model.DNSRule {
+	bindings := make(map[string]model.DNSRule)
 	for _, rule := range dnsRules {
 		if !rule.Enabled || rule.Server == "" {
 			continue
 		}
 		if !serverTags[rule.Server] {
-			logging.Info("config_generator.dns", "跳过引用无效 DNS server 的 outbound 绑定: %s", rule.Server)
+			logging.Info("config_generator.dns", "跳过引用无效 DNS server 的策略绑定: %s", rule.Server)
 			continue
 		}
 		conditions := decodeDNSRuleConditions(rule.ConditionsJSON)
+		if !isDNSStrategyBindingConditions(conditions) {
+			continue
+		}
 		for _, outbound := range dnsRuleOutboundConditions(conditions) {
 			if outbound == "" || outbound == "block" {
 				continue
 			}
 			if _, exists := bindings[outbound]; exists {
-				logging.Info("config_generator.dns", "outbound %s 绑定了多个 DNS server，保留第一个", outbound)
+				logging.Info("config_generator.dns", "策略 %s 绑定了多个 DNS server，保留第一个", outbound)
 				continue
 			}
-			resolverTag := safeNodeResolverTag(rule.Server, dnsServers, serverTags)
-			if resolverTag == "" {
-				logging.Info("config_generator.dns", "跳过无法安全引导的 outbound DNS 绑定: %s", rule.Server)
-				continue
-			}
-			if resolverTag != rule.Server {
-				logging.Info("config_generator.dns", "outbound DNS server %s 依赖代理 detour，节点解析回退到直连 bootstrap: %s", rule.Server, resolverTag)
-			}
-			resolver := map[string]interface{}{"server": resolverTag}
-			if rule.DisableCache {
-				resolver["disable_cache"] = true
-			}
-			if rule.RewriteTTL > 0 {
-				resolver["rewrite_ttl"] = rule.RewriteTTL
-			}
-			if rule.ClientSubnet != "" {
-				resolver["client_subnet"] = rule.ClientSubnet
-			}
-			bindings[outbound] = resolver
+			bindings[outbound] = rule
 		}
 	}
 	return bindings
@@ -1078,54 +1037,6 @@ func (s *ConfigGeneratorService) effectiveDNSGlobalSettings() (*model.DNSGlobalS
 	}
 	applyTUNManagedFakeIP(settings, s.store.GetInboundMode())
 	return settings, nil
-}
-
-func collectionNodeDomainResolverBindings(collections []*model.ProxyCollectionWithNodes, groupNodeUIDs map[int64][]string, usedNodeUIDs map[string]bool, bindings map[string]map[string]interface{}) map[string]map[string]interface{} {
-	nodeResolvers := make(map[string]map[string]interface{})
-	hasProxyCollection := false
-	for _, col := range collections {
-		if !col.Enabled {
-			continue
-		}
-		if col.Name == "proxy" {
-			hasProxyCollection = true
-		}
-		resolver := bindings[col.Name]
-		if len(resolver) == 0 {
-			continue
-		}
-		for _, uid := range collectionNodeUIDs(col, groupNodeUIDs) {
-			if _, exists := nodeResolvers[uid]; !exists {
-				nodeResolvers[uid] = resolver
-			}
-		}
-	}
-	if resolver := bindings["proxy"]; len(resolver) > 0 && !hasProxyCollection {
-		for uid := range usedNodeUIDs {
-			if _, exists := nodeResolvers[uid]; !exists {
-				nodeResolvers[uid] = resolver
-			}
-		}
-	}
-	return nodeResolvers
-}
-
-func collectionNodeUIDs(col *model.ProxyCollectionWithNodes, groupNodeUIDs map[int64][]string) []string {
-	if !isCollectionGroupSource(col.SourceType) {
-		return col.NodeUIDs
-	}
-	uids := make([]string, 0)
-	seen := make(map[string]bool)
-	for _, group := range col.ReferencedGroups {
-		for _, uid := range groupNodeUIDs[group.ID] {
-			if seen[uid] {
-				continue
-			}
-			seen[uid] = true
-			uids = append(uids, uid)
-		}
-	}
-	return uids
 }
 
 func applyDomainResolverBinding(outbound map[string]interface{}, resolver map[string]interface{}) {
@@ -1236,10 +1147,10 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 
 	// 获取代理模式
 	proxyMode := s.store.GetProxyMode()
+	apiToken := strings.TrimSpace(os.Getenv("ACKWRAP_API_TOKEN"))
+	apiBaseURL := internalAPIBaseURL()
 
 	if proxyMode == "rule" {
-		apiToken := strings.TrimSpace(os.Getenv("ACKWRAP_API_TOKEN"))
-		apiBaseURL := internalAPIBaseURL()
 		// 规则模式：加载所有启用的规则
 		rules, err := s.store.ListRouteRules()
 		if err != nil {
@@ -1301,6 +1212,21 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 		}
 	}
 	// 全局模式和直连模式不加载规则
+	// DNS 的 GeoSite 匹配也依赖 route.rule_set；即使不是规则模式也要注入。
+	if dnsSettings, _ := s.effectiveDNSGlobalSettings(); dnsSettings != nil && dnsSettings.Enabled {
+		dnsRules, err := s.store.ListDNSRules()
+		if err != nil {
+			return nil, err
+		}
+		for _, rule := range dnsRules {
+			if !rule.Enabled {
+				continue
+			}
+			conditions := decodeDNSRuleConditions(rule.ConditionsJSON)
+			geositeValues := dnsRuleStringConditions(conditions, "geosite")
+			ruleSets = appendGeneratedGeoRuleSets(ruleSets, ruleSetTags, "geosite", geositeValues, apiBaseURL, apiToken)
+		}
+	}
 
 	route["rules"] = routeRules
 	route["rule_set"] = ruleSets
@@ -1453,7 +1379,7 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase() map[string]interface{
 	serverTags := enabledDNSServerTags(dnsServers, globalSettings.FakeIPEnabled)
 	bootstrapTag := selectDNSBootstrapTag(dnsServers)
 	generatedBootstrapTag := ""
-	if bootstrapTag == "" && (needsGeneratedDNSBootstrap(dnsServers, serverTags) || hasProxyDetouredDNSServer(dnsServers)) {
+	if bootstrapTag == "" {
 		generatedBootstrapTag = uniqueDNSServerTag("ackwrap-bootstrap-local", serverTags)
 		bootstrapTag = generatedBootstrapTag
 		serverTags[bootstrapTag] = true
@@ -1543,31 +1469,18 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase() map[string]interface{
 			logging.Info("config_generator.dns", "跳过引用无效 DNS server 的规则: %s", rule.Server)
 			continue
 		}
-		conditions := decodeDNSRuleConditions(rule.ConditionsJSON)
+		conditions := normalizeDNSRuleConditions(decodeDNSRuleConditions(rule.ConditionsJSON))
 		if _, hasOutbound := conditions["outbound"]; hasOutbound {
-			// DNS rule outbound matching was deprecated in sing-box 1.12 and is generated
-			// as outbound domain_resolver instead.
+			// 策略绑定会在下方按关联路由规则展开为 DNS 匹配规则。
 			delete(conditions, "outbound")
 		}
 		if len(conditions) == 0 {
 			continue
 		}
-		ruleMap := map[string]interface{}{
-			"server": rule.Server,
-		}
-		for k, v := range conditions {
-			ruleMap[k] = v
-		}
-		if rule.DisableCache {
-			ruleMap["disable_cache"] = true
-		}
-		if rule.RewriteTTL > 0 {
-			ruleMap["rewrite_ttl"] = rule.RewriteTTL
-		}
-		if rule.ClientSubnet != "" {
-			ruleMap["client_subnet"] = rule.ClientSubnet
-		}
-		rules = append(rules, ruleMap)
+		rules = append(rules, dnsRuleMap(conditions, &rule))
+	}
+	if s.store.GetProxyMode() == "rule" {
+		rules = append(rules, s.generateDNSStrategyRules(dnsRules, serverTags)...)
 	}
 	if globalSettings.FakeIPEnabled {
 		rules = append(rules, map[string]interface{}{
@@ -1601,6 +1514,102 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase() map[string]interface{
 
 	logging.Info("config_generator.dns", "生成 DNS 配置: %d servers, %d rules", len(servers), len(rules))
 	return dns
+}
+
+func dnsRuleMap(conditions map[string]interface{}, settings *model.DNSRule) map[string]interface{} {
+	ruleMap := map[string]interface{}{"server": settings.Server}
+	for key, value := range conditions {
+		ruleMap[key] = value
+	}
+	if settings.DisableCache {
+		ruleMap["disable_cache"] = true
+	}
+	if settings.RewriteTTL > 0 {
+		ruleMap["rewrite_ttl"] = settings.RewriteTTL
+	}
+	if settings.ClientSubnet != "" {
+		ruleMap["client_subnet"] = settings.ClientSubnet
+	}
+	return ruleMap
+}
+
+func (s *ConfigGeneratorService) generateDNSStrategyRules(dnsRules []model.DNSRule, serverTags map[string]bool) []map[string]interface{} {
+	bindings := dnsStrategyBindings(dnsRules, serverTags)
+	if len(bindings) == 0 {
+		return nil
+	}
+	routeRules, err := s.store.ListRouteRules()
+	if err != nil {
+		logging.Info("config_generator.dns", "读取策略关联路由规则失败: %v", err)
+		return nil
+	}
+	overrides := s.routeRuleOutboundOverrides()
+	generated := make([]map[string]interface{}, 0)
+	for _, routeRule := range routeRules {
+		if !routeRule.Enabled || routeRule.Outbound == "block" {
+			continue
+		}
+		outbound := routeRule.Outbound
+		if override, exists := overrides[routeRule.ID]; exists {
+			outbound = override
+		}
+		binding, exists := bindings[outbound]
+		if !exists {
+			continue
+		}
+		for _, conditions := range dnsConditionsFromRouteRule(&routeRule) {
+			generated = append(generated, dnsRuleMap(conditions, &binding))
+		}
+	}
+	logging.Info("config_generator.dns", "按策略关联路由规则生成 %d 条 DNS 规则", len(generated))
+	return generated
+}
+
+func dnsConditionsFromRouteRule(rule *model.RouteRule) []map[string]interface{} {
+	withInvert := func(conditions map[string]interface{}) map[string]interface{} {
+		if rule.Invert {
+			conditions["invert"] = true
+		}
+		return conditions
+	}
+	switch rule.RuleType {
+	case "domain", "domain_suffix", "domain_keyword":
+		return []map[string]interface{}{withInvert(map[string]interface{}{rule.RuleType: rule.Values})}
+	case "geosite":
+		return []map[string]interface{}{withInvert(map[string]interface{}{"rule_set": generatedGeoRuleSetTags("geosite", rule.Values)})}
+	case "rule_set":
+		return []map[string]interface{}{withInvert(map[string]interface{}{"rule_set": rule.Values})}
+	case "mixed":
+		items, err := parseMixedRouteRuleValues(rule.Values)
+		if err != nil {
+			logging.Info("config_generator.dns", "混合路由规则 %s 无法生成策略 DNS 条件: %v", rule.Name, err)
+			return nil
+		}
+		rules := make([]map[string]interface{}, 0)
+		indexes := make(map[string]int)
+		appendValue := func(key, value string) {
+			if index, exists := indexes[key]; exists {
+				values, _ := rules[index][key].([]string)
+				rules[index][key] = append(values, value)
+				return
+			}
+			indexes[key] = len(rules)
+			rules = append(rules, withInvert(map[string]interface{}{key: []string{value}}))
+		}
+		for _, item := range items {
+			switch item.RuleType {
+			case "domain", "domain_suffix", "domain_keyword":
+				appendValue(item.RuleType, item.Value)
+			case "geosite":
+				appendValue("rule_set", generatedGeoRuleSetTag("geosite", item.Value))
+			case "rule_set":
+				appendValue("rule_set", item.Value)
+			}
+		}
+		return rules
+	default:
+		return nil
+	}
 }
 
 func applyDNSServerAddress(server map[string]interface{}, serverType, address string) bool {
@@ -1657,24 +1666,6 @@ func selectDNSBootstrapTag(servers []model.DNSServer) string {
 	return ""
 }
 
-func safeNodeResolverTag(requested string, servers []model.DNSServer, tags map[string]bool) string {
-	for _, server := range servers {
-		if server.Enabled && server.Tag == requested {
-			if server.Detour == "" || server.Detour == "direct" {
-				return requested
-			}
-			break
-		}
-	}
-	if bootstrapTag := selectDNSBootstrapTag(servers); bootstrapTag != "" {
-		return bootstrapTag
-	}
-	if requested != "" && tags[requested] {
-		return uniqueDNSServerTag("ackwrap-bootstrap-local", tags)
-	}
-	return ""
-}
-
 func needsGeneratedDNSBootstrap(servers []model.DNSServer, tags map[string]bool) bool {
 	for _, server := range servers {
 		if !server.Enabled {
@@ -1724,7 +1715,15 @@ func decodeDNSRuleConditions(raw string) map[string]interface{} {
 }
 
 func dnsRuleOutboundConditions(conditions map[string]interface{}) []string {
-	value, ok := conditions["outbound"]
+	return dnsRuleStringConditions(conditions, "outbound")
+}
+
+func isDNSStrategyBindingConditions(conditions map[string]interface{}) bool {
+	return len(conditions) == 1 && len(dnsRuleOutboundConditions(conditions)) > 0
+}
+
+func dnsRuleStringConditions(conditions map[string]interface{}, key string) []string {
+	value, ok := conditions[key]
 	if !ok {
 		return nil
 	}
@@ -1747,6 +1746,32 @@ func dnsRuleOutboundConditions(conditions map[string]interface{}) []string {
 	default:
 		return nil
 	}
+}
+
+func normalizeDNSRuleConditions(conditions map[string]interface{}) map[string]interface{} {
+	geositeValues := dnsRuleStringConditions(conditions, "geosite")
+	if _, exists := conditions["geosite"]; !exists {
+		return conditions
+	}
+	delete(conditions, "geosite")
+	if len(geositeValues) == 0 {
+		return conditions
+	}
+
+	ruleSets := dnsRuleStringConditions(conditions, "rule_set")
+	seen := make(map[string]bool, len(ruleSets)+len(geositeValues))
+	combined := make([]string, 0, len(ruleSets)+len(geositeValues))
+	for _, tag := range append(ruleSets, generatedGeoRuleSetTags("geosite", geositeValues)...) {
+		if tag == "" || seen[tag] {
+			continue
+		}
+		seen[tag] = true
+		combined = append(combined, tag)
+	}
+	if len(combined) > 0 {
+		conditions["rule_set"] = combined
+	}
+	return conditions
 }
 
 func (s *ConfigGeneratorService) defaultDomainResolver() map[string]interface{} {
@@ -1773,19 +1798,11 @@ func selectDefaultDomainResolver(settings *model.DNSGlobalSettings, servers []mo
 	if settings == nil || !settings.Enabled {
 		return ""
 	}
+	if bootstrapTag := selectDNSBootstrapTag(servers); bootstrapTag != "" {
+		return bootstrapTag
+	}
 	tags := enabledDNSServerTags(servers, settings.FakeIPEnabled)
-	if tags[settings.Final] {
-		return settings.Final
-	}
-	for _, server := range servers {
-		if tags[server.Tag] {
-			return server.Tag
-		}
-	}
-	if settings.FakeIPEnabled {
-		return "fakeip"
-	}
-	return ""
+	return uniqueDNSServerTag("ackwrap-bootstrap-local", tags)
 }
 
 func (s *ConfigGeneratorService) enabledRouteRuleSubscriptionTags() map[string]bool {

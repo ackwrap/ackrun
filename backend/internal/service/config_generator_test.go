@@ -2,12 +2,16 @@ package service
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/ackwrap/ackwrap/internal/model"
+	"github.com/ackwrap/ackwrap/internal/paths"
 	"github.com/ackwrap/ackwrap/internal/store"
 )
 
@@ -84,6 +88,17 @@ func TestDNSRuleOutboundConditions(t *testing.T) {
 	}
 }
 
+func TestDNSStrategyBindingsOnlyUsesPureOutboundConditions(t *testing.T) {
+	rules := []model.DNSRule{
+		{Enabled: true, ConditionsJSON: `{"outbound":["Developer"],"domain_suffix":["manual.example"]}`, Server: "dns_hybrid"},
+		{Enabled: true, ConditionsJSON: `{"outbound":["Developer"]}`, Server: "dns_strategy"},
+	}
+	bindings := dnsStrategyBindings(rules, map[string]bool{"dns_hybrid": true, "dns_strategy": true})
+	if len(bindings) != 1 || bindings["Developer"].Server != "dns_strategy" {
+		t.Fatalf("strategy bindings = %+v, want only pure outbound rule", bindings)
+	}
+}
+
 func TestApplyDomainResolverBinding(t *testing.T) {
 	outbound := map[string]interface{}{"type": "vless", "tag": "node-1"}
 	applyDomainResolverBinding(outbound, map[string]interface{}{"server": "dns_hk", "rewrite_ttl": 60})
@@ -123,26 +138,26 @@ func TestEnabledDNSServerTagsAddsGeneratedFakeIP(t *testing.T) {
 	}
 }
 
-func TestSelectDefaultDomainResolverRequiresGeneratedServer(t *testing.T) {
+func TestSelectDefaultDomainResolverUsesGeneratedBootstrap(t *testing.T) {
 	settings := &model.DNSGlobalSettings{Enabled: true, Final: "dns_proxy"}
-	if got := selectDefaultDomainResolver(settings, nil); got != "" {
-		t.Fatalf("resolver = %q, want empty when no DNS server is generated", got)
+	if got := selectDefaultDomainResolver(settings, nil); got != "ackwrap-bootstrap-local" {
+		t.Fatalf("resolver = %q, want generated local bootstrap", got)
 	}
 
 	servers := []model.DNSServer{
 		{Tag: "dns_proxy", Enabled: false},
 		{Tag: "custom_fakeip", Enabled: true, ServerType: "fakeip"},
-		{Tag: "dns_direct", Enabled: true},
+		{Tag: "dns_direct", Enabled: true, ServerType: "udp", Address: "1.1.1.1"},
 	}
 	if got := selectDefaultDomainResolver(settings, servers); got != "dns_direct" {
 		t.Fatalf("resolver = %q, want dns_direct fallback", got)
 	}
 }
 
-func TestSelectDefaultDomainResolverUsesGeneratedFakeIP(t *testing.T) {
+func TestSelectDefaultDomainResolverNeverUsesFakeIP(t *testing.T) {
 	settings := &model.DNSGlobalSettings{Enabled: true, Final: "dns_proxy", FakeIPEnabled: true}
-	if got := selectDefaultDomainResolver(settings, nil); got != "fakeip" {
-		t.Fatalf("resolver = %q, want generated fakeip server", got)
+	if got := selectDefaultDomainResolver(settings, nil); got != "ackwrap-bootstrap-local" {
+		t.Fatalf("resolver = %q, want generated local bootstrap", got)
 	}
 }
 
@@ -163,17 +178,6 @@ func TestSelectDNSBootstrapTagUsesIPServer(t *testing.T) {
 	}
 	if got := selectDNSBootstrapTag(servers); got != "dns_ip" {
 		t.Fatalf("bootstrap tag = %q, want dns_ip", got)
-	}
-}
-
-func TestSafeNodeResolverFallsBackFromProxyDetour(t *testing.T) {
-	servers := []model.DNSServer{
-		{Tag: "dns_proxy", Enabled: true, ServerType: "https", Address: "https://dns.example.com/dns-query", Detour: "proxy"},
-		{Tag: "dns_direct", Enabled: true, ServerType: "udp", Address: "1.1.1.1"},
-	}
-	tags := enabledDNSServerTags(servers, false)
-	if got := safeNodeResolverTag("dns_proxy", servers, tags); got != "dns_direct" {
-		t.Fatalf("safe node resolver = %q, want dns_direct", got)
 	}
 }
 
@@ -840,6 +844,57 @@ func TestGenerateOutboundsFallsBackWhenProxyCollectionIsEmpty(t *testing.T) {
 	t.Fatal("proxy fallback outbound not found")
 }
 
+func TestGenerateOutboundsDoesNotApplyStrategyDNSToSharedNode(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	subscription, err := db.CreateSubscription(&model.SubscriptionRequest{Name: "shared", URL: "https://example.com/subscription"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertSubscriptionNodes(subscription.ID, []model.ParsedNode{{
+		UID: "shared-node", Name: "Shared Node", Type: "socks", Server: "node.example.com", ServerPort: 1080,
+		RawJSON: `{"type":"socks","server":"node.example.com","server_port":1080}`,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"Developer", "Streaming"} {
+		if err := db.CreateProxyCollection(&model.ProxyCollection{
+			Name: name, Type: "selector", SourceType: "manual", NodeUIDs: `["shared-node"]`, ReferencedGroupIDs: "[]", RouteRuleIDs: "[]", Enabled: true,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.CreateDNSRule(&model.DNSRuleRequest{
+			Enabled: true, RuleType: "default", Conditions: map[string]interface{}{"outbound": []string{name}}, Server: "dns_" + strings.ToLower(name),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	outbounds, _, err := NewConfigGeneratorService(db, nil).generateOutbounds()
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes, err := db.ListEnabledNodes()
+	if err != nil || len(nodes) != 1 {
+		t.Fatalf("enabled nodes = %d, err = %v", len(nodes), err)
+	}
+	nodeTag := buildNodeOutboundTags(nodes)[nodes[0].UID]
+	for _, item := range outbounds {
+		outbound, ok := item.(map[string]interface{})
+		if !ok || outbound["tag"] != nodeTag {
+			continue
+		}
+		if _, exists := outbound["domain_resolver"]; exists {
+			t.Fatalf("shared node inherited strategy DNS resolver: %+v", outbound)
+		}
+		return
+	}
+	t.Fatal("shared node outbound not found")
+}
+
 func TestGenerateRouteOmitsLegacyInternalNodeCheckRule(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {
@@ -1012,6 +1067,245 @@ func TestGenerateDNSFakeIPFollowsTUNMode(t *testing.T) {
 	}
 	if resolver := service.defaultDomainResolver(); resolver["server"] != "dns_direct" {
 		t.Fatalf("Mixed mode default domain resolver = %+v, want dns_direct", resolver)
+	}
+}
+
+func TestGenerateDNSGeositeUsesGeneratedRuleSet(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.CreateDNSServer(&model.DNSServerRequest{
+		Tag: "dns_direct", Enabled: true, ServerType: "udp", Address: "1.1.1.1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateDNSRule(&model.DNSRuleRequest{
+		Enabled:    true,
+		RuleType:   "default",
+		Conditions: map[string]interface{}{"geosite": []string{"cn"}},
+		Server:     "dns_direct",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	service := NewConfigGeneratorService(db, nil)
+	dns := service.generateDNSFromDatabase()
+	rules, _ := dns["rules"].([]map[string]interface{})
+	if len(rules) < 2 {
+		t.Fatalf("DNS rules = %+v, want geosite rule and FakeIP fallback", rules)
+	}
+	if _, exists := rules[0]["geosite"]; exists {
+		t.Fatalf("DNS rule still contains removed geosite field: %+v", rules[0])
+	}
+	if tags, ok := rules[0]["rule_set"].([]string); !ok || !reflect.DeepEqual(tags, []string{"geosite-cn"}) {
+		t.Fatalf("DNS geosite rule_set = %#v, want geosite-cn", rules[0]["rule_set"])
+	}
+
+	route, err := service.generateRoute("direct")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ruleSets, _ := route["rule_set"].([]map[string]interface{})
+	found := false
+	for _, ruleSet := range ruleSets {
+		if ruleSet["tag"] == "geosite-cn" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("route rule_set does not include DNS geosite dependency: %+v", ruleSets)
+	}
+}
+
+func TestGenerateDNSStrategyBindingsFollowAssociatedRouteRules(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, server := range []*model.DNSServerRequest{
+		{Tag: "dns_direct", Enabled: true, ServerType: "udp", Address: "1.1.1.1"},
+		{Tag: "dns_developer", Enabled: true, ServerType: "https", Address: "https://dns.example.com/dns-query", Detour: "Developer"},
+		{Tag: "dns_proxy", Enabled: true, ServerType: "https", Address: "https://proxy-dns.example.com/dns-query", Detour: "proxy"},
+	} {
+		if _, err := db.CreateDNSServer(server); err != nil {
+			t.Fatal(err)
+		}
+	}
+	domainRule, err := db.CreateRouteRule(&model.RouteRuleRequest{
+		Name: "Developer Domains", Enabled: true, Priority: 10, RuleType: "domain_suffix", Values: []string{"developer.example"}, Outbound: "proxy",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateRouteRule(&model.RouteRuleRequest{
+		Name: "Direct Domains", Enabled: true, Priority: 30, RuleType: "domain_keyword", Values: []string{"intranet"}, Outbound: "direct",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateRouteRule(&model.RouteRuleRequest{
+		Name: "Proxy Domains", Enabled: true, Priority: 40, RuleType: "domain", Values: []string{"proxy.example"}, Outbound: "proxy",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	geositeRule, err := db.CreateRouteRule(&model.RouteRuleRequest{
+		Name: "Developer GeoSite", Enabled: true, Priority: 20, RuleType: "geosite", Values: []string{"cn"}, Outbound: "proxy",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CreateProxyCollection(&model.ProxyCollection{
+		Name: "Developer", Type: "selector", SourceType: "manual", NodeUIDs: "[]", ReferencedGroupIDs: "[]",
+		RouteRuleIDs: fmt.Sprintf("[%d,%d]", domainRule.ID, geositeRule.ID), Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateDNSRule(&model.DNSRuleRequest{
+		Enabled: true, Priority: 5, RuleType: "default",
+		Conditions: map[string]interface{}{"outbound": []string{"Developer"}, "domain_suffix": []string{"manual.example"}}, Server: "dns_direct",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateDNSRule(&model.DNSRuleRequest{
+		Enabled: true, Priority: 10, RuleType: "default", Conditions: map[string]interface{}{"outbound": []string{"Developer"}}, Server: "dns_developer",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for priority, binding := range []struct {
+		outbound string
+		server   string
+	}{{outbound: "direct", server: "dns_direct"}, {outbound: "proxy", server: "dns_proxy"}} {
+		if _, err := db.CreateDNSRule(&model.DNSRuleRequest{
+			Enabled: true, Priority: priority + 20, RuleType: "default", Conditions: map[string]interface{}{"outbound": []string{binding.outbound}}, Server: binding.server,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	dns := NewConfigGeneratorService(db, nil).generateDNSFromDatabase()
+	rules, _ := dns["rules"].([]map[string]interface{})
+	foundDomain := false
+	foundGeoSite := false
+	foundDirect := false
+	foundProxy := false
+	foundHybridManual := false
+	for _, rule := range rules {
+		if rule["server"] == "dns_developer" && stringListContains(rule["domain_suffix"], "developer.example") {
+			foundDomain = true
+		}
+		if rule["server"] == "dns_developer" && stringListContains(rule["rule_set"], "geosite-cn") {
+			foundGeoSite = true
+		}
+		if rule["server"] == "dns_direct" && stringListContains(rule["domain_keyword"], "intranet") {
+			foundDirect = true
+		}
+		if rule["server"] == "dns_proxy" && stringListContains(rule["domain"], "proxy.example") {
+			foundProxy = true
+		}
+		if rule["server"] == "dns_direct" && stringListContains(rule["domain_suffix"], "manual.example") {
+			foundHybridManual = true
+		}
+		if _, exists := rule["outbound"]; exists {
+			t.Fatalf("generated DNS strategy rule contains removed outbound matcher: %+v", rule)
+		}
+	}
+	if !foundDomain || !foundGeoSite || !foundDirect || !foundProxy || !foundHybridManual {
+		t.Fatalf("DNS rules missing strategy domain=%t geosite=%t direct=%t proxy=%t hybrid-manual=%t: %+v", foundDomain, foundGeoSite, foundDirect, foundProxy, foundHybridManual, rules)
+	}
+}
+
+func TestDNSConditionsFromMixedRouteRuleSkipsAddressConditions(t *testing.T) {
+	rules := dnsConditionsFromRouteRule(&model.RouteRule{
+		RuleType: "mixed", Values: []string{"domain_suffix:example.com", "geosite:cn", "ip_cidr:192.0.2.0/24", "geoip:private"}, Invert: true,
+	})
+	if len(rules) != 2 {
+		t.Fatalf("DNS-compatible mixed rules = %+v, want domain and geosite groups", rules)
+	}
+	if !stringListContains(rules[0]["domain_suffix"], "example.com") || rules[0]["invert"] != true {
+		t.Fatalf("mixed domain DNS rule = %+v", rules[0])
+	}
+	if !stringListContains(rules[1]["rule_set"], "geosite-cn") || rules[1]["invert"] != true {
+		t.Fatalf("mixed geosite DNS rule = %+v", rules[1])
+	}
+}
+
+func TestGeneratedDNSConfigurationPassesAvailableSingBoxCheck(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("workspace sing-box verification binary is Windows-only")
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("cannot locate installed sing-box: %v", err)
+	}
+	binaryPath := filepath.Join(homeDir, "ackwrap", "bin", "sing-box.exe")
+	if _, err := os.Stat(binaryPath); err != nil {
+		t.Skipf("installed sing-box verification binary unavailable: %v", err)
+	}
+	version, err := exec.Command(binaryPath, "version").CombinedOutput()
+	if err != nil || !strings.Contains(string(version), "with_clash_api") {
+		t.Skip("installed sing-box binary does not include the required Clash API build tag")
+	}
+	dataDir := t.TempDir()
+	db, err := store.Open(filepath.Join(dataDir, "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, server := range []*model.DNSServerRequest{
+		{Tag: "dns_direct", Enabled: true, ServerType: "udp", Address: "1.1.1.1"},
+		{Tag: "dns_proxy", Enabled: true, ServerType: "https", Address: "https://dns.example.com/dns-query", Detour: "proxy"},
+	} {
+		if _, err := db.CreateDNSServer(server); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.CreateRouteRule(&model.RouteRuleRequest{
+		Name: "Proxy GeoSite", Enabled: true, Priority: 10, RuleType: "geosite", Values: []string{"cn"}, Outbound: "proxy",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, rule := range []*model.DNSRuleRequest{
+		{Enabled: true, Priority: 10, RuleType: "default", Conditions: map[string]interface{}{"geosite": []string{"cn"}}, Server: "dns_direct"},
+		{Enabled: true, Priority: 20, RuleType: "default", Conditions: map[string]interface{}{"outbound": []string{"proxy"}}, Server: "dns_proxy"},
+	} {
+		if _, err := db.CreateDNSRule(rule); err != nil {
+			t.Fatal(err)
+		}
+	}
+	settings, err := db.GetDNSGlobalSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.Enabled = true
+	settings.Final = "dns_proxy"
+	settings.FakeIPEnabled = true
+	if err := db.SetDNSGlobalSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetInboundMode("tun"); err != nil {
+		t.Fatal(err)
+	}
+
+	service := NewConfigGeneratorService(db, &paths.Paths{DataDir: dataDir, BinaryPath: binaryPath})
+	for _, mode := range []string{"rule", "global", "direct"} {
+		t.Run(mode, func(t *testing.T) {
+			if err := db.SetProxyMode(mode); err != nil {
+				t.Fatal(err)
+			}
+			result, err := service.generateLockedTo(&model.ConfigGenerateRequest{
+				DefaultOutbound: "direct", InboundListen: "127.0.0.1", InboundPort: model.DefaultMixedInboundPort,
+				TUNIPv4Address: defaultTUNIPv4Address, TUNIPv6Address: defaultTUNIPv6Address, LogLevel: "warn",
+			}, filepath.Join(dataDir, "config-"+mode+".json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !result.Valid {
+				t.Fatalf("sing-box rejected %s mode config: %s", mode, result.Error)
+			}
+		})
 	}
 }
 

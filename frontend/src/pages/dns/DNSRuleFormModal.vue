@@ -30,6 +30,8 @@ defineEmits<{ close: []; save: [] }>();
 
 const valuePlaceholder = computed(() => {
   switch (props.form.condition_type) {
+    case "geosite":
+      return "cn\ngeolocation-!cn";
     case "rule_set":
       return "geosite-cn";
     case "query_type":
@@ -39,6 +41,14 @@ const valuePlaceholder = computed(() => {
     default:
       return "baidu.com\nqq.com";
   }
+});
+
+const valueHelp = computed(() => {
+  if (props.form.condition_type === "geosite")
+    return "每行一个 GeoSite 分类名；保存后生成配置时自动转换为 geosite-* rule_set。";
+  if (props.form.condition_type === "rule_set")
+    return "每行一个 rule_set tag，例如 geosite-cn；该规则集必须已配置。";
+  return "每行一个值。";
 });
 </script>
 
@@ -83,7 +93,7 @@ const valuePlaceholder = computed(() => {
           :placeholder="valuePlaceholder"
         />
         <span class="mt-1 block text-xs text-[var(--text-tertiary)]">
-          每行一个值。国内域名可选择 rule_set 并填写 geosite-cn，前提是该规则集已配置。
+          {{ valueHelp }}
         </span>
       </label>
       <label class="text-sm text-[var(--text-secondary)]">

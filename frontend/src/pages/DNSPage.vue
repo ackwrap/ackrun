@@ -5,6 +5,10 @@ import PageHeader from "@/components/layout/PageHeader.vue";
 import Toast from "@/components/ui/Toast.vue";
 import OrderButtons from "@/components/ui/OrderButtons.vue";
 import { authenticatedFetch } from "@/services/apiAuth";
+import {
+  dnsRuleOutbounds,
+  isDNSOutboundBinding,
+} from "./collections/dnsBinding";
 import DNSRuleFormModal from "./dns/DNSRuleFormModal.vue";
 import DNSServerFormModal from "./dns/DNSServerFormModal.vue";
 interface Server {
@@ -81,7 +85,6 @@ const types = [
     "domain_keyword",
     "domain_regex",
     "geosite",
-    "outbound",
     "query_type",
     "network",
     "protocol",
@@ -175,16 +178,13 @@ const detours = computed(() => [
       ...available.filter((item) => !outboundOrder.value.includes(item)),
     ];
   }),
-  outbounds = (r: Rule) => {
-    try {
-      const x = JSON.parse(r.conditions_json || "{}").outbound;
-      return Array.isArray(x) ? x : typeof x === "string" ? [x] : [];
-    } catch {
-      return [];
-    }
-  },
   bindingRule = (x: string) =>
-    rules.value.find((r) => outbounds(r).includes(x)),
+    rules.value.find(
+      (rule) => isDNSOutboundBinding(rule) && dnsRuleOutbounds(rule).includes(x),
+    ),
+  matchingRules = computed(() =>
+    rules.value.filter((rule) => !isDNSOutboundBinding(rule)),
+  ),
   conditionText = (r: Rule) => {
     try {
       const x = JSON.parse(r.conditions_json);
@@ -307,8 +307,12 @@ async function moveServer(index: number, direction: -1 | 1) {
 }
 async function moveRule(index: number, direction: -1 | 1) {
   if (ruleOrderPending.value) return;
-  const next = swapped(rules.value, index, direction);
-  if (!next) return;
+  const reordered = swapped(matchingRules.value, index, direction);
+  if (!reordered) return;
+  let nextRuleIndex = 0;
+  const next = rules.value.map((rule) =>
+    isDNSOutboundBinding(rule) ? rule : reordered[nextRuleIndex++],
+  );
   ruleOrderPending.value = true;
   rules.value = next;
   try {
@@ -335,7 +339,7 @@ async function moveBinding(index: number, direction: -1 | 1) {
       body: JSON.stringify({ outbounds: next }),
     });
   } catch (e: any) {
-    show(`DNS 出口绑定排序失败: ${e.message}`, "error");
+    show(`策略 DNS 绑定排序失败: ${e.message}`, "error");
     await load();
   }
 }
@@ -361,10 +365,10 @@ async function saveBinding(x: string) {
           client_subnet: old?.client_subnet || "",
         }),
       });
-    show(`${x} 的 DNS 出口绑定已保存`);
+    show(`${x} 的策略 DNS 绑定已保存`);
     await load();
   } catch (e: any) {
-    show(`保存 DNS 出口绑定失败: ${e.message}`, "error");
+    show(`保存策略 DNS 绑定失败: ${e.message}`, "error");
   }
 }
 function newRule() {
@@ -644,13 +648,17 @@ onMounted(load);
       <section
         class="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
       >
-        <h3 class="font-semibold">DNS 出口绑定</h3>
+        <h3 class="font-semibold">策略 DNS 绑定</h3>
+        <p class="mt-1 text-xs text-[var(--text-tertiary)]">
+          规则模式下复用策略关联路由规则的域名、GeoSite 和 rule_set 条件生成
+          dns.rules；不会修改策略组共享节点。
+        </p>
         <div class="aw-data-table-wrap mt-4">
           <table class="aw-data-table min-w-[760px]">
             <thead>
               <tr>
                 <th>排序</th>
-                <th>出站</th>
+                <th>策略</th>
                 <th>DNS 服务器</th>
                 <th>绑定状态</th>
                 <th>操作</th>
@@ -688,7 +696,7 @@ onMounted(load);
                 <td>
                   {{
                     bindingRule(x)
-                      ? `domain_resolver 绑定 #${bindingRule(x)?.id}`
+                      ? `策略绑定 #${bindingRule(x)?.id}`
                       : "未生成"
                   }}
                 </td>
@@ -699,14 +707,17 @@ onMounted(load);
                       @click="
                         preview = JSON.stringify(
                           {
-                            tag: x,
-                            domain_resolver:
-                              (bindings[x] ?? bindingRule(x)?.server)
-                                ? {
-                                    server:
-                                      bindings[x] ?? bindingRule(x)?.server,
-                                  }
-                                : '(未绑定)',
+                            strategy: x,
+                            dns_server:
+                              bindings[x] ?? bindingRule(x)?.server ?? '(未绑定)',
+                            source:
+                              x === 'direct' || x === 'proxy'
+                                ? `最终出站为 ${x} 的路由规则`
+                                : `策略组 ${x} 关联的路由规则`,
+                            generated:
+                              '复用 domain/domain_suffix/domain_keyword/geosite/rule_set 条件生成 dns.rules',
+                            ignored:
+                              'IP CIDR、GeoIP 等无法在 DNS 查询前判断的条件不会生成 DNS 规则',
                           },
                           null,
                           2,
@@ -734,7 +745,8 @@ onMounted(load);
           <div>
             <h3 class="font-semibold">DNS 规则</h3>
             <p class="mt-1 text-xs text-[var(--text-tertiary)]">
-              从上到下匹配；TUN 模式下 FakeIP 是列表之后的最终兜底。
+              从上到下匹配；策略 DNS 绑定在上方单独管理，TUN 模式下 FakeIP
+              是列表之后的最终兜底。
             </p>
           </div>
           <button class="aw-action-button aw-action-neutral" @click="newRule">
@@ -754,14 +766,14 @@ onMounted(load);
               </tr>
             </thead>
             <tbody>
-              <tr v-if="!rules.length">
+              <tr v-if="!matchingRules.length">
                 <td colspan="6" class="py-10 text-center">暂无 DNS 规则</td>
               </tr>
-              <tr v-for="(r, i) in rules" :key="r.id">
+              <tr v-for="(r, i) in matchingRules" :key="r.id">
                 <td>
                   <OrderButtons
                     :up-disabled="ruleOrderPending || i === 0"
-                    :down-disabled="ruleOrderPending || i === rules.length - 1"
+                    :down-disabled="ruleOrderPending || i === matchingRules.length - 1"
                     @up="moveRule(i, -1)"
                     @down="moveRule(i, 1)"
                   />
