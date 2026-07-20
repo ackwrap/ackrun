@@ -49,8 +49,11 @@ func (s *Store) CreateDNSServer(req *model.DNSServerRequest) (*model.DNSServer, 
 	if err := s.db.QueryRow(`SELECT COALESCE(MAX(priority), -1) + 1 FROM dns_servers`).Scan(&priority); err != nil {
 		return nil, err
 	}
-	optionsJSON, _ := json.Marshal(req.Options)
-	if optionsJSON == nil {
+	optionsJSON, err := json.Marshal(req.Options)
+	if err != nil {
+		return nil, err
+	}
+	if req.Options == nil {
 		optionsJSON = []byte("{}")
 	}
 
@@ -66,12 +69,15 @@ func (s *Store) CreateDNSServer(req *model.DNSServerRequest) (*model.DNSServer, 
 
 func (s *Store) UpdateDNSServer(id int64, req *model.DNSServerRequest) error {
 	now := time.Now().Unix()
-	optionsJSON, _ := json.Marshal(req.Options)
-	if optionsJSON == nil {
+	optionsJSON, err := json.Marshal(req.Options)
+	if err != nil {
+		return err
+	}
+	if req.Options == nil {
 		optionsJSON = []byte("{}")
 	}
 
-	_, err := s.db.Exec(`UPDATE dns_servers SET tag = ?, enabled = ?, server_type = ?, address = ?, address_resolver = ?, address_strategy = ?, strategy = ?, detour = ?, client_subnet = ?, options_json = ?, updated_at = ? WHERE id = ?`,
+	_, err = s.db.Exec(`UPDATE dns_servers SET tag = ?, enabled = ?, server_type = ?, address = ?, address_resolver = ?, address_strategy = ?, strategy = ?, detour = ?, client_subnet = ?, options_json = ?, updated_at = ? WHERE id = ?`,
 		req.Tag, req.Enabled, req.ServerType, req.Address, req.AddressResolver, req.AddressStrategy, req.Strategy, req.Detour, req.ClientSubnet, string(optionsJSON), now, id)
 	return err
 }
@@ -239,11 +245,13 @@ func (s *Store) GetDNSGlobalSettings() (*model.DNSGlobalSettings, error) {
 	}
 	defer rows.Close()
 
+	seen := make(map[string]bool)
 	for rows.Next() {
 		var key, value string
 		if err := rows.Scan(&key, &value); err != nil {
 			continue
 		}
+		seen[key] = true
 		switch key {
 		case "dns_global.enabled":
 			r.Enabled = value == "true"
@@ -281,23 +289,83 @@ func (s *Store) GetDNSGlobalSettings() (*model.DNSGlobalSettings, error) {
 			}
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if seen["dns_global.enabled"] && seen["dns_global.final"] && seen["dns_global.strategy"] &&
+		seen["dns_global.disable_cache"] && seen["dns_global.disable_expire"] && seen["dns_global.independent_cache"] &&
+		seen["dns_global.reverse_mapping"] && seen["dns_global.client_subnet"] && seen["dns_global.fakeip_enabled"] &&
+		seen["dns_global.fakeip_inet4_range"] && seen["dns_global.fakeip_inet6_range"] {
+		return r, nil
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	legacy, err := s.GetDNSSettings()
+	if err != nil {
+		return nil, err
+	}
+	if !seen["dns_global.enabled"] {
+		r.Enabled = legacy.Enabled
+	}
+	if !seen["dns_global.final"] && legacy.Final != "" {
+		r.Final = legacy.Final
+	}
+	if !seen["dns_global.strategy"] && legacy.Strategy != "" {
+		r.Strategy = legacy.Strategy
+	}
+	if !seen["dns_global.disable_cache"] {
+		r.DisableCache = legacy.DisableCache
+	}
+	if !seen["dns_global.disable_expire"] {
+		r.DisableExpire = legacy.DisableExpire
+	}
+	if !seen["dns_global.independent_cache"] {
+		r.IndependentCache = legacy.IndependentCache
+	}
+	if !seen["dns_global.reverse_mapping"] {
+		r.ReverseMapping = legacy.ReverseMapping
+	}
+	if !seen["dns_global.client_subnet"] {
+		r.ClientSubnet = legacy.ClientSubnet
+	}
+	if !seen["dns_global.fakeip_enabled"] {
+		r.FakeIPEnabled = legacy.FakeIPEnabled
+	}
+	if !seen["dns_global.fakeip_inet4_range"] && legacy.FakeIPInet4Range != "" {
+		r.FakeIPInet4Range = legacy.FakeIPInet4Range
+	}
+	if !seen["dns_global.fakeip_inet6_range"] && legacy.FakeIPInet6Range != "" {
+		r.FakeIPInet6Range = legacy.FakeIPInet6Range
+	}
 	return r, nil
 }
 
 func (s *Store) SetDNSGlobalSettings(req *model.DNSGlobalSettings) error {
 	now := time.Now().Unix()
 	settings := map[string]string{
+		"dns.enabled":                   fmt.Sprintf("%t", req.Enabled),
 		"dns_global.enabled":            fmt.Sprintf("%t", req.Enabled),
+		"dns.final":                     req.Final,
 		"dns_global.final":              req.Final,
+		"dns.strategy":                  req.Strategy,
 		"dns_global.strategy":           req.Strategy,
+		"dns.disable_cache":             fmt.Sprintf("%t", req.DisableCache),
 		"dns_global.disable_cache":      fmt.Sprintf("%t", req.DisableCache),
+		"dns.disable_expire":            fmt.Sprintf("%t", req.DisableExpire),
 		"dns_global.disable_expire":     fmt.Sprintf("%t", req.DisableExpire),
+		"dns.independent_cache":         fmt.Sprintf("%t", req.IndependentCache),
 		"dns_global.independent_cache":  fmt.Sprintf("%t", req.IndependentCache),
+		"dns.reverse_mapping":           fmt.Sprintf("%t", req.ReverseMapping),
 		"dns_global.reverse_mapping":    fmt.Sprintf("%t", req.ReverseMapping),
 		"dns_global.cache_capacity":     fmt.Sprintf("%d", req.CacheCapacity),
+		"dns.client_subnet":             req.ClientSubnet,
 		"dns_global.client_subnet":      req.ClientSubnet,
+		"dns.fakeip_enabled":            fmt.Sprintf("%t", req.FakeIPEnabled),
 		"dns_global.fakeip_enabled":     fmt.Sprintf("%t", req.FakeIPEnabled),
+		"dns.fakeip_inet4_range":        req.FakeIPInet4Range,
 		"dns_global.fakeip_inet4_range": req.FakeIPInet4Range,
+		"dns.fakeip_inet6_range":        req.FakeIPInet6Range,
 		"dns_global.fakeip_inet6_range": req.FakeIPInet6Range,
 	}
 

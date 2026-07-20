@@ -190,6 +190,23 @@ func TestSelectDNSBootstrapTagExcludesProxyDetour(t *testing.T) {
 	}
 }
 
+func TestSafeDNSBootstrapTagRejectsProxyAndDomainResolvers(t *testing.T) {
+	servers := []model.DNSServer{
+		{Tag: "dns_proxy_ip", Enabled: true, ServerType: "udp", Address: "1.1.1.1", Detour: "proxy"},
+		{Tag: "dns_direct_domain", Enabled: true, ServerType: "https", Address: "https://dns.example.com/dns-query"},
+		{Tag: "dns_direct_ip", Enabled: true, ServerType: "udp", Address: "9.9.9.9"},
+	}
+	if isSafeDNSBootstrapTag("dns_proxy_ip", servers) {
+		t.Fatal("proxy-detoured IP DNS must not bootstrap node or DNS server resolution")
+	}
+	if isSafeDNSBootstrapTag("dns_direct_domain", servers) {
+		t.Fatal("domain-based DNS must not recursively bootstrap itself")
+	}
+	if !isSafeDNSBootstrapTag("dns_direct_ip", servers) {
+		t.Fatal("direct IP DNS should be accepted as controlled bootstrap")
+	}
+}
+
 func TestProxyDetouredDNSServerRequiresGeneratedBootstrap(t *testing.T) {
 	servers := []model.DNSServer{
 		{Tag: "dns_proxy", Enabled: true, ServerType: "udp", Address: "1.1.1.1", Detour: "proxy"},
@@ -344,9 +361,13 @@ func TestGenerateRouteIncludesDefaultLoopBypassRules(t *testing.T) {
 		t.Fatalf("route rules type = %T", route["rules"])
 	}
 	var processRule, processRuleScoped, domainRule, ipRule, reachedSniff bool
-	for _, rule := range rules {
+	standardDNSHijackIndex, firstBypassIndex := -1, -1
+	for index, rule := range rules {
 		if stringListContains(rule["inbound"], legacyUpdateProxyInboundTag) {
 			t.Fatalf("generated route contains legacy update proxy rule: %+v", rule)
+		}
+		if rule["action"] == "hijack-dns" && rule["port"] == 53 {
+			standardDNSHijackIndex = index
 		}
 		if rule["action"] == "sniff" {
 			reachedSniff = true
@@ -358,6 +379,9 @@ func TestGenerateRouteIncludesDefaultLoopBypassRules(t *testing.T) {
 		if reachedSniff || rule["action"] != "bypass" {
 			t.Fatalf("loop bypass rule must use bypass before sniff: %+v", rules)
 		}
+		if firstBypassIndex == -1 {
+			firstBypassIndex = index
+		}
 		if rule["process_name"] != nil {
 			processRule = true
 			inbound, ok := rule["inbound"].([]string)
@@ -368,6 +392,9 @@ func TestGenerateRouteIncludesDefaultLoopBypassRules(t *testing.T) {
 	}
 	if !processRule || !processRuleScoped || !domainRule || !ipRule {
 		t.Fatalf("missing loop bypass rule: %+v", rules)
+	}
+	if standardDNSHijackIndex == -1 || firstBypassIndex == -1 || standardDNSHijackIndex >= firstBypassIndex {
+		t.Fatalf("standard DNS hijack must precede every bypass rule: %+v", rules)
 	}
 }
 
@@ -844,6 +871,168 @@ func TestGenerateOutboundsFallsBackWhenProxyCollectionIsEmpty(t *testing.T) {
 	t.Fatal("proxy fallback outbound not found")
 }
 
+func TestGenerateRejectsDirectProxyFallbackWhenDNSDependsOnProxy(t *testing.T) {
+	for _, testCase := range []struct {
+		name            string
+		defaultOutbound string
+		setup           func(*testing.T, *store.Store)
+	}{
+		{name: "strategy binding", setup: func(t *testing.T, db *store.Store) {
+			if _, err := db.CreateDNSServer(&model.DNSServerRequest{Tag: "dns_proxy", Enabled: true, ServerType: "udp", Address: "1.1.1.1"}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.CreateDNSRule(&model.DNSRuleRequest{Enabled: true, Conditions: map[string]interface{}{"outbound": []string{"proxy"}}, Server: "dns_proxy"}); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "global mode", setup: func(t *testing.T, db *store.Store) {
+			if err := db.SetProxyMode("global"); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "route final", defaultOutbound: "proxy"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			dataDir := t.TempDir()
+			db, err := store.Open(filepath.Join(dataDir, "ackwrap.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			if err := db.CreateProxyCollection(&model.ProxyCollection{
+				Name: "proxy", Type: "selector", SourceType: "manual", ReferencedGroupIDs: "[]", RouteRuleIDs: "[]", NodeUIDs: "[]", Enabled: true,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if testCase.setup != nil {
+				testCase.setup(t, db)
+			}
+			_, err = NewConfigGeneratorService(db, &paths.Paths{DataDir: dataDir}).generateLockedTo(&model.ConfigGenerateRequest{
+				DefaultOutbound: testCase.defaultOutbound, InboundListen: "127.0.0.1", InboundPort: model.DefaultMixedInboundPort,
+				TUNIPv4Address: defaultTUNIPv4Address, TUNIPv6Address: defaultTUNIPv6Address, LogLevel: "warn",
+			}, filepath.Join(dataDir, "config.json"))
+			if err == nil || !strings.Contains(err.Error(), "DNS 依赖 proxy 策略组") {
+				t.Fatalf("direct proxy fallback error = %v", err)
+			}
+		})
+	}
+}
+
+func TestGenerateRejectsAutomaticProxyWithOnlyDirectMembersWhenDNSDependsOnProxy(t *testing.T) {
+	dataDir := t.TempDir()
+	db, err := store.Open(filepath.Join(dataDir, "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.CreateDNSServer(&model.DNSServerRequest{Tag: "dns_proxy", Enabled: true, ServerType: "udp", Address: "1.1.1.1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateDNSRule(&model.DNSRuleRequest{
+		Enabled: true, Conditions: map[string]interface{}{"outbound": []string{"proxy"}}, Server: "dns_proxy",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CreateProxyCollection(&model.ProxyCollection{
+		Name: "全球直连", Type: "selector", SourceType: "manual", NodeUIDs: `["direct"]`, ReferencedGroupIDs: "[]", RouteRuleIDs: "[]", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = NewConfigGeneratorService(db, &paths.Paths{DataDir: dataDir}).generateLockedTo(&model.ConfigGenerateRequest{
+		InboundListen: "127.0.0.1", InboundPort: model.DefaultMixedInboundPort,
+		TUNIPv4Address: defaultTUNIPv4Address, TUNIPv6Address: defaultTUNIPv6Address, LogLevel: "warn",
+	}, filepath.Join(dataDir, "config.json"))
+	if err == nil || !strings.Contains(err.Error(), "DNS 依赖 proxy 策略组") {
+		t.Fatalf("automatic direct-only proxy fallback error = %v", err)
+	}
+}
+
+func TestGenerateRejectsDNSDetourWithoutNonDirectPath(t *testing.T) {
+	for _, testCase := range []struct {
+		name            string
+		defaultOutbound string
+		setup           func(*testing.T, *store.Store)
+	}{
+		{
+			name: "explicit proxy strategy",
+			setup: func(t *testing.T, db *store.Store) {
+				if err := db.SetProxyMode("global"); err != nil {
+					t.Fatal(err)
+				}
+				if err := db.CreateProxyCollection(&model.ProxyCollection{
+					Name: "proxy", Type: "selector", SourceType: "manual", NodeUIDs: `["direct"]`, ReferencedGroupIDs: "[]", RouteRuleIDs: "[]", Enabled: true,
+				}); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name:            "route final strategy",
+			defaultOutbound: "regional-proxy",
+			setup: func(t *testing.T, db *store.Store) {
+				if err := db.CreateProxyCollection(&model.ProxyCollection{
+					Name: "regional-proxy", Type: "selector", SourceType: "manual", NodeUIDs: `["direct"]`, ReferencedGroupIDs: "[]", RouteRuleIDs: "[]", Enabled: true,
+				}); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "manual resolver detour",
+			setup: func(t *testing.T, db *store.Store) {
+				if err := db.CreateProxyCollection(&model.ProxyCollection{
+					Name: "regional-proxy", Type: "selector", SourceType: "manual", NodeUIDs: `["direct"]`, ReferencedGroupIDs: "[]", RouteRuleIDs: "[]", Enabled: true,
+				}); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			dataDir := t.TempDir()
+			db, err := store.Open(filepath.Join(dataDir, "ackwrap.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			if testCase.setup != nil {
+				testCase.setup(t, db)
+			}
+			detour := ""
+			if testCase.name == "manual resolver detour" {
+				detour = "regional-proxy"
+			}
+			if _, err := db.CreateDNSServer(&model.DNSServerRequest{Tag: "dns_remote", Enabled: true, ServerType: "udp", Address: "1.1.1.1", Detour: detour}); err != nil {
+				t.Fatal(err)
+			}
+			_, err = NewConfigGeneratorService(db, &paths.Paths{DataDir: dataDir}).generateLockedTo(&model.ConfigGenerateRequest{
+				DefaultOutbound: testCase.defaultOutbound, InboundListen: "127.0.0.1", InboundPort: model.DefaultMixedInboundPort,
+				TUNIPv4Address: defaultTUNIPv4Address, TUNIPv6Address: defaultTUNIPv6Address, LogLevel: "warn",
+			}, filepath.Join(dataDir, "config.json"))
+			if err == nil || !strings.Contains(err.Error(), "没有可用非直连代理路径") {
+				t.Fatalf("direct-only DNS detour error = %v", err)
+			}
+		})
+	}
+}
+
+func TestHasUsableNonDirectOutboundPath(t *testing.T) {
+	if hasUsableNonDirectOutboundPath([]interface{}{
+		map[string]interface{}{"tag": "direct", "type": "direct"},
+		map[string]interface{}{"tag": "全球直连", "type": "selector", "outbounds": []string{"direct"}},
+	}, nil, []string{"全球直连"}) {
+		t.Fatal("direct-only collection was treated as a usable proxy path")
+	}
+	if !hasUsableNonDirectOutboundPath([]interface{}{
+		map[string]interface{}{"tag": "direct", "type": "direct"},
+		map[string]interface{}{"tag": "node", "type": "socks"},
+		map[string]interface{}{"tag": "Developer", "type": "selector", "outbounds": []string{"direct", "node"}},
+	}, nil, []string{"Developer"}) {
+		t.Fatal("collection with a real proxy node was not treated as a usable proxy path")
+	}
+}
+
 func TestGenerateOutboundsDoesNotApplyStrategyDNSToSharedNode(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {
@@ -1032,7 +1221,7 @@ func TestGenerateDNSFakeIPFollowsTUNMode(t *testing.T) {
 	}
 
 	service := NewConfigGeneratorService(db, nil)
-	dns := service.generateDNSFromDatabase()
+	dns := mustGenerateDNS(t, service)
 	if !generatedDNSHasServerType(dns, "fakeip") || !generatedDNSHasRuleServer(dns, "fakeip") {
 		t.Fatalf("TUN mode DNS does not contain fakeip server and rule: %+v", dns)
 	}
@@ -1046,7 +1235,7 @@ func TestGenerateDNSFakeIPFollowsTUNMode(t *testing.T) {
 	if err := db.ReorderDNSRules(ruleIDs); err != nil {
 		t.Fatal(err)
 	}
-	rules, _ = service.generateDNSFromDatabase()["rules"].([]map[string]interface{})
+	rules, _ = mustGenerateDNS(t, service)["rules"].([]map[string]interface{})
 	if got := generatedDNSDomainSuffixOrder(rules); !reflect.DeepEqual(got, []string{"third.cn", "first.cn", "second.cn"}) {
 		t.Fatalf("reordered DNS rule order = %v", got)
 	}
@@ -1061,7 +1250,7 @@ func TestGenerateDNSFakeIPFollowsTUNMode(t *testing.T) {
 	if err := db.SetDNSGlobalSettings(settings); err != nil {
 		t.Fatal(err)
 	}
-	dns = service.generateDNSFromDatabase()
+	dns = mustGenerateDNS(t, service)
 	if generatedDNSHasServerType(dns, "fakeip") || generatedDNSHasRuleServer(dns, "fakeip") {
 		t.Fatalf("Mixed mode DNS contains fakeip server or rule: %+v", dns)
 	}
@@ -1091,7 +1280,7 @@ func TestGenerateDNSGeositeUsesGeneratedRuleSet(t *testing.T) {
 	}
 
 	service := NewConfigGeneratorService(db, nil)
-	dns := service.generateDNSFromDatabase()
+	dns := mustGenerateDNS(t, service)
 	rules, _ := dns["rules"].([]map[string]interface{})
 	if len(rules) < 2 {
 		t.Fatalf("DNS rules = %+v, want geosite rule and FakeIP fallback", rules)
@@ -1127,9 +1316,9 @@ func TestGenerateDNSStrategyBindingsFollowAssociatedRouteRules(t *testing.T) {
 	}
 	defer db.Close()
 	for _, server := range []*model.DNSServerRequest{
-		{Tag: "dns_direct", Enabled: true, ServerType: "udp", Address: "1.1.1.1"},
-		{Tag: "dns_developer", Enabled: true, ServerType: "https", Address: "https://dns.example.com/dns-query", Detour: "Developer"},
-		{Tag: "dns_proxy", Enabled: true, ServerType: "https", Address: "https://proxy-dns.example.com/dns-query", Detour: "proxy"},
+		{Tag: "dns_direct", Enabled: true, ServerType: "udp", Address: "1.1.1.1", Detour: "proxy"},
+		{Tag: "dns_developer", Enabled: true, ServerType: "https", Address: "https://dns.example.com/dns-query"},
+		{Tag: "dns_proxy", Enabled: true, ServerType: "https", Address: "https://proxy-dns.example.com/dns-query"},
 	} {
 		if _, err := db.CreateDNSServer(server); err != nil {
 			t.Fatal(err)
@@ -1164,12 +1353,6 @@ func TestGenerateDNSStrategyBindingsFollowAssociatedRouteRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := db.CreateDNSRule(&model.DNSRuleRequest{
-		Enabled: true, Priority: 5, RuleType: "default",
-		Conditions: map[string]interface{}{"outbound": []string{"Developer"}, "domain_suffix": []string{"manual.example"}}, Server: "dns_direct",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.CreateDNSRule(&model.DNSRuleRequest{
 		Enabled: true, Priority: 10, RuleType: "default", Conditions: map[string]interface{}{"outbound": []string{"Developer"}}, Server: "dns_developer",
 	}); err != nil {
 		t.Fatal(err)
@@ -1185,36 +1368,342 @@ func TestGenerateDNSStrategyBindingsFollowAssociatedRouteRules(t *testing.T) {
 		}
 	}
 
-	dns := NewConfigGeneratorService(db, nil).generateDNSFromDatabase()
+	dns := mustGenerateDNS(t, NewConfigGeneratorService(db, nil))
 	rules, _ := dns["rules"].([]map[string]interface{})
 	foundDomain := false
 	foundGeoSite := false
 	foundDirect := false
 	foundProxy := false
-	foundHybridManual := false
+	developerServer := ""
+	directServer := ""
+	proxyServer := ""
 	for _, rule := range rules {
-		if rule["server"] == "dns_developer" && stringListContains(rule["domain_suffix"], "developer.example") {
+		if stringListContains(rule["domain_suffix"], "developer.example") {
 			foundDomain = true
+			developerServer, _ = rule["server"].(string)
 		}
-		if rule["server"] == "dns_developer" && stringListContains(rule["rule_set"], "geosite-cn") {
+		if stringListContains(rule["rule_set"], "geosite-cn") {
 			foundGeoSite = true
+			if server, _ := rule["server"].(string); developerServer != "" && server != developerServer {
+				t.Fatalf("developer DNS rules use different servers: %s and %s", developerServer, server)
+			}
 		}
-		if rule["server"] == "dns_direct" && stringListContains(rule["domain_keyword"], "intranet") {
+		if stringListContains(rule["domain_keyword"], "intranet") {
 			foundDirect = true
+			directServer, _ = rule["server"].(string)
 		}
-		if rule["server"] == "dns_proxy" && stringListContains(rule["domain"], "proxy.example") {
+		if stringListContains(rule["domain"], "proxy.example") {
 			foundProxy = true
-		}
-		if rule["server"] == "dns_direct" && stringListContains(rule["domain_suffix"], "manual.example") {
-			foundHybridManual = true
+			proxyServer, _ = rule["server"].(string)
 		}
 		if _, exists := rule["outbound"]; exists {
 			t.Fatalf("generated DNS strategy rule contains removed outbound matcher: %+v", rule)
 		}
 	}
-	if !foundDomain || !foundGeoSite || !foundDirect || !foundProxy || !foundHybridManual {
-		t.Fatalf("DNS rules missing strategy domain=%t geosite=%t direct=%t proxy=%t hybrid-manual=%t: %+v", foundDomain, foundGeoSite, foundDirect, foundProxy, foundHybridManual, rules)
+	if !foundDomain || !foundGeoSite || !foundDirect || !foundProxy {
+		t.Fatalf("DNS rules missing strategy domain=%t geosite=%t direct=%t proxy=%t: %+v", foundDomain, foundGeoSite, foundDirect, foundProxy, rules)
 	}
+	assertGeneratedDNSServerDetour(t, dns, developerServer, "Developer")
+	assertGeneratedDNSServerDetour(t, dns, proxyServer, "proxy")
+	assertGeneratedDNSServerDetour(t, dns, directServer, "")
+	if developerServer == "dns_developer" || proxyServer == "dns_proxy" || directServer == "dns_direct" {
+		t.Fatalf("strategy rules reused base DNS server instead of isolated detour: developer=%s proxy=%s direct=%s", developerServer, proxyServer, directServer)
+	}
+}
+
+func TestGenerateDNSFinalFollowsRouteFinalStrategy(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, server := range []*model.DNSServerRequest{
+		{Tag: "dns_direct", Enabled: true, ServerType: "udp", Address: "1.1.1.1", Detour: "proxy"},
+		{Tag: "dns_proxy", Enabled: true, ServerType: "https", Address: "https://dns.example.com/dns-query"},
+	} {
+		if _, err := db.CreateDNSServer(server); err != nil {
+			t.Fatal(err)
+		}
+	}
+	service := NewConfigGeneratorService(db, nil)
+	unboundDNS := mustGenerateDNS(t, service, "proxy")
+	unboundFinal, _ := unboundDNS["final"].(string)
+	assertGeneratedDNSServerDetour(t, unboundDNS, unboundFinal, "proxy")
+	if unboundFinal == "dns_proxy" {
+		t.Fatal("unbound route.final reused the base DNS server instead of forcing proxy detour")
+	}
+	for priority, binding := range []struct {
+		outbound string
+		server   string
+	}{{outbound: "direct", server: "dns_direct"}, {outbound: "proxy", server: "dns_proxy"}} {
+		if _, err := db.CreateDNSRule(&model.DNSRuleRequest{
+			Enabled: true, Priority: priority + 10, RuleType: "default", Conditions: map[string]interface{}{"outbound": []string{binding.outbound}}, Server: binding.server,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, testCase := range []struct {
+		outbound string
+		detour   string
+	}{{outbound: "proxy", detour: "proxy"}, {outbound: "direct", detour: ""}} {
+		dns := mustGenerateDNS(t, service, testCase.outbound)
+		finalServer, _ := dns["final"].(string)
+		if finalServer == "" {
+			t.Fatalf("route final %s did not generate DNS final", testCase.outbound)
+		}
+		assertGeneratedDNSServerDetour(t, dns, finalServer, testCase.detour)
+	}
+}
+
+func TestGenerateDNSRejectsNonRemoteStrategyServer(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.CreateDNSServer(&model.DNSServerRequest{Tag: "dns_local", Enabled: true, ServerType: "local"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateDNSRule(&model.DNSRuleRequest{
+		Enabled: true, RuleType: "default", Conditions: map[string]interface{}{"outbound": []string{"proxy"}}, Server: "dns_local",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewConfigGeneratorService(db, nil).generateDNSFromDatabase("proxy"); err == nil || !strings.Contains(err.Error(), "不能用于防泄漏策略绑定") {
+		t.Fatalf("non-remote strategy DNS error = %v", err)
+	}
+}
+
+func TestGenerateDNSRejectsInvalidPersistedStrategyBindings(t *testing.T) {
+	for _, testCase := range []struct {
+		name          string
+		outboundValue interface{}
+		extra         map[string]interface{}
+		duplicate     bool
+		rawConditions string
+		mutate        func(*store.Store, int64) error
+		wantError     string
+	}{
+		{name: "malformed conditions", outboundValue: []string{"proxy"}, rawConditions: `{`, wantError: "conditions_json 无效"},
+		{name: "empty outbound", outboundValue: []string{}, wantError: "只能包含一个 outbound"},
+		{name: "numeric outbound", outboundValue: []interface{}{123}, wantError: "只能包含一个 outbound"},
+		{name: "multiple outbounds", outboundValue: []string{"direct", "proxy"}, wantError: "只能包含一个 outbound"},
+		{name: "blocked outbound", outboundValue: []string{"block"}, wantError: "无效或未启用"},
+		{name: "whitespace outbound", outboundValue: []string{"proxy "}, wantError: "无效或未启用"},
+		{name: "unknown outbound", outboundValue: []string{"missing-strategy"}, wantError: "无效或未启用"},
+		{name: "duplicate outbound", outboundValue: []string{"proxy"}, duplicate: true, wantError: "多个启用"},
+		{name: "hybrid conditions", outboundValue: []string{"proxy"}, extra: map[string]interface{}{"domain_suffix": []string{"manual.example"}}, wantError: "只能包含 outbound 条件"},
+		{name: "disabled server", outboundValue: []string{"proxy"}, mutate: func(db *store.Store, serverID int64) error {
+			return db.UpdateDNSServer(serverID, &model.DNSServerRequest{Tag: "dns_remote", Enabled: false, ServerType: "https", Address: "https://dns.example.com/dns-query"})
+		}, wantError: "已停用"},
+		{name: "missing server", outboundValue: []string{"proxy"}, mutate: func(db *store.Store, serverID int64) error {
+			return db.DeleteDNSServer(serverID)
+		}, wantError: "不存在"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			server, err := db.CreateDNSServer(&model.DNSServerRequest{Tag: "dns_remote", Enabled: true, ServerType: "https", Address: "https://dns.example.com/dns-query"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			conditions := map[string]interface{}{"outbound": testCase.outboundValue}
+			for key, value := range testCase.extra {
+				conditions[key] = value
+			}
+			storedRule, err := db.CreateDNSRule(&model.DNSRuleRequest{
+				Enabled: true, Conditions: conditions, Server: server.Tag,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if testCase.rawConditions != "" {
+				if _, err := db.DB().Exec(`UPDATE dns_rules SET conditions_json = ? WHERE id = ?`, testCase.rawConditions, storedRule.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if testCase.duplicate {
+				if _, err := db.CreateDNSRule(&model.DNSRuleRequest{Enabled: true, Conditions: conditions, Server: server.Tag}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if testCase.mutate != nil {
+				if err := testCase.mutate(db, server.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := NewConfigGeneratorService(db, nil).generateDNSFromDatabase("proxy"); err == nil || !strings.Contains(err.Error(), testCase.wantError) {
+				t.Fatalf("invalid persisted strategy binding error = %v, want %q", err, testCase.wantError)
+			}
+		})
+	}
+}
+
+func TestGenerateDNSFailsWhenStrategyRuleSourceUnavailable(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	server, err := db.CreateDNSServer(&model.DNSServerRequest{Tag: "dns_remote", Enabled: true, ServerType: "udp", Address: "1.1.1.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateDNSRule(&model.DNSRuleRequest{
+		Enabled: true, Conditions: map[string]interface{}{"outbound": []string{"proxy"}}, Server: server.Tag,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB().Exec(`DROP TABLE route_rules`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewConfigGeneratorService(db, nil).generateDNSFromDatabase("direct"); err == nil || !strings.Contains(err.Error(), "读取策略关联路由规则失败") {
+		t.Fatalf("strategy rule source error = %v", err)
+	}
+}
+
+func TestGenerateDNSRejectsUnsafePersistedServerConfiguration(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		detour  string
+		options map[string]interface{}
+		want    string
+	}{
+		{name: "block detour", detour: "block", want: "detour 不能是 block"},
+		{name: "reject detour", detour: "reject", want: "detour 不能是 reject"},
+		{name: "options detour", options: map[string]interface{}{"detour": "direct"}, want: "options 不能覆盖受控字段 detour"},
+		{name: "options type", options: map[string]interface{}{"type": "local"}, want: "options 不能覆盖受控字段 type"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			if _, err := db.CreateDNSServer(&model.DNSServerRequest{
+				Tag: "dns_remote", Enabled: true, ServerType: "udp", Address: "1.1.1.1", Detour: testCase.detour, Options: testCase.options,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := NewConfigGeneratorService(db, nil).generateDNSFromDatabase(); err == nil || !strings.Contains(err.Error(), testCase.want) {
+				t.Fatalf("unsafe persisted DNS Server configuration error = %v, want %q", err, testCase.want)
+			}
+		})
+	}
+}
+
+func TestStrategyBindingSourceErrorsFailConfigGeneration(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.DB().Exec(`DROP TABLE proxy_collections`); err != nil {
+		t.Fatal(err)
+	}
+	service := NewConfigGeneratorService(db, nil)
+	if _, err := service.generateRoute("direct"); err == nil || !strings.Contains(err.Error(), "读取策略组规则绑定失败") {
+		t.Fatalf("route strategy binding source error = %v", err)
+	}
+	if _, err := service.generateDNSStrategyRulePlans(map[string]model.DNSRule{"proxy": {Enabled: true, Server: "dns_remote"}}); err == nil || !strings.Contains(err.Error(), "读取策略组规则绑定失败") {
+		t.Fatalf("DNS strategy binding source error = %v", err)
+	}
+}
+
+func TestGenerateRouteRejectsMalformedDNSRuleConditions(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	rule, err := db.CreateDNSRule(&model.DNSRuleRequest{
+		Enabled: true, Conditions: map[string]interface{}{"domain_suffix": []string{"example.com"}}, Server: "dns_remote",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB().Exec(`UPDATE dns_rules SET conditions_json = '{' WHERE id = ?`, rule.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewConfigGeneratorService(db, nil).generateRoute("direct"); err == nil || !strings.Contains(err.Error(), "conditions_json 无效") {
+		t.Fatalf("malformed DNS route rule error = %v", err)
+	}
+}
+
+func TestDNSGlobalEnablementControlsConfigAndHijackTogether(t *testing.T) {
+	dataDir := t.TempDir()
+	db, err := store.Open(filepath.Join(dataDir, "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.CreateDNSServer(&model.DNSServerRequest{
+		Tag: "dns_remote", Enabled: true, ServerType: "udp", Address: "1.1.1.1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	legacy := &model.DNSSettings{Enabled: false, Final: "dns_remote", Strategy: "prefer_ipv4"}
+	if err := db.SetDNSSettings(legacy); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB().Exec(`DELETE FROM app_settings WHERE key LIKE 'dns_global.%'`); err != nil {
+		t.Fatal(err)
+	}
+	global, err := db.GetDNSGlobalSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if global.Enabled {
+		t.Fatal("legacy DNS endpoint did not disable global DNS settings")
+	}
+
+	service := NewConfigGeneratorService(db, &paths.Paths{DataDir: dataDir})
+	generate := func(name string) map[string]interface{} {
+		t.Helper()
+		result, err := service.generateLockedTo(&model.ConfigGenerateRequest{
+			DefaultOutbound: "direct", InboundListen: "127.0.0.1", InboundPort: model.DefaultMixedInboundPort,
+			TUNIPv4Address: defaultTUNIPv4Address, TUNIPv6Address: defaultTUNIPv6Address, LogLevel: "warn",
+		}, filepath.Join(dataDir, name+".json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result.Config
+	}
+	assertState := func(config map[string]interface{}, enabled bool) {
+		t.Helper()
+		_, hasDNS := config["dns"]
+		route, _ := config["route"].(map[string]interface{})
+		rules, _ := route["rules"].([]map[string]interface{})
+		portHijack, protocolHijack := false, false
+		for _, rule := range rules {
+			if rule["action"] != "hijack-dns" {
+				continue
+			}
+			portHijack = portHijack || rule["port"] == 53
+			protocolHijack = protocolHijack || rule["protocol"] == "dns"
+		}
+		if hasDNS != enabled || portHijack != enabled || protocolHijack != enabled {
+			t.Fatalf("DNS state enabled=%t section=%t port-hijack=%t protocol-hijack=%t: %+v", enabled, hasDNS, portHijack, protocolHijack, rules)
+		}
+	}
+	assertState(generate("dns-disabled"), false)
+
+	global.Enabled = true
+	global.Final = "dns_remote"
+	if err := db.SetDNSGlobalSettings(global); err != nil {
+		t.Fatal(err)
+	}
+	legacyState, err := db.GetDNSSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !legacyState.Enabled {
+		t.Fatal("global DNS endpoint did not enable legacy DNS settings")
+	}
+	assertState(generate("dns-enabled"), true)
 }
 
 func TestDNSConditionsFromMixedRouteRuleSkipsAddressConditions(t *testing.T) {
@@ -1261,6 +1750,25 @@ func TestGeneratedDNSConfigurationPassesAvailableSingBoxCheck(t *testing.T) {
 		if _, err := db.CreateDNSServer(server); err != nil {
 			t.Fatal(err)
 		}
+	}
+	subscription, err := db.CreateSubscription(&model.SubscriptionRequest{Name: "proxy-nodes", URL: "https://example.com/subscription"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReplaceSubscriptionNodes(subscription.ID, []model.ParsedNode{{
+		Name: "Proxy Node", Type: "socks", Server: "192.0.2.1", ServerPort: 1080,
+		RawJSON: `{"type":"socks","server":"192.0.2.1","server_port":1080}`,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	nodes, err := db.ListEnabledNodes()
+	if err != nil || len(nodes) != 1 {
+		t.Fatalf("proxy nodes = %d, %v", len(nodes), err)
+	}
+	if err := db.CreateProxyCollection(&model.ProxyCollection{
+		Name: "proxy", Type: "selector", SourceType: "manual", NodeUIDs: fmt.Sprintf("[%q]", nodes[0].UID), ReferencedGroupIDs: "[]", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := db.CreateRouteRule(&model.RouteRuleRequest{
 		Name: "Proxy GeoSite", Enabled: true, Priority: 10, RuleType: "geosite", Values: []string{"cn"}, Outbound: "proxy",
@@ -1309,6 +1817,15 @@ func TestGeneratedDNSConfigurationPassesAvailableSingBoxCheck(t *testing.T) {
 	}
 }
 
+func mustGenerateDNS(t *testing.T, service *ConfigGeneratorService, routeFinal ...string) map[string]interface{} {
+	t.Helper()
+	dns, err := service.generateDNSFromDatabase(routeFinal...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dns
+}
+
 func generatedDNSHasServerType(dns map[string]interface{}, serverType string) bool {
 	servers, _ := dns["servers"].([]map[string]interface{})
 	for _, server := range servers {
@@ -1317,6 +1834,22 @@ func generatedDNSHasServerType(dns map[string]interface{}, serverType string) bo
 		}
 	}
 	return false
+}
+
+func assertGeneratedDNSServerDetour(t *testing.T, dns map[string]interface{}, tag, expected string) {
+	t.Helper()
+	servers, _ := dns["servers"].([]map[string]interface{})
+	for _, server := range servers {
+		if server["tag"] != tag {
+			continue
+		}
+		detour, _ := server["detour"].(string)
+		if detour != expected {
+			t.Fatalf("DNS server %s detour = %q, want %q: %+v", tag, detour, expected, server)
+		}
+		return
+	}
+	t.Fatalf("DNS server %s not found: %+v", tag, servers)
 }
 
 func generatedDNSHasRuleServer(dns map[string]interface{}, serverTag string) bool {
@@ -1397,6 +1930,25 @@ func TestPreviewRequestPreservesStoredGenerationSettings(t *testing.T) {
 	}
 	if *persisted != *stored {
 		t.Fatalf("stored generation settings changed: got %+v, want %+v", persisted, stored)
+	}
+}
+
+func TestPreviewRejectsUnvalidatedConfiguration(t *testing.T) {
+	dataDir := t.TempDir()
+	db, err := store.Open(filepath.Join(dataDir, "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.CreateDNSServer(&model.DNSServerRequest{
+		Tag: "dns_direct", Enabled: true, ServerType: "udp", Address: "1.1.1.1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	service := NewConfigGeneratorService(db, &paths.Paths{DataDir: dataDir})
+	if _, err := service.Preview("direct"); err == nil || !strings.Contains(err.Error(), "sing-box 未安装") {
+		t.Fatalf("unvalidated preview error = %v", err)
 	}
 }
 

@@ -65,7 +65,8 @@ const defaults = {
   ruleOrderPending = ref(false),
   bindings = ref<Record<string, string>>({}),
   outboundOrder = ref<string[]>([]),
-  preview = ref("");
+  preview = ref(""),
+  previewingBinding = ref("");
 const types = [
     "udp",
     "tcp",
@@ -79,6 +80,14 @@ const types = [
     "fakeip",
     "rcode",
   ],
+  strategyDNSServerTypes = new Set([
+    "udp",
+    "tcp",
+    "tls",
+    "https",
+    "quic",
+    "h3",
+  ]),
   conditions = [
     "domain",
     "domain_suffix",
@@ -371,6 +380,62 @@ async function saveBinding(x: string) {
     show(`保存策略 DNS 绑定失败: ${e.message}`, "error");
   }
 }
+async function previewBinding(outbound: string) {
+  const persistedServer = bindingRule(outbound)?.server ?? "";
+  const selectedServer = bindings.value[outbound] ?? persistedServer;
+  if (!selectedServer) {
+    show("请先选择并保存策略 DNS 绑定", "error");
+    return;
+  }
+  if (selectedServer !== persistedServer) {
+    show("DNS Server 选择尚未保存，请保存绑定后再预览", "error");
+    return;
+  }
+
+  previewingBinding.value = outbound;
+  try {
+    const config = await request("/api/v1/config/preview"),
+      generatedRules: Record<string, any>[] = Array.isArray(config?.dns?.rules)
+        ? config.dns.rules
+        : [],
+      requiredRuleSets = new Set<string>();
+    for (const rule of generatedRules) {
+      const tags = Array.isArray(rule?.rule_set)
+        ? rule.rule_set
+        : typeof rule?.rule_set === "string"
+          ? [rule.rule_set]
+          : [];
+      for (const tag of tags) requiredRuleSets.add(tag);
+    }
+    const routeRuleSets = Array.isArray(config?.route?.rule_set)
+      ? config.route.rule_set.filter((ruleSet: Record<string, any>) =>
+          requiredRuleSets.has(ruleSet?.tag),
+        )
+      : [];
+    const output: Record<string, any> = { dns: config?.dns || {} };
+    if (config?.route?.default_domain_resolver) {
+      output.route = {
+        default_domain_resolver: config.route.default_domain_resolver,
+      };
+    }
+    if (routeRuleSets.length) {
+      output.route = { ...(output.route || {}), rule_set: routeRuleSets };
+    }
+    const hijackRules = Array.isArray(config?.route?.rules)
+      ? config.route.rules.filter(
+          (rule: Record<string, any>) => rule?.action === "hijack-dns",
+        )
+      : [];
+    if (hijackRules.length) {
+      output.route = { ...(output.route || {}), rules: hijackRules };
+    }
+    preview.value = JSON.stringify(output, null, 2);
+  } catch (e: any) {
+    show(`生成策略 DNS 预览失败: ${e.message}`, "error");
+  } finally {
+    previewingBinding.value = "";
+  }
+}
 function newRule() {
   ruleForm.value = {
     enabled: true,
@@ -651,7 +716,8 @@ onMounted(load);
         <h3 class="font-semibold">策略 DNS 绑定</h3>
         <p class="mt-1 text-xs text-[var(--text-tertiary)]">
           规则模式下复用策略关联路由规则的域名、GeoSite 和 rule_set 条件生成
-          dns.rules；不会修改策略组共享节点。
+          dns.rules，并为 DNS Server 生成强制经过该策略的独立 detour，防止代理域名
+          DNS 查询直连泄漏。
         </p>
         <div class="aw-data-table-wrap mt-4">
           <table class="aw-data-table min-w-[760px]">
@@ -685,7 +751,8 @@ onMounted(load);
                     <option value="">不绑定</option>
                     <option
                       v-for="s in servers.filter(
-                        (s) => s.enabled && s.server_type !== 'fakeip',
+                        (s) =>
+                          s.enabled && strategyDNSServerTypes.has(s.server_type),
                       )"
                       :value="s.tag"
                     >
@@ -704,27 +771,10 @@ onMounted(load);
                   <div class="flex gap-2">
                     <button
                       class="aw-action-button aw-action-neutral"
-                      @click="
-                        preview = JSON.stringify(
-                          {
-                            strategy: x,
-                            dns_server:
-                              bindings[x] ?? bindingRule(x)?.server ?? '(未绑定)',
-                            source:
-                              x === 'direct' || x === 'proxy'
-                                ? `最终出站为 ${x} 的路由规则`
-                                : `策略组 ${x} 关联的路由规则`,
-                            generated:
-                              '复用 domain/domain_suffix/domain_keyword/geosite/rule_set 条件生成 dns.rules',
-                            ignored:
-                              'IP CIDR、GeoIP 等无法在 DNS 查询前判断的条件不会生成 DNS 规则',
-                          },
-                          null,
-                          2,
-                        )
-                      "
+                      :disabled="previewingBinding === x"
+                      @click="previewBinding(x)"
                     >
-                      预览</button
+                      {{ previewingBinding === x ? "生成中..." : "预览" }}</button
                     ><button
                       class="aw-action-button aw-action-success"
                       @click="saveBinding(x)"
@@ -835,7 +885,7 @@ onMounted(load);
       @save="saveRule"
     />
     <div v-if="preview" class="aw-modal-backdrop" @click="preview = ''">
-      <pre class="aw-modal-panel max-w-xl p-5">{{ preview }}</pre>
+      <pre class="aw-modal-panel max-w-3xl p-5" @click.stop>{{ preview }}</pre>
     </div>
   </div>
 </template>

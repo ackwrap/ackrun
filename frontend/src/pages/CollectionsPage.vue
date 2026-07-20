@@ -76,6 +76,14 @@ interface Rule {
   outbound: string;
   enabled: boolean;
 }
+const strategyDNSServerTypes = new Set([
+  "udp",
+  "tcp",
+  "tls",
+  "https",
+  "quic",
+  "h3",
+]);
 const active = ref<"node-groups" | "collections">("node-groups"),
   groups = ref<NG[]>([]),
   collections = ref<Col[]>([]),
@@ -1184,7 +1192,8 @@ onMounted(load);
             <option value="">不绑定（使用默认 DNS）</option>
             <option
               v-for="server in dnsServers.filter(
-                (item) => item.enabled && item.server_type !== 'fakeip',
+                (item) =>
+                  item.enabled && strategyDNSServerTypes.has(item.server_type),
               )"
               :key="server.tag"
               :value="server.tag"
@@ -1194,7 +1203,7 @@ onMounted(load);
           </select>
           <small class="text-[11px] text-[var(--text-tertiary)]">
             复用该策略组关联路由规则的域名、GeoSite 和 rule_set 条件生成 DNS
-            规则；不会修改与其他策略组共享的节点
+            规则，并强制 DNS 查询经过当前策略 detour，避免代理域名查询直连泄漏
           </small>
         </label>
         <template v-if="colType === 'urltest'">
