@@ -4,11 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"log"
+	"mime"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
 	"strings"
 	"syscall"
 	"time"
@@ -21,13 +25,25 @@ import (
 	"github.com/ackwrap/ackwrap/internal/paths"
 	"github.com/ackwrap/ackwrap/internal/service"
 	"github.com/ackwrap/ackwrap/internal/store"
+	"github.com/ackwrap/ackwrap/internal/webui"
 )
 
-const defaultListenAddr = "127.0.0.1:8080"
+const defaultListenAddr = "0.0.0.0:8080"
 
 type serverConfig struct {
 	ListenAddr string
 	APIToken   string
+}
+
+type accessTokenRedactingWriter struct {
+	io.Writer
+}
+
+func (writer accessTokenRedactingWriter) Write(value []byte) (int, error) {
+	if _, err := writer.Writer.Write([]byte(logging.RedactAccessToken(string(value)))); err != nil {
+		return 0, err
+	}
+	return len(value), nil
 }
 
 func loadServerConfig() (serverConfig, error) {
@@ -56,6 +72,42 @@ func loadServerConfig() (serverConfig, error) {
 	return config, nil
 }
 
+func registerWebUI(router *gin.Engine) error {
+	dist, err := fs.Sub(webui.Files, "dist")
+	if err != nil {
+		return fmt.Errorf("open embedded UI: %w", err)
+	}
+	index, err := fs.ReadFile(dist, "index.html")
+	if err != nil {
+		return fmt.Errorf("read embedded UI index: %w", err)
+	}
+	router.NoRoute(func(c *gin.Context) {
+		if strings.HasPrefix(c.Request.URL.Path, "/api") {
+			c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"code": "NOT_FOUND", "message": "not found"}})
+			return
+		}
+		fileName := strings.TrimPrefix(c.Request.URL.Path, "/")
+		if fileName != "" && fs.ValidPath(fileName) {
+			if data, readErr := fs.ReadFile(dist, fileName); readErr == nil {
+				contentType := mime.TypeByExtension(path.Ext(fileName))
+				if contentType == "" {
+					contentType = "application/octet-stream"
+				}
+				if strings.HasPrefix(fileName, "assets/") {
+					c.Header("Cache-Control", "public, max-age=31536000, immutable")
+				}
+				c.Data(http.StatusOK, contentType, data)
+				return
+			}
+		}
+		c.Header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+		c.Header("Pragma", "no-cache")
+		c.Header("Expires", "0")
+		c.Data(http.StatusOK, "text/html; charset=utf-8", index)
+	})
+	return nil
+}
+
 func main() {
 	serverCfg, err := loadServerConfig()
 	if err != nil {
@@ -75,8 +127,18 @@ func main() {
 	defer db.Close()
 
 	realtimeSvc := service.NewRealtimeService()
+	toolLogEvents, stopToolLogEvents := logging.SubscribeToolLogs(256)
+	defer stopToolLogEvents()
+	go func() {
+		for entry := range toolLogEvents {
+			realtimeSvc.Broadcast("tool.log", entry)
+		}
+	}()
 	coreLogSvc := service.NewCoreLogService()
 	singboxSvc := service.NewSingboxService(p, realtimeSvc, coreLogSvc, db)
+	if err := singboxSvc.RecoverStaleState(); err != nil {
+		logging.Error("core.cleanup", "启动时清理 sing-box 网络残留失败: %v", err)
+	}
 	runtimeSvc := service.NewRuntimeService(p, db, singboxSvc)
 	installerSvc := service.NewInstallerService(db, p, realtimeSvc)
 	configSvc := service.NewConfigService(p, db, realtimeSvc)
@@ -84,6 +146,9 @@ func main() {
 		logging.Error("config.migrate", "启动时配置兼容迁移失败: %v", err)
 	} else if migrated {
 		logging.Info("config.migrate", "启动时配置兼容迁移完成")
+	}
+	if _, err := configSvc.ListBackups(); err != nil {
+		logging.Error("config.backup", "启动时整理配置备份失败: %v", err)
 	}
 	installerSvc.SetPostInstallHook(func(version string) error {
 		_, err := configSvc.MigrateCompatibility(version)
@@ -105,15 +170,21 @@ func main() {
 			logging.Info("main", "初始化实验性功能默认配置失败: %v", err)
 		}
 	}
-
 	subscriptionSvc := service.NewSubscriptionService(db, realtimeSvc)
 	nodeSvc := service.NewNodeService(db)
+	nodeSvc.SetRealtimeService(realtimeSvc)
 	routeRuleSvc := service.NewRouteRuleService(db, p, realtimeSvc)
 	proxyCollectionSvc := service.NewProxyCollectionService(db, realtimeSvc)
 	configGenSvc := service.NewConfigGeneratorService(db, p, singboxSvc)
 	settingsSvc.SetModeDependencies(singboxSvc, configGenSvc)
+	settingsSvc.SetConnectivitySettingsHook(proxyCollectionSvc.RefreshHealthCheckJobs)
 	reconcileSvc := service.NewConfigReconcileService(configGenSvc, realtimeSvc)
 	defer reconcileSvc.Close()
+	coreRestartSvc := service.NewCoreRestartScheduler(db, singboxSvc, realtimeSvc)
+	if err := coreRestartSvc.StartScheduler(); err != nil {
+		logging.Error("core.restart_scheduler", "启动核心定时重启调度器失败: %v", err)
+	}
+	defer coreRestartSvc.StopScheduler()
 	dnsSvc := service.NewDNSService(db)
 	nodeGroupSvc := service.NewNodeGroupService(db)
 
@@ -127,22 +198,17 @@ func main() {
 	defer proxyCollectionSvc.StopScheduler()
 
 	gin.SetMode(gin.ReleaseMode)
-	r := gin.Default()
+	r := gin.New()
+	r.Use(
+		gin.LoggerWithWriter(accessTokenRedactingWriter{Writer: gin.DefaultWriter}),
+		gin.RecoveryWithWriter(accessTokenRedactingWriter{Writer: gin.DefaultErrorWriter}),
+	)
 
 	r.Use(api.SecurityMiddleware(serverCfg.APIToken))
-	r.Static("/assets", "./ui/assets")
-	api.RegisterRoutes(r, runtimeSvc, installerSvc, singboxSvc, configSvc, settingsSvc, subscriptionSvc, nodeSvc, routeRuleSvc, proxyCollectionSvc, configGenSvc, realtimeSvc, coreLogSvc, dnsSvc, nodeGroupSvc, reconcileSvc)
-
-	r.NoRoute(func(c *gin.Context) {
-		if len(c.Request.URL.Path) >= 4 && c.Request.URL.Path[:4] == "/api" {
-			c.JSON(404, gin.H{"error": gin.H{"code": "NOT_FOUND", "message": "not found"}})
-			return
-		}
-		c.Header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
-		c.Header("Pragma", "no-cache")
-		c.Header("Expires", "0")
-		c.File("./ui/index.html")
-	})
+	api.RegisterRoutes(r, runtimeSvc, installerSvc, singboxSvc, configSvc, settingsSvc, subscriptionSvc, nodeSvc, routeRuleSvc, proxyCollectionSvc, configGenSvc, realtimeSvc, coreLogSvc, dnsSvc, nodeGroupSvc, reconcileSvc, coreRestartSvc)
+	if err := registerWebUI(r); err != nil {
+		log.Fatalf("register embedded UI: %v", err)
+	}
 
 	server := &http.Server{
 		Addr:              serverCfg.ListenAddr,
@@ -155,16 +221,23 @@ func main() {
 		serverErrors <- server.ListenAndServe()
 	}()
 
-	shutdownSignal, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stopSignals()
+	shutdownSignals := make(chan os.Signal, 1)
+	signal.Notify(shutdownSignals, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(shutdownSignals)
 	select {
 	case err := <-serverErrors:
 		if !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("server error: %v", err)
 		}
 		return
-	case <-shutdownSignal.Done():
-		logging.Info("main", "shutdown signal received")
+	case shutdownSignal := <-shutdownSignals:
+		logging.Info("main", "shutdown signal received: %s", shutdownSignal)
+	}
+	coreRestartSvc.StopScheduler()
+	if singboxSvc.IsRunning() {
+		if _, err := singboxSvc.Shutdown(); err != nil {
+			logging.Error("main", "stop sing-box during shutdown: %v", err)
+		}
 	}
 
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)

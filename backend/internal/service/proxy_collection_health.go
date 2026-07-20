@@ -12,32 +12,47 @@ import (
 
 	"github.com/ackwrap/ackwrap/internal/logging"
 	"github.com/ackwrap/ackwrap/internal/model"
+	"github.com/robfig/cron/v3"
 )
 
 func (s *ProxyCollectionService) StartScheduler() {
+	s.healthJobsMu.Lock()
+	defer s.healthJobsMu.Unlock()
+
 	collections, err := s.store.ListProxyCollections()
 	if err != nil {
 		logging.Error("proxy_collection.scheduler", "加载策略组失败: %v", err)
 		return
 	}
 	for _, collection := range collections {
-		s.scheduleHealthCheckJob(collection)
+		s.scheduleHealthCheckJobLocked(collection)
 	}
 	s.cron.Start()
-	logging.Info("proxy_collection.scheduler", "健康检查调度器已启动，任务数: %d", len(s.entries))
+	s.mu.Lock()
+	taskCount := len(s.entries)
+	s.mu.Unlock()
+	logging.Info("proxy_collection.scheduler", "健康检查调度器已启动，任务数: %d", taskCount)
 }
 
 func (s *ProxyCollectionService) StopScheduler() {
+	s.healthJobsMu.Lock()
+	defer s.healthJobsMu.Unlock()
+
 	ctx := s.cron.Stop()
 	<-ctx.Done()
 	logging.Info("proxy_collection.scheduler", "健康检查调度器已停止")
 }
 
-func (s *ProxyCollectionService) scheduleHealthCheckJob(collection *model.ProxyCollection) {
-	if collection == nil || !collection.Enabled || collection.Type != "urltest" || collection.TestInterval < 60 {
+func (s *ProxyCollectionService) scheduleHealthCheckJobLocked(collection *model.ProxyCollection) {
+	if collection == nil || !collection.Enabled || collection.Type != "urltest" {
 		return
 	}
-	entryID, err := s.cron.AddFunc(fmt.Sprintf("@every %ds", collection.TestInterval), func() {
+	settings, err := s.store.GetConnectivitySettings()
+	if err != nil {
+		logging.Error("proxy_collection.scheduler", "读取连通性测速设置失败 collection=%d: %v", collection.ID, err)
+		return
+	}
+	entryID, err := s.cron.AddFunc(fmt.Sprintf("@every %ds", settings.IntervalSeconds), func() {
 		if _, err := s.Test(collection.ID); err != nil {
 			logging.Error("proxy_collection.test", "定时健康检查失败 collection=%d: %v", collection.ID, err)
 			if s.realtime != nil {
@@ -54,7 +69,42 @@ func (s *ProxyCollectionService) scheduleHealthCheckJob(collection *model.ProxyC
 	s.mu.Unlock()
 }
 
+func (s *ProxyCollectionService) RefreshHealthCheckJobs() {
+	s.healthJobsMu.Lock()
+	defer s.healthJobsMu.Unlock()
+
+	s.mu.Lock()
+	entryIDs := make([]cron.EntryID, 0, len(s.entries))
+	for _, entryID := range s.entries {
+		entryIDs = append(entryIDs, entryID)
+	}
+	s.entries = make(map[int]cron.EntryID)
+	s.mu.Unlock()
+	for _, entryID := range entryIDs {
+		s.cron.Remove(entryID)
+	}
+
+	collections, err := s.store.ListProxyCollections()
+	if err != nil {
+		logging.Error("proxy_collection.scheduler", "刷新健康检查任务失败: %v", err)
+		return
+	}
+	for _, collection := range collections {
+		s.scheduleHealthCheckJobLocked(collection)
+	}
+	s.mu.Lock()
+	taskCount := len(s.entries)
+	s.mu.Unlock()
+	logging.Info("proxy_collection.scheduler", "健康检查任务已刷新，任务数: %d", taskCount)
+}
+
 func (s *ProxyCollectionService) removeHealthCheckJob(id int) {
+	s.healthJobsMu.Lock()
+	defer s.healthJobsMu.Unlock()
+	s.removeHealthCheckJobLocked(id)
+}
+
+func (s *ProxyCollectionService) removeHealthCheckJobLocked(id int) {
 	s.mu.Lock()
 	entryID, ok := s.entries[id]
 	if ok {
@@ -67,10 +117,13 @@ func (s *ProxyCollectionService) removeHealthCheckJob(id int) {
 }
 
 func (s *ProxyCollectionService) refreshHealthCheckJob(id int) {
-	s.removeHealthCheckJob(id)
+	s.healthJobsMu.Lock()
+	defer s.healthJobsMu.Unlock()
+
+	s.removeHealthCheckJobLocked(id)
 	collection, err := s.store.GetProxyCollection(id)
 	if err == nil {
-		s.scheduleHealthCheckJob(collection)
+		s.scheduleHealthCheckJobLocked(collection)
 	}
 }
 
@@ -99,6 +152,10 @@ func (s *ProxyCollectionService) Test(id int) (*model.CollectionTestResponse, er
 	if len(nodes) == 0 {
 		return nil, fmt.Errorf("策略组没有可测速的已启用节点")
 	}
+	settings, err := s.store.GetConnectivitySettings()
+	if err != nil {
+		return nil, fmt.Errorf("读取连通性测速设置失败: %w", err)
+	}
 
 	logging.Info("proxy_collection.test", "开始策略组健康检查 collection=%d nodes=%d", id, len(nodes))
 	results := make([]model.CollectionTestNodeResult, 0, len(nodes))
@@ -113,7 +170,7 @@ func (s *ProxyCollectionService) Test(id int) (*model.CollectionTestResponse, er
 		go func() {
 			defer workers.Done()
 			for node := range jobs {
-				resultCh <- s.testNode(node.UID, nodeTags[node.UID], collection.TestURL)
+				resultCh <- s.testNode(node.UID, nodeTags[node.UID], settings.TestURL)
 			}
 		}()
 	}
@@ -171,7 +228,7 @@ func (s *ProxyCollectionService) collectionNodes(collection *model.ProxyCollecti
 			}
 		}
 	}
-	if collection.SourceType != "node_groups" {
+	if !isCollectionGroupSource(collection.SourceType) {
 		items, err := s.store.ListNodesByUIDs(collection.NodeUIDs)
 		if err != nil {
 			return nil, err
@@ -210,10 +267,13 @@ func (s *ProxyCollectionService) testNode(uid, outboundTag, testURL string) mode
 	}
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return model.CollectionTestNodeResult{UID: uid, Error: "无法连接 sing-box Clash API: " + err.Error()}
+		return model.CollectionTestNodeResult{UID: uid, Error: "无法连接 sing-box: " + err.Error()}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusNotFound {
+			return model.CollectionTestNodeResult{UID: uid, Error: "节点尚未载入当前运行配置，请等待配置自动应用完成后重试"}
+		}
 		return model.CollectionTestNodeResult{UID: uid, Error: fmt.Sprintf("Clash API 返回 HTTP %d", resp.StatusCode)}
 	}
 	var payload struct {

@@ -17,11 +17,19 @@
   --color-warning-bg: rgba(250, 173, 20, 0.14);
   --color-error: #FF4D4F;
   --color-error-bg: rgba(255, 77, 79, 0.14);
+  --latency-low: oklch(0.551 0.08 167);
+  --latency-low-bg: color-mix(in srgb, var(--latency-low) 14%, transparent);
+  --latency-medium: oklch(0.72 0.14 85);
+  --latency-medium-bg: color-mix(in srgb, var(--latency-medium) 14%, transparent);
+  --latency-high: oklch(0.56 0.17 22);
+  --latency-high-bg: color-mix(in srgb, var(--latency-high) 14%, transparent);
+  --latency-unknown: color-mix(in srgb, var(--text-primary) 60%, transparent);
   --bg-base: #0B0F14;
   --bg-surface: rgba(20, 26, 35, 0.94);
   --bg-elevated: #171E28;
   --bg-sidebar: #0E141C;
   --bg-sidebar-hover: rgba(47, 129, 247, 0.12);
+  --table-row-hover: rgba(47, 129, 247, 0.16);
   --bg-sidebar-active: #1F6FEB;
   --bg-overlay: rgba(0, 0, 0, 0.45);
   --text-primary: #F8FAFC;
@@ -37,6 +45,11 @@
   --radius-full: 9999px;
   --shadow-card: 0 10px 30px rgba(0, 0, 0, 0.20), inset 0 1px 0 rgba(255, 255, 255, 0.035);
   --shadow-xl: 0 24px 72px rgba(0, 0, 0, 0.38);
+  --proxy-card-bg: rgba(20, 26, 35, 0.96);
+  --proxy-card-border: rgba(148, 163, 184, 0.14);
+  --proxy-card-shadow: 0 8px 24px rgba(0, 0, 0, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.025);
+  --proxy-node-bg: rgba(255, 255, 255, 0.035);
+  --proxy-node-hover: rgba(255, 255, 255, 0.07);
   --app-bg-image: radial-gradient(circle at 14% -10%, rgba(47, 129, 247, 0.13), transparent 32%), linear-gradient(180deg, #0B0F14 0%, #0D131B 100%);
   --header-bg: rgba(11, 15, 20, 0.78);
   --text-sidebar: #B8C2D6;
@@ -45,6 +58,7 @@
   --duration-normal: 250ms;
   --easing-default: cubic-bezier(0.4, 0, 0.2, 1);
   --z-modal: 1000;
+  --z-toast: 1100;
 }
 
 :root[data-theme='light'] {
@@ -71,6 +85,7 @@
   --bg-elevated: #FFFFFF;
   --bg-sidebar: #FFFFFF;
   --bg-sidebar-hover: rgba(37, 99, 235, 0.10);
+  --table-row-hover: rgba(37, 99, 235, 0.08);
   --bg-sidebar-active: #2563EB;
   --bg-overlay: rgba(15, 23, 42, 0.28);
   --text-primary: #0F172A;
@@ -83,6 +98,11 @@
   --border-light: rgba(30, 41, 59, 0.10);
   --shadow-card: 0 8px 24px rgba(15, 23, 42, 0.07), inset 0 1px 0 rgba(255, 255, 255, 0.9);
   --shadow-xl: 0 24px 64px rgba(15, 23, 42, 0.18);
+  --proxy-card-bg: #FFFFFF;
+  --proxy-card-border: rgba(15, 23, 42, 0.055);
+  --proxy-card-shadow: 0 3px 14px rgba(15, 23, 42, 0.055);
+  --proxy-node-bg: #F7F8FA;
+  --proxy-node-hover: #F0F3F7;
   --app-bg-image: radial-gradient(circle at 12% -10%, rgba(37, 99, 235, 0.09), transparent 30%), linear-gradient(180deg, #F8FAFC 0%, #F1F5F9 100%);
   --header-bg: rgba(255, 255, 255, 0.82);
 }

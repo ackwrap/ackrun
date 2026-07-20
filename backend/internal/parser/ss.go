@@ -65,11 +65,11 @@ func parseShadowsocks(raw string) (*model.ParsedNode, error) {
 	}
 	node := map[string]any{"name": name, "type": "shadowsocks", "server": server, "port": port, "cipher": method, "password": password, "udp": true}
 	if plugin := query["plugin"]; plugin != "" {
-		applySSPlugin(node, plugin)
-	}
-	if plugin := query["plugin"]; plugin != "" {
-		if pluginName := extractPluginName(plugin); pluginName == "v2ray-plugin" {
-			applyV2rayPlugin(node, plugin)
+		pluginText := decodeURLValue(plugin)
+		pluginName, pluginOptions, _ := strings.Cut(pluginText, ";")
+		node["plugin"] = strings.TrimSpace(pluginName)
+		if pluginOptions != "" {
+			node["plugin-opts"] = pluginOptions
 		}
 	}
 	if truthy(query["tls"]) || strings.EqualFold(query["tls"], "true") {
@@ -97,75 +97,4 @@ func splitAuth(auth string) (string, string) {
 		return "", ""
 	}
 	return auth[:idx], auth[idx+1:]
-}
-
-func extractPluginName(pluginRaw string) string {
-	pluginText := decodeURLValue(pluginRaw)
-	parts := strings.Split(pluginText, ";")
-	if len(parts) == 0 {
-		return ""
-	}
-	return strings.TrimSpace(parts[0])
-}
-
-func applySSPlugin(node map[string]any, pluginRaw string) {
-	pluginText := decodeURLValue(pluginRaw)
-	parts := strings.Split(pluginText, ";")
-	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {
-		return
-	}
-	plugin := strings.TrimSpace(parts[0])
-	if plugin == "obfs-local" || plugin == "simple-obfs" {
-		plugin = "obfs"
-	}
-	node["plugin"] = plugin
-	opts := map[string]any{}
-	for _, part := range parts[1:] {
-		kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
-		if len(kv) != 2 {
-			continue
-		}
-		key, value := kv[0], kv[1]
-		switch plugin {
-		case "obfs":
-			if key == "obfs" {
-				opts["mode"] = value
-			} else if key == "obfs-host" || key == "host" {
-				opts["host"] = value
-			}
-		default:
-			opts[key] = value
-		}
-	}
-	if len(opts) > 0 {
-		node["plugin-opts"] = opts
-	}
-}
-
-func applyV2rayPlugin(node map[string]any, pluginRaw string) {
-	pluginText := decodeURLValue(pluginRaw)
-	parts := strings.Split(pluginText, ";")
-	opts := map[string]any{}
-	for _, part := range parts[1:] {
-		kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
-		if len(kv) != 2 {
-			continue
-		}
-		key, value := kv[0], kv[1]
-		switch key {
-		case "mode":
-			opts["mode"] = value
-		case "host":
-			opts["host"] = value
-		case "path":
-			opts["path"] = value
-		case "mux":
-			opts["mux"] = truthy(value)
-		case "skip-cert-verify", "tls":
-			opts[key] = truthy(value)
-		}
-	}
-	if len(opts) > 0 {
-		node["plugin-opts"] = opts
-	}
 }

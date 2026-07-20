@@ -1,6 +1,10 @@
 package service
 
 import (
+	"fmt"
+	"strings"
+
+	"github.com/ackwrap/ackwrap/internal/logging"
 	"github.com/ackwrap/ackwrap/internal/model"
 	"github.com/ackwrap/ackwrap/internal/store"
 )
@@ -11,6 +15,39 @@ type DNSService struct {
 
 func NewDNSService(s *store.Store) *DNSService {
 	return &DNSService{store: s}
+}
+
+func validateDNSServerRequest(req *model.DNSServerRequest) error {
+	if req == nil {
+		return fmt.Errorf("DNS Server 请求不能为空")
+	}
+	if req.ServerType == "fakeip" {
+		return fmt.Errorf("FakeIP Server 由 TUN 模式自动管理，不能手动创建或更新")
+	}
+	if err := validateDNSServerDetour(req.Detour); err != nil {
+		return err
+	}
+	return validateDNSServerOptions(req.Options)
+}
+
+func validateDNSServerDetour(detour string) error {
+	if detour != strings.TrimSpace(detour) {
+		return fmt.Errorf("DNS Server detour 包含无效空白")
+	}
+	if detour == "block" || detour == "reject" {
+		return fmt.Errorf("DNS Server detour 不能是 %s", detour)
+	}
+	return nil
+}
+
+func validateDNSServerOptions(options map[string]interface{}) error {
+	for key := range options {
+		switch key {
+		case "tag", "type", "server", "server_port", "path", "detour", "domain_resolver", "domain_strategy", "strategy", "client_subnet", "address_resolver", "address_strategy":
+			return fmt.Errorf("DNS Server options 不能覆盖受控字段 %s", key)
+		}
+	}
+	return nil
 }
 
 // DNS Servers
@@ -24,15 +61,39 @@ func (svc *DNSService) GetDNSServer(id int64) (*model.DNSServer, error) {
 }
 
 func (svc *DNSService) CreateDNSServer(req *model.DNSServerRequest) (*model.DNSServer, error) {
+	if err := validateDNSServerRequest(req); err != nil {
+		return nil, err
+	}
 	return svc.store.CreateDNSServer(req)
 }
 
 func (svc *DNSService) UpdateDNSServer(id int64, req *model.DNSServerRequest) error {
+	if req == nil {
+		return fmt.Errorf("DNS Server 请求不能为空")
+	}
+	if err := validateDNSServerRequest(req); err != nil {
+		return err
+	}
 	return svc.store.UpdateDNSServer(id, req)
 }
 
 func (svc *DNSService) DeleteDNSServer(id int64) error {
 	return svc.store.DeleteDNSServer(id)
+}
+
+func (svc *DNSService) ReorderDNSServers(ids []int64) error {
+	if len(ids) == 0 {
+		return fmt.Errorf("DNS Server ID 不能为空")
+	}
+	seen := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		if id <= 0 || seen[id] {
+			return fmt.Errorf("DNS Server ID 无效或重复")
+		}
+		seen[id] = true
+	}
+	logging.Info("dns.server.reorder", "调整 %d 个 DNS Server 的顺序", len(ids))
+	return svc.store.ReorderDNSServers(ids)
 }
 
 // DNS Rules
@@ -46,11 +107,43 @@ func (svc *DNSService) GetDNSRule(id int64) (*model.DNSRule, error) {
 }
 
 func (svc *DNSService) CreateDNSRule(req *model.DNSRuleRequest) (*model.DNSRule, error) {
+	if err := svc.validateDNSRuleRequest(req); err != nil {
+		return nil, err
+	}
 	return svc.store.CreateDNSRule(req)
 }
 
 func (svc *DNSService) UpdateDNSRule(id int64, req *model.DNSRuleRequest) error {
+	if err := svc.validateDNSRuleRequest(req); err != nil {
+		return err
+	}
 	return svc.store.UpdateDNSRule(id, req)
+}
+
+func (svc *DNSService) validateDNSRuleRequest(req *model.DNSRuleRequest) error {
+	if req == nil {
+		return fmt.Errorf("DNS 规则请求不能为空")
+	}
+	if dnsRuleHasOutboundCondition(req.Conditions) {
+		return fmt.Errorf("DNS 规则不再支持 outbound 条件，请通过 DNS Server detour 配置真实查询出口")
+	}
+	return svc.rejectFakeIPServerReference(req.Server)
+}
+
+func (svc *DNSService) rejectFakeIPServerReference(tag string) error {
+	if tag == "fakeip" {
+		return fmt.Errorf("显式 DNS 配置不能引用 FakeIP Server，FakeIP 由 TUN A/AAAA 规则自动管理")
+	}
+	servers, err := svc.store.ListDNSServers()
+	if err != nil {
+		return fmt.Errorf("读取 DNS Server 失败: %w", err)
+	}
+	for _, server := range servers {
+		if server.Tag == tag && server.ServerType == "fakeip" {
+			return fmt.Errorf("显式 DNS 配置不能引用 FakeIP Server，FakeIP 由 TUN A/AAAA 规则自动管理")
+		}
+	}
+	return nil
 }
 
 func (svc *DNSService) DeleteDNSRule(id int64) error {
@@ -58,15 +151,45 @@ func (svc *DNSService) DeleteDNSRule(id int64) error {
 }
 
 func (svc *DNSService) ReorderDNSRules(ids []int64) error {
+	if len(ids) == 0 {
+		return fmt.Errorf("DNS 规则 ID 不能为空")
+	}
+	seen := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		if id <= 0 || seen[id] {
+			return fmt.Errorf("DNS 规则 ID 无效或重复")
+		}
+		seen[id] = true
+	}
+	logging.Info("dns.rule.reorder", "调整 %d 条 DNS 规则的顺序", len(ids))
 	return svc.store.ReorderDNSRules(ids)
 }
 
 // DNS Global Settings
 
 func (svc *DNSService) GetDNSGlobalSettings() (*model.DNSGlobalSettings, error) {
-	return svc.store.GetDNSGlobalSettings()
+	settings, err := svc.store.GetDNSGlobalSettings()
+	if err != nil {
+		return nil, err
+	}
+	applyTUNManagedFakeIP(settings, svc.store.GetInboundMode())
+	return settings, nil
 }
 
 func (svc *DNSService) SetDNSGlobalSettings(req *model.DNSGlobalSettings) error {
+	if req == nil {
+		return fmt.Errorf("DNS 全局设置不能为空")
+	}
+	if err := svc.rejectFakeIPServerReference(req.Final); err != nil {
+		return err
+	}
+	applyTUNManagedFakeIP(req, svc.store.GetInboundMode())
+	logging.Info("dns.global.update", "FakeIP 跟随 TUN 模式，当前状态: %t", req.FakeIPEnabled)
 	return svc.store.SetDNSGlobalSettings(req)
+}
+
+func applyTUNManagedFakeIP(settings *model.DNSGlobalSettings, inboundMode string) {
+	if settings != nil {
+		settings.FakeIPEnabled = inboundMode != "mixed"
+	}
 }

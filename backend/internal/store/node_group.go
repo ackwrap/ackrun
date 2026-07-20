@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -51,6 +52,9 @@ func (s *Store) GetNodeGroup(id int64) (*model.NodeGroup, error) {
 }
 
 func (s *Store) CreateNodeGroup(req *model.NodeGroupRequest) (*model.NodeGroup, error) {
+	s.nodeRefsMu.Lock()
+	defer s.nodeRefsMu.Unlock()
+
 	now := time.Now().Unix()
 	testURL := req.TestURL
 	if testURL == "" {
@@ -77,6 +81,9 @@ func (s *Store) CreateNodeGroup(req *model.NodeGroupRequest) (*model.NodeGroup, 
 }
 
 func (s *Store) UpdateNodeGroup(id int64, req *model.NodeGroupRequest) error {
+	s.nodeRefsMu.Lock()
+	defer s.nodeRefsMu.Unlock()
+
 	now := time.Now().Unix()
 	testURL := req.TestURL
 	if testURL == "" {
@@ -97,14 +104,36 @@ func (s *Store) UpdateNodeGroup(id int64, req *model.NodeGroupRequest) error {
 	return err
 }
 
-func (s *Store) DeleteNodeGroup(id int64) error {
-	if _, err := s.db.Exec(`DELETE FROM node_groups WHERE id = ?`, id); err != nil {
+func (s *Store) UpdateNodeGroupFilters(id int64, filterProtocols, filterSubscriptions string) error {
+	s.nodeRefsMu.Lock()
+	defer s.nodeRefsMu.Unlock()
+
+	result, err := s.db.Exec(`UPDATE node_groups SET filter_protocols = ?, filter_subscriptions = ?, updated_at = ? WHERE id = ?`,
+		filterProtocols, filterSubscriptions, time.Now().Unix(), id)
+	if err != nil {
 		return err
 	}
-	return s.removeNodeGroupRefsFromProxyCollections([]int64{id})
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) DeleteNodeGroup(id int64) error {
+	return s.DeleteNodeGroups([]int64{id})
 }
 
 func (s *Store) DeleteNodeGroups(ids []int64) error {
+	s.nodeRefsMu.Lock()
+	defer s.nodeRefsMu.Unlock()
+	return s.deleteNodeGroups(ids)
+}
+
+func (s *Store) deleteNodeGroups(ids []int64) error {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -119,14 +148,20 @@ func (s *Store) DeleteNodeGroups(ids []int64) error {
 			return err
 		}
 	}
-
-	if err := tx.Commit(); err != nil {
+	remove := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		remove[id] = true
+	}
+	if _, err := updateIntJSONRefsTx(tx, "proxy_collections", "referenced_group_ids", remove); err != nil {
 		return err
 	}
-	return s.removeNodeGroupRefsFromProxyCollections(ids)
+	return tx.Commit()
 }
 
 func (s *Store) DeleteEmptyNodeGroups() ([]int64, error) {
+	s.nodeRefsMu.Lock()
+	defer s.nodeRefsMu.Unlock()
+
 	groups, err := s.ListNodeGroups()
 	if err != nil {
 		return nil, err
@@ -137,18 +172,24 @@ func (s *Store) DeleteEmptyNodeGroups() ([]int64, error) {
 			ids = append(ids, group.ID)
 		}
 	}
-	if err := s.DeleteNodeGroups(ids); err != nil {
+	if err := s.deleteNodeGroups(ids); err != nil {
 		return nil, err
 	}
 	return ids, nil
 }
 
 func (s *Store) ReorderNodeGroups(ids []int64) error {
+	s.nodeRefsMu.Lock()
+	defer s.nodeRefsMu.Unlock()
+
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if err := validateCompleteReorderIDs(tx, "node_groups", ids); err != nil {
+		return err
+	}
 
 	for priority, id := range ids {
 		if _, err := tx.Exec(`UPDATE node_groups SET priority = ? WHERE id = ?`, priority, id); err != nil {
@@ -407,7 +448,7 @@ func (s *Store) GetNodeGroupsByIDs(ids []int64) ([]model.NodeGroup, error) {
 	}
 
 	// 构建 IN 查询
-	query := `SELECT id, name, type, filter_protocols, filter_subscriptions, filter_include, filter_exclude, test_url, test_interval, tolerance, enabled, priority, created_at, updated_at FROM node_groups WHERE id IN (`
+	query := `SELECT id, name, type, filter_protocols, filter_subscriptions, filter_include, filter_exclude, node_uids, test_url, test_interval, tolerance, enabled, priority, created_at, updated_at FROM node_groups WHERE id IN (`
 	args := []interface{}{}
 	for i, id := range ids {
 		if i > 0 {
@@ -428,7 +469,7 @@ func (s *Store) GetNodeGroupsByIDs(ids []int64) ([]model.NodeGroup, error) {
 	for rows.Next() {
 		var g model.NodeGroup
 		var enabled int
-		if err := rows.Scan(&g.ID, &g.Name, &g.Type, &g.FilterProtocols, &g.FilterSubscriptions, &g.FilterInclude, &g.FilterExclude, &g.TestURL, &g.TestInterval, &g.Tolerance, &enabled, &g.Priority, &g.CreatedAt, &g.UpdatedAt); err != nil {
+		if err := rows.Scan(&g.ID, &g.Name, &g.Type, &g.FilterProtocols, &g.FilterSubscriptions, &g.FilterInclude, &g.FilterExclude, &g.NodeUIDs, &g.TestURL, &g.TestInterval, &g.Tolerance, &enabled, &g.Priority, &g.CreatedAt, &g.UpdatedAt); err != nil {
 			return nil, err
 		}
 		g.Enabled = enabled == 1
@@ -447,11 +488,12 @@ func (s *Store) UpdateProxyCollectionWithGroups(id int, req *model.ProxyCollecti
 	}
 
 	referencedGroupIDsJSON, _ := json.Marshal(req.ReferencedGroupIDs)
+	routeRuleIDsJSON, _ := json.Marshal(req.RouteRuleIDs)
 
 	nodeUIDsJSON, _ := json.Marshal(req.NodeUIDs)
 
-	_, err := s.db.Exec(`UPDATE proxy_collections SET name = ?, type = ?, source_type = ?, referenced_group_ids = ?, node_uids = ?, test_url = ?, test_interval = ?, tolerance = ?, enabled = ?, updated_at = ? WHERE id = ?`,
-		req.Name, req.Type, sourceType, string(referencedGroupIDsJSON), string(nodeUIDsJSON), req.TestURL, req.TestInterval, req.Tolerance, req.Enabled, now, id)
+	_, err := s.db.Exec(`UPDATE proxy_collections SET name = ?, type = ?, source_type = ?, referenced_group_ids = ?, route_rule_id = ?, route_rule_ids = ?, node_uids = ?, test_url = ?, test_interval = ?, tolerance = ?, enabled = ?, updated_at = ? WHERE id = ?`,
+		req.Name, req.Type, sourceType, string(referencedGroupIDsJSON), req.RouteRuleID, string(routeRuleIDsJSON), string(nodeUIDsJSON), req.TestURL, req.TestInterval, req.Tolerance, req.Enabled, now, id)
 	return err
 }
 
@@ -465,11 +507,12 @@ func (s *Store) CreateProxyCollectionWithGroups(req *model.ProxyCollectionReques
 	}
 
 	referencedGroupIDsJSON, _ := json.Marshal(req.ReferencedGroupIDs)
+	routeRuleIDsJSON, _ := json.Marshal(req.RouteRuleIDs)
 
 	nodeUIDsJSON, _ := json.Marshal(req.NodeUIDs)
 
-	result, err := s.db.Exec(`INSERT INTO proxy_collections (name, type, source_type, referenced_group_ids, node_uids, test_url, test_interval, tolerance, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		req.Name, req.Type, sourceType, string(referencedGroupIDsJSON), string(nodeUIDsJSON), req.TestURL, req.TestInterval, req.Tolerance, req.Enabled, now, now)
+	result, err := s.db.Exec(`INSERT INTO proxy_collections (name, type, source_type, referenced_group_ids, route_rule_id, route_rule_ids, node_uids, test_url, test_interval, tolerance, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		req.Name, req.Type, sourceType, string(referencedGroupIDsJSON), req.RouteRuleID, string(routeRuleIDsJSON), string(nodeUIDsJSON), req.TestURL, req.TestInterval, req.Tolerance, req.Enabled, now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -482,8 +525,8 @@ func (s *Store) CreateProxyCollectionWithGroups(req *model.ProxyCollectionReques
 func (s *Store) GetProxyCollectionWithNodes(id int) (*model.ProxyCollectionWithNodes, error) {
 	var c model.ProxyCollection
 	var enabled int
-	err := s.db.QueryRow(`SELECT id, name, type, source_type, referenced_group_ids, route_rule_ids, node_uids, test_url, test_interval, tolerance, enabled, created_at, updated_at FROM proxy_collections WHERE id = ?`, id).
-		Scan(&c.ID, &c.Name, &c.Type, &c.SourceType, &c.ReferencedGroupIDs, &c.RouteRuleIDs, &c.NodeUIDs, &c.TestURL, &c.TestInterval, &c.Tolerance, &enabled, &c.CreatedAt, &c.UpdatedAt)
+	err := s.db.QueryRow(`SELECT id, name, type, source_type, referenced_group_ids, route_rule_id, route_rule_ids, node_uids, test_url, test_interval, tolerance, enabled, priority, created_at, updated_at FROM proxy_collections WHERE id = ?`, id).
+		Scan(&c.ID, &c.Name, &c.Type, &c.SourceType, &c.ReferencedGroupIDs, &c.RouteRuleID, &c.RouteRuleIDs, &c.NodeUIDs, &c.TestURL, &c.TestInterval, &c.Tolerance, &enabled, &c.Priority, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -496,8 +539,8 @@ func (s *Store) GetProxyCollectionWithNodes(id int) (*model.ProxyCollectionWithN
 		json.Unmarshal([]byte(c.RouteRuleIDs), &result.RouteRuleIDs)
 	}
 
-	// 如果是 node_groups 模式，加载引用的节点组
-	if c.SourceType == "node_groups" {
+	// 节点组来源模式需要加载引用的节点组。
+	if c.SourceType == "node_groups" || c.SourceType == "node_groups_and_nodes" {
 		var groupIDs []int64
 		if c.ReferencedGroupIDs != "" && c.ReferencedGroupIDs != "[]" {
 			json.Unmarshal([]byte(c.ReferencedGroupIDs), &groupIDs)

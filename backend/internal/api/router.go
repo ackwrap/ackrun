@@ -24,6 +24,7 @@ func RegisterRoutes(
 	dnsSvc *service.DNSService,
 	nodeGroupSvc *service.NodeGroupService,
 	reconcileSvc *service.ConfigReconcileService,
+	coreRestartSvc *service.CoreRestartScheduler,
 ) {
 	runtimeH := handler.NewRuntimeHandler(runtimeSvc)
 	installerH := handler.NewInstallerHandler(installerSvc)
@@ -39,6 +40,7 @@ func RegisterRoutes(
 	logH := handler.NewLogHandler(coreLogSvc)
 	dnsH := handler.NewDNSHandler(dnsSvc)
 	nodeGroupH := handler.NewNodeGroupHandler(nodeGroupSvc)
+	coreRestartH := handler.NewCoreRestartHandler(coreRestartSvc)
 
 	clashProxyH := handler.NewClashProxyHandler(settingsSvc)
 
@@ -52,6 +54,8 @@ func RegisterRoutes(
 
 		v1.GET("/config/status", configH.GetStatus)
 		v1.GET("/config/files", configH.ListFiles)
+		v1.GET("/config/backups", configH.ListBackups)
+		v1.PUT("/config/active", configH.SetActive)
 		v1.POST("/config/default", configH.GenerateDefault)
 		v1.POST("/config/validate", configH.Validate)
 		v1.POST("/config/rules/update", configH.UpdateRules)
@@ -70,13 +74,29 @@ func RegisterRoutes(
 		v1.POST("/core/reset-firewall", coreH.ResetFirewall)
 		v1.POST("/core/flush-dns", coreH.FlushDNS)
 		v1.POST("/core/check-update", coreH.CheckUpdate)
+		v1.GET("/settings/core-restart", coreRestartH.GetSettings)
+		v1.PUT("/settings/core-restart", coreRestartH.UpdateSettings)
 		v1.GET("/logs/core", logH.ListCore)
 		v1.DELETE("/logs/core", logH.ClearCore)
+		v1.GET("/logs/tool", logH.ListTool)
+		v1.DELETE("/logs/tool", logH.ClearTool)
 
 		v1.GET("/settings/update", settingsH.GetUpdateSettings)
 		v1.PUT("/settings/update", settingsH.SetUpdateSettings)
+		v1.GET("/settings/traffic-bypass", settingsH.GetTrafficBypassSettings)
+		v1.PUT("/settings/traffic-bypass", settingsH.SetTrafficBypassSettings)
 		v1.GET("/settings/log", settingsH.GetLogSettings)
 		v1.PUT("/settings/log", settingsH.SetLogSettings)
+		v1.GET("/settings/connectivity", settingsH.GetConnectivitySettings)
+		v1.PUT("/settings/connectivity", settingsH.SetConnectivitySettings)
+		v1.GET("/settings/connectivity-targets", settingsH.ListConnectivityTargets)
+		v1.POST("/settings/connectivity-targets", settingsH.CreateConnectivityTarget)
+		v1.PUT("/settings/connectivity-targets/:id", settingsH.UpdateConnectivityTarget)
+		v1.DELETE("/settings/connectivity-targets/:id", settingsH.DeleteConnectivityTarget)
+		v1.GET("/settings/geoip-providers", settingsH.ListGeoIPProviders)
+		v1.POST("/settings/geoip-providers", settingsH.CreateGeoIPProvider)
+		v1.PUT("/settings/geoip-providers/:id", settingsH.UpdateGeoIPProvider)
+		v1.DELETE("/settings/geoip-providers/:id", settingsH.DeleteGeoIPProvider)
 		v1.GET("/settings/ntp", settingsH.GetNTPSettings)
 		v1.PUT("/settings/ntp", settingsH.SetNTPSettings)
 		v1.GET("/settings/dns", settingsH.GetDNSSettings)
@@ -105,6 +125,9 @@ func RegisterRoutes(
 		v1.POST("/nodes/import/preview", nodeH.ImportPreview)
 		v1.POST("/nodes/import", nodeH.Import)
 		v1.POST("/nodes/tcping", nodeH.TCPing)
+		v1.POST("/nodes/:uid/exit-ip", nodeH.ExitIP)
+		v1.POST("/nodes/:uid/traceroute", nodeH.Traceroute)
+		v1.DELETE("/nodes/:uid/traceroute/:traceID", nodeH.CancelTraceroute)
 		v1.POST("/nodes/add-emoji", nodeH.AddEmoji)
 		v1.POST("/nodes/flag", nodeH.InferFlag)
 		v1.POST("/nodes/flags", nodeH.InferFlags)
@@ -115,6 +138,7 @@ func RegisterRoutes(
 
 		v1.GET("/collections", proxyCollectionH.List)
 		v1.POST("/collections", proxyCollectionH.Create)
+		v1.POST("/collections/reorder", proxyCollectionH.Reorder)
 		v1.GET("/collections/:id", proxyCollectionH.Get)
 		v1.PUT("/collections/:id", proxyCollectionH.Update)
 		v1.DELETE("/collections/:id", proxyCollectionH.Delete)
@@ -127,6 +151,7 @@ func RegisterRoutes(
 		v1.POST("/config/apply", configGenH.Apply)
 
 		v1.GET("/rules", routeRuleH.List)
+		v1.GET("/rules/strategies", routeRuleH.Strategies)
 		v1.POST("/rules", routeRuleH.Create)
 		v1.GET("/rules/subscriptions", routeRuleH.ListSubscriptions)
 		v1.POST("/rules/subscriptions", routeRuleH.CreateSubscription)
@@ -150,6 +175,7 @@ func RegisterRoutes(
 
 		v1.GET("/dns/servers", dnsH.ListDNSServers)
 		v1.POST("/dns/servers", dnsH.CreateDNSServer)
+		v1.POST("/dns/servers/reorder", dnsH.ReorderDNSServers)
 		v1.GET("/dns/servers/:id", dnsH.GetDNSServer)
 		v1.PUT("/dns/servers/:id", dnsH.UpdateDNSServer)
 		v1.DELETE("/dns/servers/:id", dnsH.DeleteDNSServer)

@@ -70,6 +70,34 @@ func (s *Store) SetRouteRuleSubscriptionSyncState(id int64, status string, progr
 	return err
 }
 
+// ClaimRouteRuleSubscriptionSync atomically moves a subscription into syncing state.
+// A missing subscription returns sql.ErrNoRows; an existing syncing subscription returns claimed=false.
+func (s *Store) ClaimRouteRuleSubscriptionSync(id int64, progress float64) (*model.RouteRuleSubscription, bool, error) {
+	now := time.Now().UnixMilli()
+	result, err := s.db.Exec(`UPDATE route_rule_subscriptions SET sync_status = 'syncing', sync_progress = ?, sync_error = '', updated_at = ? WHERE id = ? AND sync_status <> 'syncing'`, progress, now, id)
+	if err != nil {
+		return nil, false, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return nil, false, err
+	}
+	item, err := s.GetRouteRuleSubscription(id)
+	if err != nil {
+		return nil, false, err
+	}
+	if item == nil {
+		return nil, false, sql.ErrNoRows
+	}
+	return item, rows == 1, nil
+}
+
+// ResetInterruptedRouteRuleSubscriptionSyncs clears jobs that could not survive a process restart.
+func (s *Store) ResetInterruptedRouteRuleSubscriptionSyncs() error {
+	_, err := s.db.Exec(`UPDATE route_rule_subscriptions SET sync_status = 'failed', sync_progress = 0, sync_error = '同步被服务重启中断' WHERE sync_status = 'syncing'`)
+	return err
+}
+
 func (s *Store) UpdateRouteRuleSubscriptionSyncResult(id int64, cachedPath string) (*model.RouteRuleSubscription, error) {
 	now := time.Now().UnixMilli()
 	_, err := s.db.Exec(`UPDATE route_rule_subscriptions SET sync_status = 'updated', sync_progress = 100, sync_error = '', last_sync_at = ?, cached_path = ?, cached_updated_at = ?, updated_at = ? WHERE id = ?`, now, cachedPath, now, now, id)

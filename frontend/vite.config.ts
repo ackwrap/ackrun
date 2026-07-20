@@ -5,7 +5,7 @@ import path from 'path'
 export default defineConfig({
   plugins: [vue()],
   build: {
-    outDir: '../backend/ui',
+    outDir: '../backend/internal/webui/dist',
     emptyOutDir: true,
     rollupOptions: {
       output: {
@@ -23,7 +23,10 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': 'http://127.0.0.1:8080',
+      '/api': {
+        target: 'http://127.0.0.1:8080',
+        ws: true,
+      },
     },
   },
 })

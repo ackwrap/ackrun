@@ -3,6 +3,10 @@ import { computed, onMounted, ref } from "vue";
 import { Plus, Save, ServerCog, Trash2 } from "lucide-vue-next";
 import PageHeader from "@/components/layout/PageHeader.vue";
 import Toast from "@/components/ui/Toast.vue";
+import OrderButtons from "@/components/ui/OrderButtons.vue";
+import { authenticatedFetch } from "@/services/apiAuth";
+import DNSRuleFormModal from "./dns/DNSRuleFormModal.vue";
+import DNSServerFormModal from "./dns/DNSServerFormModal.vue";
 interface Server {
   id: number;
   tag: string;
@@ -14,6 +18,7 @@ interface Server {
   strategy: string;
   detour: string;
   client_subnet: string;
+  priority: number;
 }
 interface Rule {
   id: number;
@@ -52,8 +57,8 @@ const defaults = {
   messageType = ref<"success" | "error">("success"),
   serverForm = ref<Partial<Server> | null>(null),
   ruleForm = ref<any | null>(null),
-  bindings = ref<Record<string, string>>({}),
-  preview = ref("");
+  ruleSaving = ref(false),
+  ruleOrderPending = ref(false);
 const types = [
     "udp",
     "tcp",
@@ -64,7 +69,6 @@ const types = [
     "local",
     "hosts",
     "dhcp",
-    "fakeip",
     "rcode",
   ],
   conditions = [
@@ -73,7 +77,6 @@ const types = [
     "domain_keyword",
     "domain_regex",
     "geosite",
-    "outbound",
     "query_type",
     "network",
     "protocol",
@@ -83,6 +86,8 @@ const types = [
   strategies = ["prefer_ipv4", "prefer_ipv6", "ipv4_only", "ipv6_only"],
   presets = [
     ["阿里 DoH", "dns_ali", "https", "https://dns.alidns.com/dns-query", ""],
+    ["阿里 DNS UDP", "dns_ali_udp", "udp", "223.5.5.5", ""],
+    ["阿里 DNS UDP 备用", "dns_ali_udp_2", "udp", "223.6.6.6", ""],
     [
       "腾讯 DNSPod DoH",
       "dns_tencent",
@@ -90,6 +95,8 @@ const types = [
       "https://doh.pub/dns-query",
       "",
     ],
+    ["腾讯 DNSPod UDP", "dns_tencent_udp", "udp", "119.29.29.29", ""],
+    ["腾讯 DNSPod UDP 备用", "dns_tencent_udp_2", "udp", "119.28.28.28", ""],
     [
       "Cloudflare DoH",
       "dns_cloudflare",
@@ -104,12 +111,22 @@ const types = [
       "https://dns.google/dns-query",
       "proxy",
     ],
-    ["阿里 UDP", "dns_ali_udp", "udp", "223.5.5.5", ""],
-    ["腾讯 UDP", "dns_tencent_udp", "udp", "119.29.29.29", ""],
+    [
+      "Quad9 DoH",
+      "dns_quad9",
+      "https",
+      "https://dns.quad9.net/dns-query",
+      "proxy",
+    ],
+    ["114 DNS UDP", "dns_114", "udp", "114.114.114.114", ""],
+    ["百度 DNS UDP", "dns_baidu", "udp", "180.76.76.76", ""],
+    ["移动 DNS UDP", "dns_mobile", "udp", "211.136.192.6", ""],
+    ["联通 DNS UDP", "dns_unicom", "udp", "123.125.81.6", ""],
+    ["电信 DNS UDP", "dns_telecom", "udp", "202.96.128.86", ""],
   ],
   preset = ref(0);
 async function request(url: string, init?: RequestInit) {
-  const r = await fetch(url, init);
+  const r = await authenticatedFetch(url, init);
   const x = await r.json().catch(() => null);
   if (!r.ok) throw new Error(x?.error?.message || r.statusText);
   return x;
@@ -117,7 +134,6 @@ async function request(url: string, init?: RequestInit) {
 const show = (s: string, t: "success" | "error" = "success") => {
   message.value = s;
   messageType.value = t;
-  setTimeout(() => (message.value = ""), t === "error" ? 5000 : 3000);
 };
 async function load() {
   try {
@@ -143,17 +159,9 @@ const detours = computed(() => [
     "proxy",
     ...collections.value.filter((x) => x.enabled).map((x) => x.name),
   ]),
-  targets = computed(() => detours.value.filter(Boolean)),
-  outbounds = (r: Rule) => {
-    try {
-      const x = JSON.parse(r.conditions_json || "{}").outbound;
-      return Array.isArray(x) ? x : typeof x === "string" ? [x] : [];
-    } catch {
-      return [];
-    }
-  },
-  bindingRule = (x: string) =>
-    rules.value.find((r) => outbounds(r).includes(x)),
+  matchingRules = computed(() =>
+    rules.value.filter((rule) => !hasLegacyOutboundCondition(rule)),
+  ),
   conditionText = (r: Rule) => {
     try {
       const x = JSON.parse(r.conditions_json);
@@ -164,6 +172,14 @@ const detours = computed(() => [
       return "(空)";
     }
   };
+function hasLegacyOutboundCondition(rule: Rule) {
+  try {
+    const conditions = JSON.parse(rule.conditions_json || "{}");
+    return Object.prototype.hasOwnProperty.call(conditions, "outbound");
+  } catch {
+    return false;
+  }
+}
 async function saveGlobal() {
   try {
     await request("/api/v1/dns/global", {
@@ -252,32 +268,49 @@ async function toggleServer(s: Server) {
     show(`状态更新失败: ${e.message}`, "error");
   }
 }
-async function saveBinding(x: string) {
-  const old = bindingRule(x),
-    server = bindings.value[x] ?? old?.server ?? "";
+function swapped<T>(items: T[], index: number, direction: -1 | 1) {
+  const target = index + direction;
+  if (target < 0 || target >= items.length) return null;
+  const next = [...items];
+  [next[index], next[target]] = [next[target], next[index]];
+  return next;
+}
+async function moveServer(index: number, direction: -1 | 1) {
+  const next = swapped(servers.value, index, direction);
+  if (!next) return;
+  servers.value = next;
   try {
-    if (!server) {
-      if (old)
-        await request(`/api/v1/dns/rules/${old.id}`, { method: "DELETE" });
-    } else
-      await request(old ? `/api/v1/dns/rules/${old.id}` : "/api/v1/dns/rules", {
-        method: old ? "PUT" : "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          enabled: true,
-          priority: old?.priority || 0,
-          rule_type: "default",
-          conditions: { outbound: [x] },
-          server,
-          disable_cache: old?.disable_cache || false,
-          rewrite_ttl: old?.rewrite_ttl || 0,
-          client_subnet: old?.client_subnet || "",
-        }),
-      });
-    show(`${x} 的 DNS 出口绑定已保存`);
-    await load();
+    await request("/api/v1/dns/servers/reorder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(next.map((item) => item.id)),
+    });
   } catch (e: any) {
-    show(`保存 DNS 出口绑定失败: ${e.message}`, "error");
+    show(`DNS Server 排序失败: ${e.message}`, "error");
+    await load();
+  }
+}
+async function moveRule(index: number, direction: -1 | 1) {
+  if (ruleOrderPending.value) return;
+  const reordered = swapped(matchingRules.value, index, direction);
+  if (!reordered) return;
+  let nextRuleIndex = 0;
+  const next = rules.value.map((rule) =>
+    hasLegacyOutboundCondition(rule) ? rule : reordered[nextRuleIndex++],
+  );
+  ruleOrderPending.value = true;
+  rules.value = next;
+  try {
+    await request("/api/v1/dns/rules/reorder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(next.map((item) => item.id)),
+    });
+  } catch (e: any) {
+    show(`DNS 规则排序失败: ${e.message}`, "error");
+    await load();
+  } finally {
+    ruleOrderPending.value = false;
   }
 }
 function newRule() {
@@ -303,6 +336,7 @@ function editRule(r: Rule) {
   ruleForm.value = { ...r, condition_type: type, values };
 }
 async function saveRule() {
+  if (ruleSaving.value) return;
   const f = ruleForm.value,
     v = f.values
       .split("\n")
@@ -311,7 +345,21 @@ async function saveRule() {
     c: { [k: string]: any } = {
       [f.condition_type]:
         f.condition_type === "clash_mode" ? v[0] || "rule" : v,
-    };
+    },
+    rewriteTTL = Number(f.rewrite_ttl || 0);
+  if (!f.server) {
+    show("请选择 DNS Server", "error");
+    return;
+  }
+  if (!v.length && f.condition_type !== "clash_mode") {
+    show("请填写至少一个匹配值", "error");
+    return;
+  }
+  if (!Number.isInteger(rewriteTTL) || rewriteTTL < 0) {
+    show("Rewrite TTL 必须是大于或等于 0 的整数", "error");
+    return;
+  }
+  ruleSaving.value = true;
   try {
     await request(f.id ? `/api/v1/dns/rules/${f.id}` : "/api/v1/dns/rules", {
       method: f.id ? "PUT" : "POST",
@@ -323,7 +371,7 @@ async function saveRule() {
         conditions: c,
         server: f.server,
         disable_cache: f.disable_cache,
-        rewrite_ttl: +f.rewrite_ttl || 0,
+        rewrite_ttl: rewriteTTL,
         client_subnet: f.client_subnet,
       }),
     });
@@ -332,6 +380,8 @@ async function saveRule() {
     await load();
   } catch (e: any) {
     show(`保存失败: ${e.message}`, "error");
+  } finally {
+    ruleSaving.value = false;
   }
 }
 async function removeRule(r: Rule) {
@@ -368,10 +418,12 @@ onMounted(load);
     <PageHeader title="DNS 管理" /><Toast
       :message="message"
       :type="messageType"
+      @dismiss="message = ''"
     />
     <div v-if="loading" class="py-20 text-center">加载中...</div>
     <template v-else
-      ><section
+      ><div class="grid gap-4 lg:grid-cols-2">
+        <section
         class="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
       >
         <div class="flex justify-between">
@@ -386,7 +438,7 @@ onMounted(load);
             >默认 Server<select v-model="global.final">
               <option value="">请选择</option>
               <option
-                v-for="s in servers.filter((x) => x.enabled)"
+                v-for="s in servers.filter((x) => x.enabled && x.server_type !== 'fakeip')"
                 :value="s.tag"
               >
                 {{ s.tag }}
@@ -423,25 +475,29 @@ onMounted(load);
             {{ x }}</label
           >
         </div>
-      </section>
-      <section
+        </section>
+        <section
         class="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
       >
         <div class="flex justify-between">
           <h3>FakeIP</h3>
-          <label
-            ><input
-              v-model="global.fakeip_enabled"
-              type="checkbox"
-            />启用</label
-          >
+          <label class="text-sm text-[var(--text-secondary)]">
+            <input :checked="global.fakeip_enabled" type="checkbox" disabled />
+            {{ global.fakeip_enabled ? "已随 TUN 启用" : "已随 TUN 停用" }}
+          </label>
         </div>
+        <p class="mt-2 text-xs text-[var(--text-tertiary)]">
+          FakeIP 由运行模式自动管理：TUN / TUN + Mixed 启用，Mixed 停用。
+          显式 DNS 规则用于国内和局域网等真实 IP 例外；TUN 未命中的 A/AAAA
+          查询使用 FakeIP，其余真实查询统一经过安全 DNS final。
+        </p>
         <div class="mt-3 grid gap-3 md:grid-cols-3">
           <input v-model="global.fakeip_inet4_range" /><input
             v-model="global.fakeip_inet6_range"
           /><button @click="saveGlobal">保存 FakeIP</button>
         </div>
-      </section>
+        </section>
+      </div>
       <section
         class="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
       >
@@ -471,6 +527,7 @@ onMounted(load);
           <table class="aw-data-table min-w-[760px]">
             <thead>
               <tr>
+                <th>排序</th>
                 <th>Tag</th>
                 <th>类型</th>
                 <th>地址</th>
@@ -481,9 +538,17 @@ onMounted(load);
             </thead>
             <tbody>
               <tr v-if="!servers.length">
-                <td colspan="6" class="py-10 text-center">暂无 DNS 服务器</td>
+                <td colspan="7" class="py-10 text-center">暂无 DNS 服务器</td>
               </tr>
-              <tr v-for="s in servers" :key="s.id">
+              <tr v-for="(s, i) in servers" :key="s.id">
+                <td>
+                  <OrderButtons
+                    :up-disabled="i === 0"
+                    :down-disabled="i === servers.length - 1"
+                    @up="moveServer(i, -1)"
+                    @down="moveServer(i, 1)"
+                  />
+                </td>
                 <td class="font-medium text-[var(--text-primary)]">
                   {{ s.tag }}
                 </td>
@@ -526,85 +591,14 @@ onMounted(load);
       <section
         class="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
       >
-        <h3 class="font-semibold">DNS 出口绑定</h3>
-        <div class="aw-data-table-wrap mt-4">
-          <table class="aw-data-table min-w-[760px]">
-            <thead>
-              <tr>
-                <th>出站</th>
-                <th>DNS 服务器</th>
-                <th>绑定状态</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="x in targets" :key="x">
-                <td>{{ x }}</td>
-                <td>
-                  <select
-                    :value="bindings[x] ?? bindingRule(x)?.server ?? ''"
-                    @change="
-                      bindings[x] = ($event.target as HTMLSelectElement).value
-                    "
-                  >
-                    <option value="">不绑定</option>
-                    <option
-                      v-for="s in servers.filter(
-                        (s) => s.enabled && s.server_type !== 'fakeip',
-                      )"
-                      :value="s.tag"
-                    >
-                      {{ s.tag }}
-                    </option>
-                  </select>
-                </td>
-                <td>
-                  {{
-                    bindingRule(x)
-                      ? `domain_resolver 绑定 #${bindingRule(x)?.id}`
-                      : "未生成"
-                  }}
-                </td>
-                <td>
-                  <div class="flex gap-2">
-                    <button
-                      class="aw-action-button aw-action-neutral"
-                      @click="
-                        preview = JSON.stringify(
-                          {
-                            tag: x,
-                            domain_resolver:
-                              (bindings[x] ?? bindingRule(x)?.server)
-                                ? {
-                                    server:
-                                      bindings[x] ?? bindingRule(x)?.server,
-                                  }
-                                : '(未绑定)',
-                          },
-                          null,
-                          2,
-                        )
-                      "
-                    >
-                      预览</button
-                    ><button
-                      class="aw-action-button aw-action-success"
-                      @click="saveBinding(x)"
-                    >
-                      保存绑定
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-      <section
-        class="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
-      >
         <header class="flex items-center justify-between gap-3">
-          <h3 class="font-semibold">DNS 规则</h3>
+          <div>
+            <h3 class="font-semibold">DNS 规则</h3>
+            <p class="mt-1 text-xs text-[var(--text-tertiary)]">
+              从上到下匹配，适合配置国内、局域网等需要真实 IP 的例外；TUN
+              模式下 FakeIP 位于这些显式规则之后。
+            </p>
+          </div>
           <button class="aw-action-button aw-action-neutral" @click="newRule">
             <Plus :size="13" />新增规则
           </button>
@@ -613,6 +607,7 @@ onMounted(load);
           <table class="aw-data-table min-w-[760px]">
             <thead>
               <tr>
+                <th>排序</th>
                 <th>匹配条件</th>
                 <th>DNS 服务器</th>
                 <th>禁用缓存</th>
@@ -621,10 +616,18 @@ onMounted(load);
               </tr>
             </thead>
             <tbody>
-              <tr v-if="!rules.length">
-                <td colspan="5" class="py-10 text-center">暂无 DNS 规则</td>
+              <tr v-if="!matchingRules.length">
+                <td colspan="6" class="py-10 text-center">暂无 DNS 规则</td>
               </tr>
-              <tr v-for="r in rules" :key="r.id">
+              <tr v-for="(r, i) in matchingRules" :key="r.id">
+                <td>
+                  <OrderButtons
+                    :up-disabled="ruleOrderPending || i === 0"
+                    :down-disabled="ruleOrderPending || i === matchingRules.length - 1"
+                    @up="moveRule(i, -1)"
+                    @down="moveRule(i, 1)"
+                  />
+                </td>
                 <td class="max-w-[520px] truncate" :title="conditionText(r)">
                   {{ conditionText(r) }}
                 </td>
@@ -662,72 +665,23 @@ onMounted(load);
         </div>
       </section></template
     >
-    <div v-if="serverForm" class="aw-modal-backdrop">
-      <div class="aw-modal-panel max-w-4xl p-5">
-        <h3>{{ serverForm.id ? "编辑" : "新增" }} DNS 服务器</h3>
-        <div class="grid gap-3 md:grid-cols-3">
-          <label>Tag<input v-model="serverForm.tag" /></label
-          ><label
-            >类型<select v-model="serverForm.server_type">
-              <option v-for="x in types">{{ x }}</option>
-            </select></label
-          ><label>地址<input v-model="serverForm.address" /></label
-          ><label
-            >Address Resolver<input
-              v-model="serverForm.address_resolver" /></label
-          ><label
-            >Address Strategy<select v-model="serverForm.address_strategy">
-              <option value="">留空</option>
-              <option v-for="x in strategies">{{ x }}</option>
-            </select></label
-          ><label
-            >Strategy<select v-model="serverForm.strategy">
-              <option value="">留空</option>
-              <option v-for="x in strategies">{{ x }}</option>
-            </select></label
-          ><label
-            >Detour<select v-model="serverForm.detour">
-              <option v-for="x in detours" :value="x">
-                {{ x || "默认出站" }}
-              </option>
-            </select></label
-          ><label
-            >Client Subnet<input v-model="serverForm.client_subnet" /></label
-          ><label
-            ><input v-model="serverForm.enabled" type="checkbox" />启用</label
-          >
-        </div>
-        <button @click="serverForm = null">取消</button
-        ><button @click="saveServer">保存</button>
-      </div>
-    </div>
-    <div v-if="ruleForm" class="aw-modal-backdrop">
-      <div class="aw-modal-panel max-w-4xl p-5">
-        <h3>{{ ruleForm.id ? "编辑" : "新增" }} DNS 规则</h3>
-        <select v-model="ruleForm.condition_type">
-          <option v-for="x in conditions">{{ x }}</option></select
-        ><textarea v-model="ruleForm.values" rows="4" /><select
-          v-model="ruleForm.server"
-        >
-          <option value="">请选择 Server</option>
-          <option v-for="s in servers.filter((x) => x.enabled)" :value="s.tag">
-            {{ s.tag }}
-          </option>
-          <option v-if="global.fakeip_enabled">fakeip</option></select
-        ><input v-model.number="ruleForm.rewrite_ttl" type="number" /><input
-          v-model="ruleForm.client_subnet"
-        /><label
-          ><input
-            v-model="ruleForm.disable_cache"
-            type="checkbox"
-          />禁用缓存</label
-        ><label><input v-model="ruleForm.enabled" type="checkbox" />启用</label
-        ><button @click="ruleForm = null">取消</button
-        ><button @click="saveRule">保存</button>
-      </div>
-    </div>
-    <div v-if="preview" class="aw-modal-backdrop" @click="preview = ''">
-      <pre class="aw-modal-panel max-w-xl p-5">{{ preview }}</pre>
-    </div>
+    <DNSServerFormModal
+      v-if="serverForm"
+      :form="serverForm"
+      :types="types"
+      :strategies="strategies"
+      :detours="detours"
+      @close="serverForm = null"
+      @save="saveServer"
+    />
+    <DNSRuleFormModal
+      v-if="ruleForm"
+      :form="ruleForm"
+      :conditions="conditions"
+      :servers="servers.filter((server) => server.enabled && server.server_type !== 'fakeip')"
+      :saving="ruleSaving"
+      @close="ruleForm = null"
+      @save="saveRule"
+    />
   </div>
 </template>

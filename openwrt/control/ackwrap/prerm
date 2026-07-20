@@ -1,0 +1,4 @@
+#!/bin/sh
+
+[ -n "$IPKG_INSTROOT" ] || /etc/init.d/ackwrap stop
+exit 0

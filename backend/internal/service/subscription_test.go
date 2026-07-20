@@ -98,6 +98,9 @@ func TestFetchAndParseFiltersUnsupportedClashVariants(t *testing.T) {
 	if result.UnsupportedCount["vless"] != 1 {
 		t.Fatalf("unsupported VLESS count = %d, want 1", result.UnsupportedCount["vless"])
 	}
+	if len(result.ExcludedNodes) != 1 || result.ExcludedNodes[0].Name != "Unsupported-XHTTP" || result.ExcludedNodes[0].Type != "vless" || result.ExcludedNodes[0].Reason == "" {
+		t.Fatalf("unexpected excluded nodes: %+v", result.ExcludedNodes)
+	}
 }
 
 func TestApplyNodeFilters(t *testing.T) {
@@ -119,6 +122,9 @@ func TestApplyNodeFilters(t *testing.T) {
 	}
 	if result.NodeCount != 1 || result.Nodes[0].Name != "JP-01" {
 		t.Fatalf("unexpected filtered result: %+v", result)
+	}
+	if len(result.ExcludedNodes) != 1 || result.ExcludedNodes[0].Name != "HK-01" || result.ExcludedNodes[0].Reason != `命中节点过滤规则 "filter hk" (target=name)` {
+		t.Fatalf("unexpected excluded node records: %+v", result.ExcludedNodes)
 	}
 }
 

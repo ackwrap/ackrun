@@ -5,12 +5,14 @@ import PageHeader from "@/components/layout/PageHeader.vue";
 import Modal from "@/components/ui/Modal.vue";
 import Toast from "@/components/ui/Toast.vue";
 import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
+import { useRealtimeSocket } from "@/composables/useRealtimeSocket";
 import { api } from "@/services/api";
 import type {
   GeoAsset,
   RouteRule,
   RouteRulePreviewResponse,
   RouteRuleSubscription,
+  WSEvent,
 } from "@/services/types";
 import GeoDatabaseSection from "./rules/GeoDatabaseSection.vue";
 import RuleListSection from "./rules/RuleListSection.vue";
@@ -23,6 +25,7 @@ const rules = ref<RouteRule[]>([]),
   message = ref(""),
   messageType = ref<"success" | "error">("success"),
   pending = ref<RouteRule | null>(null),
+  detailRule = ref<RouteRule | null>(null),
   formOpen = ref(false),
   editing = ref<RouteRule | null>(null),
   name = ref(""),
@@ -50,10 +53,10 @@ const rules = ref<RouteRule[]>([]),
   content = ref<{ title: string; content: string } | null>(null),
   geoSyncing = ref(false);
 let poll: number | undefined;
+let loadVersion = 0;
 const show = (s: string, t: "success" | "error" = "success") => {
     message.value = s;
     messageType.value = t;
-    setTimeout(() => (message.value = ""), t === "error" ? 5000 : 3000);
   },
   values = computed(() => [
     ...new Set(
@@ -68,6 +71,9 @@ const show = (s: string, t: "success" | "error" = "success") => {
       geoSyncing.value ||
       geoAssets.value.some((x) => x.sync_status === "syncing"),
   ),
+  isRuleSubscriptionSyncing = computed(() =>
+    subscriptions.value.some((x) => x.sync_status === "syncing"),
+  ),
   previewText = computed(
     () =>
       content.value?.content ||
@@ -78,16 +84,20 @@ const show = (s: string, t: "success" | "error" = "success") => {
       ),
   );
 async function load() {
+  const version = ++loadVersion;
   try {
-    [rules.value, subscriptions.value, geoAssets.value] = await Promise.all([
+    const result = await Promise.all([
       api.getRouteRules(),
       api.getRouteRuleSubscriptions(),
       api.getGeoAssets(),
     ]);
+    if (version !== loadVersion) return;
+    [rules.value, subscriptions.value, geoAssets.value] = result;
   } catch (e: any) {
+    if (version !== loadVersion) return;
     show(`规则加载失败: ${e.message}`, "error");
   } finally {
-    loading.value = false;
+    if (version === loadVersion) loading.value = false;
   }
 }
 function resetRule() {
@@ -142,6 +152,13 @@ async function saveRule() {
   }
 }
 async function toggleRule(r: RouteRule) {
+  if (
+    r.system_key === "ad_block" ||
+    r.system_key === "global_direct" ||
+    ["fallback", "final"].includes(r.rule_type) ||
+    (r.is_system && ["广告拦截", "全球直连"].includes(r.name))
+  )
+    return;
   try {
     await api.updateRouteRule(r.id, {
       name: r.name,
@@ -171,6 +188,12 @@ async function removeRule() {
 async function move(i: number, d: -1 | 1) {
   const n = i + d;
   if (n < 0 || n >= rules.value.length) return;
+  const protectedRule = (rule: RouteRule) =>
+    rule.system_key === "ad_block" ||
+    rule.system_key === "global_direct" ||
+    ["fallback", "final"].includes(rule.rule_type) ||
+    (rule.is_system && ["广告拦截", "全球直连"].includes(rule.name));
+  if (protectedRule(rules.value[i]) || protectedRule(rules.value[n])) return;
   const next = [...rules.value];
   [next[i], next[n]] = [next[n], next[i]];
   rules.value = next;
@@ -319,6 +342,12 @@ async function previewSub(x: RouteRuleSubscription) {
 }
 async function syncGeo(x?: GeoAsset) {
   geoSyncing.value = true;
+  const targets = x ? [x] : geoAssets.value;
+  targets.forEach((item) => {
+    item.sync_status = "syncing";
+    item.sync_progress = 0;
+    item.sync_error = "";
+  });
   try {
     x ? await api.syncGeoAsset(x.id) : await api.syncAllGeoAssets();
     show("Geo 数据库已开始更新");
@@ -329,6 +358,35 @@ async function syncGeo(x?: GeoAsset) {
     geoSyncing.value = false;
   }
 }
+useRealtimeSocket((event: WSEvent) => {
+  const data: any = event.data;
+  if (event.type === "geo.sync") {
+    const asset = geoAssets.value.find((item) => item.id === data.id);
+    if (asset) {
+      asset.sync_status = data.status ?? asset.sync_status;
+      asset.sync_progress = data.progress ?? asset.sync_progress;
+      asset.sync_error = data.error ?? "";
+    }
+    if (data.status === "failed") {
+      show(`Geo 数据库更新失败: ${data.error || "请求失败"}`, "error");
+    }
+  } else if (event.type === "route_rule_subscription.sync") {
+    const subscription = subscriptions.value.find((item) => item.id === data.id);
+    if (subscription) {
+      subscription.sync_status = data.status ?? subscription.sync_status;
+      subscription.sync_progress = data.progress ?? subscription.sync_progress;
+      subscription.sync_error = data.error ?? "";
+    }
+    if (data.status === "failed") {
+      show(`规则订阅更新失败: ${data.error || "请求失败"}`, "error");
+    } else if (data.status === "updated") {
+      void load();
+    }
+  } else if (event.type === "geo.sync_all" && data.status === "completed") {
+    void load();
+    if (data.failed) show(`Geo 数据库更新完成，${data.failed} 项失败`, "error");
+  }
+});
 async function updateGeo(x: GeoAsset, b: any) {
   try {
     await api.updateGeoAsset(x.id, b);
@@ -341,7 +399,7 @@ async function updateGeo(x: GeoAsset, b: any) {
 onMounted(() => {
   load();
   poll = window.setInterval(() => {
-    if (isGeoSyncing.value) load();
+    if (isGeoSyncing.value || isRuleSubscriptionSyncing.value) load();
   }, 2000);
 });
 onBeforeUnmount(() => clearInterval(poll));
@@ -351,6 +409,7 @@ onBeforeUnmount(() => clearInterval(poll));
     <PageHeader title="规则管理" /><Toast
       :message="message"
       :type="messageType"
+      @dismiss="message = ''"
     />
     <div v-if="loading" class="py-20 text-center">加载中...</div>
     <template v-else
@@ -371,6 +430,7 @@ onBeforeUnmount(() => clearInterval(poll));
         @toggle="toggleRule"
         @edit="editRule"
         @remove="pending = $event"
+        @detail="detailRule = $event"
       />
       <section
         class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
@@ -381,7 +441,7 @@ onBeforeUnmount(() => clearInterval(poll));
               <Cloud :size="17" />规则订阅
             </h3>
             <p class="mt-1 text-xs text-[var(--text-secondary)]">
-              下载远程规则集，并生成 sing-box rule_set 引用。
+              支持 sing-box binary/source 和 Clash Rule Provider YAML；选择 clash 或由 auto 按 .yml/.yaml 自动识别，转换后生成 sing-box rule_set 引用。不支持完整 Clash 节点订阅配置。
             </p>
           </div>
           <button class="aw-action-button aw-action-neutral" @click="syncAll">
@@ -548,6 +608,43 @@ onBeforeUnmount(() => clearInterval(poll));
       @edit="editSub"
       @remove="deleteSub"
     />
+    <Modal
+      :open="!!detailRule"
+      :title="detailRule ? `规则详情：${detailRule.name}` : '规则详情'"
+      size="lg"
+      @close="detailRule = null"
+    >
+      <div v-if="detailRule" class="grid gap-4 text-sm md:grid-cols-2">
+        <div class="rounded-lg bg-[var(--bg-base)] p-3">
+          <span class="text-[var(--text-tertiary)]">类型</span>
+          <p class="mt-1 font-mono">{{ detailRule.rule_type }}</p>
+        </div>
+        <div class="rounded-lg bg-[var(--bg-base)] p-3">
+          <span class="text-[var(--text-tertiary)]">出站</span>
+          <p class="mt-1 font-mono">{{ detailRule.outbound }}</p>
+        </div>
+        <div class="rounded-lg bg-[var(--bg-base)] p-3">
+          <span class="text-[var(--text-tertiary)]">状态</span>
+          <p class="mt-1">{{ detailRule.enabled ? "启用" : "停用" }}</p>
+        </div>
+        <div class="rounded-lg bg-[var(--bg-base)] p-3">
+          <span class="text-[var(--text-tertiary)]">排序 / 反向</span>
+          <p class="mt-1">
+            {{ detailRule.priority }} / {{ detailRule.invert ? "是" : "否" }}
+          </p>
+        </div>
+        <div
+          class="rounded-lg border border-[var(--border-default)] bg-[var(--bg-base)] p-3 md:col-span-2"
+        >
+          <span class="text-[var(--text-tertiary)]"
+            >匹配值（{{ detailRule.values.length }}）</span
+          >
+          <pre
+            class="mt-2 max-h-[50vh] overflow-auto whitespace-pre-wrap break-all font-mono text-xs leading-5 text-[var(--text-primary)]"
+          >{{ detailRule.values.join("\n") || "-" }}</pre>
+        </div>
+      </div>
+    </Modal>
     <Modal
       :open="!!(preview || content)"
       :title="content?.title || '规则 JSON 预览'"

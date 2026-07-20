@@ -4,7 +4,9 @@ import { useRoute, useRouter } from "vue-router";
 import {
   Edit3,
   Eye,
+  Globe2,
   RefreshCw,
+  Route as RouteIcon,
   Smile,
   Star,
   Tags,
@@ -12,13 +14,15 @@ import {
   Zap,
 } from "lucide-vue-next";
 import PageHeader from "@/components/layout/PageHeader.vue";
+import NodeFlagName from "@/components/NodeFlagName.vue";
 import Toast from "@/components/ui/Toast.vue";
 import Modal from "@/components/ui/Modal.vue";
 import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
 import Pagination from "@/components/ui/Pagination.vue";
+import NodeTracerouteModal from "@/pages/nodes/NodeTracerouteModal.vue";
+import NodeExitIPModal from "@/pages/nodes/NodeExitIPModal.vue";
 import { api } from "@/services/api";
 import type { NodeFacetItem, NodeItem, Subscription } from "@/services/types";
-import { defaultFlag, getFlagImageURL } from "@/utils/nodeFlags";
 
 const route = useRoute(),
   router = useRouter(),
@@ -40,6 +44,8 @@ const total = ref(0),
   enabledFilter = ref(""),
   preferredFilter = ref("");
 const detail = ref<NodeItem | null>(null),
+  traceNode = ref<NodeItem | null>(null),
+  exitIPNode = ref<NodeItem | null>(null),
   selected = ref(new Set<string>()),
   tcping = ref(new Set<string>()),
   tcpingLoading = ref(false),
@@ -246,6 +252,8 @@ async function remove() {
   }
 }
 const address = (n: NodeItem) => `${n.server}:${n.server_port}`,
+  formatUpdatedAt = (value: number) =>
+    value > 0 ? new Date(value).toLocaleString() : "--",
   pretty = (s: string) => {
     try {
       return JSON.stringify(JSON.parse(s || "{}"), null, 2);
@@ -283,6 +291,7 @@ onMounted(async () => {
     <PageHeader title="节点管理" /><Toast
       :message="message"
       :type="toastType"
+      @dismiss="message = ''"
     />
     <section
       class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
@@ -423,7 +432,21 @@ onMounted(async () => {
         </div>
       </div>
       <div class="aw-data-table-wrap">
-        <table class="aw-data-table min-w-[1120px]">
+        <table class="aw-data-table min-w-[1384px] table-fixed">
+          <colgroup>
+            <col class="w-10" />
+            <col class="w-44" />
+            <col class="w-20" />
+            <col class="w-40" />
+            <col class="w-20" />
+            <col class="w-28" />
+            <col class="w-20" />
+            <col class="w-24" />
+            <col class="w-20" />
+            <col class="w-24" />
+            <col class="w-36" />
+            <col class="w-60" />
+          </colgroup>
           <thead>
             <tr>
               <th>
@@ -448,6 +471,11 @@ onMounted(async () => {
                   '操作',
                 ]"
                 :key="c"
+                :class="
+                  c === '操作'
+                    ? 'sticky right-0 z-20 bg-[var(--bg-surface)]'
+                    : ''
+                "
               >
                 {{ c }}
               </th>
@@ -467,17 +495,20 @@ onMounted(async () => {
                   @change="toggle(n.uid)"
                 />
               </td>
-              <td class="max-w-[240px] truncate">
-                <img
-                  :src="getFlagImageURL(flags[n.uid] || defaultFlag)"
-                  alt=""
-                  class="mr-2 inline h-4 w-4"
-                />{{ n.name }}
+              <td class="truncate" :title="n.name">
+                <NodeFlagName :name="n.name" :flag="flags[n.uid]" />
               </td>
-              <td>{{ n.type }}</td>
-              <td class="max-w-[220px] truncate">{{ address(n) }}</td>
-              <td>{{ n.subscription_name || n.subscription_id }}</td>
-              <td class="font-mono">{{ n.uid.slice(0, 12) }}…</td>
+              <td class="truncate" :title="n.type">{{ n.type }}</td>
+              <td class="truncate" :title="address(n)">{{ address(n) }}</td>
+              <td
+                class="truncate"
+                :title="String(n.subscription_name || n.subscription_id)"
+              >
+                {{ n.subscription_name || n.subscription_id }}
+              </td>
+              <td class="truncate font-mono" :title="n.uid">
+                {{ n.uid.slice(0, 12) }}…
+              </td>
               <td>
                 <button @click="ping([n.uid])">
                   {{
@@ -489,7 +520,7 @@ onMounted(async () => {
                   }}
                 </button>
               </td>
-              <td>{{ n.status }}</td>
+              <td class="truncate" :title="n.status">{{ n.status }}</td>
               <td>
                 <button @click="enabled(n)">
                   {{ n.enabled ? "启用" : "禁用" }}
@@ -502,17 +533,34 @@ onMounted(async () => {
                   }}
                 </button>
               </td>
-              <td>
-                {{
-                  n.updated_at > 0
-                    ? new Date(n.updated_at).toLocaleString()
-                    : "--"
-                }}
+              <td class="truncate" :title="formatUpdatedAt(n.updated_at)">
+                {{ formatUpdatedAt(n.updated_at) }}
               </td>
-              <td>
-                <button @click="detail = n">
-                  <Eye :size="13" class="inline" />详情
-                </button>
+              <td
+                class="sticky right-0 z-[1] whitespace-nowrap bg-[var(--bg-surface)]"
+              >
+                <div class="flex items-center gap-1.5">
+                  <button
+                    class="aw-action-button aw-action-neutral"
+                    title="追踪到节点服务器的网络路由"
+                    @click="traceNode = n"
+                  >
+                    <RouteIcon :size="13" />路由追踪
+                  </button>
+                  <button
+                    class="aw-action-button aw-action-neutral"
+                    title="通过当前节点查询出口 IP"
+                    @click="exitIPNode = n"
+                  >
+                    <Globe2 :size="13" />出口 IP
+                  </button>
+                  <button
+                    class="aw-action-button aw-action-neutral"
+                    @click="detail = n"
+                  >
+                    <Eye :size="13" />详情
+                  </button>
+                </div>
               </td>
             </tr>
           </tbody>
@@ -533,6 +581,9 @@ onMounted(async () => {
     <Modal :open="!!detail" title="节点详情" size="lg" @close="detail = null"
       ><template v-if="detail"
         ><div class="grid gap-3 md:grid-cols-2">
+          <div class="md:col-span-2">
+            名称：<NodeFlagName :name="detail.name" :flag="flags[detail.uid]" />
+          </div>
           <div>UID：{{ detail.uid }}</div>
           <div>地址：{{ address(detail) }}</div>
           <div>协议：{{ detail.type }}</div>
@@ -545,6 +596,16 @@ onMounted(async () => {
           >{{ pretty(detail.raw_json) }}</pre>
       </template></Modal
     >
+    <NodeTracerouteModal
+      :node="traceNode"
+      :flag="traceNode ? flags[traceNode.uid] : ''"
+      @close="traceNode = null"
+    />
+    <NodeExitIPModal
+      :node="exitIPNode"
+      :flag="exitIPNode ? flags[exitIPNode.uid] : ''"
+      @close="exitIPNode = null"
+    />
     <Modal
       :open="renameOpen"
       :title="`批量修改名称 (${selectedNodes.length})`"

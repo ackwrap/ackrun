@@ -1,4 +1,5 @@
 // Clash API Client for sing-box
+import { authenticatedFetch } from "./apiAuth";
 
 export interface TrafficData {
   up: number;
@@ -87,7 +88,7 @@ class ClashAPIClient {
     options: RequestInit = {},
   ): Promise<T> {
     const url = `${this.baseURL}${path}`;
-    const response = await fetch(url, {
+    const response = await authenticatedFetch(url, {
       ...options,
       headers: {
         ...this.getHeaders(),

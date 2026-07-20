@@ -2,6 +2,7 @@ package store
 
 import (
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -206,7 +207,7 @@ func (s *Store) ListNodes(req model.NodeListRequest) (*model.NodeListResponse, e
 			n.name, n.name_overridden, n.type, n.server, n.server_port, n.raw, n.raw_json, n.enabled, n.preferred,
 			n.latency_ms, n.status, n.last_test_at, n.test_latency_ms, n.test_success, n.created_at, n.updated_at
 		FROM nodes n LEFT JOIN subscriptions s ON s.id = n.subscription_id` + where + `
-		ORDER BY n.updated_at DESC, n.id DESC LIMIT ? OFFSET ?`
+		ORDER BY n.name COLLATE NOCASE ASC, n.subscription_id ASC, n.uid ASC LIMIT ? OFFSET ?`
 	queryArgs := append(args, limit, req.Offset)
 	rows, err := s.db.Query(query, queryArgs...)
 	if err != nil {
@@ -298,7 +299,22 @@ func (s *Store) UpdateNodeHealthCheck(uid string, latencyMS int, success bool, t
 }
 
 func (s *Store) DeleteNode(uid string) error {
-	res, err := s.db.Exec(`DELETE FROM nodes WHERE uid = ?`, uid)
+	s.nodeRefsMu.Lock()
+	defer s.nodeRefsMu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var subscriptionID int64
+	if err := tx.QueryRow(`SELECT subscription_id FROM nodes WHERE uid = ?`, uid).Scan(&subscriptionID); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("node not found: %s", uid)
+		}
+		return err
+	}
+	res, err := tx.Exec(`DELETE FROM nodes WHERE uid = ?`, uid)
 	if err != nil {
 		return err
 	}
@@ -309,10 +325,17 @@ func (s *Store) DeleteNode(uid string) error {
 	if affected == 0 {
 		return fmt.Errorf("node not found: %s", uid)
 	}
-	if err := s.removeNodeUIDFromProxyCollections(uid); err != nil {
+	if _, err := s.cleanInvalidNodeUIDsTx(tx, []string{uid}); err != nil {
 		return err
 	}
-	return s.removeNodeUIDFromNodeGroups(uid)
+	if _, err := tx.Exec(`
+		UPDATE subscriptions
+		SET node_count = (SELECT COUNT(*) FROM nodes WHERE subscription_id = ?), updated_at = ?
+		WHERE id = ?
+	`, subscriptionID, time.Now().UnixMilli(), subscriptionID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) NodeFacets() (*model.NodeFacetsResponse, error) {

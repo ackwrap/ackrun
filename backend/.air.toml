@@ -1,5 +1,6 @@
 root = "."
 tmp_dir = ".air"
+env_files = [".air.env"]
 
 [build]
 cmd = "go build -o ./.air/ackwrap ./cmd/server"

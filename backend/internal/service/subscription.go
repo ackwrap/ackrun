@@ -36,6 +36,13 @@ type subscriptionSyncResult struct {
 	ExpireAt          int64
 	Nodes             []model.ParsedNode
 	UnsupportedCount  map[string]int
+	ExcludedNodes     []excludedSubscriptionNode
+}
+
+type excludedSubscriptionNode struct {
+	Name   string
+	Type   string
+	Reason string
 }
 
 type SubscriptionService struct {
@@ -46,6 +53,7 @@ type SubscriptionService struct {
 	entries    map[int64]cron.EntryID
 	mu         sync.Mutex
 	syncMu     sync.Mutex
+	nodeSyncMu sync.Mutex
 	syncing    map[int64]bool
 }
 
@@ -271,6 +279,11 @@ func (svc *SubscriptionService) runSync(id int64) {
 	oldUIDs, err := svc.store.GetSubscriptionNodeUIDs(id)
 	if err != nil {
 		logging.Error("subscription.sync", "get old UIDs for subscription %d failed: %v", id, err)
+		if setErr := svc.store.SetSubscriptionSyncState(id, "failed", 0); setErr != nil {
+			logging.Error("subscription.sync", "set failed state failed: %v", setErr)
+		}
+		svc.broadcastSync(id, "failed", 0, "读取同步前节点快照失败: "+err.Error())
+		return
 	}
 
 	if !svc.updateSyncProgress(id, 15) {
@@ -301,12 +314,14 @@ func (svc *SubscriptionService) runSync(id int64) {
 		warningMsg = fmt.Sprintf("已忽略 %d 个不支持的节点 (%s)", totalUnsupported, strings.Join(parts, ", "))
 	}
 
-	if err := svc.applyNodeFilters(result); err != nil {
-		logging.Error("subscription.sync", "apply node filters for subscription %d failed: %v", id, err)
+	filterErr := svc.applyNodeFilters(result)
+	svc.logExcludedNodes(item, result.ExcludedNodes)
+	if filterErr != nil {
+		logging.Error("subscription.sync", "apply node filters for subscription %d failed: %v", id, filterErr)
 		if setErr := svc.store.SetSubscriptionSyncState(id, "failed", 0); setErr != nil {
 			logging.Error("subscription.sync", "set failed state failed: %v", setErr)
 		}
-		svc.broadcastSync(id, "failed", 0, err.Error())
+		svc.broadcastSync(id, "failed", 0, filterErr.Error())
 		return
 	}
 	if !svc.updateSyncProgress(id, 65) {
@@ -315,7 +330,9 @@ func (svc *SubscriptionService) runSync(id int64) {
 	if !svc.updateSyncProgress(id, 80) {
 		return
 	}
+	svc.nodeSyncMu.Lock()
 	if err := svc.store.ReplaceSubscriptionNodes(id, result.Nodes); err != nil {
+		svc.nodeSyncMu.Unlock()
 		logging.Error("subscription.sync", "replace nodes failed: %v", err)
 		if setErr := svc.store.SetSubscriptionSyncState(id, "failed", 0); setErr != nil {
 			logging.Error("subscription.sync", "set failed state failed: %v", setErr)
@@ -325,25 +342,37 @@ func (svc *SubscriptionService) runSync(id int64) {
 	}
 
 	// 2. 记录同步后的节点 UID 列表
-	newUIDs, err := svc.store.GetSubscriptionNodeUIDs(id)
-	if err != nil {
-		logging.Error("subscription.sync", "get new UIDs for subscription %d failed: %v", id, err)
+	newUIDs, snapshotErr := svc.store.GetSubscriptionNodeUIDs(id)
+	added := []string(nil)
+	removed := []string(nil)
+	hasChanges := true
+	if snapshotErr != nil {
+		logging.Error("subscription.sync", "get new UIDs for subscription %d failed: %v", id, snapshotErr)
+		warningMsg = appendSubscriptionWarning(warningMsg, "读取同步后节点快照失败，已跳过策略组联动: "+snapshotErr.Error())
+	} else {
+		// 3. 对比变化
+		added, removed = diffUIDs(oldUIDs, newUIDs)
+		hasChanges = len(added) > 0 || len(removed) > 0
 	}
 
-	// 3. 对比变化
-	added, removed := diffUIDs(oldUIDs, newUIDs)
-	hasChanges := len(added) > 0 || len(removed) > 0
-
 	if hasChanges {
-		logging.Info("subscription.sync", "订阅 %d 节点变化：新增 %d，删除 %d", id, len(added), len(removed))
+		if snapshotErr == nil {
+			logging.Info("subscription.sync", "订阅 %d 节点变化：新增 %d，删除 %d", id, len(added), len(removed))
+		}
 
 		// 4. 清理策略组中失效的节点引用
 		if len(removed) > 0 {
-			cleanedCount, err := svc.store.CleanInvalidNodeUIDs(removed)
+			cleanup, err := svc.store.CleanInvalidNodeUIDs(removed)
 			if err != nil {
 				logging.Error("subscription.sync", "clean invalid node UIDs failed: %v", err)
-			} else if cleanedCount > 0 {
-				logging.Info("subscription.sync", "已清理 %d 个策略组的失效节点引用", cleanedCount)
+				warningMsg = appendSubscriptionWarning(warningMsg, "策略组联动清理失败: "+err.Error())
+			} else {
+				if cleanup.UpdatedCollections > 0 {
+					logging.Info("subscription.sync", "已清理 %d 个业务策略组的失效节点引用", cleanup.UpdatedCollections)
+				}
+				if cleanup.DeletedNodeGroups > 0 {
+					logging.Info("subscription.sync", "已删除 %d 个零节点节点组，并同步解绑业务策略组引用", cleanup.DeletedNodeGroups)
+				}
 			}
 		}
 
@@ -352,14 +381,15 @@ func (svc *SubscriptionService) runSync(id int64) {
 			addedCount, err := svc.store.AutoAddNewNodes(id, added)
 			if err != nil {
 				logging.Error("subscription.sync", "auto add new nodes failed: %v", err)
+				warningMsg = appendSubscriptionWarning(warningMsg, "新增节点自动加入策略组失败: "+err.Error())
 			} else if addedCount > 0 {
 				logging.Info("subscription.sync", "已自动将新增节点加入 %d 个策略组", addedCount)
 			}
 		}
-
 	} else {
 		logging.Info("subscription.sync", "订阅 %d 节点无变化，跳过配置更新", id)
 	}
+	svc.nodeSyncMu.Unlock()
 
 	if !svc.updateSyncProgress(id, 95) {
 		return
@@ -381,6 +411,13 @@ func (svc *SubscriptionService) runSync(id int64) {
 	if hasChanges && svc.reconciler != nil {
 		svc.reconciler.Trigger("subscription.sync")
 	}
+}
+
+func appendSubscriptionWarning(current, next string) string {
+	if current == "" {
+		return next
+	}
+	return current + "；" + next
 }
 
 func (svc *SubscriptionService) beginSync(id int64) bool {
@@ -427,7 +464,12 @@ func (svc *SubscriptionService) applyNodeFilters(result *subscriptionSyncResult)
 	}
 	kept := make([]model.ParsedNode, 0, len(result.Nodes))
 	for _, node := range result.Nodes {
-		if nodeFiltered(node, compiled) {
+		if matched := matchedNodeFilter(node, compiled); matched != nil {
+			result.ExcludedNodes = append(result.ExcludedNodes, excludedSubscriptionNode{
+				Name:   node.Name,
+				Type:   node.Type,
+				Reason: fmt.Sprintf("命中节点过滤规则 %q (target=%s)", matched.Name, matched.Target),
+			})
 			continue
 		}
 		kept = append(kept, node)
@@ -445,13 +487,30 @@ type compiledNodeFilter struct {
 	regex  *regexp.Regexp
 }
 
-func nodeFiltered(node model.ParsedNode, filters []compiledNodeFilter) bool {
-	for _, filter := range filters {
-		if filter.regex.MatchString(nodeFilterValue(node, filter.filter.Target)) {
-			return true
+func matchedNodeFilter(node model.ParsedNode, filters []compiledNodeFilter) *model.NodeFilter {
+	for i := range filters {
+		if filters[i].regex.MatchString(nodeFilterValue(node, filters[i].filter.Target)) {
+			return &filters[i].filter
 		}
 	}
-	return false
+	return nil
+}
+
+func (svc *SubscriptionService) logExcludedNodes(subscription *model.Subscription, nodes []excludedSubscriptionNode) {
+	if subscription == nil {
+		return
+	}
+	for _, node := range nodes {
+		logging.Info(
+			"subscription.sync",
+			"排除节点 subscription_id=%d subscription=%q node=%q type=%q reason=%q",
+			subscription.ID,
+			subscription.Name,
+			node.Name,
+			node.Type,
+			node.Reason,
+		)
+	}
 }
 
 func nodeFilterValue(node model.ParsedNode, target string) string {
@@ -563,9 +622,11 @@ func (svc *SubscriptionService) fetchAndParse(rawURL string, userAgent string, t
 	for _, node := range nodes {
 		if isUnsupportedNodeType(node.Type) || node.UnsupportedReason != "" {
 			unsupportedCount[node.Type]++
-			if node.UnsupportedReason != "" {
-				logging.Info("subscription.parse", "filtered %s node: %s", node.Type, node.UnsupportedReason)
+			reason := node.UnsupportedReason
+			if reason == "" {
+				reason = "当前核心不支持该协议"
 			}
+			result.ExcludedNodes = append(result.ExcludedNodes, excludedSubscriptionNode{Name: node.Name, Type: node.Type, Reason: reason})
 		} else {
 			supportedNodes = append(supportedNodes, node)
 		}

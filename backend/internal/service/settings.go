@@ -1,8 +1,10 @@
 package service
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -14,20 +16,31 @@ import (
 )
 
 type SettingsService struct {
-	store           *store.Store
-	singbox         *SingboxService
-	configGenerator *ConfigGeneratorService
+	store                    *store.Store
+	singbox                  *SingboxService
+	configGenerator          modeConfigGenerator
+	connectivitySettingsHook func()
+}
+
+type modeConfigGenerator interface {
+	ReconcileCurrent() (*model.ConfigGenerateResponse, error)
 }
 
 var ErrModeChangeWhileRunning = errors.New("核心运行时不能切换模式，请先停止核心")
+var ErrConnectivitySettingsInvalid = errors.New("连通性测速设置无效")
+var ErrTrafficBypassSettingsInvalid = errors.New("流量排除设置无效")
 
 func NewSettingsService(s *store.Store) *SettingsService {
 	return &SettingsService{store: s}
 }
 
-func (svc *SettingsService) SetModeDependencies(singbox *SingboxService, generator *ConfigGeneratorService) {
+func (svc *SettingsService) SetModeDependencies(singbox *SingboxService, generator modeConfigGenerator) {
 	svc.singbox = singbox
 	svc.configGenerator = generator
+}
+
+func (svc *SettingsService) SetConnectivitySettingsHook(hook func()) {
+	svc.connectivitySettingsHook = hook
 }
 
 func (svc *SettingsService) GetUpdateSettings() (*model.UpdateSettingsResponse, error) {
@@ -37,19 +50,10 @@ func (svc *SettingsService) GetUpdateSettings() (*model.UpdateSettingsResponse, 
 func (svc *SettingsService) SetUpdateSettings(req *model.UpdateSettings) error {
 	req.Acceleration = strings.TrimSpace(req.Acceleration)
 	req.CustomMirrorURL = strings.TrimSpace(req.CustomMirrorURL)
-	req.ProxyURL = strings.TrimSpace(req.ProxyURL)
 	switch req.Acceleration {
-	case "", "proxy", "ghproxy", "custom":
+	case "", "ghproxy", "ghproxy_vip", "jsdelivr_fastly", "jsdelivr_testingcf", "jsdelivr_cdn", "custom":
 	default:
 		return fmt.Errorf("更新加速方式无效")
-	}
-	if req.Acceleration == "proxy" {
-		if req.ProxyURL == "" {
-			req.ProxyURL = "http://127.0.0.1:2080"
-		}
-		if err := validateUpdateURL(req.ProxyURL, "代理 URL"); err != nil {
-			return err
-		}
 	}
 	if req.Acceleration == "custom" {
 		if req.CustomMirrorURL == "" {
@@ -60,6 +64,59 @@ func (svc *SettingsService) SetUpdateSettings(req *model.UpdateSettings) error {
 		}
 	}
 	return svc.store.SetUpdateSettings(req)
+}
+
+func (svc *SettingsService) GetTrafficBypassSettings() (*model.TrafficBypassSettings, error) {
+	return svc.store.GetTrafficBypassSettings()
+}
+
+func (svc *SettingsService) SetTrafficBypassSettings(settings *model.TrafficBypassSettings) error {
+	if settings == nil {
+		return fmt.Errorf("%w: 设置不能为空", ErrTrafficBypassSettingsInvalid)
+	}
+	normalized := make([]model.TrafficBypassRule, 0, len(settings.Rules))
+	seen := make(map[string]bool)
+	for _, rule := range settings.Rules {
+		rule.Type = strings.TrimSpace(rule.Type)
+		rule.Value = strings.TrimSpace(rule.Value)
+		if rule.Value == "" {
+			continue
+		}
+		switch rule.Type {
+		case "process_name":
+			if len(rule.Value) > 255 || strings.ContainsAny(rule.Value, "\r\n\x00") {
+				return fmt.Errorf("%w: 进程名称无效", ErrTrafficBypassSettingsInvalid)
+			}
+		case "interface":
+			if len(rule.Value) > 64 || !regexp.MustCompile(`^[A-Za-z0-9_.:@-]+$`).MatchString(rule.Value) {
+				return fmt.Errorf("%w: 网络接口名称无效", ErrTrafficBypassSettingsInvalid)
+			}
+		case "ip_cidr", "source_ip_cidr":
+			prefix, err := netip.ParsePrefix(rule.Value)
+			if err != nil {
+				return fmt.Errorf("%w: %s 不是有效 CIDR", ErrTrafficBypassSettingsInvalid, rule.Value)
+			}
+			rule.Value = prefix.Masked().String()
+		case "domain_suffix":
+			rule.Value = strings.ToLower(strings.TrimSuffix(rule.Value, "."))
+			if len(rule.Value) > 253 || !regexp.MustCompile(`^[a-z0-9_*.-]+$`).MatchString(rule.Value) {
+				return fmt.Errorf("%w: 域名后缀无效", ErrTrafficBypassSettingsInvalid)
+			}
+		default:
+			return fmt.Errorf("%w: 不支持类型 %s", ErrTrafficBypassSettingsInvalid, rule.Type)
+		}
+		key := rule.Type + "\x00" + strings.ToLower(rule.Value)
+		if !seen[key] {
+			seen[key] = true
+			normalized = append(normalized, rule)
+		}
+	}
+	settings.Rules = normalized
+	if err := svc.store.SetTrafficBypassSettings(settings); err != nil {
+		return err
+	}
+	logging.Info("settings.traffic_bypass", "流量排除设置已更新，规则数: %d", len(normalized))
+	return nil
 }
 
 func validateUpdateURL(value, field string) error {
@@ -84,15 +141,39 @@ func (svc *SettingsService) SetLogSettings(req *model.LogSettings) error {
 	if err := svc.store.SetLogSettings(req); err != nil {
 		return err
 	}
-	generateRequest, err := svc.store.GetConfigGenerateRequest()
+	return nil
+}
+
+func (svc *SettingsService) GetConnectivitySettings() (*model.ConnectivitySettings, error) {
+	return svc.store.GetConnectivitySettings()
+}
+
+func (svc *SettingsService) SetConnectivitySettings(req *model.ConnectivitySettings) error {
+	req.TestURL = strings.TrimSpace(req.TestURL)
+	if err := validateUpdateURL(req.TestURL, "连通性地址"); err != nil {
+		return fmt.Errorf("%w: %v", ErrConnectivitySettingsInvalid, err)
+	}
+	target, err := svc.store.GetConnectivityTargetByURL(req.TestURL)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: 请先在连通性地址列表中添加该 URL", ErrConnectivitySettingsInvalid)
+	}
 	if err != nil {
-		return fmt.Errorf("读取配置生成参数失败: %w", err)
+		return err
 	}
-	if generateRequest == nil {
-		return nil
+	if !target.Enabled {
+		return fmt.Errorf("%w: 所选连通性地址已停用", ErrConnectivitySettingsInvalid)
 	}
-	generateRequest.LogLevel = req.Level
-	return svc.store.SetConfigGenerateRequest(generateRequest)
+	if req.IntervalSeconds < 60 || req.IntervalSeconds > 3600 {
+		return fmt.Errorf("%w: 连通间隔必须在 60 到 3600 秒之间", ErrConnectivitySettingsInvalid)
+	}
+	if err := svc.store.SetConnectivitySettings(req); err != nil {
+		return err
+	}
+	logging.Info("settings.update", "连通性测速设置已更新，间隔: %ds", req.IntervalSeconds)
+	if svc.connectivitySettingsHook != nil {
+		svc.connectivitySettingsHook()
+	}
+	return nil
 }
 
 func (svc *SettingsService) GetNTPSettings() (*model.NTPSettingsResponse, error) {
@@ -121,7 +202,7 @@ func (svc *SettingsService) SetInboundMode(mode string) error {
 	default:
 		return fmt.Errorf("运行模式无效")
 	}
-	logging.Info("settings.update", "切换运行模式: %s", mode)
+	logging.Info("settings.update", "切换运行模式: %s，FakeIP: %t", mode, mode != "mixed")
 	return svc.setMode(svc.store.GetInboundMode(), mode, svc.store.SetInboundMode)
 }
 

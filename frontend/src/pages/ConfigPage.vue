@@ -1,34 +1,43 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, ref } from "vue";
 import {
   CheckCircle2,
   ChevronDown,
+  FileJson2,
   Play,
+  RefreshCw,
   Save,
   XCircle,
 } from "lucide-vue-next";
 import PageHeader from "@/components/layout/PageHeader.vue";
 import JsonPreview from "@/components/JsonPreview.vue";
-import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
+import Button from "@/components/ui/Button.vue";
+import Modal from "@/components/ui/Modal.vue";
 import Toast from "@/components/ui/Toast.vue";
 import { api } from "@/services/api";
-import type { ConfigGenerateRequest } from "@/services/types";
-const request = ref<ConfigGenerateRequest>({
-  default_outbound: "proxy",
-  inbound_listen: "127.0.0.1",
-  inbound_port: 7890,
-  log_level: "info",
-});
+import { writeClipboardText } from "@/utils/clipboard";
+import type {
+  ConfigBackup,
+  ConfigFileItem,
+  ConfigGenerateRequest,
+} from "@/services/types";
+const request = ref<ConfigGenerateRequest | null>(null);
 const generated = ref<any>(null),
-  hasConfig = ref(false),
+  configFiles = ref<ConfigFileItem[]>([]),
+  configBackups = ref<ConfigBackup[]>([]),
+  loadingFiles = ref(true),
   generating = ref(false),
   applying = ref(false),
-  confirmApply = ref(false),
+  applyDialog = ref(false),
+  applyFileName = ref("config.json"),
   showFullPreview = ref(false),
   expandedModules = ref<Record<string, boolean>>({}),
   message = ref(""),
   messageType = ref<"success" | "error">("error");
 const config = computed(() => generated.value?.config);
+const activeConfig = computed(() =>
+  configFiles.value.find((item) => item.active),
+);
 const moduleItems = computed(() => {
   const c = config.value,
     r = c?.route || {};
@@ -116,23 +125,46 @@ const moduleItems = computed(() => {
     },
   ];
 });
-let toastTimer: number | undefined;
 function showMessage(v: string, t: "success" | "error" = "error") {
   message.value = v;
   messageType.value = t;
 }
-watch([message, messageType], () => {
-  clearTimeout(toastTimer);
-  if (message.value)
-    toastTimer = window.setTimeout(
-      () => (message.value = ""),
-      messageType.value === "error" ? 5000 : 3000,
-    );
-});
+const formatSize = (value: number) =>
+  value < 1024 ? `${value} B` : `${(value / 1024).toFixed(1)} KiB`;
+const formatUpdatedAt = (value: number) =>
+  value ? new Date(value).toLocaleString() : "-";
+function backupSummary(configName: string) {
+  const backups = configBackups.value.filter(
+    (item) => item.config_name === configName,
+  );
+  return {
+    count: backups.length,
+    latest: backups[0]?.backup_date || "",
+  };
+}
+
+async function loadConfigFiles() {
+  loadingFiles.value = true;
+  try {
+    const [files, backups] = await Promise.all([
+      api.getConfigFiles(),
+      api.getConfigBackups(),
+    ]);
+    configFiles.value = files;
+    configBackups.value = backups;
+  } catch (e: any) {
+    showMessage(`加载配置文件失败: ${e.message}`);
+  } finally {
+    loadingFiles.value = false;
+  }
+}
+
 async function generate() {
+  const currentRequest = request.value;
+  if (!currentRequest) return showMessage("配置生成参数尚未加载");
   try {
     generating.value = true;
-    const result = await api.generateConfig(request.value);
+    const result = await api.generateConfig(currentRequest);
     generated.value = result;
     showMessage(
       result.valid
@@ -146,13 +178,22 @@ async function generate() {
     generating.value = false;
   }
 }
+function openApplyDialog() {
+  applyFileName.value = activeConfig.value?.name || "config.json";
+  applyDialog.value = true;
+}
 async function apply() {
-  if (!hasConfig.value) return showMessage("当前没有可应用的配置文件");
+  if (applying.value) return;
   if (!generated.value?.valid) return showMessage("请先生成并校验通过配置");
+  if (!applyFileName.value.trim()) return showMessage("请输入配置文件名");
   try {
     applying.value = true;
-    await api.applyConfig({ restart_core: true });
-    confirmApply.value = false;
+    await api.applyConfig({
+      file_name: applyFileName.value.trim(),
+      restart_core: true,
+    });
+    applyDialog.value = false;
+    await loadConfigFiles();
     showMessage("配置已应用", "success");
   } catch (e: any) {
     showMessage(`应用失败: ${e.message}`);
@@ -170,19 +211,17 @@ function toggleRow(index: number) {
 }
 async function copy(value: any, label: string) {
   try {
-    await navigator.clipboard.writeText(JSON.stringify(value, null, 2));
+    await writeClipboardText(JSON.stringify(value, null, 2));
     showMessage(`${label} 已复制`, "success");
   } catch (e: any) {
     showMessage(`复制失败: ${e.message || "浏览器不支持剪贴板"}`);
   }
 }
 onMounted(async () => {
-  const [statusResult, requestResult] = await Promise.allSettled([
-    api.getConfigStatus(),
+  const [requestResult] = await Promise.allSettled([
     api.getConfigGenerateRequest(),
+    loadConfigFiles(),
   ]);
-  hasConfig.value =
-    statusResult.status === "fulfilled" && statusResult.value.has_config;
   if (requestResult.status === "rejected") {
     showMessage(
       `加载配置生成参数失败: ${requestResult.reason?.message || "请求失败"}`,
@@ -201,65 +240,178 @@ onMounted(async () => {
         description="从当前订阅、节点、策略组、路由规则、DNS、Geo 和运行设置生成完整 sing-box 配置"
       />
       <div class="flex gap-2">
-        <button
-          class="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--button-primary-border)] bg-[var(--button-primary-bg)] px-3 text-sm"
-          :disabled="generating"
+        <Button
+          variant="primary"
+          size="lg"
+          :loading="generating"
+          :disabled="!request"
           @click="generate"
         >
-          <Play :size="15" />{{
-            generating ? "生成中..." : "生成完整配置"
-          }}</button
-        ><button
-          class="inline-flex h-9 items-center gap-2 rounded-md bg-emerald-600 px-3 text-sm text-white disabled:opacity-50"
-          :disabled="!hasConfig || !generated?.valid || applying"
-          @click="confirmApply = true"
+          <Play :size="15" />生成完整配置
+        </Button>
+        <Button
+          variant="primary"
+          size="lg"
+          :disabled="!generated?.valid || applying"
+          @click="openApplyDialog"
         >
-          <Save :size="15" />{{ applying ? "应用中..." : "应用当前生成结果" }}
-        </button>
+          <Save :size="15" />应用当前生成结果
+        </Button>
       </div>
     </div>
-    <Toast :message="message" :type="messageType" />
-    <section
-      class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
-    >
-      <h3 class="text-sm font-semibold">生成参数</h3>
-      <div class="mt-4 grid gap-3">
-        <label
-          ><span class="text-xs">默认出站</span
-          ><select
-            v-model="request.default_outbound"
-            class="mt-1 w-full rounded-md border bg-[var(--bg-base)] px-3 py-2"
-          >
-            <option value="proxy">proxy（策略）</option>
-            <option value="direct">direct（直连）</option>
-          </select></label
-        ><label
-          ><span class="text-xs">Mixed 监听地址</span
-          ><input
-            v-model="request.inbound_listen"
-            class="mt-1 w-full rounded-md border bg-[var(--bg-base)] px-3 py-2" /></label
-        ><label
-          ><span class="text-xs">Mixed 监听端口</span
-          ><input
-            v-model.number="request.inbound_port"
-            type="number"
-            class="mt-1 w-full rounded-md border bg-[var(--bg-base)] px-3 py-2" /></label
-        ><label
-          ><span class="text-xs">日志级别</span
-          ><select
-            v-model="request.log_level"
-            class="mt-1 w-full rounded-md border bg-[var(--bg-base)] px-3 py-2"
-          >
-            <option
-              v-for="l in ['trace', 'debug', 'info', 'warn', 'error']"
-              :key="l"
+    <Toast :message="message" :type="messageType" @dismiss="message = ''" />
+    <div class="grid gap-4 lg:grid-cols-2">
+      <section
+        class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
+      >
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <h3 class="flex items-center gap-2 text-sm font-semibold">
+              <FileJson2
+                :size="16"
+                class="text-[var(--color-primary)]"
+              />配置文件
+            </h3>
+            <p class="mt-1 text-xs text-[var(--text-tertiary)]">
+              当前使用：{{ activeConfig?.name || "未选择" }}
+            </p>
+          </div>
+          <Button size="sm" :loading="loadingFiles" @click="loadConfigFiles">
+            <RefreshCw :size="13" />刷新
+          </Button>
+        </div>
+        <div class="aw-data-table-wrap mt-4 max-h-[262px]">
+          <table class="aw-data-table min-w-[560px]">
+            <thead>
+              <tr>
+                <th>文件名</th>
+                <th>状态</th>
+                <th>备份</th>
+                <th>大小</th>
+                <th>更新时间</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-if="loadingFiles">
+                <td colspan="5" class="text-center">加载中...</td>
+              </tr>
+              <tr v-else-if="!configFiles.length">
+                <td colspan="5" class="text-center">暂无配置文件</td>
+              </tr>
+              <tr v-for="item in configFiles" v-else :key="item.path">
+                <td class="font-mono">
+                  {{ item.name }}
+                  <span
+                    v-if="item.active"
+                    class="ml-1 rounded-full bg-[var(--color-primary-bg)] px-2 py-0.5 text-[10px] text-[var(--color-primary)]"
+                  >
+                    当前使用
+                  </span>
+                </td>
+                <td
+                  :class="
+                    item.valid
+                      ? 'text-[var(--color-success)]'
+                      : 'text-[var(--color-error)]'
+                  "
+                  :title="item.error"
+                >
+                  {{ item.valid ? "校验通过" : "校验失败" }}
+                </td>
+                <td
+                  class="whitespace-nowrap"
+                  :title="
+                    backupSummary(item.name).latest
+                      ? `最近备份：${backupSummary(item.name).latest}`
+                      : '暂无备份'
+                  "
+                >
+                  {{
+                    backupSummary(item.name).count
+                      ? `${backupSummary(item.name).count} 天`
+                      : "无"
+                  }}
+                </td>
+                <td class="tabular-nums">{{ formatSize(item.size_bytes) }}</td>
+                <td class="whitespace-nowrap">
+                  {{ formatUpdatedAt(item.updated_at) }}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section
+        class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
+      >
+        <h3 class="text-sm font-semibold">生成参数</h3>
+        <p class="mt-1 text-xs text-[var(--text-tertiary)]">
+          生成结果先写入临时文件并通过 sing-box check，应用时再命名保存。
+        </p>
+        <div v-if="request" class="mt-4 grid gap-3 sm:grid-cols-2">
+          <label
+            ><span class="text-xs">默认出站</span
+            ><select
+              v-model="request.default_outbound"
+              class="aw-input mt-1 w-full"
             >
-              {{ l }}
-            </option>
-          </select></label
-        >
-      </div>
-    </section>
+              <option value="proxy">proxy（策略）</option>
+              <option value="direct">direct（直连）</option>
+            </select></label
+          ><label
+            ><span class="text-xs">日志级别</span
+            ><select v-model="request.log_level" class="aw-input mt-1 w-full">
+              <option
+                v-for="l in [
+                  'trace',
+                  'debug',
+                  'info',
+                  'warn',
+                  'error',
+                  'fatal',
+                  'panic',
+                ]"
+                :key="l"
+              >
+                {{ l }}
+              </option>
+            </select></label
+          ><label
+            ><span class="text-xs">Mixed 监听地址</span
+            ><input
+              v-model="request.inbound_listen"
+              class="aw-input mt-1 w-full" /></label
+          ><label
+            ><span class="text-xs">Mixed 监听端口</span
+            ><input
+              v-model.number="request.inbound_port"
+              type="number"
+              class="aw-input mt-1 w-full" /></label
+          ><label
+            ><span class="text-xs">TUN IPv4 地址</span
+            ><input
+              v-model="request.tun_ipv4_address"
+              class="aw-input mt-1 w-full"
+              placeholder="172.31.255.1/30"
+            /><small class="mt-1 block text-[var(--text-tertiary)]"
+              >使用 CIDR，需避开 LAN、Docker 和 VPN 已占用网段。</small
+            ></label
+          ><label
+            ><span class="text-xs">TUN IPv6 地址</span
+            ><input
+              v-model="request.tun_ipv6_address"
+              class="aw-input mt-1 w-full"
+              placeholder="fdfe:dcba:9875::1/126"
+            /><small class="mt-1 block text-[var(--text-tertiary)]"
+              >使用 IPv6 CIDR；修改后需重新生成并应用配置。</small
+            ></label
+          >
+        </div>
+        <p v-else class="mt-4 text-xs text-[var(--text-tertiary)]">
+          正在从后端加载配置生成参数...
+        </p>
+      </section>
+    </div>
     <section
       class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)]"
     >
@@ -304,7 +456,7 @@ onMounted(async () => {
             :class="item.accent"
           >
             <button
-              class="flex w-full justify-between text-left"
+              class="flex w-full items-start justify-between gap-3 text-left"
               @click="toggleRow(index)"
             >
               <span
@@ -312,7 +464,7 @@ onMounted(async () => {
                 ><small class="mt-1 block text-[var(--text-tertiary)]">{{
                   item.detail
                 }}</small></span
-              ><span class="flex gap-2"
+              ><span class="flex shrink-0 items-center gap-2"
                 ><button
                   v-if="expandedModules[item.key]"
                   @click.stop="
@@ -321,7 +473,7 @@ onMounted(async () => {
                 >
                   复制</button
                 ><span
-                  class="rounded-full px-2 py-1 text-xs"
+                  class="inline-flex h-6 min-w-6 items-center justify-center rounded-full px-1.5 text-xs leading-none tabular-nums"
                   :class="item.badge"
                   >{{ item.count }}</span
                 >
@@ -344,14 +496,35 @@ onMounted(async () => {
         </div>
       </div>
     </section>
-    <ConfirmDialog
-      :open="confirmApply"
-      title="应用当前生成结果"
-      message="将把已校验通过的临时配置覆盖为正式配置。应用前会备份当前配置。"
-      confirm-text="应用配置"
-      @confirm="apply"
-      @cancel="confirmApply = false"
-    />
+    <Modal
+      :open="applyDialog"
+      title="保存并应用配置"
+      size="sm"
+      :closable="!applying"
+      @close="applyDialog = false"
+    >
+      <label class="text-sm">
+        配置文件名
+        <input
+          v-model.trim="applyFileName"
+          class="aw-input mt-1 w-full"
+          maxlength="128"
+          placeholder="例如：home.json"
+          autofocus
+          @keyup.enter="apply"
+        />
+      </label>
+      <p class="mt-3 text-xs leading-5 text-[var(--text-tertiary)]">
+        未填写扩展名时自动补充
+        .json。文件将保存到本地配置目录并设为当前使用配置，然后重载核心。
+      </p>
+      <template #footer>
+        <Button :disabled="applying" @click="applyDialog = false">取消</Button>
+        <Button variant="primary" :loading="applying" @click="apply"
+          >保存并应用</Button
+        >
+      </template>
+    </Modal>
     <div
       v-if="showFullPreview && config"
       class="aw-modal-backdrop"

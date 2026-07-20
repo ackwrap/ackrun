@@ -11,6 +11,7 @@ import {
   Upload,
 } from "lucide-vue-next";
 import PageHeader from "@/components/layout/PageHeader.vue";
+import NodeFlagName from "@/components/NodeFlagName.vue";
 import Toast from "@/components/ui/Toast.vue";
 import Modal from "@/components/ui/Modal.vue";
 import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
@@ -49,6 +50,7 @@ const content = ref(""),
   previewLoading = ref(false),
   previewError = ref(""),
   previewDetail = ref<NodeImportPreviewItem | null>(null),
+  previewFlags = ref<Record<string, string>>({}),
   detailFormat = ref<"json" | "yaml">("json"),
   lastPreview = ref("");
 const editingFilter = ref<NodeFilter | null>(null),
@@ -59,8 +61,7 @@ const editingFilter = ref<NodeFilter | null>(null),
 const remote = computed(() =>
     subscriptions.value.filter((x) => x.url !== manualURL),
   ),
-  manual = computed(() => subscriptions.value.find((x) => x.url === manualURL)),
-  displayed = computed(() => remote.value),
+  displayed = computed(() => subscriptions.value),
   anySyncing = computed(() =>
     remote.value.some((x) => x.sync_status === "syncing"),
   ),
@@ -202,6 +203,16 @@ async function parse(silent = false) {
   try {
     const r = await api.previewImportNodes({ content: content.value });
     preview.value = r.items;
+    const inferred = await api.inferNodeFlags(
+      r.items.map((node) => ({
+        key: node.uid,
+        name: node.name,
+        server: node.server,
+      })),
+    );
+    previewFlags.value = Object.fromEntries(
+      inferred.items.map((item) => [item.key, item.flag]),
+    );
     if (!silent) show(`预览完成：识别到 ${r.count} 个节点`);
   } catch (e: any) {
     preview.value = [];
@@ -345,6 +356,7 @@ const pretty = (s: string) => {
     <PageHeader title="订阅管理" /><Toast
       :message="message"
       :type="toastType"
+      @dismiss="message = ''"
     />
     <section
       class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
@@ -394,9 +406,9 @@ const pretty = (s: string) => {
               </td>
             </tr>
             <tr v-for="x in displayed" v-else :key="x.id">
-              <td>{{ x.url === manualURL ? "本地订阅" : x.name }}</td>
+              <td>{{ x.url === manualURL ? "本地节点源" : x.name }}</td>
               <td class="max-w-[260px] truncate">
-                {{ x.url === manualURL ? "本地节点源" : x.url }}
+                {{ x.url === manualURL ? "本地导入" : x.url }}
               </td>
               <td>
                 <button
@@ -463,33 +475,12 @@ const pretty = (s: string) => {
     <section
       class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
     >
-      <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+      <div class="mb-4">
         <div>
           <h2 class="font-semibold">本地订阅导入</h2>
           <p class="mt-1 text-xs text-[var(--text-secondary)]">
             支持 URI List、Clash YAML 和 sing-box JSON；UID 已存在时追加/更新。
           </p>
-        </div>
-        <div
-          class="flex items-center gap-3 rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--bg-base)] px-3 py-2"
-        >
-          <div>
-            <div class="text-xs font-medium text-[var(--text-primary)]">
-              本地节点源
-            </div>
-            <div class="text-[11px] text-[var(--text-tertiary)]">
-              {{ manual ? "manual://local" : "首次导入时自动创建" }}
-            </div>
-          </div>
-          <button
-            class="aw-action-button aw-action-neutral"
-            :disabled="!manual?.node_count"
-            @click="
-              manual && router.push(`/nodes?subscription_id=${manual.id}`)
-            "
-          >
-            {{ manual?.node_count || 0 }} 个节点
-          </button>
         </div>
       </div>
       <div class="mb-3 flex flex-wrap justify-end gap-2">
@@ -541,8 +532,15 @@ const pretty = (s: string) => {
             class="mb-2 flex w-full justify-between rounded border border-[var(--border-default)] p-2 text-left"
             @click="previewDetail = x"
           >
-            <span class="truncate">{{ x.name }} · {{ x.type }}</span
-            ><Eye :size="13" />
+            <span class="flex min-w-0 items-center gap-1">
+              <NodeFlagName
+                :name="x.name"
+                :flag="previewFlags[x.uid]"
+                class="min-w-0 flex-1"
+              />
+              <span class="shrink-0">· {{ x.type }}</span>
+            </span>
+            <Eye :size="13" />
           </button>
         </aside>
       </div>

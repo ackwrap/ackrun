@@ -46,6 +46,16 @@ export interface ConfigFileItem {
   error?: string;
 }
 
+export interface ConfigBackup {
+  id: number;
+  config_name: string;
+  file_name: string;
+  path: string;
+  backup_date: string;
+  size_bytes: number;
+  created_at: number;
+}
+
 export interface CoreStatus {
   status: "starting" | "running" | "stopping" | "stopped" | "error";
   pid: number;
@@ -57,6 +67,14 @@ export interface CoreLogEntry {
   time: number;
   source: "stdout" | "stderr" | string;
   line: string;
+}
+
+export interface ToolLogEntry {
+  id: number;
+  time: number;
+  level: "info" | "error" | string;
+  tag: string;
+  message: string;
 }
 
 export interface MaintenanceCheck {
@@ -94,15 +112,27 @@ export interface CoreDiagnosticsResponse {
 export interface UpdateSettings {
   acceleration: string;
   custom_mirror_url?: string;
-  github_token?: string;
-  proxy_url?: string;
 }
 
 export interface UpdateSettingsResponse {
   acceleration: string;
   custom_mirror_url: string;
-  github_token: string;
-  proxy_url: string;
+}
+
+export type TrafficBypassRuleType =
+  | "process_name"
+  | "interface"
+  | "ip_cidr"
+  | "source_ip_cidr"
+  | "domain_suffix";
+
+export interface TrafficBypassRule {
+  type: TrafficBypassRuleType;
+  value: string;
+}
+
+export interface TrafficBypassSettings {
+  rules: TrafficBypassRule[];
 }
 
 export interface LogSettings {
@@ -113,6 +143,84 @@ export interface LogSettings {
 export interface LogSettingsResponse {
   level: string;
   timestamp: boolean;
+}
+
+export interface ConnectivitySettings {
+  test_url: string;
+  interval_seconds: number;
+}
+
+export interface ConnectivityTarget {
+  id: number;
+  name: string;
+  url: string;
+  enabled: boolean;
+  builtin: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface ConnectivityTargetRequest {
+  name: string;
+  url: string;
+  enabled: boolean;
+}
+
+export interface GeoIPFieldMapping {
+  asnumber?: string;
+  country?: string;
+  country_code?: string;
+  country_en?: string;
+  prov?: string;
+  prov_en?: string;
+  city?: string;
+  city_en?: string;
+  district?: string;
+  owner?: string;
+  isp?: string;
+  domain?: string;
+  whois?: string;
+  lat?: string;
+  lng?: string;
+  prefix?: string;
+}
+
+export interface GeoIPProvider {
+  id: number;
+  name: string;
+  key: string;
+  template: string;
+  url?: string;
+  ip_parameter?: string;
+  mapping: GeoIPFieldMapping;
+  enabled: boolean;
+  is_default: boolean;
+  builtin: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface GeoIPProviderRequest {
+  name: string;
+  template: string;
+  url?: string;
+  ip_parameter?: string;
+  mapping: GeoIPFieldMapping;
+  enabled: boolean;
+  is_default: boolean;
+}
+
+export interface GeoIPProviderTemplate {
+  key: string;
+  name: string;
+  url?: string;
+  ip_parameter?: string;
+  mapping: GeoIPFieldMapping;
+}
+
+export interface GeoIPProviderListResponse {
+  items: GeoIPProvider[];
+  templates: GeoIPProviderTemplate[];
 }
 
 export interface NTPSettings {
@@ -313,6 +421,88 @@ export interface NodeTCPingResult {
   error?: string;
 }
 
+export interface NodeExitIPResponse {
+  uid: string;
+  node_name: string;
+  node_ip: string;
+  exit_ip: string;
+  matched: boolean;
+  resolution: "literal" | "alidns_doh";
+  geo_provider: string;
+  geo?: NodeTracerouteGeo;
+  geo_error?: string;
+}
+
+export interface NodeTracerouteAttempt {
+  success: boolean;
+  ip?: string;
+  hostname?: string;
+  rtt_ms?: number;
+  reached?: boolean;
+  geo?: NodeTracerouteGeo;
+  geo_error?: string;
+}
+
+export interface NodeTracerouteGeo {
+  asnumber?: string;
+  country?: string;
+  country_en?: string;
+  prov?: string;
+  prov_en?: string;
+  city?: string;
+  city_en?: string;
+  district?: string;
+  owner?: string;
+  isp?: string;
+  domain?: string;
+  whois?: string;
+  lat?: number;
+  lng?: number;
+  prefix?: string;
+  source?: string;
+}
+
+export interface NodeTracerouteHop {
+  ttl: number;
+  attempts: NodeTracerouteAttempt[];
+}
+
+export interface NodeTracerouteResponse {
+  uid: string;
+  node_name: string;
+  target: string;
+  resolved_ip: string;
+  protocol: string;
+  ip_version: number;
+  reached: boolean;
+  duration_ms: number;
+  geo_provider: string;
+  hops: NodeTracerouteHop[];
+}
+
+export interface NodeTracerouteStartResponse {
+  trace_id: string;
+  uid: string;
+  status: "started";
+  geo_provider: string;
+}
+
+export interface NodeTracerouteEvent {
+  trace_id: string;
+  uid: string;
+  node_name: string;
+  status: "started" | "hop" | "completed" | "failed" | "canceled";
+  target: string;
+  resolved_ip?: string;
+  protocol?: string;
+  ip_version?: number;
+  reached: boolean;
+  duration_ms: number;
+  geo_provider?: string;
+  hop?: NodeTracerouteHop;
+  error?: string;
+}
+
 export interface NodeFlagRequest {
   name: string;
   server?: string;
@@ -444,9 +634,11 @@ export interface GeoAsset {
   sync_time: string;
   sync_weekday: number;
   sync_status: string;
+  sync_progress?: number;
   sync_error: string;
   last_sync_at: number;
   local_path: string;
+  available: boolean;
   cached_updated_at: number;
   created_at: number;
   updated_at: number;
@@ -490,6 +682,14 @@ export interface GeoDomainsResponse {
   message: string;
 }
 
+export interface GeoTagsResponse {
+  type: "geoip" | "geosite";
+  tags: string[];
+  total: number;
+  ready: boolean;
+  message: string;
+}
+
 export interface ApiError {
   error: {
     code: string;
@@ -512,6 +712,7 @@ export interface ProxyCollection {
   test_interval: number;
   tolerance: number;
   enabled: boolean;
+  route_rule_id: number;
   created_at: number;
   updated_at: number;
 }
@@ -528,8 +729,20 @@ export interface ProxyCollectionRequest {
   test_interval: number;
   tolerance: number;
   enabled: boolean;
+  route_rule_id: number;
   route_rule_ids: number[];
   node_uids: string[];
+}
+
+export interface StrategyItem {
+  rule_id: number;
+  name: string;
+  priority: number;
+  kind: "reject" | "direct" | "proxy" | "final";
+  enabled: boolean;
+  read_only: boolean;
+  outbound_tag: string;
+  collection?: ProxyCollectionWithNodes;
 }
 
 export interface CollectionTestNodeResult {
@@ -553,6 +766,8 @@ export interface ConfigGenerateRequest {
   default_outbound: string;
   inbound_listen?: string;
   inbound_port?: number;
+  tun_ipv4_address?: string;
+  tun_ipv6_address?: string;
   log_level?: string;
 }
 
@@ -564,5 +779,12 @@ export interface ConfigGenerateResponse {
 }
 
 export interface ConfigApplyRequest {
+  file_name: string;
   restart_core: boolean;
+}
+
+export interface CoreRestartSettings {
+  mode: "off" | "daily" | "weekly";
+  time: string;
+  weekday: number;
 }

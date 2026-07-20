@@ -36,6 +36,17 @@ type RouteRulePreviewResponse struct {
 	RuleSets []map[string]any `json:"rule_sets"`
 }
 
+type RouteStrategyItem struct {
+	RuleID      int64                     `json:"rule_id"`
+	Name        string                    `json:"name"`
+	Priority    int                       `json:"priority"`
+	Kind        string                    `json:"kind"`
+	Enabled     bool                      `json:"enabled"`
+	ReadOnly    bool                      `json:"read_only"`
+	OutboundTag string                    `json:"outbound_tag"`
+	Collection  *ProxyCollectionWithNodes `json:"collection,omitempty"`
+}
+
 type RouteRuleSubscription struct {
 	ID              int64   `json:"id"`
 	Name            string  `json:"name"`
@@ -87,6 +98,7 @@ type GeoAsset struct {
 	SyncError       string `json:"sync_error"`
 	LastSyncAt      int64  `json:"last_sync_at"`
 	LocalPath       string `json:"local_path"`
+	Available       bool   `json:"available"`
 	CachedUpdatedAt int64  `json:"cached_updated_at"`
 	CreatedAt       int64  `json:"created_at"`
 	UpdatedAt       int64  `json:"updated_at"`

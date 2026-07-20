@@ -30,11 +30,7 @@ func (h *ProxyCollectionHandler) Create(c *gin.Context) {
 
 	result, err := h.service.Create(req)
 	if err != nil {
-		if errors.Is(err, service.ErrSystemProxyCollectionProtected) {
-			c.JSON(http.StatusForbidden, model.ErrorResponse{Error: model.APIError{Code: "SYSTEM_COLLECTION_PROTECTED", Message: err.Error()}})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Error: model.APIError{Code: "CREATE_FAILED", Message: err.Error()}})
+		writeProxyCollectionMutationError(c, "CREATE_FAILED", err)
 		return
 	}
 
@@ -69,6 +65,19 @@ func (h *ProxyCollectionHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
+func (h *ProxyCollectionHandler) Reorder(c *gin.Context) {
+	var ids []int
+	if err := c.ShouldBindJSON(&ids); err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "INVALID_REQUEST", Message: err.Error()}})
+		return
+	}
+	if err := h.service.Reorder(ids); err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "COLLECTIONS_REORDER_FAILED", Message: err.Error()}})
+		return
+	}
+	c.JSON(http.StatusOK, model.ActionResponse{Success: true, Message: "Proxy collections reordered"})
+}
+
 // Update 更新代理集合
 func (h *ProxyCollectionHandler) Update(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
@@ -84,15 +93,28 @@ func (h *ProxyCollectionHandler) Update(c *gin.Context) {
 	}
 
 	if err := h.service.Update(id, req); err != nil {
-		if errors.Is(err, service.ErrSystemProxyCollectionProtected) {
-			c.JSON(http.StatusForbidden, model.ErrorResponse{Error: model.APIError{Code: "SYSTEM_COLLECTION_PROTECTED", Message: err.Error()}})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Error: model.APIError{Code: "UPDATE_FAILED", Message: err.Error()}})
+		writeProxyCollectionMutationError(c, "UPDATE_FAILED", err)
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "代理集合已更新"})
+}
+
+func writeProxyCollectionMutationError(c *gin.Context, fallbackCode string, err error) {
+	status, code := http.StatusInternalServerError, fallbackCode
+	switch {
+	case errors.Is(err, service.ErrSystemProxyCollectionProtected):
+		status, code = http.StatusForbidden, "SYSTEM_COLLECTION_PROTECTED"
+	case errors.Is(err, service.ErrProxyCollectionNotFound):
+		status, code = http.StatusNotFound, "PROXY_COLLECTION_NOT_FOUND"
+	case errors.Is(err, service.ErrProxyCollectionRuleNotFound):
+		status, code = http.StatusNotFound, "ROUTE_RULE_NOT_FOUND"
+	case errors.Is(err, service.ErrProxyCollectionRuleBindingConflict):
+		status, code = http.StatusConflict, "ROUTE_RULE_BINDING_CONFLICT"
+	case errors.Is(err, service.ErrProxyCollectionRuleBindingInvalid):
+		status, code = http.StatusBadRequest, "INVALID_ROUTE_RULE_BINDING"
+	}
+	c.JSON(status, model.ErrorResponse{Error: model.APIError{Code: code, Message: err.Error()}})
 }
 
 // Delete 删除代理集合
@@ -104,11 +126,7 @@ func (h *ProxyCollectionHandler) Delete(c *gin.Context) {
 	}
 
 	if err := h.service.Delete(id); err != nil {
-		if errors.Is(err, service.ErrSystemProxyCollectionProtected) {
-			c.JSON(http.StatusForbidden, model.ErrorResponse{Error: model.APIError{Code: "SYSTEM_COLLECTION_PROTECTED", Message: err.Error()}})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Error: model.APIError{Code: "DELETE_FAILED", Message: err.Error()}})
+		writeProxyCollectionMutationError(c, "DELETE_FAILED", err)
 		return
 	}
 
@@ -124,11 +142,7 @@ func (h *ProxyCollectionHandler) ToggleEnabled(c *gin.Context) {
 	}
 
 	if err := h.service.ToggleEnabled(id); err != nil {
-		if errors.Is(err, service.ErrSystemProxyCollectionProtected) {
-			c.JSON(http.StatusForbidden, model.ErrorResponse{Error: model.APIError{Code: "SYSTEM_COLLECTION_PROTECTED", Message: err.Error()}})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Error: model.APIError{Code: "TOGGLE_FAILED", Message: err.Error()}})
+		writeProxyCollectionMutationError(c, "TOGGLE_FAILED", err)
 		return
 	}
 

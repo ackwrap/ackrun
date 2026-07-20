@@ -3,15 +3,20 @@ package model
 type UpdateSettings struct {
 	Acceleration    string `json:"acceleration"`
 	CustomMirrorURL string `json:"custom_mirror_url,omitempty"`
-	GithubToken     string `json:"github_token,omitempty"`
-	ProxyURL        string `json:"proxy_url,omitempty"`
 }
 
 type UpdateSettingsResponse struct {
 	Acceleration    string `json:"acceleration"`
 	CustomMirrorURL string `json:"custom_mirror_url"`
-	GithubToken     string `json:"github_token"`
-	ProxyURL        string `json:"proxy_url"`
+}
+
+type TrafficBypassRule struct {
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
+
+type TrafficBypassSettings struct {
+	Rules []TrafficBypassRule `json:"rules"`
 }
 
 type LogSettings struct {
@@ -22,6 +27,12 @@ type LogSettings struct {
 type LogSettingsResponse struct {
 	Level     string `json:"level"`
 	Timestamp bool   `json:"timestamp"`
+}
+
+// ConnectivitySettings controls automatic URLTest checks globally.
+type ConnectivitySettings struct {
+	TestURL         string `json:"test_url"`
+	IntervalSeconds int    `json:"interval_seconds"`
 }
 
 // NTPSettings NTP 时间同步设置

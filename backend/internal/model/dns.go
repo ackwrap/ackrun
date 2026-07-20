@@ -13,6 +13,7 @@ type DNSServer struct {
 	Detour          string `json:"detour"`
 	ClientSubnet    string `json:"client_subnet"`
 	OptionsJSON     string `json:"options_json"`
+	Priority        int    `json:"priority"`
 	CreatedAt       int64  `json:"created_at"`
 	UpdatedAt       int64  `json:"updated_at"`
 }

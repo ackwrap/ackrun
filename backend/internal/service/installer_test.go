@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -102,6 +104,89 @@ func TestExtractArchivesRequireCoreBinary(t *testing.T) {
 	if err := svc.extractZip(zipPath); err == nil {
 		t.Fatal("expected missing core binary error")
 	}
+}
+
+func TestEnsureCachedDownloadReusesMatchingFile(t *testing.T) {
+	dest := filepath.Join(t.TempDir(), "downloads", "release.zip")
+	content := []byte("verified archive")
+	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dest, content, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	called := false
+	reused, err := ensureCachedDownload(dest, testSHA256Digest(content), func(string) error {
+		called = true
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("reuse cached download: %v", err)
+	}
+	if !reused || called {
+		t.Fatalf("reused = %v, download called = %v", reused, called)
+	}
+}
+
+func TestEnsureCachedDownloadReplacesMismatchedFile(t *testing.T) {
+	dest := filepath.Join(t.TempDir(), "downloads", "release.zip")
+	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dest, []byte("stale archive"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	want := []byte("fresh archive")
+
+	reused, err := ensureCachedDownload(dest, testSHA256Digest(want), func(tempPath string) error {
+		return os.WriteFile(tempPath, want, 0644)
+	})
+	if err != nil {
+		t.Fatalf("replace cached download: %v", err)
+	}
+	if reused {
+		t.Fatal("mismatched cache should not be reused")
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("cached content = %q, want %q", got, want)
+	}
+}
+
+func TestEnsureCachedDownloadRejectsDownloadedHashMismatch(t *testing.T) {
+	dest := filepath.Join(t.TempDir(), "downloads", "release.zip")
+	_, err := ensureCachedDownload(dest, testSHA256Digest([]byte("expected")), func(tempPath string) error {
+		return os.WriteFile(tempPath, []byte("corrupt"), 0644)
+	})
+	if err == nil || !strings.Contains(err.Error(), "SHA-256 mismatch") {
+		t.Fatalf("unexpected checksum error: %v", err)
+	}
+	if _, statErr := os.Stat(dest); !os.IsNotExist(statErr) {
+		t.Fatalf("invalid download should not be cached: %v", statErr)
+	}
+}
+
+func TestEnsureCachedDownloadRejectsMissingDigestBeforeDownload(t *testing.T) {
+	called := false
+	_, err := ensureCachedDownload(filepath.Join(t.TempDir(), "release.zip"), "", func(string) error {
+		called = true
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "missing a SHA-256 digest") {
+		t.Fatalf("unexpected digest error: %v", err)
+	}
+	if called {
+		t.Fatal("download should not start without a trusted digest")
+	}
+}
+
+func testSHA256Digest(content []byte) string {
+	sum := sha256.Sum256(content)
+	return fmt.Sprintf("sha256:%x", sum)
 }
 
 func writeTarEntry(t *testing.T, tw *tar.Writer, name, content string, mode int64) {

@@ -91,6 +91,19 @@ func (h *DNSHandler) DeleteDNSServer(c *gin.Context) {
 	c.JSON(http.StatusOK, model.ActionResponse{Success: true, Message: "DNS server deleted"})
 }
 
+func (h *DNSHandler) ReorderDNSServers(c *gin.Context) {
+	var ids []int64
+	if err := c.ShouldBindJSON(&ids); err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "INVALID_REQUEST", Message: err.Error()}})
+		return
+	}
+	if err := h.svc.ReorderDNSServers(ids); err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "DNS_SERVERS_REORDER_FAILED", Message: err.Error()}})
+		return
+	}
+	c.JSON(http.StatusOK, model.ActionResponse{Success: true, Message: "DNS servers reordered"})
+}
+
 // DNS Rules
 
 func (h *DNSHandler) ListDNSRules(c *gin.Context) {

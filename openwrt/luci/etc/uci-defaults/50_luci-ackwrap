@@ -1,0 +1,11 @@
+#!/bin/sh
+
+uci -q batch <<-EOF
+	delete ucitrack.@ackwrap[-1]
+	add ucitrack ackwrap
+	set ucitrack.@ackwrap[-1].init=ackwrap
+	commit ucitrack
+EOF
+
+rm -f /tmp/luci-indexcache
+exit 0

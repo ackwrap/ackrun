@@ -22,12 +22,6 @@ watch(
   },
   { immediate: true },
 );
-watch(reconcileError, (value) => {
-  if (value)
-    setTimeout(() => {
-      reconcileError.value = "";
-    }, 6000);
-});
 const { connected } = useRealtimeSocket((event) => {
   if (event.type !== "config.reconcile") return;
   const data = event.data as { status?: string; error?: string };
@@ -37,7 +31,11 @@ const { connected } = useRealtimeSocket((event) => {
 </script>
 <template>
   <div class="flex h-screen bg-[var(--bg-base)] text-[var(--text-primary)]">
-    <Toast :message="reconcileError" type="error" />
+    <Toast
+      :message="reconcileError"
+      type="error"
+      @dismiss="reconcileError = ''"
+    />
     <div
       v-if="mobileOpen"
       class="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm lg:hidden"

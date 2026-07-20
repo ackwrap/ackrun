@@ -1,7 +1,9 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -13,11 +15,14 @@ func (s *Store) CreateProxyCollection(pc *model.ProxyCollection) error {
 	now := time.Now().UnixMilli()
 	pc.CreatedAt = now
 	pc.UpdatedAt = now
+	if err := s.db.QueryRow(`SELECT COALESCE(MAX(priority), -1) + 1 FROM proxy_collections`).Scan(&pc.Priority); err != nil {
+		return err
+	}
 
 	result, err := s.db.Exec(
-		`INSERT INTO proxy_collections (name, type, source_type, referenced_group_ids, route_rule_ids, node_uids, test_url, test_interval, tolerance, enabled, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		pc.Name, pc.Type, pc.SourceType, pc.ReferencedGroupIDs, pc.RouteRuleIDs, pc.NodeUIDs, pc.TestURL, pc.TestInterval, pc.Tolerance, boolToInt(pc.Enabled), pc.CreatedAt, pc.UpdatedAt,
+		`INSERT INTO proxy_collections (name, type, source_type, referenced_group_ids, route_rule_id, route_rule_ids, node_uids, test_url, test_interval, tolerance, enabled, priority, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		pc.Name, pc.Type, pc.SourceType, pc.ReferencedGroupIDs, pc.RouteRuleID, pc.RouteRuleIDs, pc.NodeUIDs, pc.TestURL, pc.TestInterval, pc.Tolerance, boolToInt(pc.Enabled), pc.Priority, pc.CreatedAt, pc.UpdatedAt,
 	)
 	if err != nil {
 		return err
@@ -34,9 +39,9 @@ func (s *Store) GetProxyCollection(id int) (*model.ProxyCollection, error) {
 	var enabled int
 
 	err := s.db.QueryRow(
-		`SELECT id, name, type, source_type, referenced_group_ids, route_rule_ids, node_uids, test_url, test_interval, tolerance, enabled, created_at, updated_at
+		`SELECT id, name, type, source_type, referenced_group_ids, route_rule_id, route_rule_ids, node_uids, test_url, test_interval, tolerance, enabled, priority, created_at, updated_at
 			FROM proxy_collections WHERE id = ?`, id,
-	).Scan(&pc.ID, &pc.Name, &pc.Type, &pc.SourceType, &pc.ReferencedGroupIDs, &pc.RouteRuleIDs, &pc.NodeUIDs, &pc.TestURL, &pc.TestInterval, &pc.Tolerance, &enabled, &pc.CreatedAt, &pc.UpdatedAt)
+	).Scan(&pc.ID, &pc.Name, &pc.Type, &pc.SourceType, &pc.ReferencedGroupIDs, &pc.RouteRuleID, &pc.RouteRuleIDs, &pc.NodeUIDs, &pc.TestURL, &pc.TestInterval, &pc.Tolerance, &enabled, &pc.Priority, &pc.CreatedAt, &pc.UpdatedAt)
 
 	if err != nil {
 		return nil, err
@@ -49,8 +54,8 @@ func (s *Store) GetProxyCollection(id int) (*model.ProxyCollection, error) {
 // ListProxyCollections 列出所有代理集合
 func (s *Store) ListProxyCollections() ([]*model.ProxyCollection, error) {
 	rows, err := s.db.Query(
-		`SELECT id, name, type, source_type, referenced_group_ids, route_rule_ids, node_uids, test_url, test_interval, tolerance, enabled, created_at, updated_at
-			FROM proxy_collections ORDER BY created_at DESC`,
+		`SELECT id, name, type, source_type, referenced_group_ids, route_rule_id, route_rule_ids, node_uids, test_url, test_interval, tolerance, enabled, priority, created_at, updated_at
+			FROM proxy_collections ORDER BY CASE WHEN name = '全球直连' THEN 0 ELSE 1 END, priority ASC, id DESC`,
 	)
 	if err != nil {
 		return nil, err
@@ -62,7 +67,7 @@ func (s *Store) ListProxyCollections() ([]*model.ProxyCollection, error) {
 		var pc model.ProxyCollection
 		var enabled int
 
-		if err := rows.Scan(&pc.ID, &pc.Name, &pc.Type, &pc.SourceType, &pc.ReferencedGroupIDs, &pc.RouteRuleIDs, &pc.NodeUIDs, &pc.TestURL, &pc.TestInterval, &pc.Tolerance, &enabled, &pc.CreatedAt, &pc.UpdatedAt); err != nil {
+		if err := rows.Scan(&pc.ID, &pc.Name, &pc.Type, &pc.SourceType, &pc.ReferencedGroupIDs, &pc.RouteRuleID, &pc.RouteRuleIDs, &pc.NodeUIDs, &pc.TestURL, &pc.TestInterval, &pc.Tolerance, &enabled, &pc.Priority, &pc.CreatedAt, &pc.UpdatedAt); err != nil {
 			return nil, err
 		}
 
@@ -77,19 +82,76 @@ func (s *Store) ListProxyCollections() ([]*model.ProxyCollection, error) {
 func (s *Store) UpdateProxyCollection(id int, pc *model.ProxyCollection) error {
 	pc.UpdatedAt = time.Now().UnixMilli()
 
-	_, err := s.db.Exec(
-		`UPDATE proxy_collections SET name = ?, type = ?, source_type = ?, referenced_group_ids = ?, route_rule_ids = ?, node_uids = ?, test_url = ?, test_interval = ?, tolerance = ?, enabled = ?, updated_at = ?
+	result, err := s.db.Exec(
+		`UPDATE proxy_collections SET name = ?, type = ?, source_type = ?, referenced_group_ids = ?, route_rule_id = ?, route_rule_ids = ?, node_uids = ?, test_url = ?, test_interval = ?, tolerance = ?, enabled = ?, updated_at = ?
 			WHERE id = ?`,
-		pc.Name, pc.Type, pc.SourceType, pc.ReferencedGroupIDs, pc.RouteRuleIDs, pc.NodeUIDs, pc.TestURL, pc.TestInterval, pc.Tolerance, boolToInt(pc.Enabled), pc.UpdatedAt, id,
+		pc.Name, pc.Type, pc.SourceType, pc.ReferencedGroupIDs, pc.RouteRuleID, pc.RouteRuleIDs, pc.NodeUIDs, pc.TestURL, pc.TestInterval, pc.Tolerance, boolToInt(pc.Enabled), pc.UpdatedAt, id,
 	)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
 
-	return err
+func (s *Store) GetProxyCollectionByRouteRuleID(routeRuleID int64) (*model.ProxyCollection, error) {
+	var id int
+	err := s.db.QueryRow(`SELECT id FROM proxy_collections WHERE route_rule_id = ?`, routeRuleID).Scan(&id)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s.GetProxyCollection(id)
 }
 
 // DeleteProxyCollection 删除代理集合
 func (s *Store) DeleteProxyCollection(id int) error {
-	_, err := s.db.Exec(`DELETE FROM proxy_collections WHERE id = ?`, id)
-	return err
+	result, err := s.db.Exec(`DELETE FROM proxy_collections WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) ReorderProxyCollections(ids []int) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := validateCompleteReorderIDs(tx, "proxy_collections", ids); err != nil {
+		return err
+	}
+	var directID int
+	err = tx.QueryRow(`SELECT id FROM proxy_collections WHERE name = '全球直连' LIMIT 1`).Scan(&directID)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if err == nil && (len(ids) == 0 || ids[0] != directID) {
+		return fmt.Errorf("全球直连必须保持在策略组第一位")
+	}
+	now := time.Now().UnixMilli()
+	for priority, id := range ids {
+		if _, err := tx.Exec(`UPDATE proxy_collections SET priority = ?, updated_at = ? WHERE id = ?`, priority, now, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // GetCollectionNodeUIDs 获取集合中的节点 UID 列表
@@ -157,58 +219,68 @@ func (s *Store) ListProxyCollectionsWithNodes() ([]*model.ProxyCollectionWithNod
 	return result, nil
 }
 
-// CleanInvalidNodeUIDs 清理所有策略组中失效的节点 UID
-func (s *Store) CleanInvalidNodeUIDs(removedUIDs []string) (int, error) {
+type InvalidNodeCleanupResult struct {
+	UpdatedCollections int
+	DeletedNodeGroups  int
+}
+
+// CleanInvalidNodeUIDs 清理失效节点引用、空手动节点组及业务策略组引用。
+func (s *Store) CleanInvalidNodeUIDs(removedUIDs []string) (InvalidNodeCleanupResult, error) {
+	result := InvalidNodeCleanupResult{}
 	if len(removedUIDs) == 0 {
-		return 0, nil
+		return result, nil
 	}
+	s.nodeRefsMu.Lock()
+	defer s.nodeRefsMu.Unlock()
 
-	collections, err := s.ListProxyCollections()
+	tx, err := s.db.Begin()
 	if err != nil {
-		return 0, err
+		return result, err
 	}
-
-	removedSet := make(map[string]bool)
-	for _, uid := range removedUIDs {
-		removedSet[uid] = true
+	defer tx.Rollback()
+	result, err = s.cleanInvalidNodeUIDsTx(tx, removedUIDs)
+	if err != nil {
+		return result, err
 	}
-
-	cleanedCount := 0
-	for _, pc := range collections {
-		if pc.SourceType != "manual" || pc.NodeUIDs == "" || pc.NodeUIDs == "[]" {
-			continue
-		}
-
-		var currentUIDs []string
-		if err := json.Unmarshal([]byte(pc.NodeUIDs), &currentUIDs); err != nil {
-			continue
-		}
-
-		// 过滤掉失效的 UID
-		validUIDs := make([]string, 0)
-		hadInvalid := false
-		for _, uid := range currentUIDs {
-			if removedSet[uid] {
-				hadInvalid = true
-			} else {
-				validUIDs = append(validUIDs, uid)
-			}
-		}
-
-		if !hadInvalid {
-			continue
-		}
-
-		// 更新策略组
-		validUIDsJSON, _ := json.Marshal(validUIDs)
-		pc.NodeUIDs = string(validUIDsJSON)
-		if err := s.UpdateProxyCollection(pc.ID, pc); err != nil {
-			return cleanedCount, err
-		}
-		cleanedCount++
+	if err := tx.Commit(); err != nil {
+		return result, err
 	}
+	return result, nil
+}
 
-	return cleanedCount, nil
+func (s *Store) cleanInvalidNodeUIDsTx(tx *sql.Tx, removedUIDs []string) (InvalidNodeCleanupResult, error) {
+	result := InvalidNodeCleanupResult{}
+	remove, err := globallyMissingNodeUIDsTx(tx, removedUIDs)
+	if err != nil {
+		return result, err
+	}
+	emptyGroupIDs, err := s.emptyNodeGroupIDsTx(tx, remove)
+	if err != nil {
+		return result, err
+	}
+	if len(remove) > 0 {
+		result.UpdatedCollections, err = updateStringJSONRefsTx(tx, "proxy_collections", "node_uids", remove)
+		if err != nil {
+			return result, err
+		}
+		if _, err := updateStringJSONRefsTx(tx, "node_groups", "node_uids", remove); err != nil {
+			return result, err
+		}
+	}
+	for _, id := range emptyGroupIDs {
+		if _, err := tx.Exec(`DELETE FROM node_groups WHERE id = ?`, id); err != nil {
+			return result, err
+		}
+	}
+	groupRemove := make(map[int64]bool, len(emptyGroupIDs))
+	for _, id := range emptyGroupIDs {
+		groupRemove[id] = true
+	}
+	if _, err := updateIntJSONRefsTx(tx, "proxy_collections", "referenced_group_ids", groupRemove); err != nil {
+		return result, err
+	}
+	result.DeletedNodeGroups = len(emptyGroupIDs)
+	return result, nil
 }
 
 // AutoAddNewNodes 自动将新增节点加入匹配的策略组
@@ -216,6 +288,8 @@ func (s *Store) AutoAddNewNodes(subscriptionID int64, addedUIDs []string) (int, 
 	if len(addedUIDs) == 0 {
 		return 0, nil
 	}
+	s.nodeRefsMu.Lock()
+	defer s.nodeRefsMu.Unlock()
 
 	// 获取新增节点的详细信息
 	newNodes, err := s.ListNodesByUIDs(addedUIDs)

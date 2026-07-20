@@ -18,10 +18,12 @@ npm run build
 
 **开发模式：**
 - 前端：`cd frontend && npm run dev` (端口 5173，API 自动代理到 :8080)
-- 后端：`cd backend && go run ./cmd/server` (端口 8080)
+- 后端：设置 `ACKWRAP_LISTEN_ADDR=127.0.0.1:8080` 后运行 `cd backend && go run ./cmd/server`（远程监听则必须同时设置 `ACKWRAP_API_TOKEN`）
 
 **构建：**
-- 前端构建输出到 `backend/ui/`，后端直接服务该目录
+- 前端构建输出到 `backend/internal/webui/dist/`，通过 `go:embed` 打包进后端二进制
+- `backend/internal/webui/dist/` 是本地生成目录，除嵌入占位文件外禁止提交其中的 hashed JS/CSS、HTML、图片或其他编译产物
+- 发布构建统一从仓库根目录运行 `python build.py`，默认生成 Windows、Linux、OpenWrt amd64 单文件产物；OpenWrt 目标同时生成包含核心、LuCI 和 iStoreOS app-meta 的单一 IPK
 - 后端入口：`backend/cmd/server/main.go`
 
 ---
@@ -35,6 +37,13 @@ npm run build
 4. 这个功能有没有最小验证命令？
 
 如果不能，不要进入下一步。
+
+## 审核与提交规则
+
+- 每轮功能审核或自审完成后，必须先修复全部确认问题并执行对应验证；审核无剩余问题时，立即提交本轮全部预期改动，避免下一轮重复审核已经确认的差异。
+- 提交前必须检查 `git status`、`git diff`、最近提交和子模块状态，只暂存本轮预期文件；用户或其他代理的无关改动保持未暂存，不得顺带提交、还原或删除。
+- 审核未通过、验证失败或仍有明确阻塞时禁止提交；修复后重新审核和验证，再创建新提交。
+- 禁止提交 `backend/internal/webui/dist/` 中由 Vite 生成的 hashed JS/CSS 等构建产物；发布包必须通过 `npm run build` 或根目录 `build.py` 在本地重新生成并嵌入。
 
 ## devel 与子模块保护规则
 
@@ -642,7 +651,7 @@ not_installed → no_config → stopped → running
 
 ## 前端规则
 
-- 前端构建输出到 `backend/ui/`
+- 前端构建输出到 `backend/internal/webui/dist/` 并由后端嵌入
 - Go 后端负责静态资源和 SPA fallback
 - 视觉风格遵循当前暗色蓝灰主题，不照搬参考项目的橙色选中样式
 - 新增或调整 UI 时，优先复用全局组件、全局 CSS class 和设计 token；不要在单个页面里重复硬编码大段颜色、弹窗、表格、按钮样式
@@ -657,7 +666,15 @@ not_installed → no_config → stopped → running
 
 ## 文档维护规则
 
-**每次修改业务功能都必须同步更新 docs/ 目录下的相关文档。**
+**每次修改业务功能都必须在代码审核通过后同步更新 docs/ 目录下的相关文档。**
+
+文档更新时序：
+1. 先完成业务代码和测试
+2. 执行功能审核或自审
+3. 修复全部确认问题并完成对应验证
+4. 审核无剩余问题后，再根据最终实现更新文档
+
+禁止在审核前提前修改功能文档，避免审核修复导致文档与最终实现不一致。纯文档任务不受此时序限制。
 
 ### 文档更新对照表
 
@@ -678,7 +695,7 @@ not_installed → no_config → stopped → running
 
 ### 文档更新要求
 
-1. **功能开发完成后立即更新文档**，不要拖延
+1. **代码审核通过并完成问题修复验证后立即更新文档**，不要在审核前提前更新
 2. **文档描述必须准确**，与实际实现保持一致
 3. **API 接口变更必须更新请求/响应示例**
 4. **数据库变更必须更新字段说明和示例**

@@ -2,6 +2,8 @@ package store
 
 import (
 	"database/sql"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ackwrap/ackwrap/internal/model"
@@ -9,8 +11,10 @@ import (
 
 func (s *Store) ListSubscriptions() ([]model.Subscription, error) {
 	rows, err := s.db.Query(`
-		SELECT id, name, url, user_agent, sync_interval_minutes, sync_mode, sync_time, sync_weekday, sync_status, sync_progress, sync_timeout_seconds, node_count, traffic_used_bytes, traffic_total_bytes, expire_at, last_sync_at, created_at, updated_at
-		FROM subscriptions ORDER BY id DESC
+		SELECT s.id, s.name, s.url, s.user_agent, s.sync_interval_minutes, s.sync_mode, s.sync_time, s.sync_weekday, s.sync_status, s.sync_progress, s.sync_timeout_seconds,
+			(SELECT COUNT(*) FROM nodes n WHERE n.subscription_id = s.id),
+			s.traffic_used_bytes, s.traffic_total_bytes, s.expire_at, s.last_sync_at, s.created_at, s.updated_at
+		FROM subscriptions s ORDER BY s.id DESC
 	`)
 	if err != nil {
 		return nil, err
@@ -99,11 +103,7 @@ func (s *Store) DeleteSubscription(id int64) error {
 	if err != nil || existing == nil {
 		return err
 	}
-	if err := s.deleteSubscriptionNodesAndCleanup(id); err != nil {
-		return err
-	}
-	_, err = s.db.Exec(`DELETE FROM subscriptions WHERE id = ?`, id)
-	return err
+	return s.deleteSubscriptionNodesAndCleanup(id, true)
 }
 
 func (s *Store) ClearSubscriptionNodes(id int64) error {
@@ -111,38 +111,130 @@ func (s *Store) ClearSubscriptionNodes(id int64) error {
 	if err != nil || existing == nil {
 		return err
 	}
-	return s.deleteSubscriptionNodesAndCleanup(id)
+	return s.deleteSubscriptionNodesAndCleanup(id, false)
 }
 
-func (s *Store) deleteSubscriptionNodesAndCleanup(id int64) error {
-	uids, err := s.GetSubscriptionNodeUIDs(id)
-	if err != nil {
-		return err
-	}
-	if len(uids) > 0 {
-		if err := s.removeNodeUIDsFromProxyCollections(uids); err != nil {
-			return err
-		}
-		if err := s.removeNodeUIDsFromNodeGroups(uids); err != nil {
-			return err
-		}
-	}
+func (s *Store) deleteSubscriptionNodesAndCleanup(id int64, deleteSubscription bool) error {
+	s.nodeRefsMu.Lock()
+	defer s.nodeRefsMu.Unlock()
+
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	rows, err := tx.Query(`SELECT uid FROM nodes WHERE subscription_id = ? AND uid <> ''`, id)
+	if err != nil {
+		return err
+	}
+	uids := make([]string, 0)
+	for rows.Next() {
+		var uid string
+		if err := rows.Scan(&uid); err != nil {
+			rows.Close()
+			return err
+		}
+		uids = append(uids, uid)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`DELETE FROM nodes WHERE subscription_id = ?`, id); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`UPDATE subscriptions SET node_count = 0, updated_at = ? WHERE id = ?`, time.Now().UnixMilli(), id); err != nil {
+	if deleteSubscription {
+		if _, err := tx.Exec(`DELETE FROM subscriptions WHERE id = ?`, id); err != nil {
+			return err
+		}
+	} else {
+		if _, err := tx.Exec(`UPDATE subscriptions SET node_count = 0, updated_at = ? WHERE id = ?`, time.Now().UnixMilli(), id); err != nil {
+			return err
+		}
+	}
+	if _, err := s.cleanInvalidNodeUIDsTx(tx, uids); err != nil {
 		return err
 	}
-	if err := tx.Commit(); err != nil {
-		return err
+	if deleteSubscription {
+		deletedGroupIDs, err := removeSubscriptionFromNodeGroupsTx(tx, id)
+		if err != nil {
+			return err
+		}
+		remove := make(map[int64]bool, len(deletedGroupIDs))
+		for _, groupID := range deletedGroupIDs {
+			remove[groupID] = true
+		}
+		if _, err := updateIntJSONRefsTx(tx, "proxy_collections", "referenced_group_ids", remove); err != nil {
+			return err
+		}
 	}
-	_, err = s.DeleteEmptyNodeGroups()
-	return err
+	return tx.Commit()
+}
+
+func removeSubscriptionFromNodeGroupsTx(tx *sql.Tx, subscriptionID int64) ([]int64, error) {
+	rows, err := tx.Query(`SELECT id, node_uids, filter_subscriptions FROM node_groups WHERE filter_subscriptions <> ''`)
+	if err != nil {
+		return nil, err
+	}
+	target := strconv.FormatInt(subscriptionID, 10)
+	type groupUpdate struct {
+		id                  int64
+		filterSubscriptions string
+	}
+	updates := make([]groupUpdate, 0)
+	deletedIDs := make([]int64, 0)
+	for rows.Next() {
+		var id int64
+		var nodeUIDs, filterSubscriptions string
+		if err := rows.Scan(&id, &nodeUIDs, &filterSubscriptions); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		parts := strings.Split(filterSubscriptions, ",")
+		kept := make([]string, 0, len(parts))
+		removed := false
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			if part == target {
+				removed = true
+				continue
+			}
+			kept = append(kept, part)
+		}
+		if !removed {
+			continue
+		}
+		if len(kept) == 0 && !hasManualNodeUIDs(nodeUIDs) {
+			deletedIDs = append(deletedIDs, id)
+			continue
+		}
+		updates = append(updates, groupUpdate{id: id, filterSubscriptions: strings.Join(kept, ",")})
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	now := time.Now().Unix()
+	for _, update := range updates {
+		if _, err := tx.Exec(`UPDATE node_groups SET filter_subscriptions = ?, updated_at = ? WHERE id = ?`, update.filterSubscriptions, now, update.id); err != nil {
+			return nil, err
+		}
+	}
+	for _, id := range deletedIDs {
+		if _, err := tx.Exec(`DELETE FROM node_groups WHERE id = ?`, id); err != nil {
+			return nil, err
+		}
+	}
+	return deletedIDs, nil
 }
 
 func (s *Store) MarkSubscriptionSynced(id int64) (*model.Subscription, error) {

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -37,6 +38,40 @@ func (h *ConfigHandler) ListFiles(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, items)
+}
+
+func (h *ConfigHandler) ListBackups(c *gin.Context) {
+	items, err := h.svc.ListBackups()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
+			Error: model.APIError{Code: "CONFIG_BACKUP_LIST_FAILED", Message: err.Error()},
+		})
+		return
+	}
+	c.JSON(http.StatusOK, items)
+}
+
+func (h *ConfigHandler) SetActive(c *gin.Context) {
+	var req model.ConfigActiveRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "INVALID_REQUEST", Message: err.Error()}})
+		return
+	}
+	status, err := h.svc.SetActiveConfig(req.FileName)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrInvalidConfigFileName):
+			c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "INVALID_CONFIG_FILE_NAME", Message: err.Error()}})
+		case errors.Is(err, service.ErrConfigFileNotFound):
+			c.JSON(http.StatusNotFound, model.ErrorResponse{Error: model.APIError{Code: "CONFIG_NOT_FOUND", Message: err.Error()}})
+		case errors.Is(err, service.ErrConfigFileInvalid):
+			c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "CONFIG_INVALID", Message: err.Error()}})
+		default:
+			c.JSON(http.StatusInternalServerError, model.ErrorResponse{Error: model.APIError{Code: "CONFIG_ACTIVATE_FAILED", Message: err.Error()}})
+		}
+		return
+	}
+	c.JSON(http.StatusOK, status)
 }
 
 func (h *ConfigHandler) GenerateDefault(c *gin.Context) {

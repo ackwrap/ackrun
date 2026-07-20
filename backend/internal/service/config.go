@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,10 +19,24 @@ import (
 )
 
 type ConfigService struct {
-	paths    *paths.Paths
-	store    *store.Store
-	realtime *RealtimeService
+	paths           *paths.Paths
+	store           *store.Store
+	realtime        *RealtimeService
+	configValidator func(string) error
+	validationMu    sync.Mutex
+	validationCache map[string]configValidationCacheEntry
 }
+
+type configValidationCacheEntry struct {
+	modTimeNS int64
+	size      int64
+	err       error
+}
+
+var (
+	ErrConfigFileNotFound = errors.New("配置文件不存在")
+	ErrConfigFileInvalid  = errors.New("配置文件校验失败")
+)
 
 var configFileMu sync.Mutex
 
@@ -33,6 +48,7 @@ type MinimalConfig struct {
 	Log       MinimalLog        `json:"log"`
 	Inbounds  []MinimalInbound  `json:"inbounds"`
 	Outbounds []MinimalOutbound `json:"outbounds"`
+	Route     MinimalRoute      `json:"route"`
 }
 
 type MinimalLog struct {
@@ -47,13 +63,13 @@ type MinimalInbound struct {
 }
 
 type MinimalOutbound struct {
-	Type string `json:"type"`
-	Tag  string `json:"tag"`
+	Type      string   `json:"type"`
+	Tag       string   `json:"tag"`
+	Outbounds []string `json:"outbounds,omitempty"`
 }
 
-type configBackup struct {
-	path      string
-	updatedAt time.Time
+type MinimalRoute struct {
+	Rules []map[string]interface{} `json:"rules"`
 }
 
 func (svc *ConfigService) HasConfig() (bool, error) {
@@ -81,7 +97,7 @@ func (svc *ConfigService) GetConfigStatus() (*model.ConfigStatusResponse, error)
 		UpdatedAt: info.ModTime().UnixMilli(),
 	}
 
-	if err := svc.validateFile(configPath); err != nil {
+	if err := svc.validateFileCached(configPath, info); err != nil {
 		status.Valid = false
 		return status, nil
 	}
@@ -104,7 +120,7 @@ func (svc *ConfigService) ListConfigFiles() ([]model.ConfigFileItem, error) {
 	}
 	items := make([]model.ConfigFileItem, 0)
 	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+		if entry.IsDir() || !paths.IsConfigFileName(entry.Name()) {
 			continue
 		}
 		path := filepath.Join(svc.paths.ConfigDir, entry.Name())
@@ -120,7 +136,7 @@ func (svc *ConfigService) ListConfigFiles() ([]model.ConfigFileItem, error) {
 			UpdatedAt: info.ModTime().UnixMilli(),
 			Valid:     true,
 		}
-		if err := svc.validateFile(path); err != nil {
+		if err := svc.validateFileCached(path, info); err != nil {
 			item.Valid = false
 			item.Error = err.Error()
 		}
@@ -133,6 +149,52 @@ func (svc *ConfigService) ListConfigFiles() ([]model.ConfigFileItem, error) {
 		return items[i].UpdatedAt > items[j].UpdatedAt
 	})
 	return items, nil
+}
+
+func (svc *ConfigService) SetActiveConfig(fileName string) (*model.ConfigStatusResponse, error) {
+	requestedName := strings.TrimSpace(fileName)
+	normalizedName, err := normalizeConfigFileName(requestedName)
+	if err != nil {
+		return nil, err
+	}
+	if filepath.Ext(requestedName) == "" {
+		requestedName = normalizedName
+	}
+
+	configFileMu.Lock()
+	defer configFileMu.Unlock()
+	targetPath := filepath.Join(svc.paths.ConfigDir, requestedName)
+	info, err := os.Stat(targetPath)
+	if os.IsNotExist(err) {
+		return nil, fmt.Errorf("%w: %s", ErrConfigFileNotFound, requestedName)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("读取配置文件失败: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%w: %s", ErrConfigFileNotFound, requestedName)
+	}
+	validator := svc.validateFile
+	if svc.configValidator != nil {
+		validator = svc.configValidator
+	}
+	if err := validator(targetPath); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrConfigFileInvalid, err)
+	}
+	if err := writeActiveConfigMarker(svc.paths, targetPath); err != nil {
+		return nil, fmt.Errorf("设置当前配置失败: %w", err)
+	}
+	status := &model.ConfigStatusResponse{
+		HasConfig: true,
+		Valid:     true,
+		FileName:  requestedName,
+		UpdatedAt: info.ModTime().UnixMilli(),
+	}
+	logging.Info("config.active", "当前配置已切换: %s", requestedName)
+	if svc.realtime != nil {
+		svc.realtime.Broadcast("config.status", status)
+	}
+	return status, nil
 }
 
 func (svc *ConfigService) GenerateDefault() error {
@@ -150,13 +212,15 @@ func (svc *ConfigService) GenerateDefault() error {
 			{
 				Type:       "mixed",
 				Tag:        "mixed-in",
-				Listen:     "127.0.0.1",
-				ListenPort: 2080,
+				Listen:     "0.0.0.0",
+				ListenPort: model.DefaultMixedInboundPort,
 			},
 		},
 		Outbounds: []MinimalOutbound{
 			{Type: "direct", Tag: "direct"},
+			{Type: "selector", Tag: "proxy", Outbounds: []string{"direct"}},
 		},
+		Route: MinimalRoute{Rules: []map[string]interface{}{}},
 	}
 
 	data, err := json.MarshalIndent(cfg, "", "  ")
@@ -165,17 +229,31 @@ func (svc *ConfigService) GenerateDefault() error {
 	}
 
 	tmpPath := svc.paths.ConfigPath + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
 		return fmt.Errorf("write temp config: %w", err)
 	}
 	defer os.Remove(tmpPath)
 
-	if err := svc.validateFile(tmpPath); err != nil {
+	validator := svc.validateFile
+	if svc.configValidator != nil {
+		validator = svc.configValidator
+	}
+	if err := validator(tmpPath); err != nil {
 		return fmt.Errorf("config validation failed: %w", err)
+	}
+	if _, err := os.Stat(svc.paths.ConfigPath); err == nil {
+		if _, _, err := ensureDailyConfigBackup(svc.paths, svc.store, svc.paths.ConfigPath, time.Now()); err != nil {
+			return fmt.Errorf("backup current config: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("check current config: %w", err)
 	}
 
 	if err := atomicReplaceFile(tmpPath, svc.paths.ConfigPath); err != nil {
 		return fmt.Errorf("rename config: %w", err)
+	}
+	if err := writeActiveConfigMarker(svc.paths, svc.paths.ConfigPath); err != nil {
+		return fmt.Errorf("config generated but activation failed: %w", err)
 	}
 
 	logging.Info("config.generate", "config generated successfully")
@@ -196,13 +274,6 @@ func (svc *ConfigService) GenerateDefault() error {
 }
 
 func (svc *ConfigService) Validate() error {
-	status, err := svc.GetConfigStatus()
-	if err != nil {
-		return err
-	}
-	if !status.HasConfig {
-		return fmt.Errorf("no config file found")
-	}
 	configPath, ok, err := svc.paths.ActiveConfigPath()
 	if err != nil {
 		return err
@@ -210,7 +281,11 @@ func (svc *ConfigService) Validate() error {
 	if !ok {
 		return fmt.Errorf("no config file found")
 	}
-	return svc.validateFile(configPath)
+	info, err := os.Stat(configPath)
+	if err != nil {
+		return err
+	}
+	return svc.validateFileAndCache(configPath, info)
 }
 
 func (svc *ConfigService) UpdateRules() (*model.ActionResponse, error) {
@@ -238,22 +313,22 @@ func (svc *ConfigService) Backup() (*model.ActionResponse, error) {
 		return nil, fmt.Errorf("no config file found")
 	}
 
-	data, err := os.ReadFile(configPath)
+	backup, created, err := ensureDailyConfigBackup(svc.paths, svc.store, configPath, time.Now())
 	if err != nil {
-		return nil, fmt.Errorf("read config: %w", err)
+		return nil, fmt.Errorf("backup config: %w", err)
 	}
+	message := "today's config backup already exists"
+	if created {
+		message = "config backed up: " + backup.FileName
+	}
+	return &model.ActionResponse{Success: true, Message: message}, nil
+}
 
-	backupDir := filepath.Join(svc.paths.ConfigDir, "backup")
-	if err := os.MkdirAll(backupDir, 0755); err != nil {
-		return nil, fmt.Errorf("create backup dir: %w", err)
-	}
-
-	name := fmt.Sprintf("%s.%s.bak.json", filepath.Base(configPath), time.Now().Format("20060102150405"))
-	backupPath := filepath.Join(backupDir, name)
-	if err := os.WriteFile(backupPath, data, 0644); err != nil {
-		return nil, fmt.Errorf("write backup: %w", err)
-	}
-	return &model.ActionResponse{Success: true, Message: "config backed up"}, nil
+func (svc *ConfigService) ListBackups() ([]model.ConfigBackup, error) {
+	configFileMu.Lock()
+	defer configFileMu.Unlock()
+	logging.Info("config.backup_list", "listing config backups")
+	return syncConfigBackups(svc.paths, svc.store)
 }
 
 func (svc *ConfigService) RestoreLatestBackup() (*model.ActionResponse, error) {
@@ -261,21 +336,16 @@ func (svc *ConfigService) RestoreLatestBackup() (*model.ActionResponse, error) {
 	defer configFileMu.Unlock()
 
 	logging.Info("config.restore", "restoring latest config backup")
-	backupDir := filepath.Join(svc.paths.ConfigDir, "backup")
-	entries, err := os.ReadDir(backupDir)
-	if os.IsNotExist(err) {
-		return nil, fmt.Errorf("no config backup found")
-	}
+	backups, err := syncConfigBackups(svc.paths, svc.store)
 	if err != nil {
 		return nil, err
 	}
-
-	backupPath, ok := latestConfigBackup(backupDir, entries)
-	if !ok {
+	if len(backups) == 0 {
 		return nil, fmt.Errorf("no config backup found")
 	}
+	backup := backups[0]
 
-	data, err := os.ReadFile(backupPath)
+	data, err := os.ReadFile(backup.Path)
 	if err != nil {
 		return nil, fmt.Errorf("read backup: %w", err)
 	}
@@ -290,53 +360,54 @@ func (svc *ConfigService) RestoreLatestBackup() (*model.ActionResponse, error) {
 	if err := os.MkdirAll(svc.paths.ConfigDir, 0755); err != nil {
 		return nil, fmt.Errorf("create config dir: %w", err)
 	}
-	tmpPath := svc.paths.ConfigPath + ".restore.tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+	targetPath := filepath.Join(svc.paths.ConfigDir, backup.ConfigName)
+	stagedFile, err := os.CreateTemp(svc.paths.ConfigDir, ".ackwrap-restore-*.tmp")
+	if err != nil {
+		return nil, fmt.Errorf("create restore temp config: %w", err)
+	}
+	tmpPath := stagedFile.Name()
+	if _, err := stagedFile.Write(data); err != nil {
+		stagedFile.Close()
+		os.Remove(tmpPath)
 		return nil, fmt.Errorf("write temp config: %w", err)
+	}
+	if err := stagedFile.Close(); err != nil {
+		os.Remove(tmpPath)
+		return nil, fmt.Errorf("close temp config: %w", err)
 	}
 	defer os.Remove(tmpPath)
 	if err := svc.validateFile(tmpPath); err != nil {
 		return nil, fmt.Errorf("backup config invalid: %w", err)
 	}
-	if err := atomicReplaceFile(tmpPath, svc.paths.ConfigPath); err != nil {
+	if _, err := os.Stat(targetPath); err == nil {
+		if _, _, err := ensureDailyConfigBackup(svc.paths, svc.store, targetPath, time.Now()); err != nil {
+			return nil, fmt.Errorf("backup current config before restore: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("check restore target: %w", err)
+	}
+	if err := atomicReplaceFile(tmpPath, targetPath); err != nil {
 		return nil, fmt.Errorf("restore config: %w", err)
+	}
+	if err := writeActiveConfigMarker(svc.paths, targetPath); err != nil {
+		return nil, fmt.Errorf("config restored but activation failed: %w", err)
 	}
 
 	status, _ := svc.GetConfigStatus()
-	if status != nil {
+	if status != nil && svc.realtime != nil {
 		svc.realtime.Broadcast("config.status", status)
 	}
 	return &model.ActionResponse{Success: true, Message: "config restored"}, nil
 }
 
-func latestConfigBackup(backupDir string, entries []os.DirEntry) (string, bool) {
-	backups := make([]configBackup, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-		backups = append(backups, configBackup{
-			path:      filepath.Join(backupDir, entry.Name()),
-			updatedAt: info.ModTime(),
-		})
-	}
-	if len(backups) == 0 {
-		return "", false
-	}
-	sort.Slice(backups, func(i, j int) bool {
-		if backups[i].updatedAt.Equal(backups[j].updatedAt) {
-			return backups[i].path < backups[j].path
-		}
-		return backups[i].updatedAt.Before(backups[j].updatedAt)
-	})
-	return backups[len(backups)-1].path, true
-}
-
 func (svc *ConfigService) validateFile(path string) error {
+	if svc.configValidator != nil {
+		if err := svc.configValidator(path); err != nil {
+			return err
+		}
+		logging.Info("config.validate", "config validated: %s", path)
+		return nil
+	}
 	binPath := svc.paths.BinaryPath
 	if _, err := os.Stat(binPath); os.IsNotExist(err) {
 		return fmt.Errorf("sing-box binary not found")
@@ -350,6 +421,36 @@ func (svc *ConfigService) validateFile(path string) error {
 
 	logging.Info("config.validate", "config validated: %s", path)
 	return nil
+}
+
+func (svc *ConfigService) validateFileCached(path string, info os.FileInfo) error {
+	svc.validationMu.Lock()
+	defer svc.validationMu.Unlock()
+
+	key := filepath.Clean(path)
+	if cached, ok := svc.validationCache[key]; ok && cached.modTimeNS == info.ModTime().UnixNano() && cached.size == info.Size() {
+		return cached.err
+	}
+	return svc.validateFileAndCacheLocked(key, path, info)
+}
+
+func (svc *ConfigService) validateFileAndCache(path string, info os.FileInfo) error {
+	svc.validationMu.Lock()
+	defer svc.validationMu.Unlock()
+	return svc.validateFileAndCacheLocked(filepath.Clean(path), path, info)
+}
+
+func (svc *ConfigService) validateFileAndCacheLocked(key, path string, info os.FileInfo) error {
+	err := svc.validateFile(path)
+	if svc.validationCache == nil {
+		svc.validationCache = make(map[string]configValidationCacheEntry)
+	}
+	svc.validationCache[key] = configValidationCacheEntry{
+		modTimeNS: info.ModTime().UnixNano(),
+		size:      info.Size(),
+		err:       err,
+	}
+	return err
 }
 
 func getConfigDir(p *paths.Paths) string {

@@ -109,6 +109,80 @@ type NodeTCPingResult struct {
 	Error     string `json:"error,omitempty"`
 }
 
+type NodeExitIPResponse struct {
+	UID         string             `json:"uid"`
+	NodeName    string             `json:"node_name"`
+	NodeIP      string             `json:"node_ip"`
+	ExitIP      string             `json:"exit_ip"`
+	Matched     bool               `json:"matched"`
+	Resolution  string             `json:"resolution"`
+	GeoProvider string             `json:"geo_provider"`
+	Geo         *NodeTracerouteGeo `json:"geo,omitempty"`
+	GeoError    string             `json:"geo_error,omitempty"`
+}
+
+type NodeTracerouteStartRequest struct {
+	TraceID     string `json:"trace_id" binding:"required"`
+	GeoProvider string `json:"geo_provider"`
+}
+
+type NodeTracerouteStartResponse struct {
+	TraceID     string `json:"trace_id"`
+	UID         string `json:"uid"`
+	Status      string `json:"status"`
+	GeoProvider string `json:"geo_provider"`
+}
+
+type NodeTracerouteEvent struct {
+	TraceID     string             `json:"trace_id"`
+	UID         string             `json:"uid"`
+	NodeName    string             `json:"node_name"`
+	Status      string             `json:"status"`
+	Target      string             `json:"target"`
+	ResolvedIP  string             `json:"resolved_ip,omitempty"`
+	Protocol    string             `json:"protocol,omitempty"`
+	IPVersion   int                `json:"ip_version,omitempty"`
+	Reached     bool               `json:"reached"`
+	DurationMS  int64              `json:"duration_ms"`
+	GeoProvider string             `json:"geo_provider,omitempty"`
+	Hop         *NodeTracerouteHop `json:"hop,omitempty"`
+	Error       string             `json:"error,omitempty"`
+}
+
+type NodeTracerouteHop struct {
+	TTL      int                     `json:"ttl"`
+	Attempts []NodeTracerouteAttempt `json:"attempts"`
+}
+
+type NodeTracerouteAttempt struct {
+	Success  bool               `json:"success"`
+	IP       string             `json:"ip,omitempty"`
+	Hostname string             `json:"hostname,omitempty"`
+	RTTMS    float64            `json:"rtt_ms"`
+	Reached  bool               `json:"reached,omitempty"`
+	Geo      *NodeTracerouteGeo `json:"geo,omitempty"`
+	GeoError string             `json:"geo_error,omitempty"`
+}
+
+type NodeTracerouteGeo struct {
+	ASN        string  `json:"asnumber,omitempty"`
+	Country    string  `json:"country,omitempty"`
+	CountryEn  string  `json:"country_en,omitempty"`
+	Province   string  `json:"prov,omitempty"`
+	ProvinceEn string  `json:"prov_en,omitempty"`
+	City       string  `json:"city,omitempty"`
+	CityEn     string  `json:"city_en,omitempty"`
+	District   string  `json:"district,omitempty"`
+	Owner      string  `json:"owner,omitempty"`
+	ISP        string  `json:"isp,omitempty"`
+	Domain     string  `json:"domain,omitempty"`
+	Whois      string  `json:"whois,omitempty"`
+	Latitude   float64 `json:"lat,omitempty"`
+	Longitude  float64 `json:"lng,omitempty"`
+	Prefix     string  `json:"prefix,omitempty"`
+	Source     string  `json:"source,omitempty"`
+}
+
 type NodeImportRequest struct {
 	Content string `json:"content" binding:"required"`
 }

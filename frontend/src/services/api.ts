@@ -3,11 +3,19 @@ import type {
   InstallStateResponse,
   ConfigStatus,
   ConfigFileItem,
+  ConfigBackup,
   ActionResponse,
   UpdateSettings,
   UpdateSettingsResponse,
+  TrafficBypassSettings,
   LogSettings,
   LogSettingsResponse,
+  ConnectivitySettings,
+  ConnectivityTarget,
+  ConnectivityTargetRequest,
+  GeoIPProvider,
+  GeoIPProviderRequest,
+  GeoIPProviderListResponse,
   NTPSettings,
   NTPSettingsResponse,
   DNSSettings,
@@ -24,6 +32,8 @@ import type {
   NodeBatchRenameRequest,
   NodeBatchResult,
   NodeTCPingResult,
+  NodeExitIPResponse,
+  NodeTracerouteStartResponse,
   NodeFlagRequest,
   NodeFlagResponse,
   NodeFlagBatchItem,
@@ -40,17 +50,22 @@ import type {
   GeoAsset,
   GeoAssetRequest,
   GeoDomainsResponse,
+  GeoTagsResponse,
   GeoLookupResponse,
   ProxyCollectionWithNodes,
   ProxyCollectionRequest,
+  StrategyItem,
   CollectionTestResponse,
   ConfigGenerateRequest,
   ConfigGenerateResponse,
   ConfigApplyRequest,
+  CoreRestartSettings,
   CoreLogEntry,
+  ToolLogEntry,
   MaintenanceCheckResponse,
   CoreDiagnosticsResponse,
 } from "./types";
+import { authenticatedFetch } from "./apiAuth";
 
 const API_BASE = "/api/v1";
 
@@ -59,7 +74,7 @@ async function request<T>(
   options: RequestInit = {},
 ): Promise<T> {
   const url = `${API_BASE}${endpoint}`;
-  const res = await fetch(url, {
+  const res = await authenticatedFetch(url, {
     headers: { "Content-Type": "application/json", ...options.headers },
     ...options,
   });
@@ -82,6 +97,12 @@ export const api = {
 
   getConfigStatus: () => request<ConfigStatus>("/config/status"),
   getConfigFiles: () => request<ConfigFileItem[]>("/config/files"),
+  getConfigBackups: () => request<ConfigBackup[]>("/config/backups"),
+  setActiveConfig: (fileName: string) =>
+    request<ConfigStatus>("/config/active", {
+      method: "PUT",
+      body: JSON.stringify({ file_name: fileName }),
+    }),
   generateDefaultConfig: () =>
     request<ActionResponse>("/config/default", { method: "POST" }),
   validateConfig: () =>
@@ -99,6 +120,13 @@ export const api = {
     request<ActionResponse>("/core/restart", { method: "POST" }),
   reloadConfig: () =>
     request<ActionResponse>("/core/reload-config", { method: "POST" }),
+  getCoreRestartSettings: () =>
+    request<CoreRestartSettings>("/settings/core-restart"),
+  updateCoreRestartSettings: (data: CoreRestartSettings) =>
+    request<CoreRestartSettings>("/settings/core-restart", {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
   closeConnections: () =>
     request<ActionResponse>("/core/close-connections", { method: "POST" }),
   flushCoreDNS: () =>
@@ -120,10 +148,21 @@ export const api = {
     request<CoreLogEntry[]>(`/logs/core?limit=${limit}`),
   clearCoreLogs: () =>
     request<ActionResponse>("/logs/core", { method: "DELETE" }),
+  getToolLogs: (limit = 500) =>
+    request<ToolLogEntry[]>(`/logs/tool?limit=${limit}`),
+  clearToolLogs: () =>
+    request<ActionResponse>("/logs/tool", { method: "DELETE" }),
 
   getUpdateSettings: () => request<UpdateSettingsResponse>("/settings/update"),
   setUpdateSettings: (body: UpdateSettings) =>
     request<ActionResponse>("/settings/update", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  getTrafficBypassSettings: () =>
+    request<TrafficBypassSettings>("/settings/traffic-bypass"),
+  setTrafficBypassSettings: (body: TrafficBypassSettings) =>
+    request<ActionResponse>("/settings/traffic-bypass", {
       method: "PUT",
       body: JSON.stringify(body),
     }),
@@ -132,6 +171,45 @@ export const api = {
     request<ActionResponse>("/settings/log", {
       method: "PUT",
       body: JSON.stringify(body),
+    }),
+  getConnectivitySettings: () =>
+    request<ConnectivitySettings>("/settings/connectivity"),
+  setConnectivitySettings: (body: ConnectivitySettings) =>
+    request<ActionResponse>("/settings/connectivity", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  getConnectivityTargets: () =>
+    request<ConnectivityTarget[]>("/settings/connectivity-targets"),
+  createConnectivityTarget: (body: ConnectivityTargetRequest) =>
+    request<ConnectivityTarget>("/settings/connectivity-targets", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  updateConnectivityTarget: (id: number, body: ConnectivityTargetRequest) =>
+    request<ConnectivityTarget>(`/settings/connectivity-targets/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  deleteConnectivityTarget: (id: number) =>
+    request<ActionResponse>(`/settings/connectivity-targets/${id}`, {
+      method: "DELETE",
+    }),
+  getGeoIPProviders: () =>
+    request<GeoIPProviderListResponse>("/settings/geoip-providers"),
+  createGeoIPProvider: (body: GeoIPProviderRequest) =>
+    request<GeoIPProvider>("/settings/geoip-providers", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  updateGeoIPProvider: (id: number, body: GeoIPProviderRequest) =>
+    request<GeoIPProvider>(`/settings/geoip-providers/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  deleteGeoIPProvider: (id: number) =>
+    request<ActionResponse>(`/settings/geoip-providers/${id}`, {
+      method: "DELETE",
     }),
   getNTPSettings: () => request<NTPSettingsResponse>("/settings/ntp"),
   setNTPSettings: (body: NTPSettings) =>
@@ -225,6 +303,27 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ uids }),
     }),
+  checkNodeExitIP: (uid: string, geoProvider = "") =>
+    request<NodeExitIPResponse>(
+      `/nodes/${encodeURIComponent(uid)}/exit-ip?geo_provider=${encodeURIComponent(geoProvider)}`,
+      { method: "POST" },
+    ),
+  startNodeTraceroute: (uid: string, traceID: string, geoProvider: string) =>
+    request<NodeTracerouteStartResponse>(
+      `/nodes/${encodeURIComponent(uid)}/traceroute`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          trace_id: traceID,
+          geo_provider: geoProvider,
+        }),
+      },
+    ),
+  cancelNodeTraceroute: (uid: string, traceID: string) =>
+    request<ActionResponse>(
+      `/nodes/${encodeURIComponent(uid)}/traceroute/${encodeURIComponent(traceID)}`,
+      { method: "DELETE" },
+    ),
   addNodeEmoji: (uids: string[]) =>
     request<NodeBatchResult>("/nodes/add-emoji", {
       method: "POST",
@@ -262,6 +361,7 @@ export const api = {
     }),
 
   getRouteRules: () => request<RouteRule[]>("/rules"),
+  getRouteStrategies: () => request<StrategyItem[]>("/rules/strategies"),
   createRouteRule: (body: RouteRuleRequest) =>
     request<RouteRule>("/rules", {
       method: "POST",
@@ -323,6 +423,11 @@ export const api = {
     request<GeoDomainsResponse>(
       `/rules/geo/domains?tag=${encodeURIComponent(tag)}&limit=${limit}&offset=${offset}`,
     ),
+  getGeoTags: (type: "geoip" | "geosite", query = "", limit = 100) => {
+    const search = new URLSearchParams({ type, limit: String(limit) });
+    if (query) search.set("q", query);
+    return request<GeoTagsResponse>(`/rules/geo/tags?${search.toString()}`);
+  },
 
   generateConfig: (data: ConfigGenerateRequest) =>
     request<ConfigGenerateResponse>("/config/generate", {

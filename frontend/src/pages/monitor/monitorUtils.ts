@@ -1,4 +1,5 @@
 import type { ProxyGroup } from '@/services/clash';
+import { isEmojiPrefix } from './proxyGroupUtils';
 
 export type MonitorTab = 'overview' | 'proxies' | 'connections' | 'rules';
 
@@ -19,7 +20,7 @@ export function formatSpeed(bytesPerSecond: number): string {
 
 export function proxyGroupIcon(group: ProxyGroup): string {
   const customEmoji = group.name.match(/^(\S+)\s+(.+)$/u);
-  if (customEmoji && /[\p{Extended_Pictographic}\p{Regional_Indicator}]/u.test(customEmoji[1])) return customEmoji[1];
+  if (customEmoji && isEmojiPrefix(customEmoji[1])) return customEmoji[1];
   const regionFlags: Array<[string[], string]> = [
     [['香港'], '🇭🇰'], [['台湾', '台灣'], '🇹🇼'], [['日本'], '🇯🇵'], [['韩国', '韓國'], '🇰🇷'],
     [['新加坡'], '🇸🇬'], [['印度'], '🇮🇳'], [['泰国', '泰國'], '🇹🇭'], [['越南'], '🇻🇳'], [['菲律宾', '菲律賓'], '🇵🇭'],

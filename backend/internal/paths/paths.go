@@ -8,15 +8,28 @@ import (
 	"strings"
 )
 
+const activeConfigMarkerName = ".active-config"
+
+func IsConfigBackupName(name string) bool {
+	name = strings.ToLower(name)
+	return strings.HasSuffix(name, ".bak.json") ||
+		(strings.HasPrefix(name, "config.backup.") && strings.HasSuffix(name, ".json"))
+}
+
+func IsConfigFileName(name string) bool {
+	return strings.EqualFold(filepath.Ext(name), ".json") && !IsConfigBackupName(name)
+}
+
 type Paths struct {
-	DataDir    string
-	BinaryDir  string
-	BinaryPath string
-	ConfigDir  string
-	ConfigPath string
-	RulesDir   string
-	GeoDir     string
-	DBPath     string
+	DataDir      string
+	BinaryDir    string
+	BinaryPath   string
+	ConfigDir    string
+	ConfigPath   string
+	RulesDir     string
+	GeoDir       string
+	DownloadsDir string
+	DBPath       string
 }
 
 func Default() *Paths {
@@ -50,21 +63,23 @@ func Default() *Paths {
 	configDir := filepath.Join(dataDir, "config")
 	rulesDir := filepath.Join(dataDir, "rules")
 	geoDir := filepath.Join(dataDir, "geo")
+	downloadsDir := filepath.Join(dataDir, "downloads")
 
 	return &Paths{
-		DataDir:    dataDir,
-		BinaryDir:  binaryDir,
-		BinaryPath: filepath.Join(binaryDir, binaryName),
-		ConfigDir:  configDir,
-		ConfigPath: filepath.Join(configDir, "config.json"),
-		RulesDir:   rulesDir,
-		GeoDir:     geoDir,
-		DBPath:     filepath.Join(dataDir, "ackwrap.db"),
+		DataDir:      dataDir,
+		BinaryDir:    binaryDir,
+		BinaryPath:   filepath.Join(binaryDir, binaryName),
+		ConfigDir:    configDir,
+		ConfigPath:   filepath.Join(configDir, "config.json"),
+		RulesDir:     rulesDir,
+		GeoDir:       geoDir,
+		DownloadsDir: downloadsDir,
+		DBPath:       filepath.Join(dataDir, "ackwrap.db"),
 	}
 }
 
 func (p *Paths) EnsureDirs() error {
-	dirs := []string{p.DataDir, p.BinaryDir, p.ConfigDir, p.RulesDir, p.GeoDir}
+	dirs := []string{p.DataDir, p.BinaryDir, p.ConfigDir, p.RulesDir, p.GeoDir, p.DownloadsDir}
 	for _, d := range dirs {
 		if err := os.MkdirAll(d, 0755); err != nil {
 			return err
@@ -95,9 +110,24 @@ func (p *Paths) ActiveConfigPath() (string, bool, error) {
 		return "", false, err
 	}
 
+	marker, err := os.ReadFile(p.ActiveConfigMarkerPath())
+	if err == nil {
+		name := strings.TrimSpace(string(marker))
+		if name != "" && filepath.Base(name) == name && IsConfigFileName(name) {
+			path := filepath.Join(p.ConfigDir, name)
+			if info, statErr := os.Stat(path); statErr == nil && !info.IsDir() {
+				return path, true, nil
+			} else if statErr != nil && !os.IsNotExist(statErr) {
+				return "", false, statErr
+			}
+		}
+	} else if !os.IsNotExist(err) {
+		return "", false, err
+	}
+
 	configs := make([]string, 0)
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".json") {
+		if entry.IsDir() || !IsConfigFileName(entry.Name()) {
 			continue
 		}
 		configs = append(configs, filepath.Join(p.ConfigDir, entry.Name()))
@@ -113,4 +143,8 @@ func (p *Paths) ActiveConfigPath() (string, bool, error) {
 	}
 	sort.Strings(configs)
 	return configs[0], true, nil
+}
+
+func (p *Paths) ActiveConfigMarkerPath() string {
+	return filepath.Join(p.ConfigDir, activeConfigMarkerName)
 }

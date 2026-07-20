@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -31,7 +33,7 @@ type InstallerService struct {
 	mu          sync.Mutex
 	busy        bool
 	latestMu    sync.Mutex
-	latest      string
+	latest      *singboxRelease
 	latestAt    time.Time
 	postInstall func(version string) error
 }
@@ -130,14 +132,15 @@ func (svc *InstallerService) Install() (*model.ActionResponse, error) {
 func (svc *InstallerService) runInstall() {
 	logging.Info("installer.start", "starting sing-box installation")
 
-	// 获取最新版本
-	latestVersion, err := svc.getLatestVersion()
+	// 获取最新版本及对应平台资产的官方摘要。
+	release, err := svc.getLatestRelease()
 	if err != nil {
 		logging.Info("installer.version", "failed to fetch latest version: %v", err)
 		svc.setState(model.InstallFailed, "", 0, "", fmt.Sprintf("fetch latest version failed: %v", err))
 		svc.broadcastStatus()
 		return
 	}
+	latestVersion := release.Version
 	logging.Info("installer.version", "using latest version: %s", latestVersion)
 
 	svc.setState(model.InstallDownloading, "downloading", 0, "", "")
@@ -150,25 +153,43 @@ func (svc *InstallerService) runInstall() {
 		return
 	}
 
-	tmpFile := filepath.Join(svc.paths.DataDir, "sing-box-download.tmp")
-	if err := svc.download(url, tmpFile); err != nil {
+	assetName := filepath.Base(url)
+	asset, ok := releaseAssetByName(release, assetName)
+	if !ok {
+		err := fmt.Errorf("release does not contain asset %s", assetName)
+		logging.Error("installer.download", "release asset not found: %s", assetName)
+		svc.setState(model.InstallFailed, "", 0, "", err.Error())
+		svc.broadcastStatus()
+		return
+	}
+
+	archivePath := filepath.Join(svc.paths.DownloadsDir, assetName)
+	reused, err := ensureCachedDownload(archivePath, asset.Digest, func(tempPath string) error {
+		return svc.download(url, tempPath)
+	})
+	if err != nil {
+		logging.Error("installer.download", "archive unavailable: asset=%s error=%v", assetName, err)
 		svc.setState(model.InstallFailed, "", 0, "", fmt.Sprintf("download failed: %v", err))
 		svc.broadcastStatus()
 		return
+	}
+	if reused {
+		logging.Info("installer.download", "using verified cached archive: %s", assetName)
+		svc.setState(model.InstallDownloading, "using cached download", 100, "", "")
+		if asset.Size > 0 {
+			svc.broadcastProgress(asset.Size, asset.Size)
+		}
 	}
 
 	logging.Info("installer.extract", "extracting sing-box")
 	svc.setState(model.InstallExtracting, "extracting", 0, "", "")
 	svc.broadcastStatus()
 
-	if err := svc.extract(tmpFile); err != nil {
-		os.Remove(tmpFile)
+	if err := svc.extract(archivePath); err != nil {
 		svc.setState(model.InstallFailed, "", 0, "", fmt.Sprintf("extract failed: %v", err))
 		svc.broadcastStatus()
 		return
 	}
-
-	os.Remove(tmpFile)
 
 	migrationError := ""
 	svc.mu.Lock()
@@ -192,27 +213,35 @@ func (svc *InstallerService) runInstall() {
 	logging.Info("installer.start", "sing-box installed successfully, version=%s", latestVersion)
 }
 
-func (svc *InstallerService) fetchLatestVersion() (string, error) {
+func (svc *InstallerService) fetchLatestRelease() (*singboxRelease, error) {
 	settings, err := svc.store.GetUpdateSettings()
 	if err != nil {
-		return "", fmt.Errorf("读取更新设置失败: %w", err)
+		return nil, fmt.Errorf("读取更新设置失败: %w", err)
 	}
-	return fetchLatestSingboxVersionWithSettings(settings, singboxVersionURL)
+	return fetchLatestSingboxReleaseWithSettings(settings, singboxVersionURL)
+}
+
+func (svc *InstallerService) getLatestRelease() (*singboxRelease, error) {
+	svc.latestMu.Lock()
+	defer svc.latestMu.Unlock()
+	if svc.latest != nil && time.Since(svc.latestAt) < 5*time.Minute {
+		return svc.latest, nil
+	}
+	release, err := svc.fetchLatestRelease()
+	if err != nil {
+		return nil, err
+	}
+	svc.latest = release
+	svc.latestAt = time.Now()
+	return release, nil
 }
 
 func (svc *InstallerService) getLatestVersion() (string, error) {
-	svc.latestMu.Lock()
-	defer svc.latestMu.Unlock()
-	if svc.latest != "" && time.Since(svc.latestAt) < 5*time.Minute {
-		return svc.latest, nil
-	}
-	version, err := svc.fetchLatestVersion()
+	release, err := svc.getLatestRelease()
 	if err != nil {
 		return "", err
 	}
-	svc.latest = version
-	svc.latestAt = time.Now()
-	return version, nil
+	return release.Version, nil
 }
 
 func (svc *InstallerService) buildDownloadURL(version string) (string, error) {
@@ -250,6 +279,98 @@ func buildDownloadURLFor(version, goos, arch string) (string, error) {
 	name := fmt.Sprintf("sing-wrap-%s-%s-%s%s", version, goos, archStr, variant)
 	url := fmt.Sprintf("https://github.com/ackwrap/sing-box-wrap/releases/download/v%s/%s%s", version, name, ext)
 	return url, nil
+}
+
+func releaseAssetByName(release *singboxRelease, name string) (singboxReleaseAsset, bool) {
+	if release == nil {
+		return singboxReleaseAsset{}, false
+	}
+	for _, asset := range release.Assets {
+		if asset.Name == name {
+			return asset, true
+		}
+	}
+	return singboxReleaseAsset{}, false
+}
+
+func ensureCachedDownload(dest, digest string, download func(tempPath string) error) (bool, error) {
+	expected, err := normalizeSHA256Digest(digest)
+	if err != nil {
+		return false, err
+	}
+
+	actual, err := fileSHA256(dest)
+	if err == nil && actual == expected {
+		return true, nil
+	}
+	if err == nil {
+		logging.Info("installer.download", "cached archive checksum mismatch, downloading again: %s", filepath.Base(dest))
+	}
+	if err != nil && !os.IsNotExist(err) {
+		return false, fmt.Errorf("calculate cached file SHA-256: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+		return false, fmt.Errorf("create download cache directory: %w", err)
+	}
+	tempFile, err := os.CreateTemp(filepath.Dir(dest), ".ackwrap-download-*")
+	if err != nil {
+		return false, fmt.Errorf("create download temp file: %w", err)
+	}
+	tempPath := tempFile.Name()
+	if err := tempFile.Close(); err != nil {
+		os.Remove(tempPath)
+		return false, fmt.Errorf("close download temp file: %w", err)
+	}
+	defer os.Remove(tempPath)
+
+	if err := download(tempPath); err != nil {
+		return false, err
+	}
+	actual, err = fileSHA256(tempPath)
+	if err != nil {
+		return false, fmt.Errorf("calculate downloaded file SHA-256: %w", err)
+	}
+	if actual != expected {
+		return false, fmt.Errorf("downloaded file SHA-256 mismatch")
+	}
+	logging.Info("installer.download", "download checksum verified: %s", filepath.Base(dest))
+	if err := os.Rename(tempPath, dest); err != nil {
+		if removeErr := os.Remove(dest); removeErr != nil && !os.IsNotExist(removeErr) {
+			return false, fmt.Errorf("replace cached download: %w", removeErr)
+		}
+		if err := os.Rename(tempPath, dest); err != nil {
+			return false, fmt.Errorf("commit cached download: %w", err)
+		}
+	}
+	return false, nil
+}
+
+func normalizeSHA256Digest(digest string) (string, error) {
+	const prefix = "sha256:"
+	digest = strings.ToLower(strings.TrimSpace(digest))
+	if !strings.HasPrefix(digest, prefix) {
+		return "", fmt.Errorf("release asset is missing a SHA-256 digest")
+	}
+	digest = strings.TrimPrefix(digest, prefix)
+	decoded, err := hex.DecodeString(digest)
+	if err != nil || len(decoded) != sha256.Size {
+		return "", fmt.Errorf("release asset has an invalid SHA-256 digest")
+	}
+	return digest, nil
+}
+
+func fileSHA256(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func (svc *InstallerService) download(url, dest string) error {

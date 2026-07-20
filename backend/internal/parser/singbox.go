@@ -37,14 +37,21 @@ func parseSingboxJSON(body []byte) []model.ParsedNode {
 		if _, hasServerPort := normalized["server_port"]; !hasServerPort {
 			normalized["server_port"] = port
 		}
+		unsupportedReason := ""
+		if typ == "shadowsocks" {
+			if err := normalizeShadowsocksPlugin(normalized); err != nil {
+				unsupportedReason = err.Error()
+			}
+		}
 		rawJSON, _ := json.Marshal(normalized)
 		nodes = append(nodes, model.ParsedNode{
-			Name:       name,
-			Type:       typ,
-			Server:     server,
-			ServerPort: port,
-			Raw:        string(rawJSON),
-			RawJSON:    string(rawJSON),
+			Name:              name,
+			Type:              typ,
+			Server:            server,
+			ServerPort:        port,
+			Raw:               string(rawJSON),
+			RawJSON:           string(rawJSON),
+			UnsupportedReason: unsupportedReason,
 		})
 	}
 	return nodes

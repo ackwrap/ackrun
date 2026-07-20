@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import Modal from "@/components/ui/Modal.vue";
+import NodeFlagName from "@/components/NodeFlagName.vue";
+import { subscriptionFilterLabel } from "./nodeGroupLabels";
 
 interface FacetItem {
   value: string;
@@ -29,18 +31,14 @@ const props = defineProps<{
   nodes: Node[];
   loading: boolean;
   subscriptions: FacetItem[];
+  flags: Record<string, string>;
 }>();
 const emit = defineEmits<{ close: [] }>();
 const subscriptionLabel = computed(() =>
-  props.group.filter_subscriptions
-    ? props.group.filter_subscriptions
-        .split(",")
-        .map(
-          (id) =>
-            props.subscriptions.find((item) => item.value === id)?.label || id,
-        )
-        .join("、")
-    : "全部",
+  subscriptionFilterLabel(
+    props.group.filter_subscriptions,
+    props.subscriptions,
+  ),
 );
 </script>
 
@@ -98,7 +96,7 @@ const subscriptionLabel = computed(() =>
           </tr>
           <tr v-for="node in nodes" v-else :key="node.uid">
             <td class="max-w-[420px] truncate font-medium">
-              {{ node.name || "(未命名节点)" }}
+              <NodeFlagName :name="node.name" :flag="flags[node.uid]" />
             </td>
             <td class="uppercase">{{ node.type }}</td>
             <td>

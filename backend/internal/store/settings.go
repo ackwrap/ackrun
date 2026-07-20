@@ -1,6 +1,8 @@
 package store
 
 import (
+	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"time"
@@ -8,9 +10,56 @@ import (
 	"github.com/ackwrap/ackwrap/internal/model"
 )
 
+func defaultTrafficBypassSettings() *model.TrafficBypassSettings {
+	return &model.TrafficBypassSettings{Rules: []model.TrafficBypassRule{
+		{Type: "process_name", Value: "easytier-core"},
+		{Type: "interface", Value: "easytier-tun"},
+		{Type: "ip_cidr", Value: "10.0.0.0/8"},
+		{Type: "ip_cidr", Value: "172.16.0.0/12"},
+		{Type: "ip_cidr", Value: "192.168.0.0/16"},
+	}}
+}
+
+func (s *Store) GetTrafficBypassSettings() (*model.TrafficBypassSettings, error) {
+	settings := defaultTrafficBypassSettings()
+	var raw string
+	err := s.db.QueryRow(`SELECT value FROM app_settings WHERE key = 'traffic_bypass.rules'`).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return settings, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal([]byte(raw), &settings.Rules); err != nil {
+		return nil, fmt.Errorf("解析流量排除设置失败: %w", err)
+	}
+	if settings.Rules == nil {
+		settings.Rules = []model.TrafficBypassRule{}
+	}
+	return settings, nil
+}
+
+func (s *Store) SetTrafficBypassSettings(settings *model.TrafficBypassSettings) error {
+	raw, err := json.Marshal(settings.Rules)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`
+		INSERT INTO app_settings (key, value, updated_at)
+		VALUES ('traffic_bypass.rules', ?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+	`, string(raw), time.Now().Unix())
+	return err
+}
+
+const (
+	DefaultConnectivityTestURL         = "http://www.gstatic.com/generate_204"
+	DefaultConnectivityIntervalSeconds = 300
+)
+
 func (s *Store) GetUpdateSettings() (*model.UpdateSettingsResponse, error) {
-	r := &model.UpdateSettingsResponse{}
-	rows, err := s.db.Query(`SELECT key, value FROM app_settings WHERE key IN ('update.acceleration', 'update.custom_mirror_url', 'update.github_token', 'update.proxy_url')`)
+	r := &model.UpdateSettingsResponse{Acceleration: "ghproxy"}
+	rows, err := s.db.Query(`SELECT key, value FROM app_settings WHERE key IN ('update.acceleration', 'update.custom_mirror_url')`)
 	if err != nil {
 		return nil, err
 	}
@@ -26,11 +75,13 @@ func (s *Store) GetUpdateSettings() (*model.UpdateSettingsResponse, error) {
 			r.Acceleration = value
 		case "update.custom_mirror_url":
 			r.CustomMirrorURL = value
-		case "update.github_token":
-			r.GithubToken = value
-		case "update.proxy_url":
-			r.ProxyURL = value
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	return r, nil
 }
@@ -40,8 +91,6 @@ func (s *Store) SetUpdateSettings(req *model.UpdateSettings) error {
 	settings := map[string]string{
 		"update.acceleration":      req.Acceleration,
 		"update.custom_mirror_url": req.CustomMirrorURL,
-		"update.github_token":      req.GithubToken,
-		"update.proxy_url":         req.ProxyURL,
 	}
 	for key, value := range settings {
 		if value == "" {
@@ -114,6 +163,64 @@ func (s *Store) SetLogSettings(req *model.LogSettings) error {
 	for key, value := range map[string]string{
 		"log.level":     req.Level,
 		"log.timestamp": fmt.Sprintf("%t", req.Timestamp),
+	} {
+		if _, err := tx.Exec(`
+			INSERT INTO app_settings (key, value, updated_at)
+			VALUES (?, ?, ?)
+			ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+		`, key, value, now); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`
+		UPDATE app_settings
+		SET value = json_set(value, '$.log_level', ?), updated_at = ?
+		WHERE key = ?
+	`, req.Level, now, configGeneratorRequestKey); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) GetConnectivitySettings() (*model.ConnectivitySettings, error) {
+	settings := &model.ConnectivitySettings{
+		TestURL:         DefaultConnectivityTestURL,
+		IntervalSeconds: DefaultConnectivityIntervalSeconds,
+	}
+	rows, err := s.db.Query(`SELECT key, value FROM app_settings WHERE key IN ('connectivity.test_url', 'connectivity.interval_seconds')`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			return nil, err
+		}
+		switch key {
+		case "connectivity.test_url":
+			if value != "" {
+				settings.TestURL = value
+			}
+		case "connectivity.interval_seconds":
+			if interval, err := strconv.Atoi(value); err == nil {
+				settings.IntervalSeconds = interval
+			}
+		}
+	}
+	return settings, rows.Err()
+}
+
+func (s *Store) SetConnectivitySettings(req *model.ConnectivitySettings) error {
+	now := time.Now().Unix()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for key, value := range map[string]string{
+		"connectivity.test_url":         req.TestURL,
+		"connectivity.interval_seconds": strconv.Itoa(req.IntervalSeconds),
 	} {
 		if _, err := tx.Exec(`
 			INSERT INTO app_settings (key, value, updated_at)
@@ -296,24 +403,35 @@ func (s *Store) GetDNSSettings() (*model.DNSSettingsResponse, error) {
 func (s *Store) SetDNSSettings(req *model.DNSSettings) error {
 	now := time.Now().Unix()
 	settings := map[string]string{
-		"dns.enabled":            fmt.Sprintf("%t", req.Enabled),
-		"dns.proxy_server":       req.ProxyServer,
-		"dns.direct_server":      req.DirectServer,
-		"dns.resolver":           req.Resolver,
-		"dns.final":              req.Final,
-		"dns.strategy":           req.Strategy,
-		"dns.address_strategy":   req.AddressStrategy,
-		"dns.disable_cache":      fmt.Sprintf("%t", req.DisableCache),
-		"dns.disable_expire":     fmt.Sprintf("%t", req.DisableExpire),
-		"dns.independent_cache":  fmt.Sprintf("%t", req.IndependentCache),
-		"dns.reverse_mapping":    fmt.Sprintf("%t", req.ReverseMapping),
-		"dns.client_subnet":      req.ClientSubnet,
-		"dns.fakeip_enabled":     fmt.Sprintf("%t", req.FakeIPEnabled),
-		"dns.fakeip_inet4_range": req.FakeIPInet4Range,
-		"dns.fakeip_inet6_range": req.FakeIPInet6Range,
-		"dns.route_cn":           fmt.Sprintf("%t", req.RouteCN),
-		"dns.route_non_cn":       fmt.Sprintf("%t", req.RouteNonCN),
-		"dns.block_ads":          fmt.Sprintf("%t", req.BlockAds),
+		"dns.enabled":                   fmt.Sprintf("%t", req.Enabled),
+		"dns_global.enabled":            fmt.Sprintf("%t", req.Enabled),
+		"dns.proxy_server":              req.ProxyServer,
+		"dns.direct_server":             req.DirectServer,
+		"dns.resolver":                  req.Resolver,
+		"dns.final":                     req.Final,
+		"dns_global.final":              req.Final,
+		"dns.strategy":                  req.Strategy,
+		"dns_global.strategy":           req.Strategy,
+		"dns.address_strategy":          req.AddressStrategy,
+		"dns.disable_cache":             fmt.Sprintf("%t", req.DisableCache),
+		"dns_global.disable_cache":      fmt.Sprintf("%t", req.DisableCache),
+		"dns.disable_expire":            fmt.Sprintf("%t", req.DisableExpire),
+		"dns_global.disable_expire":     fmt.Sprintf("%t", req.DisableExpire),
+		"dns.independent_cache":         fmt.Sprintf("%t", req.IndependentCache),
+		"dns_global.independent_cache":  fmt.Sprintf("%t", req.IndependentCache),
+		"dns.reverse_mapping":           fmt.Sprintf("%t", req.ReverseMapping),
+		"dns_global.reverse_mapping":    fmt.Sprintf("%t", req.ReverseMapping),
+		"dns.client_subnet":             req.ClientSubnet,
+		"dns_global.client_subnet":      req.ClientSubnet,
+		"dns.fakeip_enabled":            fmt.Sprintf("%t", req.FakeIPEnabled),
+		"dns_global.fakeip_enabled":     fmt.Sprintf("%t", req.FakeIPEnabled),
+		"dns.fakeip_inet4_range":        req.FakeIPInet4Range,
+		"dns_global.fakeip_inet4_range": req.FakeIPInet4Range,
+		"dns.fakeip_inet6_range":        req.FakeIPInet6Range,
+		"dns_global.fakeip_inet6_range": req.FakeIPInet6Range,
+		"dns.route_cn":                  fmt.Sprintf("%t", req.RouteCN),
+		"dns.route_non_cn":              fmt.Sprintf("%t", req.RouteNonCN),
+		"dns.block_ads":                 fmt.Sprintf("%t", req.BlockAds),
 	}
 	for key, value := range settings {
 		if value == "" {

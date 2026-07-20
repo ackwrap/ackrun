@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -14,16 +15,28 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/ackwrap/ackwrap/internal/logging"
 	"github.com/ackwrap/ackwrap/internal/model"
+	"github.com/ackwrap/ackwrap/internal/parser"
 	"github.com/ackwrap/ackwrap/internal/paths"
 	"github.com/ackwrap/ackwrap/internal/store"
 )
 
 var outboundTagUnsafePattern = regexp.MustCompile(`[^A-Za-z0-9_.\-\p{Han}]+`)
 
-const defaultRuleSetHTTPClientTag = "ackwrap-rule-set-direct"
+var ErrInvalidConfigFileName = errors.New("配置文件名无效")
+
+const (
+	defaultRuleSetHTTPClientTag = "ackwrap-rule-set-direct"
+	defaultTUNIPv4Address       = "172.31.255.1/30"
+	defaultTUNIPv6Address       = "fdfe:dcba:9875::1/126"
+	defaultAutoRedirectMark     = 0x2024
+	legacyDefaultTUNIPv4Address = "172.19.0.1/30"
+	previousDefaultTUNIPv4      = "172.254.0.1/30"
+	previousDefaultTUNIPv6      = "fdfe:dcba:9876::1/126"
+)
 
 // ConfigGeneratorService 配置生成服务
 type ConfigGeneratorService struct {
@@ -78,6 +91,8 @@ func (s *ConfigGeneratorService) GenerateCurrent() (*model.ConfigGenerateRespons
 
 // GetGenerateRequest 返回最近一次校验通过的生成参数。
 func (s *ConfigGeneratorService) GetGenerateRequest() (*model.ConfigGenerateRequest, error) {
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
 	return s.previewRequest("")
 }
 
@@ -89,26 +104,44 @@ func (s *ConfigGeneratorService) ReconcileCurrent() (*model.ConfigGenerateRespon
 	if err != nil || !result.Valid {
 		return result, err
 	}
-	if err := s.applyLocked(true); err != nil {
+	if err := s.applyLocked("", true); err != nil {
 		return result, err
 	}
 	return result, nil
 }
 
 func (s *ConfigGeneratorService) generateCurrentLocked() (*model.ConfigGenerateResponse, error) {
-	req, err := s.store.GetConfigGenerateRequest()
+	req, err := s.loadConfigGenerateRequest()
 	if err != nil {
-		return nil, fmt.Errorf("读取配置生成参数失败: %w", err)
+		return nil, err
 	}
 	if req == nil {
 		req = &model.ConfigGenerateRequest{
-			DefaultOutbound: "proxy",
-			InboundListen:   "127.0.0.1",
-			InboundPort:     7890,
+			DefaultOutbound: "direct",
+			InboundListen:   "0.0.0.0",
+			InboundPort:     model.DefaultMixedInboundPort,
+			TUNIPv4Address:  defaultTUNIPv4Address,
+			TUNIPv6Address:  defaultTUNIPv6Address,
 			LogLevel:        s.store.GetLogLevel(),
 		}
 	}
 	return s.generateLocked(req)
+}
+
+func (s *ConfigGeneratorService) loadConfigGenerateRequest() (*model.ConfigGenerateRequest, error) {
+	req, migrated, err := s.store.MigrateConfigGenerateRequestTUNAddresses(
+		previousDefaultTUNIPv4,
+		defaultTUNIPv4Address,
+		previousDefaultTUNIPv6,
+		defaultTUNIPv6Address,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("读取配置生成参数失败: %w", err)
+	}
+	if migrated {
+		logging.Info("config_generator.migrate", "已迁移旧默认 TUN 地址")
+	}
+	return req, nil
 }
 
 func (s *ConfigGeneratorService) generateLocked(req *model.ConfigGenerateRequest) (*model.ConfigGenerateResponse, error) {
@@ -120,14 +153,26 @@ func (s *ConfigGeneratorService) generateLockedTo(req *model.ConfigGenerateReque
 	if req.LogLevel == "" {
 		req.LogLevel = s.store.GetLogLevel()
 	}
+	var err error
+	req.TUNIPv4Address, req.TUNIPv6Address, err = normalizeTUNAddresses(req.TUNIPv4Address, req.TUNIPv6Address)
+	if err != nil {
+		return nil, err
+	}
 
 	logging.Info("config_generator.generate", "开始生成配置，默认出站: %s", req.DefaultOutbound)
 
 	// 1. 生成 inbounds
-	inbounds := s.generateInbounds(req.InboundListen, req.InboundPort)
+	inbounds, err := s.generateInbounds(req.InboundListen, req.InboundPort, req.TUNIPv4Address, req.TUNIPv6Address)
+	if err != nil {
+		return nil, fmt.Errorf("生成 inbounds 失败: %w", err)
+	}
 
 	// 2. 生成 outbounds / endpoints
-	outbounds, endpoints, err := s.generateOutbounds()
+	requireUsableProxy, err := s.dnsRequiresUsableProxy(req.DefaultOutbound)
+	if err != nil {
+		return nil, fmt.Errorf("检查 DNS 代理出站失败: %w", err)
+	}
+	outbounds, endpoints, err := s.generateOutbounds(requireUsableProxy)
 	if err != nil {
 		return nil, fmt.Errorf("生成 outbounds 失败: %w", err)
 	}
@@ -167,9 +212,20 @@ func (s *ConfigGeneratorService) generateLockedTo(req *model.ConfigGenerateReque
 		config["endpoints"] = endpoints
 	}
 
-	dnsGlobalSettings, _ := s.store.GetDNSGlobalSettings()
+	dnsGlobalSettings, err := s.effectiveDNSGlobalSettings()
+	if err != nil {
+		return nil, fmt.Errorf("读取 DNS 全局设置失败: %w", err)
+	}
 	if dnsGlobalSettings != nil && dnsGlobalSettings.Enabled {
-		if dns := s.generateDNSFromDatabase(); len(dns) > 0 {
+		routeFinal, _ := route["final"].(string)
+		dns, err := s.generateDNSFromDatabase(routeFinal)
+		if err != nil {
+			return nil, fmt.Errorf("生成 DNS 配置失败: %w", err)
+		}
+		if len(dns) > 0 {
+			if err := validateDNSDetourPaths(dns, outbounds, endpoints); err != nil {
+				return nil, fmt.Errorf("验证 DNS detour 失败: %w", err)
+			}
 			config["dns"] = dns
 		}
 	}
@@ -250,30 +306,68 @@ func (s *ConfigGeneratorService) generateLockedTo(req *model.ConfigGenerateReque
 	valid, errMsg := s.validateConfig(tmpPath)
 
 	return &model.ConfigGenerateResponse{
-		Config:   config,
+		Config:   redactConfigAccessTokens(config).(map[string]interface{}),
 		Valid:    valid,
-		Error:    errMsg,
+		Error:    redactAccessToken(errMsg),
 		FilePath: tmpPath,
 	}, nil
 }
 
+func redactConfigAccessTokens(value interface{}) interface{} {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		redacted := make(map[string]interface{}, len(typed))
+		for key, item := range typed {
+			redacted[key] = redactConfigAccessTokens(item)
+		}
+		return redacted
+	case []interface{}:
+		redacted := make([]interface{}, len(typed))
+		for index, item := range typed {
+			redacted[index] = redactConfigAccessTokens(item)
+		}
+		return redacted
+	case []map[string]interface{}:
+		redacted := make([]map[string]interface{}, len(typed))
+		for index, item := range typed {
+			redacted[index] = redactConfigAccessTokens(item).(map[string]interface{})
+		}
+		return redacted
+	case string:
+		return redactAccessToken(typed)
+	default:
+		return value
+	}
+}
+
 // generateOutbounds 生成所有 outbounds 和 endpoints。WireGuard 在 sing-box 1.13 起是 endpoint，
 // 不再是 outbound，但 endpoint tag 与 outbound 共享引用命名空间。
-func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface{}, error) {
+func (s *ConfigGeneratorService) generateOutbounds(requireUsableProxy ...bool) ([]interface{}, []interface{}, error) {
 	outbounds := []interface{}{}
 	endpoints := []interface{}{}
-	domainResolverBindings := s.dnsOutboundResolverBindings()
+	strictProxy := len(requireUsableProxy) > 0 && requireUsableProxy[0]
+	connectivitySettings, err := s.store.GetConnectivitySettings()
+	if err != nil {
+		return nil, nil, fmt.Errorf("读取连通性测速设置失败: %w", err)
+	}
 
 	// 1. 添加基础 direct 出站。sing-box 1.13 已移除 dns/block 特殊 outbound，DNS/拦截必须通过 route action 处理。
 	directOutbound := map[string]interface{}{
 		"type": "direct",
 		"tag":  "direct",
 	}
-	applyDomainResolverBinding(directOutbound, domainResolverBindings["direct"])
 	outbounds = append(outbounds, directOutbound)
 
 	// 2. 获取所有启用的代理集合
 	collections, err := s.store.ListProxyCollectionsWithNodes()
+	if err != nil {
+		return nil, nil, err
+	}
+	routeRules, err := s.store.ListRouteRules()
+	if err != nil {
+		return nil, nil, err
+	}
+	collections, err = effectiveRouteStrategyCollections(collections, routeRules, s.store.GetProxyMode() == "rule")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -334,13 +428,15 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface
 			usedNodeUIDs[uid] = true
 		}
 	}
-	nodeDomainResolvers := collectionNodeDomainResolverBindings(collections, groupNodeUIDs, usedNodeUIDs, domainResolverBindings)
-
-	// 5. 为集合和节点组使用的节点生成 outbound
 	nodes, err := s.store.ListEnabledNodes()
 	if err != nil {
 		return nil, nil, err
 	}
+	// 核心出口检测 API 需要按 tag 直接取得任一启用节点。
+	for _, node := range nodes {
+		usedNodeUIDs[node.UID] = true
+	}
+	// 5. 为所有启用节点生成 outbound，供策略组和核心出口检测 API 复用。
 	nodeTags := buildNodeOutboundTags(nodes)
 	generatedNodeTags := make(map[string]string, len(nodeTags))
 
@@ -351,7 +447,7 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface
 		}
 
 		if node.Type == "wireguard" {
-			endpoint, err := s.generateWireGuardEndpoint(&node, nodeTags[node.UID], nodeDomainResolvers[node.UID])
+			endpoint, err := s.generateWireGuardEndpoint(&node, nodeTags[node.UID], nil)
 			if err != nil {
 				logging.Info("config_generator.node", "跳过节点 %s: %v", node.Name, err)
 				continue
@@ -360,7 +456,7 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface
 			generatedNodeTags[node.UID] = nodeTags[node.UID]
 			continue
 		}
-		nodeOutbound, err := s.generateNodeOutbound(&node, nodeTags[node.UID], nodeDomainResolvers[node.UID])
+		nodeOutbound, err := s.generateNodeOutbound(&node, nodeTags[node.UID], nil)
 		if err != nil {
 			logging.Info("config_generator.outbound", "节点 %s 生成失败: %v", node.Name, err)
 			continue
@@ -368,7 +464,6 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface
 		outbounds = append(outbounds, nodeOutbound)
 		generatedNodeTags[node.UID] = nodeTags[node.UID]
 	}
-
 	// 6. 生成节点组 outbound
 	for _, group := range nodeGroups {
 		uids := groupNodeUIDs[group.ID]
@@ -389,8 +484,8 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface
 
 		// urltest 特有字段
 		if group.Type == "urltest" {
-			outbound["url"] = group.TestURL
-			outbound["interval"] = fmt.Sprintf("%ds", group.TestInterval)
+			outbound["url"] = connectivitySettings.TestURL
+			outbound["interval"] = fmt.Sprintf("%ds", connectivitySettings.IntervalSeconds)
 			outbound["tolerance"] = group.Tolerance
 		}
 
@@ -406,21 +501,44 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface
 			continue
 		}
 
-		outbound, err := s.generateCollectionOutbound(col, validGroupTags, generatedNodeTags)
+		effectiveCollection := *col
+		effectiveCollection.TestURL = connectivitySettings.TestURL
+		effectiveCollection.TestInterval = connectivitySettings.IntervalSeconds
+		if IsSystemProxyCollectionName(effectiveCollection.Name) {
+			effectiveCollection.Type = "selector"
+		}
+		outbound, err := s.generateCollectionOutbound(&effectiveCollection, validGroupTags, generatedNodeTags, groupNodeUIDs)
 		if err != nil {
-			return nil, nil, fmt.Errorf("策略组 %s 生成失败: %w", col.Name, err)
+			if col.Name != "proxy" {
+				return nil, nil, fmt.Errorf("策略组 %s 生成失败: %w", col.Name, err)
+			}
+			if strictProxy {
+				return nil, nil, fmt.Errorf("DNS 依赖 proxy 策略组，但该策略组没有可用代理节点: %w", err)
+			}
+			logging.Info("config_generator.outbound", "proxy 策略组没有可用节点，降级为 direct: %v", err)
+			outbound = map[string]interface{}{
+				"tag":       "proxy",
+				"type":      "selector",
+				"outbounds": []string{"direct"},
+			}
 		}
 
 		if col.Name == "proxy" {
 			hasProxyCollection = true
-		} else {
+		} else if col.Name != SystemGlobalDirectRouteRuleName {
 			collectionTags = append(collectionTags, col.Name)
 		}
 		outbounds = append(outbounds, outbound)
 	}
+	if hasProxyCollection && strictProxy && !hasUsableNonDirectOutboundPath(outbounds, endpoints, []string{"proxy"}) {
+		return nil, nil, fmt.Errorf("DNS 依赖 proxy 策略组，但该策略组没有可用非直连代理路径")
+	}
 
 	// 8. 规则管理中的“策略”动作固定引用 proxy。若用户没有显式创建 proxy 策略组，自动生成一个代理入口承接已启用策略组。
 	if !hasProxyCollection {
+		if strictProxy && !hasUsableNonDirectOutboundPath(outbounds, endpoints, collectionTags) {
+			return nil, nil, fmt.Errorf("DNS 依赖 proxy 策略组，但当前没有可用代理策略组")
+		}
 		if len(collectionTags) == 0 {
 			collectionTags = []string{"direct"}
 		}
@@ -430,27 +548,275 @@ func (s *ConfigGeneratorService) generateOutbounds() ([]interface{}, []interface
 			"outbounds": collectionTags,
 		})
 	}
+	if s.store.GetProxyMode() == "rule" {
+		outbounds, err = s.appendDirectStrategyOutbounds(outbounds, endpoints)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
 
 	return outbounds, endpoints, nil
 }
 
+func effectiveRouteStrategyCollections(collections []*model.ProxyCollectionWithNodes, rules []model.RouteRule, failOnMissingProxy bool) ([]*model.ProxyCollectionWithNodes, error) {
+	rulesByID := make(map[int64]model.RouteRule, len(rules))
+	for _, rule := range rules {
+		rulesByID[rule.ID] = rule
+	}
+
+	effective := make([]*model.ProxyCollectionWithNodes, 0, len(collections))
+	boundProxyRules := make(map[int64]bool)
+	for _, collection := range collections {
+		if !collection.Enabled {
+			continue
+		}
+		name := strings.TrimSpace(collection.Name)
+		if collection.RouteRuleID > 0 {
+			rule, ok := rulesByID[collection.RouteRuleID]
+			if ok && rule.Enabled && name == SystemGlobalDirectRouteRuleName && rule.SystemKey == SystemRuleGlobalDirectKey {
+				effective = append(effective, collection)
+				continue
+			}
+			if ok && rule.Enabled && !rule.IsSystem && rule.Outbound == "proxy" && strings.TrimSpace(rule.Name) == name {
+				effective = append(effective, collection)
+				boundProxyRules[rule.ID] = true
+				continue
+			}
+		}
+		logging.Info("config_generator.outbound", "策略组 %s 未规范绑定到启用的代理规则，保留数据但跳过生成", collection.Name)
+	}
+
+	if failOnMissingProxy {
+		for _, rule := range rules {
+			if rule.Enabled && !rule.IsSystem && rule.Outbound == "proxy" && !boundProxyRules[rule.ID] {
+				return nil, fmt.Errorf("代理规则 %q 已启用，但未绑定启用且有效的策略组，请先完成策略组配置或停用该规则", rule.Name)
+			}
+		}
+	}
+	return effective, nil
+}
+
+func (s *ConfigGeneratorService) appendDirectStrategyOutbounds(outbounds, endpoints []interface{}) ([]interface{}, error) {
+	tags := make(map[string]bool, len(outbounds)+len(endpoints))
+	for _, entry := range append(append([]interface{}{}, outbounds...), endpoints...) {
+		item, ok := entry.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if tag, _ := item["tag"].(string); tag != "" {
+			tags[tag] = true
+		}
+	}
+	rules, err := s.store.ListRouteRules()
+	if err != nil {
+		return nil, err
+	}
+	for _, rule := range rules {
+		if !rule.Enabled || rule.Outbound != "direct" || rule.RuleType == "fallback" || rule.IsSystem {
+			continue
+		}
+		tag := strings.TrimSpace(rule.Name)
+		if tags[tag] {
+			return nil, fmt.Errorf("直连策略 %q 的 outbound tag 与现有出站冲突", tag)
+		}
+		tags[tag] = true
+		outbounds = append(outbounds, map[string]interface{}{
+			"tag":       tag,
+			"type":      "selector",
+			"outbounds": []string{"direct"},
+		})
+	}
+	return outbounds, nil
+}
+
+func (s *ConfigGeneratorService) dnsRequiresUsableProxy(defaultOutbound string) (bool, error) {
+	settings, err := s.effectiveDNSGlobalSettings()
+	if err != nil || settings == nil || !settings.Enabled {
+		return false, err
+	}
+	required, err := s.dnsNeedsProxyFinal(defaultOutbound)
+	if err != nil {
+		return false, err
+	}
+	if required {
+		return true, nil
+	}
+	servers, err := s.store.ListDNSServers()
+	if err != nil {
+		return false, err
+	}
+	for _, server := range servers {
+		if server.Enabled && server.Detour == "proxy" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (s *ConfigGeneratorService) dnsNeedsProxyFinal(_ string) (bool, error) {
+	switch s.store.GetProxyMode() {
+	case "global":
+		return true, nil
+	case "direct":
+		return false, nil
+	case "rule":
+		rules, err := s.store.ListRouteRules()
+		if err != nil {
+			return false, fmt.Errorf("读取 DNS 防泄漏关联路由规则失败: %w", err)
+		}
+		overrides, err := s.routeRuleOutboundOverrides()
+		if err != nil {
+			return false, err
+		}
+		for _, rule := range rules {
+			if !rule.Enabled || rule.Outbound == "block" || rule.Outbound == "reject" {
+				continue
+			}
+			outbound := rule.Outbound
+			if override, exists := overrides[rule.ID]; exists && rule.Outbound == "proxy" {
+				outbound = override
+			}
+			if outbound != "" && outbound != "direct" {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func hasUsableNonDirectOutboundPath(outbounds, endpoints []interface{}, rootTags []string) bool {
+	byTag := make(map[string]map[string]interface{}, len(outbounds)+len(endpoints))
+	all := append(append([]interface{}{}, outbounds...), endpoints...)
+	for _, item := range all {
+		outbound, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if tag, _ := outbound["tag"].(string); tag != "" {
+			byTag[tag] = outbound
+		}
+	}
+	visiting := make(map[string]bool)
+	var hasPath func(string) bool
+	hasPath = func(tag string) bool {
+		if tag == "" || tag == "direct" || tag == "block" || tag == "reject" || visiting[tag] {
+			return false
+		}
+		outbound, exists := byTag[tag]
+		if !exists {
+			return false
+		}
+		outboundType, _ := outbound["type"].(string)
+		if outboundType == "direct" || outboundType == "block" || outboundType == "reject" {
+			return false
+		}
+		members := outboundMemberTags(outbound["outbounds"])
+		if len(members) == 0 {
+			if outboundType == "selector" || outboundType == "urltest" {
+				return false
+			}
+			return true
+		}
+		visiting[tag] = true
+		defer delete(visiting, tag)
+		for _, member := range members {
+			if hasPath(member) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, tag := range rootTags {
+		if hasPath(tag) {
+			return true
+		}
+	}
+	return false
+}
+
+// validateDNSDetourPaths rejects DNS resolvers whose effective detour can only reach direct.
+// DNS strategy clones and manually configured resolver detours are both present in dns.servers.
+func validateDNSDetourPaths(dns map[string]interface{}, outbounds, endpoints []interface{}) error {
+	servers, ok := dns["servers"].([]map[string]interface{})
+	if !ok {
+		return fmt.Errorf("DNS servers 格式无效")
+	}
+	for _, server := range servers {
+		detourValue, exists := server["detour"]
+		if !exists {
+			continue
+		}
+		detour, ok := detourValue.(string)
+		tag, _ := server["tag"].(string)
+		if tag == "" {
+			tag = "<unknown>"
+		}
+		if !ok || detour == "" || detour != strings.TrimSpace(detour) {
+			return fmt.Errorf("DNS Server %s 的 detour 无效", tag)
+		}
+		switch detour {
+		case "direct":
+			continue
+		case "block", "reject":
+			return fmt.Errorf("DNS Server %s 的 detour %s 无效", tag, detour)
+		}
+		if !hasUsableNonDirectOutboundPath(outbounds, endpoints, []string{detour}) {
+			return fmt.Errorf("DNS Server %s 的 detour %s 没有可用非直连代理路径", tag, detour)
+		}
+	}
+	return nil
+}
+
+func outboundMemberTags(value interface{}) []string {
+	switch members := value.(type) {
+	case []string:
+		return members
+	case []interface{}:
+		result := make([]string, 0, len(members))
+		for _, member := range members {
+			if tag, ok := member.(string); ok && tag != "" {
+				result = append(result, tag)
+			}
+		}
+		return result
+	default:
+		return nil
+	}
+}
+
 // generateCollectionOutbound 为代理集合生成 outbound
-func (s *ConfigGeneratorService) generateCollectionOutbound(col *model.ProxyCollectionWithNodes, validGroupTags map[string]bool, nodeTags map[string]string) (map[string]interface{}, error) {
+func (s *ConfigGeneratorService) generateCollectionOutbound(col *model.ProxyCollectionWithNodes, validGroupTags map[string]bool, nodeTags map[string]string, groupNodeUIDs map[int64][]string) (map[string]interface{}, error) {
 	outbound := map[string]interface{}{
 		"type": col.Type,
 		"tag":  col.Name,
 	}
 
 	// 判断是引用节点组还是手动选节点
-	if col.SourceType == "node_groups" && len(col.ReferencedGroups) > 0 {
+	if isCollectionGroupSource(col.SourceType) && len(col.ReferencedGroups) > 0 {
 		// 引用节点组模式。node_uids 兼容存放 direct 这类真实内置出站 tag。
 		referencedTags := collectionBuiltinOutboundTags(col)
+		seen := make(map[string]bool, len(referencedTags))
+		for _, tag := range referencedTags {
+			seen[tag] = true
+		}
+		appendUnique := func(tags ...string) {
+			for _, tag := range tags {
+				if tag == "" || seen[tag] {
+					continue
+				}
+				seen[tag] = true
+				referencedTags = append(referencedTags, tag)
+			}
+		}
 		for _, group := range col.ReferencedGroups {
 			if !validGroupTags[group.Name] {
 				logging.Info("config_generator.outbound", "策略组 %s 跳过空节点组引用: %s", col.Name, group.Name)
 				continue
 			}
-			referencedTags = append(referencedTags, group.Name)
+			appendUnique(group.Name)
+			if col.SourceType == proxyCollectionSourceNodeGroupsAndNodes {
+				appendUnique(nodeUIDsToOutboundTags(groupNodeUIDs[group.ID], nodeTags)...)
+			}
 		}
 		if len(referencedTags) == 0 {
 			return nil, fmt.Errorf("策略组没有可用节点组引用")
@@ -538,7 +904,9 @@ func (s *ConfigGeneratorService) generateNodeOutbound(node *model.Node, tag stri
 	// 移除可能存在的非 sing-box 字段
 	delete(nodeData, "name")
 	mapMihomoUDPFlagToSingboxNetwork(nodeData)
-	mapTLSFingerprintFields(nodeData)
+	if err := mapTLSFingerprintFields(nodeData); err != nil {
+		return nil, err
+	}
 	ensureRequiredOutboundTLS(nodeData, node.Type)
 	if err := normalizeLegacyOutboundFields(nodeData, node.Type); err != nil {
 		return nil, err
@@ -694,26 +1062,47 @@ func intValue(value interface{}) int {
 	}
 }
 
-func mapTLSFingerprintFields(nodeData map[string]interface{}) {
+func mapTLSFingerprintFields(nodeData map[string]interface{}) error {
 	tlsMap, ok := nodeData["tls"].(map[string]interface{})
 	if !ok {
-		return
+		return nil
+	}
+	if insecure, exists := nodeData["skip-cert-verify"]; exists {
+		tlsMap["insecure"] = configBoolValue(insecure)
+		delete(nodeData, "skip-cert-verify")
+	}
+	if alpn, exists := nodeData["alpn"]; exists {
+		tlsMap["alpn"] = alpn
+		delete(nodeData, "alpn")
+	}
+	if legacyPins, exists := tlsMap["certificate_public_key_sha256"]; exists {
+		if normalizedPins, ok := normalizeSHA256HexValues(legacyPins); ok {
+			if err := mergeCertificateSHA256Pins(tlsMap, normalizedPins); err != nil {
+				return err
+			}
+			delete(tlsMap, "certificate_public_key_sha256")
+		}
 	}
 	utlsMap, ok := tlsMap["utls"].(map[string]interface{})
 	if !ok {
-		return
+		return nil
 	}
 	fingerprint, _ := utlsMap["fingerprint"].(string)
 	if fingerprint == "" || isSingboxUTLSFingerprint(fingerprint) {
-		return
+		return nil
 	}
-	if isSHA256HexString(fingerprint) {
-		tlsMap["certificate_public_key_sha256"] = []string{fingerprint}
+	normalizedFingerprint, ok := normalizeSHA256HexString(fingerprint)
+	if !ok {
+		return fmt.Errorf("无法识别旧节点的 TLS fingerprint")
+	}
+	if err := mergeCertificateSHA256Pins(tlsMap, []string{normalizedFingerprint}); err != nil {
+		return err
 	}
 	delete(utlsMap, "fingerprint")
 	if len(utlsMap) == 1 && configBoolValue(utlsMap["enabled"]) {
 		delete(tlsMap, "utls")
 	}
+	return nil
 }
 
 func ensureRequiredOutboundTLS(nodeData map[string]interface{}, outboundType string) {
@@ -733,6 +1122,12 @@ func ensureRequiredOutboundTLS(nodeData map[string]interface{}, outboundType str
 
 func normalizeLegacyOutboundFields(nodeData map[string]interface{}, outboundType string) error {
 	outboundType = strings.ToLower(strings.TrimSpace(outboundType))
+	if err := normalizeLegacyRealityOptions(nodeData); err != nil {
+		return err
+	}
+	if err := normalizeLegacyV2RayTransport(nodeData, outboundType); err != nil {
+		return err
+	}
 	if cipher, exists := nodeData["cipher"]; exists {
 		switch outboundType {
 		case "vmess":
@@ -749,6 +1144,41 @@ func normalizeLegacyOutboundFields(nodeData map[string]interface{}, outboundType
 			}
 		}
 		delete(nodeData, "cipher")
+	}
+	switch outboundType {
+	case "hysteria":
+		moveConfigField(nodeData, "obfs-param", "obfs")
+		moveConfigField(nodeData, "obfs_param", "obfs")
+		moveConfigField(nodeData, "receive-window", "recv_window")
+		moveConfigField(nodeData, "receive_window", "recv_window")
+		moveConfigField(nodeData, "receive-window-conn", "recv_window_conn")
+		moveConfigField(nodeData, "receive_window_conn", "recv_window_conn")
+		moveConfigField(nodeData, "disable-mtu-discovery", "disable_mtu_discovery")
+		for _, key := range []string{"recv_window", "recv_window_conn"} {
+			if value := intValue(nodeData[key]); value > 0 {
+				nodeData[key] = value
+			}
+		}
+	case "tuic":
+		moveConfigField(nodeData, "udp-relay-mode", "udp_relay_mode")
+		moveConfigField(nodeData, "reduce-rtt", "zero_rtt_handshake")
+		moveConfigField(nodeData, "reduce_rtt", "zero_rtt_handshake")
+		moveConfigField(nodeData, "zero-rtt-handshake", "zero_rtt_handshake")
+		if token := firstStringValue(nodeData, "token"); token != "" {
+			delete(nodeData, "token")
+			if firstStringValue(nodeData, "uuid") == "" || firstStringValue(nodeData, "password") == "" {
+				return fmt.Errorf("旧版 TUIC token 认证不受当前 sing-box 版本支持")
+			}
+		}
+	case "shadowsocks":
+		moveConfigField(nodeData, "plugin-opts", "plugin_opts")
+		if err := normalizeLegacyShadowsocksPlugin(nodeData); err != nil {
+			return err
+		}
+	case "socks":
+		if tlsEnabledValue(nodeData["tls"]) {
+			return fmt.Errorf("当前 sing-box 版本不支持 TLS 封装的 SOCKS 节点")
+		}
 	}
 	if outboundType == "ssr" {
 		nodeData["type"] = "shadowsocksr"
@@ -788,6 +1218,315 @@ func normalizeLegacyOutboundFields(nodeData map[string]interface{}, outboundType
 	return fmt.Errorf("旧版 VMess alter_id 节点不受当前 sing-box 版本支持")
 }
 
+func normalizeLegacyV2RayTransport(nodeData map[string]interface{}, outboundType string) error {
+	if outboundType != "vmess" && outboundType != "vless" && outboundType != "trojan" {
+		return nil
+	}
+	network := strings.ToLower(firstStringValue(nodeData, "network"))
+	legacyKeys := []string{"ws-opts", "grpc-opts", "h2-opts", "http-upgrade-opts", "xhttp-opts"}
+	defer func() {
+		for _, key := range legacyKeys {
+			delete(nodeData, key)
+		}
+	}()
+	if network == "" || network == "tcp" || network == "udp" {
+		return nil
+	}
+	if _, exists := nodeData["transport"]; exists {
+		delete(nodeData, "network")
+		return nil
+	}
+
+	transport := map[string]interface{}{"type": network}
+	switch network {
+	case "ws":
+		if options, ok := nodeData["ws-opts"].(map[string]interface{}); ok {
+			if path := firstStringValue(options, "path"); path != "" {
+				transport["path"] = path
+			}
+			if headers, ok := options["headers"].(map[string]interface{}); ok && len(headers) > 0 {
+				transport["headers"] = headers
+			}
+			if maxEarlyData := intValue(options["max-early-data"]); maxEarlyData > 0 {
+				transport["max_early_data"] = maxEarlyData
+			}
+			if headerName := firstStringValue(options, "early-data-header-name"); headerName != "" {
+				transport["early_data_header_name"] = headerName
+			}
+		}
+	case "grpc":
+		if options, ok := nodeData["grpc-opts"].(map[string]interface{}); ok {
+			if serviceName := firstStringValue(options, "grpc-service-name", "service-name", "service_name"); serviceName != "" {
+				transport["service_name"] = serviceName
+			}
+		}
+	case "http", "h2":
+		transport["type"] = "http"
+		if options, ok := nodeData["h2-opts"].(map[string]interface{}); ok {
+			if path := firstStringValue(options, "path"); path != "" {
+				transport["path"] = path
+			}
+			if host, exists := options["host"]; exists {
+				transport["host"] = host
+			}
+		}
+	case "httpupgrade":
+		if options, ok := nodeData["http-upgrade-opts"].(map[string]interface{}); ok {
+			for _, key := range []string{"host", "path", "headers"} {
+				if value, exists := options[key]; exists {
+					transport[key] = value
+				}
+			}
+		}
+	default:
+		return fmt.Errorf("旧版 %s transport 不受当前 sing-box 版本支持", network)
+	}
+	nodeData["transport"] = transport
+	delete(nodeData, "network")
+	return nil
+}
+
+func normalizeLegacyShadowsocksPlugin(nodeData map[string]interface{}) error {
+	plugin := strings.ToLower(firstStringValue(nodeData, "plugin"))
+	network := strings.ToLower(firstStringValue(nodeData, "network"))
+	existingOptions, _ := nodeData["plugin_opts"].(string)
+	pluginOptions, _ := nodeData["plugin_opts"].(map[string]interface{})
+	if pluginOptions == nil {
+		pluginOptions = map[string]interface{}{}
+	}
+	legacyTransport := network == "ws" || network == "websocket" || network == "quic"
+	if plugin == "" && legacyTransport {
+		plugin = "v2ray-plugin"
+	}
+	if plugin != "v2ray-plugin" && network != "" && network != "tcp" && network != "udp" {
+		return fmt.Errorf("Shadowsocks network %q 缺少兼容的 SIP003 plugin", network)
+	}
+	if plugin != "v2ray-plugin" {
+		if field := legacyShadowsocksTLSField(nodeData); field != "" {
+			return fmt.Errorf("Shadowsocks TLS 字段 %s 需要 v2ray-plugin 才能迁移", field)
+		}
+		normalizedPlugin, normalizedOptions, err := parser.NormalizeShadowsocksSIP003Plugin(plugin, nodeData["plugin_opts"])
+		if err != nil {
+			return err
+		}
+		if normalizedPlugin == "" {
+			delete(nodeData, "plugin")
+			delete(nodeData, "plugin_opts")
+			return nil
+		}
+		nodeData["plugin"] = normalizedPlugin
+		if normalizedOptions == "" {
+			delete(nodeData, "plugin_opts")
+		} else {
+			nodeData["plugin_opts"] = normalizedOptions
+		}
+		return nil
+	}
+	if existingOptions != "" {
+		if field := legacyShadowsocksTLSField(nodeData); field != "" {
+			return fmt.Errorf("旧版 Shadowsocks TLS 字段 %s 无法与已有 v2ray-plugin 选项安全合并", field)
+		}
+		hasLegacyFields := legacyTransport || nodeData["ws-opts"] != nil ||
+			firstStringValue(nodeData, "host", "path") != "" ||
+			nodeData["skip-cert-verify"] != nil || nodeData["skip_cert_verify"] != nil || nodeData["insecure"] != nil
+		if hasLegacyFields {
+			return fmt.Errorf("旧版 Shadowsocks transport 无法与已有 v2ray-plugin 选项安全合并")
+		}
+		normalizedPlugin, normalizedOptions, err := parser.NormalizeShadowsocksSIP003Plugin(plugin, existingOptions)
+		if err != nil {
+			return err
+		}
+		nodeData["plugin"] = normalizedPlugin
+		if normalizedOptions == "" {
+			delete(nodeData, "plugin_opts")
+		} else {
+			nodeData["plugin_opts"] = normalizedOptions
+		}
+		return nil
+	}
+
+	mode := ""
+	if legacyTransport {
+		if network == "quic" {
+			mode = "quic"
+		} else {
+			mode = "websocket"
+		}
+		if configuredMode := firstStringValue(pluginOptions, "mode"); configuredMode != "" && configuredMode != mode {
+			return fmt.Errorf("Shadowsocks network 与 v2ray-plugin mode 冲突")
+		}
+		pluginOptions["mode"] = mode
+		delete(nodeData, "network")
+	}
+
+	wsHost := ""
+	wsPath := ""
+	if value, exists := nodeData["ws-opts"]; exists {
+		options, ok := value.(map[string]interface{})
+		if !ok || mode != "websocket" {
+			return fmt.Errorf("无法识别旧版 Shadowsocks ws-opts")
+		}
+		for key := range options {
+			if key != "path" && key != "headers" {
+				return fmt.Errorf("旧版 Shadowsocks ws-opts.%s 无法映射到 v2ray-plugin", key)
+			}
+		}
+		wsPath = firstStringValue(options, "path")
+		if headersValue, exists := options["headers"]; exists {
+			headers, ok := headersValue.(map[string]interface{})
+			if !ok {
+				return fmt.Errorf("无法识别旧版 Shadowsocks WebSocket headers")
+			}
+			for key := range headers {
+				if !strings.EqualFold(key, "host") {
+					return fmt.Errorf("旧版 Shadowsocks WebSocket header %s 无法映射到 v2ray-plugin", key)
+				}
+			}
+			wsHost = firstStringValue(headers, "Host", "host")
+		}
+		delete(nodeData, "ws-opts")
+	}
+	for _, key := range []string{"alpn", "fingerprint", "certificate-sha256", "certificate_sha256", "client-fingerprint", "client_fingerprint", "reality-opts"} {
+		if value, exists := nodeData[key]; exists && value != nil {
+			return fmt.Errorf("Shadowsocks TLS 字段 %s 无法映射到 v2ray-plugin", key)
+		}
+	}
+
+	tlsEnabled := tlsEnabledValue(nodeData["tls"])
+	tlsHost := ""
+	if tlsValue, exists := nodeData["tls"]; exists {
+		switch tlsOptions := tlsValue.(type) {
+		case bool:
+		case map[string]interface{}:
+			for key, value := range tlsOptions {
+				switch key {
+				case "enabled":
+				case "server_name":
+					tlsHost = configStringValue(value)
+				case "insecure":
+					if configBoolValue(value) {
+						return fmt.Errorf("v2ray-plugin 不支持 insecure TLS，无法无损迁移 Shadowsocks 节点")
+					}
+				default:
+					return fmt.Errorf("Shadowsocks TLS 字段 %s 无法映射到 v2ray-plugin", key)
+				}
+			}
+		default:
+			return fmt.Errorf("无法识别旧版 Shadowsocks TLS 配置")
+		}
+	}
+	for _, key := range []string{"skip-cert-verify", "skip_cert_verify", "insecure"} {
+		if configBoolValue(nodeData[key]) {
+			return fmt.Errorf("v2ray-plugin 不支持 %s，无法无损迁移 Shadowsocks 节点", key)
+		}
+		delete(nodeData, key)
+	}
+	topHost := firstStringValue(nodeData, "host", "sni", "servername", "server_name")
+	pluginHost := firstStringValue(pluginOptions, "host")
+	for _, candidate := range []string{wsHost, tlsHost, topHost} {
+		if candidate == "" {
+			continue
+		}
+		if pluginHost != "" && !strings.EqualFold(pluginHost, candidate) {
+			return fmt.Errorf("Shadowsocks WebSocket Host 与 TLS SNI 无法同时映射到 v2ray-plugin host")
+		}
+		pluginHost = candidate
+	}
+	if pluginHost != "" {
+		pluginOptions["host"] = pluginHost
+	}
+	delete(nodeData, "host")
+	delete(nodeData, "sni")
+	delete(nodeData, "servername")
+	delete(nodeData, "server_name")
+	pluginPath := firstStringValue(pluginOptions, "path")
+	topPath := firstStringValue(nodeData, "path")
+	for _, candidate := range []string{wsPath, topPath} {
+		if candidate == "" {
+			continue
+		}
+		if pluginPath != "" && pluginPath != candidate {
+			return fmt.Errorf("Shadowsocks WebSocket path 与 v2ray-plugin path 冲突")
+		}
+		pluginPath = candidate
+	}
+	if pluginPath != "" {
+		pluginOptions["path"] = pluginPath
+	}
+	delete(nodeData, "path")
+	if tlsEnabled {
+		pluginOptions["tls"] = true
+	}
+	delete(nodeData, "tls")
+	if boolValue, exists := pluginOptions["skip-cert-verify"]; exists && configBoolValue(boolValue) {
+		return fmt.Errorf("v2ray-plugin 不支持 skip-cert-verify")
+	}
+	delete(pluginOptions, "skip-cert-verify")
+	delete(pluginOptions, "skip_cert_verify")
+
+	normalizedPlugin, normalizedOptions, err := parser.NormalizeShadowsocksSIP003Plugin(plugin, pluginOptions)
+	if err != nil {
+		return err
+	}
+	nodeData["plugin"] = normalizedPlugin
+	if normalizedOptions == "" {
+		delete(nodeData, "plugin_opts")
+	} else {
+		nodeData["plugin_opts"] = normalizedOptions
+	}
+	return nil
+}
+
+func legacyShadowsocksTLSField(nodeData map[string]interface{}) string {
+	for _, key := range []string{
+		"tls", "sni", "servername", "server_name", "alpn", "fingerprint", "certificate-sha256", "certificate_sha256",
+		"client-fingerprint", "client_fingerprint", "skip-cert-verify", "skip_cert_verify", "insecure", "reality-opts",
+	} {
+		if value, exists := nodeData[key]; exists && value != nil {
+			return key
+		}
+	}
+	return ""
+}
+
+func tlsEnabledValue(value interface{}) bool {
+	if tlsOptions, ok := value.(map[string]interface{}); ok {
+		return configBoolValue(tlsOptions["enabled"])
+	}
+	return configBoolValue(value)
+}
+
+func normalizeLegacyRealityOptions(nodeData map[string]interface{}) error {
+	value, exists := nodeData["reality-opts"]
+	if !exists {
+		return nil
+	}
+	delete(nodeData, "reality-opts")
+	realityOpts, ok := value.(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("无法识别 Reality 配置")
+	}
+	tlsMap, ok := nodeData["tls"].(map[string]interface{})
+	if !ok {
+		tlsMap = map[string]interface{}{}
+		nodeData["tls"] = tlsMap
+	}
+	tlsMap["enabled"] = true
+	realityMap, ok := tlsMap["reality"].(map[string]interface{})
+	if !ok {
+		realityMap = map[string]interface{}{}
+		tlsMap["reality"] = realityMap
+	}
+	realityMap["enabled"] = true
+	if publicKey := firstStringValue(realityOpts, "public_key", "public-key", "pbk"); publicKey != "" {
+		realityMap["public_key"] = publicKey
+	}
+	if shortID := firstStringValue(realityOpts, "short_id", "short-id", "sid"); shortID != "" {
+		realityMap["short_id"] = shortID
+	}
+	return nil
+}
+
 func moveConfigField(data map[string]interface{}, source, target string) {
 	if value, exists := data[source]; exists {
 		if _, targetExists := data[target]; !targetExists {
@@ -806,17 +1545,74 @@ func isSingboxUTLSFingerprint(value string) bool {
 	}
 }
 
-func isSHA256HexString(value string) bool {
-	value = strings.TrimSpace(value)
+func normalizeSHA256HexString(value string) (string, bool) {
+	value = strings.ToLower(strings.NewReplacer(":", "", "-", "").Replace(strings.TrimSpace(value)))
 	if len(value) != 64 {
-		return false
+		return "", false
 	}
 	for _, r := range value {
 		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
-			return false
+			return "", false
 		}
 	}
-	return true
+	return value, true
+}
+
+func normalizeSHA256HexValues(value interface{}) ([]string, bool) {
+	var values []string
+	switch typed := value.(type) {
+	case string:
+		values = []string{typed}
+	case []string:
+		values = typed
+	case []interface{}:
+		values = make([]string, 0, len(typed))
+		for _, item := range typed {
+			stringValue, ok := item.(string)
+			if !ok {
+				return nil, false
+			}
+			values = append(values, stringValue)
+		}
+	default:
+		return nil, false
+	}
+	if len(values) == 0 {
+		return nil, false
+	}
+	normalized := make([]string, 0, len(values))
+	for _, item := range values {
+		normalizedItem, ok := normalizeSHA256HexString(item)
+		if !ok {
+			return nil, false
+		}
+		normalized = append(normalized, normalizedItem)
+	}
+	return normalized, true
+}
+
+func mergeCertificateSHA256Pins(tlsMap map[string]interface{}, migratedPins []string) error {
+	combined := make([]string, 0, len(migratedPins))
+	if existingValue, exists := tlsMap["certificate_sha256"]; exists {
+		existingPins, ok := normalizeSHA256HexValues(existingValue)
+		if !ok {
+			return fmt.Errorf("无法识别旧节点的 certificate_sha256")
+		}
+		combined = append(combined, existingPins...)
+	}
+	seen := make(map[string]struct{}, len(combined)+len(migratedPins))
+	for _, pin := range combined {
+		seen[pin] = struct{}{}
+	}
+	for _, pin := range migratedPins {
+		if _, exists := seen[pin]; exists {
+			continue
+		}
+		seen[pin] = struct{}{}
+		combined = append(combined, pin)
+	}
+	tlsMap["certificate_sha256"] = combined
+	return nil
 }
 
 func mapMihomoUDPFlagToSingboxNetwork(nodeData map[string]interface{}) {
@@ -832,68 +1628,10 @@ func mapMihomoUDPFlagToSingboxNetwork(nodeData map[string]interface{}) {
 	}
 }
 
-func (s *ConfigGeneratorService) dnsOutboundResolverBindings() map[string]map[string]interface{} {
-	bindings := make(map[string]map[string]interface{})
-	globalSettings, err := s.store.GetDNSGlobalSettings()
-	if err != nil || globalSettings == nil || !globalSettings.Enabled {
-		return bindings
-	}
-	dnsServers, err := s.store.ListDNSServers()
-	if err != nil {
-		logging.Info("config_generator.dns", "读取 DNS server 失败: %v", err)
-		return bindings
-	}
-	serverTags := enabledDNSServerTags(dnsServers, globalSettings.FakeIPEnabled)
-	dnsRules, err := s.store.ListDNSRules()
-	if err != nil {
-		logging.Info("config_generator.dns", "读取 DNS 出口绑定失败: %v", err)
-		return bindings
-	}
-	for _, rule := range dnsRules {
-		if !rule.Enabled || rule.Server == "" {
-			continue
-		}
-		if !serverTags[rule.Server] {
-			logging.Info("config_generator.dns", "跳过引用无效 DNS server 的 outbound 绑定: %s", rule.Server)
-			continue
-		}
-		conditions := decodeDNSRuleConditions(rule.ConditionsJSON)
-		for _, outbound := range dnsRuleOutboundConditions(conditions) {
-			if outbound == "" || outbound == "block" {
-				continue
-			}
-			if _, exists := bindings[outbound]; exists {
-				logging.Info("config_generator.dns", "outbound %s 绑定了多个 DNS server，保留第一个", outbound)
-				continue
-			}
-			resolverTag := safeNodeResolverTag(rule.Server, dnsServers, serverTags)
-			if resolverTag == "" {
-				logging.Info("config_generator.dns", "跳过无法安全引导的 outbound DNS 绑定: %s", rule.Server)
-				continue
-			}
-			if resolverTag != rule.Server {
-				logging.Info("config_generator.dns", "outbound DNS server %s 依赖代理 detour，节点解析回退到直连 bootstrap: %s", rule.Server, resolverTag)
-			}
-			resolver := map[string]interface{}{"server": resolverTag}
-			if rule.DisableCache {
-				resolver["disable_cache"] = true
-			}
-			if rule.RewriteTTL > 0 {
-				resolver["rewrite_ttl"] = rule.RewriteTTL
-			}
-			if rule.ClientSubnet != "" {
-				resolver["client_subnet"] = rule.ClientSubnet
-			}
-			bindings[outbound] = resolver
-		}
-	}
-	return bindings
-}
-
 func enabledDNSServerTags(servers []model.DNSServer, fakeIPEnabled bool) map[string]bool {
 	tags := make(map[string]bool)
 	for _, server := range servers {
-		if server.Enabled && server.Tag != "" {
+		if server.Enabled && server.Tag != "" && server.ServerType != "fakeip" {
 			tags[server.Tag] = true
 		}
 	}
@@ -903,52 +1641,13 @@ func enabledDNSServerTags(servers []model.DNSServer, fakeIPEnabled bool) map[str
 	return tags
 }
 
-func collectionNodeDomainResolverBindings(collections []*model.ProxyCollectionWithNodes, groupNodeUIDs map[int64][]string, usedNodeUIDs map[string]bool, bindings map[string]map[string]interface{}) map[string]map[string]interface{} {
-	nodeResolvers := make(map[string]map[string]interface{})
-	hasProxyCollection := false
-	for _, col := range collections {
-		if !col.Enabled {
-			continue
-		}
-		if col.Name == "proxy" {
-			hasProxyCollection = true
-		}
-		resolver := bindings[col.Name]
-		if len(resolver) == 0 {
-			continue
-		}
-		for _, uid := range collectionNodeUIDs(col, groupNodeUIDs) {
-			if _, exists := nodeResolvers[uid]; !exists {
-				nodeResolvers[uid] = resolver
-			}
-		}
+func (s *ConfigGeneratorService) effectiveDNSGlobalSettings() (*model.DNSGlobalSettings, error) {
+	settings, err := s.store.GetDNSGlobalSettings()
+	if err != nil {
+		return nil, err
 	}
-	if resolver := bindings["proxy"]; len(resolver) > 0 && !hasProxyCollection {
-		for uid := range usedNodeUIDs {
-			if _, exists := nodeResolvers[uid]; !exists {
-				nodeResolvers[uid] = resolver
-			}
-		}
-	}
-	return nodeResolvers
-}
-
-func collectionNodeUIDs(col *model.ProxyCollectionWithNodes, groupNodeUIDs map[int64][]string) []string {
-	if col.SourceType != "node_groups" {
-		return col.NodeUIDs
-	}
-	uids := make([]string, 0)
-	seen := make(map[string]bool)
-	for _, group := range col.ReferencedGroups {
-		for _, uid := range groupNodeUIDs[group.ID] {
-			if seen[uid] {
-				continue
-			}
-			seen[uid] = true
-			uids = append(uids, uid)
-		}
-	}
-	return uids
+	applyTUNManagedFakeIP(settings, s.store.GetInboundMode())
+	return settings, nil
 }
 
 func applyDomainResolverBinding(outbound map[string]interface{}, resolver map[string]interface{}) {
@@ -977,7 +1676,6 @@ func configBoolValue(value interface{}) bool {
 
 func buildNodeOutboundTags(nodes []model.Node) map[string]string {
 	result := make(map[string]string, len(nodes))
-	used := make(map[string]bool)
 	for _, node := range nodes {
 		base := sanitizeOutboundTag(node.Name)
 		if base == "" {
@@ -986,16 +1684,7 @@ func buildNodeOutboundTags(nodes []model.Node) map[string]string {
 		if base == "" {
 			base = "node"
 		}
-		shortUID := node.UID
-		if len(shortUID) > 8 {
-			shortUID = shortUID[:8]
-		}
-		tag := fmt.Sprintf("%s-%s", base, shortUID)
-		if used[tag] {
-			tag = fmt.Sprintf("%s-%s", tag, node.UID)
-		}
-		used[tag] = true
-		result[node.UID] = tag
+		result[node.UID] = fmt.Sprintf("%s-%s", base, node.UID)
 	}
 	return result
 }
@@ -1033,11 +1722,37 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 		"rule_set":            []map[string]interface{}{},
 		"default_http_client": defaultRuleSetHTTPClientTag,
 	}
+	inboundMode := s.store.GetInboundMode()
+	if inboundMode == "tun" || inboundMode == "tun_mixed" {
+		route["auto_detect_interface"] = true
+	}
+	dnsSettings, err := s.effectiveDNSGlobalSettings()
+	if err != nil {
+		return nil, fmt.Errorf("读取 DNS 全局设置失败: %w", err)
+	}
+	dnsEnabled := dnsSettings != nil && dnsSettings.Enabled
 
 	// 根据代理模式决定是否加载规则
 	var routeRules []map[string]interface{}
 	var ruleSets []map[string]interface{}
 	ruleSetTags := make(map[string]bool)
+
+	// 标准 TCP/UDP DNS 必须在进程和节点直连白名单之前劫持，避免 DNS
+	// 目标与白名单地址重合时被 bypass 终止匹配。
+	if dnsEnabled {
+		routeRules = append(routeRules, map[string]interface{}{
+			"port":   53,
+			"action": "hijack-dns",
+		})
+	}
+
+	// 内核级绕过必须先于 sniff；TCP 预匹配遇到 sniff 后不会继续匹配后续规则。
+	bypassRules, err := s.defaultBypassRules()
+	if err != nil {
+		return nil, err
+	}
+	routeRules = append(routeRules, bypassRules...)
+	route["find_process"] = true
 
 	// sing-box 1.13 已移除 inbound sniff 字段，嗅探和 DNS 劫持必须使用 rule action。
 	routeRules = append(routeRules, map[string]interface{}{
@@ -1045,7 +1760,7 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 	})
 
 	// DNS 查询交给 DNS rule action 处理，放在所有路由规则之前。
-	if dnsSettings, _ := s.store.GetDNSSettings(); dnsSettings != nil && dnsSettings.Enabled {
+	if dnsEnabled {
 		routeRules = append(routeRules, map[string]interface{}{
 			"protocol": "dns",
 			"action":   "hijack-dns",
@@ -1055,16 +1770,10 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 		}
 	}
 
-	// AckWrap、sing-box 和节点服务器必须优先直连，避免 TUN/全局模式形成代理回环。
-	bypassRules, err := s.defaultBypassRules()
-	if err != nil {
-		return nil, err
-	}
-	routeRules = append(routeRules, bypassRules...)
-	route["find_process"] = true
-
 	// 获取代理模式
 	proxyMode := s.store.GetProxyMode()
+	apiToken := strings.TrimSpace(os.Getenv("ACKWRAP_API_TOKEN"))
+	apiBaseURL := internalAPIBaseURL()
 
 	if proxyMode == "rule" {
 		// 规则模式：加载所有启用的规则
@@ -1082,14 +1791,26 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 			}
 		}
 
-		ruleOutboundOverrides := s.routeRuleOutboundOverrides()
+		ruleOutboundOverrides, err := s.routeRuleOutboundOverrides()
+		if err != nil {
+			return nil, err
+		}
 
 		for _, rule := range rules {
 			if !rule.Enabled {
 				continue
 			}
-			if outbound, ok := ruleOutboundOverrides[rule.ID]; ok && rule.Outbound != "block" {
+			if rule.RuleType == "fallback" || rule.SystemKey == SystemRuleGlobalDirectKey {
+				continue
+			}
+			if rule.Outbound == "proxy" {
+				outbound, ok := ruleOutboundOverrides[rule.ID]
+				if !ok {
+					return nil, fmt.Errorf("代理规则 %q 已启用，但未绑定启用且有效的策略组，请先完成策略组配置或停用该规则", rule.Name)
+				}
 				rule.Outbound = outbound
+			} else if rule.Outbound == "direct" {
+				rule.Outbound = rule.Name
 			}
 
 			ruleMaps, err := s.generateRouteRules(&rule)
@@ -1101,10 +1822,10 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 				routeRules = append(routeRules, ruleMap)
 			}
 			if rule.RuleType == "geoip" || rule.RuleType == "geosite" {
-				ruleSets = appendGeneratedGeoRuleSets(ruleSets, ruleSetTags, rule.RuleType, rule.Values, "http://127.0.0.1:8080")
+				ruleSets = appendGeneratedGeoRuleSets(ruleSets, ruleSetTags, rule.RuleType, rule.Values, apiBaseURL, apiToken)
 			}
 			if rule.RuleType == "mixed" {
-				ruleSets = addMixedGeneratedRuleSets(ruleSets, ruleSetTags, rule.Values, "http://127.0.0.1:8080")
+				ruleSets = addMixedGeneratedRuleSets(ruleSets, ruleSetTags, rule.Values, apiBaseURL, apiToken)
 			}
 		}
 
@@ -1122,12 +1843,30 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 				"type":   "remote",
 				"tag":    sub.Tag,
 				"format": format,
-				"url":    fmt.Sprintf("http://127.0.0.1:8080/api/v1/rules/subscriptions/%d/content", sub.ID),
+				"url":    routeRuleSubscriptionContentURL(apiBaseURL, sub.ID, apiToken),
 			}
 			ruleSets = append(ruleSets, ruleSet)
 		}
 	}
 	// 全局模式和直连模式不加载规则
+	// DNS 的 GeoSite 匹配也依赖 route.rule_set；即使不是规则模式也要注入。
+	if dnsEnabled {
+		dnsRules, err := s.store.ListDNSRules()
+		if err != nil {
+			return nil, err
+		}
+		if err := validateEnabledDNSRuleConditions(dnsRules); err != nil {
+			return nil, err
+		}
+		for _, rule := range dnsRules {
+			if !rule.Enabled {
+				continue
+			}
+			conditions := decodeDNSRuleConditions(rule.ConditionsJSON)
+			geositeValues := dnsRuleStringConditions(conditions, "geosite")
+			ruleSets = appendGeneratedGeoRuleSets(ruleSets, ruleSetTags, "geosite", geositeValues, apiBaseURL, apiToken)
+		}
+	}
 
 	route["rules"] = routeRules
 	route["rule_set"] = ruleSets
@@ -1142,15 +1881,8 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 		// 直连模式：所有流量直连
 		finalOutbound = "direct"
 	case "rule":
-		// 规则模式：未匹配规则的流量走 defaultOutbound 或 direct
-		if defaultOutbound != "" {
-			if defaultOutbound == "block" || defaultOutbound == "reject" {
-				return nil, fmt.Errorf("默认出站不能是 %s：sing-box route.final 必须引用真实 outbound tag", defaultOutbound)
-			}
-			finalOutbound = defaultOutbound
-		} else {
-			finalOutbound = "direct"
-		}
+		// 规则模式的最终策略由受保护的全球直连系统规则和 selector 承接。
+		finalOutbound = SystemGlobalDirectRouteRuleName
 	default:
 		finalOutbound = "direct"
 	}
@@ -1168,13 +1900,42 @@ func (s *ConfigGeneratorService) defaultBypassRules() ([]map[string]interface{},
 		coreBinaryPath = s.paths.BinaryPath
 	}
 	processNames := defaultBypassProcessNames(currentExecutable, coreBinaryPath)
+	bypassSettings, err := s.store.GetTrafficBypassSettings()
+	if err != nil {
+		return nil, fmt.Errorf("加载流量排除设置失败: %w", err)
+	}
+	customProcesses, _, targetCIDRs, sourceCIDRs, domainSuffixes := trafficBypassValues(bypassSettings)
+	processNames = appendUniqueStrings(processNames, customProcesses...)
 
 	rules := []map[string]interface{}{
 		{
 			"process_name": processNames,
-			"action":       "route",
+			"inbound":      []string{"tun-in"},
+			"action":       "bypass",
 			"outbound":     "direct",
 		},
+	}
+
+	if len(targetCIDRs) > 0 {
+		rules = append(rules, map[string]interface{}{
+			"ip_cidr":  targetCIDRs,
+			"action":   "bypass",
+			"outbound": "direct",
+		})
+	}
+	if len(sourceCIDRs) > 0 {
+		rules = append(rules, map[string]interface{}{
+			"source_ip_cidr": sourceCIDRs,
+			"action":         "bypass",
+			"outbound":       "direct",
+		})
+	}
+	if len(domainSuffixes) > 0 {
+		rules = append(rules, map[string]interface{}{
+			"domain_suffix": domainSuffixes,
+			"action":        "bypass",
+			"outbound":      "direct",
+		})
 	}
 
 	nodes, err := s.store.ListEnabledNodes()
@@ -1185,18 +1946,53 @@ func (s *ConfigGeneratorService) defaultBypassRules() ([]map[string]interface{},
 	if len(domains) > 0 {
 		rules = append(rules, map[string]interface{}{
 			"domain":   domains,
-			"action":   "route",
+			"action":   "bypass",
 			"outbound": "direct",
 		})
 	}
 	if len(ipCIDRs) > 0 {
 		rules = append(rules, map[string]interface{}{
 			"ip_cidr":  ipCIDRs,
-			"action":   "route",
+			"action":   "bypass",
 			"outbound": "direct",
 		})
 	}
 	return rules, nil
+}
+
+func trafficBypassValues(settings *model.TrafficBypassSettings) (processes, interfaces, targetCIDRs, sourceCIDRs, domainSuffixes []string) {
+	if settings == nil {
+		return
+	}
+	for _, rule := range settings.Rules {
+		switch rule.Type {
+		case "process_name":
+			processes = appendUniqueStrings(processes, rule.Value)
+		case "interface":
+			interfaces = appendUniqueStrings(interfaces, rule.Value)
+		case "ip_cidr":
+			targetCIDRs = appendUniqueStrings(targetCIDRs, rule.Value)
+		case "source_ip_cidr":
+			sourceCIDRs = appendUniqueStrings(sourceCIDRs, rule.Value)
+		case "domain_suffix":
+			domainSuffixes = appendUniqueStrings(domainSuffixes, rule.Value)
+		}
+	}
+	return
+}
+
+func appendUniqueStrings(values []string, additions ...string) []string {
+	seen := make(map[string]bool, len(values)+len(additions))
+	for _, value := range values {
+		seen[value] = true
+	}
+	for _, value := range additions {
+		if value != "" && !seen[value] {
+			seen[value] = true
+			values = append(values, value)
+		}
+	}
+	return values
 }
 
 func defaultBypassProcessNames(currentExecutable, coreBinaryPath string) []string {
@@ -1253,9 +2049,12 @@ func nodeServerBypassTargets(nodes []model.Node) ([]string, []string) {
 }
 
 // generateDNSFromDatabase 从数据库读取 DNS servers 和 rules 生成完整 DNS 配置
-func (s *ConfigGeneratorService) generateDNSFromDatabase() map[string]interface{} {
+func (s *ConfigGeneratorService) generateDNSFromDatabase(routeFinal ...string) (map[string]interface{}, error) {
 	// 1. 获取全局设置
-	globalSettings, _ := s.store.GetDNSGlobalSettings()
+	globalSettings, err := s.effectiveDNSGlobalSettings()
+	if err != nil {
+		return nil, fmt.Errorf("读取 DNS 全局设置失败: %w", err)
+	}
 	if globalSettings == nil {
 		globalSettings = &model.DNSGlobalSettings{
 			Enabled:          true,
@@ -1274,23 +2073,28 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase() map[string]interface{
 	}
 
 	// 2. 读取所有启用的 DNS servers
-	dnsServers, _ := s.store.ListDNSServers()
+	dnsServers, err := s.store.ListDNSServers()
+	if err != nil {
+		return nil, fmt.Errorf("读取 DNS Server 失败: %w", err)
+	}
 	servers := []map[string]interface{}{}
 	serverTags := enabledDNSServerTags(dnsServers, globalSettings.FakeIPEnabled)
+	fakeIPServerTags := map[string]bool{"fakeip": true}
+	for _, server := range dnsServers {
+		if server.ServerType == "fakeip" {
+			fakeIPServerTags[server.Tag] = true
+		}
+	}
 	bootstrapTag := selectDNSBootstrapTag(dnsServers)
 	generatedBootstrapTag := ""
-	if bootstrapTag == "" && (needsGeneratedDNSBootstrap(dnsServers, serverTags) || hasProxyDetouredDNSServer(dnsServers)) {
+	if bootstrapTag == "" {
 		generatedBootstrapTag = uniqueDNSServerTag("ackwrap-bootstrap-local", serverTags)
 		bootstrapTag = generatedBootstrapTag
 		serverTags[bootstrapTag] = true
 	}
-	hasFakeIPServer := false
 	for _, srv := range dnsServers {
-		if !srv.Enabled {
+		if !srv.Enabled || srv.ServerType == "fakeip" {
 			continue
-		}
-		if srv.Tag == "fakeip" {
-			hasFakeIPServer = true
 		}
 		server := map[string]interface{}{
 			"tag":  srv.Tag,
@@ -1299,9 +2103,9 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase() map[string]interface{
 		serverIsDomain := applyDNSServerAddress(server, srv.ServerType, srv.Address)
 		if serverIsDomain {
 			resolver := srv.AddressResolver
-			if !serverTags[resolver] || resolver == srv.Tag {
+			if resolver == srv.Tag || !isSafeDNSBootstrapTag(resolver, dnsServers) {
 				if resolver != "" {
-					logging.Info("config_generator.dns", "DNS server %s 跳过无效 address_resolver: %s", srv.Tag, resolver)
+					logging.Info("config_generator.dns", "DNS server %s 跳过不安全的 address_resolver: %s", srv.Tag, resolver)
 				}
 				resolver = bootstrapTag
 			}
@@ -1315,7 +2119,10 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase() map[string]interface{
 		if srv.Strategy != "" {
 			server["strategy"] = srv.Strategy
 		}
-		if srv.Detour != "" && srv.Detour != "direct" && srv.Detour != "block" && srv.Detour != "reject" {
+		if err := validateDNSServerDetour(srv.Detour); err != nil {
+			return nil, fmt.Errorf("DNS Server %s 配置无效: %w", srv.Tag, err)
+		}
+		if srv.Detour != "" && srv.Detour != "direct" {
 			server["detour"] = srv.Detour
 		}
 		if srv.ClientSubnet != "" {
@@ -1324,10 +2131,17 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase() map[string]interface{
 		// 合并 options_json 中的额外选项
 		if srv.OptionsJSON != "" && srv.OptionsJSON != "{}" {
 			var options map[string]interface{}
-			if json.Unmarshal([]byte(srv.OptionsJSON), &options) == nil {
-				for k, v := range options {
-					server[k] = v
-				}
+			if err := json.Unmarshal([]byte(srv.OptionsJSON), &options); err != nil {
+				return nil, fmt.Errorf("DNS Server %s options_json 无效", srv.Tag)
+			}
+			if options == nil {
+				options = make(map[string]interface{})
+			}
+			if err := validateDNSServerOptions(options); err != nil {
+				return nil, fmt.Errorf("DNS Server %s 配置无效: %w", srv.Tag, err)
+			}
+			for k, v := range options {
+				server[k] = v
 			}
 		}
 		delete(server, "address_resolver")
@@ -1340,7 +2154,36 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase() map[string]interface{
 			"type": "local",
 		})
 	}
-	if globalSettings.FakeIPEnabled && !hasFakeIPServer {
+	// 3. 读取显式 DNS 规则。旧版纯 outbound 策略绑定保留在数据库中，
+	// 但不再参与配置生成，避免每个业务策略复制一套本地 DNS。
+	dnsRules, err := s.store.ListDNSRules()
+	if err != nil {
+		return nil, fmt.Errorf("读取 DNS 规则失败: %w", err)
+	}
+	if err := validateEnabledDNSRuleConditions(dnsRules); err != nil {
+		return nil, err
+	}
+	finalOutbound := ""
+	if len(routeFinal) > 0 {
+		finalOutbound = routeFinal[0]
+	}
+	proxyFinalRequired, err := s.dnsNeedsProxyFinal(finalOutbound)
+	if err != nil {
+		return nil, err
+	}
+	proxyFinalServer := ""
+	if proxyFinalRequired {
+		generatedServer, finalServer, err := generateProxyDNSFinal(globalSettings.Final, servers, serverTags)
+		if err != nil {
+			return nil, err
+		}
+		if generatedServer != nil {
+			servers = append(servers, generatedServer)
+		}
+		proxyFinalServer = finalServer
+	}
+
+	if globalSettings.FakeIPEnabled {
 		fakeIP := map[string]interface{}{
 			"tag":  "fakeip",
 			"type": "fakeip",
@@ -1355,56 +2198,49 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase() map[string]interface{
 	}
 	if len(servers) == 0 {
 		logging.Info("config_generator.dns", "没有启用的 DNS server，跳过 DNS 配置")
-		return nil
+		return nil, nil
 	}
 
-	// 3. 读取所有启用的 DNS rules
-	dnsRules, _ := s.store.ListDNSRules()
+	// 4. 显式规则用于国内、局域网等真实 IP 例外。TUN 客户端未命中的
+	// A/AAAA 查询随后使用 FakeIP；其他查询进入统一 DNS final。
 	rules := []map[string]interface{}{}
 	for _, rule := range dnsRules {
 		if !rule.Enabled {
+			continue
+		}
+		if fakeIPServerTags[rule.Server] {
+			logging.Info("config_generator.dns", "忽略旧版显式 FakeIP DNS 规则: %d", rule.ID)
 			continue
 		}
 		if !serverTags[rule.Server] {
 			logging.Info("config_generator.dns", "跳过引用无效 DNS server 的规则: %s", rule.Server)
 			continue
 		}
-		conditions := decodeDNSRuleConditions(rule.ConditionsJSON)
+		conditions := normalizeDNSRuleConditions(decodeDNSRuleConditions(rule.ConditionsJSON))
 		if _, hasOutbound := conditions["outbound"]; hasOutbound {
-			// DNS rule outbound matching was deprecated in sing-box 1.12 and is generated
-			// as outbound domain_resolver instead.
-			delete(conditions, "outbound")
+			logging.Info("config_generator.dns", "忽略旧版策略 DNS 绑定规则: %d", rule.ID)
+			continue
 		}
 		if len(conditions) == 0 {
 			continue
 		}
-		ruleMap := map[string]interface{}{
-			"server": rule.Server,
-		}
-		for k, v := range conditions {
-			ruleMap[k] = v
-		}
-		if rule.DisableCache {
-			ruleMap["disable_cache"] = true
-		}
-		if rule.RewriteTTL > 0 {
-			ruleMap["rewrite_ttl"] = rule.RewriteTTL
-		}
-		if rule.ClientSubnet != "" {
-			ruleMap["client_subnet"] = rule.ClientSubnet
-		}
-		rules = append(rules, ruleMap)
+		rules = append(rules, dnsRuleMap(conditions, &rule))
 	}
 	if globalSettings.FakeIPEnabled {
-		rules = append([]map[string]interface{}{{
+		rules = append(rules, map[string]interface{}{
+			"inbound":    []string{"tun-in"},
 			"query_type": []string{"A", "AAAA"},
 			"server":     "fakeip",
-		}}, rules...)
+		})
 	}
 
-	// 4. 组装完整 DNS 配置
+	// 5. 代理模式存在非直连路由时，所有未命中显式例外的真实查询统一经
+	// proxy 出站，代理不可用时由出站与 detour 校验 fail closed。
 	finalServer := globalSettings.Final
-	if !serverTags[finalServer] {
+	if proxyFinalRequired {
+		finalServer = proxyFinalServer
+	}
+	if fakeIPServerTags[finalServer] || !serverTags[finalServer] {
 		finalServer = servers[0]["tag"].(string)
 		logging.Info("config_generator.dns", "DNS final 引用无效，回退到: %s", finalServer)
 	}
@@ -1426,7 +2262,79 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase() map[string]interface{
 	}
 
 	logging.Info("config_generator.dns", "生成 DNS 配置: %d servers, %d rules", len(servers), len(rules))
-	return dns
+	return dns, nil
+}
+
+func dnsRuleMap(conditions map[string]interface{}, settings *model.DNSRule) map[string]interface{} {
+	ruleMap := map[string]interface{}{"server": settings.Server}
+	for key, value := range conditions {
+		ruleMap[key] = value
+	}
+	if settings.DisableCache {
+		ruleMap["disable_cache"] = true
+	}
+	if settings.RewriteTTL > 0 {
+		ruleMap["rewrite_ttl"] = settings.RewriteTTL
+	}
+	if settings.ClientSubnet != "" {
+		ruleMap["client_subnet"] = settings.ClientSubnet
+	}
+	return ruleMap
+}
+
+func generateProxyDNSFinal(preferred string, servers []map[string]interface{}, serverTags map[string]bool) (map[string]interface{}, string, error) {
+	baseTag := strategyDNSFallbackServerTag(preferred, servers)
+	if baseTag == "" {
+		return nil, "", fmt.Errorf("DNS 防泄漏没有可用远程 Server，请启用 udp/tcp/tls/https/quic/h3 DNS")
+	}
+	for _, server := range servers {
+		if server["tag"] != baseTag {
+			continue
+		}
+		if server["detour"] == "proxy" {
+			return nil, baseTag, nil
+		}
+		tag := uniqueDNSServerTag("ackwrap-proxy-dns", serverTags)
+		serverTags[tag] = true
+		clone := make(map[string]interface{}, len(server))
+		for key, value := range server {
+			clone[key] = value
+		}
+		clone["tag"] = tag
+		clone["detour"] = "proxy"
+		logging.Info("config_generator.dns", "使用 %s 生成统一代理 DNS final", baseTag)
+		return clone, tag, nil
+	}
+	return nil, "", fmt.Errorf("DNS 防泄漏 Server %s 未生成", baseTag)
+}
+
+func isStrategyDNSRemoteType(serverType string) bool {
+	switch serverType {
+	case "udp", "tcp", "tls", "https", "quic", "h3":
+		return true
+	default:
+		return false
+	}
+}
+
+func strategyDNSFallbackServerTag(preferred string, servers []map[string]interface{}) string {
+	for _, server := range servers {
+		if server["tag"] != preferred {
+			continue
+		}
+		serverType, _ := server["type"].(string)
+		if isStrategyDNSRemoteType(serverType) {
+			return preferred
+		}
+		break
+	}
+	for _, server := range servers {
+		serverType, _ := server["type"].(string)
+		if tag, _ := server["tag"].(string); tag != "" && isStrategyDNSRemoteType(serverType) {
+			return tag
+		}
+	}
+	return ""
 }
 
 func applyDNSServerAddress(server map[string]interface{}, serverType, address string) bool {
@@ -1467,38 +2375,31 @@ func isRemoteDNSServerType(serverType string) bool {
 
 func selectDNSBootstrapTag(servers []model.DNSServer) string {
 	for _, server := range servers {
-		if !server.Enabled || server.Tag == "" || (server.Detour != "" && server.Detour != "direct") {
-			continue
-		}
-		if server.ServerType == "local" {
+		if isSafeDNSBootstrapTag(server.Tag, servers) {
 			return server.Tag
-		}
-		config := make(map[string]interface{})
-		if isRemoteDNSServerType(server.ServerType) && !applyDNSServerAddress(config, server.ServerType, server.Address) {
-			if _, ok := config["server"]; ok {
-				return server.Tag
-			}
 		}
 	}
 	return ""
 }
 
-func safeNodeResolverTag(requested string, servers []model.DNSServer, tags map[string]bool) string {
+func isSafeDNSBootstrapTag(tag string, servers []model.DNSServer) bool {
+	if tag == "" {
+		return false
+	}
 	for _, server := range servers {
-		if server.Enabled && server.Tag == requested {
-			if server.Detour == "" || server.Detour == "direct" {
-				return requested
-			}
-			break
+		if !server.Enabled || server.Tag != tag || (server.Detour != "" && server.Detour != "direct") {
+			continue
+		}
+		if server.ServerType == "local" {
+			return true
+		}
+		config := make(map[string]interface{})
+		if isRemoteDNSServerType(server.ServerType) && !applyDNSServerAddress(config, server.ServerType, server.Address) {
+			_, exists := config["server"]
+			return exists
 		}
 	}
-	if bootstrapTag := selectDNSBootstrapTag(servers); bootstrapTag != "" {
-		return bootstrapTag
-	}
-	if requested != "" && tags[requested] {
-		return uniqueDNSServerTag("ackwrap-bootstrap-local", tags)
-	}
-	return ""
+	return false
 }
 
 func needsGeneratedDNSBootstrap(servers []model.DNSServer, tags map[string]bool) bool {
@@ -1539,18 +2440,46 @@ func uniqueDNSServerTag(base string, tags map[string]bool) string {
 }
 
 func decodeDNSRuleConditions(raw string) map[string]interface{} {
-	conditions := make(map[string]interface{})
-	if raw == "" || raw == "{}" {
-		return conditions
-	}
-	if err := json.Unmarshal([]byte(raw), &conditions); err != nil {
+	conditions, err := parseDNSRuleConditions(raw)
+	if err != nil {
 		return map[string]interface{}{}
 	}
 	return conditions
 }
 
-func dnsRuleOutboundConditions(conditions map[string]interface{}) []string {
-	value, ok := conditions["outbound"]
+func parseDNSRuleConditions(raw string) (map[string]interface{}, error) {
+	if strings.TrimSpace(raw) == "" || strings.TrimSpace(raw) == "{}" {
+		return make(map[string]interface{}), nil
+	}
+	conditions := make(map[string]interface{})
+	if err := json.Unmarshal([]byte(raw), &conditions); err != nil {
+		return nil, err
+	}
+	if conditions == nil {
+		return nil, fmt.Errorf("必须是 JSON 对象")
+	}
+	return conditions, nil
+}
+
+func validateEnabledDNSRuleConditions(rules []model.DNSRule) error {
+	for _, rule := range rules {
+		if !rule.Enabled {
+			continue
+		}
+		if _, err := parseDNSRuleConditions(rule.ConditionsJSON); err != nil {
+			return fmt.Errorf("DNS 规则 %d conditions_json 无效: %w", rule.ID, err)
+		}
+	}
+	return nil
+}
+
+func dnsRuleHasOutboundCondition(conditions map[string]interface{}) bool {
+	_, exists := conditions["outbound"]
+	return exists
+}
+
+func dnsRuleStringConditions(conditions map[string]interface{}, key string) []string {
+	value, ok := conditions[key]
 	if !ok {
 		return nil
 	}
@@ -1575,8 +2504,34 @@ func dnsRuleOutboundConditions(conditions map[string]interface{}) []string {
 	}
 }
 
+func normalizeDNSRuleConditions(conditions map[string]interface{}) map[string]interface{} {
+	geositeValues := dnsRuleStringConditions(conditions, "geosite")
+	if _, exists := conditions["geosite"]; !exists {
+		return conditions
+	}
+	delete(conditions, "geosite")
+	if len(geositeValues) == 0 {
+		return conditions
+	}
+
+	ruleSets := dnsRuleStringConditions(conditions, "rule_set")
+	seen := make(map[string]bool, len(ruleSets)+len(geositeValues))
+	combined := make([]string, 0, len(ruleSets)+len(geositeValues))
+	for _, tag := range append(ruleSets, generatedGeoRuleSetTags("geosite", geositeValues)...) {
+		if tag == "" || seen[tag] {
+			continue
+		}
+		seen[tag] = true
+		combined = append(combined, tag)
+	}
+	if len(combined) > 0 {
+		conditions["rule_set"] = combined
+	}
+	return conditions
+}
+
 func (s *ConfigGeneratorService) defaultDomainResolver() map[string]interface{} {
-	settings, err := s.store.GetDNSGlobalSettings()
+	settings, err := s.effectiveDNSGlobalSettings()
 	if err != nil || settings == nil || !settings.Enabled || settings.Final == "" {
 		return nil
 	}
@@ -1599,19 +2554,11 @@ func selectDefaultDomainResolver(settings *model.DNSGlobalSettings, servers []mo
 	if settings == nil || !settings.Enabled {
 		return ""
 	}
+	if bootstrapTag := selectDNSBootstrapTag(servers); bootstrapTag != "" {
+		return bootstrapTag
+	}
 	tags := enabledDNSServerTags(servers, settings.FakeIPEnabled)
-	if tags[settings.Final] {
-		return settings.Final
-	}
-	for _, server := range servers {
-		if server.Enabled && server.Tag != "" {
-			return server.Tag
-		}
-	}
-	if settings.FakeIPEnabled {
-		return "fakeip"
-	}
-	return ""
+	return uniqueDNSServerTag("ackwrap-bootstrap-local", tags)
 }
 
 func (s *ConfigGeneratorService) enabledRouteRuleSubscriptionTags() map[string]bool {
@@ -1628,29 +2575,26 @@ func (s *ConfigGeneratorService) enabledRouteRuleSubscriptionTags() map[string]b
 	return tags
 }
 
-func (s *ConfigGeneratorService) routeRuleOutboundOverrides() map[int64]string {
+func (s *ConfigGeneratorService) routeRuleOutboundOverrides() (map[int64]string, error) {
 	overrides := make(map[int64]string)
 	collections, err := s.store.ListProxyCollectionsWithNodes()
 	if err != nil {
-		logging.Info("config_generator.route", "读取策略组规则绑定失败: %v", err)
-		return overrides
+		return nil, fmt.Errorf("读取策略组规则绑定失败: %w", err)
+	}
+	rules, err := s.store.ListRouteRules()
+	if err != nil {
+		return nil, fmt.Errorf("读取策略组关联规则失败: %w", err)
+	}
+	collections, err = effectiveRouteStrategyCollections(collections, rules, false)
+	if err != nil {
+		return nil, err
 	}
 	for _, collection := range collections {
-		if !collection.Enabled {
-			continue
-		}
-		for _, ruleID := range collection.RouteRuleIDs {
-			if ruleID <= 0 {
-				continue
-			}
-			if _, exists := overrides[ruleID]; exists {
-				logging.Info("config_generator.route", "规则 %d 绑定多个策略组，保留第一个策略组", ruleID)
-				continue
-			}
-			overrides[ruleID] = collection.Name
+		if collection.RouteRuleID > 0 {
+			overrides[collection.RouteRuleID] = collection.Name
 		}
 	}
-	return overrides
+	return overrides, nil
 }
 
 // generateRouteRule 生成单条路由规则
@@ -1686,26 +2630,55 @@ func (s *ConfigGeneratorService) validateConfig(configPath string) (bool, string
 	return true, ""
 }
 
-// Apply 应用配置
-func (s *ConfigGeneratorService) Apply(restartCore bool) error {
+// Apply 将最近生成并校验通过的配置保存为命名文件并设为当前配置。
+func (s *ConfigGeneratorService) Apply(fileName string, restartCore bool) error {
+	fileName, err := normalizeConfigFileName(fileName)
+	if err != nil {
+		return err
+	}
 	s.configMu.Lock()
 	defer s.configMu.Unlock()
-	return s.applyLocked(restartCore)
+	return s.applyLocked(fileName, restartCore)
 }
 
-func (s *ConfigGeneratorService) applyLocked(restartCore bool) error {
+func (s *ConfigGeneratorService) applyLocked(fileName string, restartCore bool) error {
 	configFileMu.Lock()
-	defer configFileMu.Unlock()
+	err := s.applyConfigFileLocked(fileName)
+	configFileMu.Unlock()
+	if err != nil {
+		return err
+	}
 
-	logging.Info("config_generator.apply", "应用配置，重启核心: %v", restartCore)
+	if restartCore && s.singbox != nil {
+		if _, err := s.singbox.ReloadConfig(); err != nil {
+			return fmt.Errorf("配置已应用，但重载核心失败: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func (s *ConfigGeneratorService) applyConfigFileLocked(fileName string) error {
+
+	logging.Info("config_generator.apply", "应用配置，文件名: %s", fileName)
 
 	tmpPath := filepath.Join(s.paths.DataDir, "config.tmp.json")
-	targetPath, exists, err := s.paths.ActiveConfigPath()
-	if err != nil {
-		return fmt.Errorf("获取配置路径失败: %w", err)
+	if err := os.MkdirAll(s.paths.ConfigDir, 0755); err != nil {
+		return fmt.Errorf("创建配置目录失败: %w", err)
 	}
-	if !exists {
-		targetPath = s.paths.ConfigPath
+	targetPath := ""
+	if fileName != "" {
+		targetPath = filepath.Join(s.paths.ConfigDir, fileName)
+	} else {
+		var exists bool
+		var err error
+		targetPath, exists, err = s.paths.ActiveConfigPath()
+		if err != nil {
+			return fmt.Errorf("获取配置路径失败: %w", err)
+		}
+		if !exists {
+			targetPath = s.paths.ConfigPath
+		}
 	}
 
 	// 1. 检查临时配置是否存在
@@ -1733,19 +2706,23 @@ func (s *ConfigGeneratorService) applyLocked(restartCore bool) error {
 
 	// 3. 先复制旧配置作为备份，再原子替换正式配置。
 	// 替换失败时原配置仍位于正式路径，不需要二次回滚。
-	backupPath := ""
 	if _, err := os.Stat(targetPath); err == nil {
-		backupPath = filepath.Join(s.paths.ConfigDir, fmt.Sprintf("config.backup.%d.json", time.Now().UnixNano()))
-		if err := copyFile(targetPath, backupPath); err != nil {
+		backup, created, err := ensureDailyConfigBackup(s.paths, s.store, targetPath, time.Now())
+		if err != nil {
 			return fmt.Errorf("备份当前配置失败: %w", err)
 		}
-		logging.Info("config_generator.apply", "配置已备份到: %s", backupPath)
+		if created {
+			logging.Info("config_generator.apply", "已创建今日配置备份: %s", backup.FileName)
+		}
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("检查当前配置失败: %w", err)
 	}
 
 	if err := atomicReplaceFile(stagedPath, targetPath); err != nil {
 		return fmt.Errorf("应用配置失败，旧配置保持不变: %w", err)
+	}
+	if err := writeActiveConfigMarker(s.paths, targetPath); err != nil {
+		return fmt.Errorf("配置已保存，但设置为当前配置失败: %w", err)
 	}
 
 	logging.Info("config_generator.apply", "配置已应用到: %s", targetPath)
@@ -1755,26 +2732,72 @@ func (s *ConfigGeneratorService) applyLocked(restartCore bool) error {
 		logging.Info("config_generator.apply", "删除临时配置失败: %v", err)
 	}
 
-	if restartCore && s.singbox != nil {
-		if _, err := s.singbox.ReloadConfig(); err != nil {
-			return fmt.Errorf("配置已应用，但重载核心失败: %w", err)
-		}
-	}
-
 	return nil
 }
 
+func normalizeConfigFileName(fileName string) (string, error) {
+	fileName = strings.TrimSpace(fileName)
+	if fileName == "" {
+		return "", fmt.Errorf("%w: 文件名不能为空", ErrInvalidConfigFileName)
+	}
+	if filepath.Ext(fileName) == "" {
+		fileName += ".json"
+	}
+	if len([]rune(fileName)) > 128 || filepath.Base(fileName) != fileName || strings.IndexFunc(fileName, unicode.IsControl) >= 0 ||
+		strings.ContainsAny(fileName, `<>:"/\|?*`) || !strings.EqualFold(filepath.Ext(fileName), ".json") {
+		return "", fmt.Errorf("%w: 仅支持配置目录内的 .json 文件", ErrInvalidConfigFileName)
+	}
+	extension := filepath.Ext(fileName)
+	stem := strings.TrimSuffix(fileName, extension)
+	if stem == "" || strings.HasSuffix(stem, ".") || strings.HasSuffix(stem, " ") {
+		return "", fmt.Errorf("%w: 文件名格式不正确", ErrInvalidConfigFileName)
+	}
+	reservedStem := strings.ToUpper(strings.SplitN(stem, ".", 2)[0])
+	if reservedStem == "CON" || reservedStem == "PRN" || reservedStem == "AUX" || reservedStem == "NUL" ||
+		(len(reservedStem) == 4 && (strings.HasPrefix(reservedStem, "COM") || strings.HasPrefix(reservedStem, "LPT")) && reservedStem[3] >= '1' && reservedStem[3] <= '9') {
+		return "", fmt.Errorf("%w: 文件名为系统保留名称", ErrInvalidConfigFileName)
+	}
+	fileName = stem + ".json"
+	if paths.IsConfigBackupName(fileName) {
+		return "", fmt.Errorf("%w: 文件名不能使用备份格式", ErrInvalidConfigFileName)
+	}
+	return fileName, nil
+}
+
+func writeActiveConfigMarker(p *paths.Paths, targetPath string) error {
+	markerFile, err := os.CreateTemp(p.ConfigDir, ".active-config-*.tmp")
+	if err != nil {
+		return err
+	}
+	markerPath := markerFile.Name()
+	defer os.Remove(markerPath)
+	if _, err := markerFile.WriteString(filepath.Base(targetPath)); err != nil {
+		markerFile.Close()
+		return err
+	}
+	if err := markerFile.Close(); err != nil {
+		return err
+	}
+	return atomicReplaceFile(markerPath, p.ActiveConfigMarkerPath())
+}
+
 // generateInbounds 生成入站配置
-func (s *ConfigGeneratorService) generateInbounds(listen string, port int) []interface{} {
+func (s *ConfigGeneratorService) generateInbounds(listen string, port int, tunIPv4Address, tunIPv6Address string) ([]interface{}, error) {
 	if listen == "" {
-		listen = "127.0.0.1"
+		listen = "0.0.0.0"
 	}
 	if port == 0 {
-		port = 7890
+		port = model.DefaultMixedInboundPort
 	}
 
 	// 获取运行模式设置
 	mode := s.store.GetInboundMode()
+	autoRedirect := runtime.GOOS == "linux"
+	bypassSettings, err := s.store.GetTrafficBypassSettings()
+	if err != nil {
+		return nil, fmt.Errorf("加载流量排除设置失败: %w", err)
+	}
+	_, excludedInterfaces, excludedCIDRs, _, _ := trafficBypassValues(bypassSettings)
 
 	var inbounds []interface{}
 
@@ -1782,15 +2805,7 @@ func (s *ConfigGeneratorService) generateInbounds(listen string, port int) []int
 	case "tun":
 		// 纯 TUN 模式
 		inbounds = []interface{}{
-			map[string]interface{}{
-				"type":           "tun",
-				"tag":            "tun-in",
-				"interface_name": "tun0",
-				"address":        []string{"172.19.0.1/30"},
-				"auto_route":     true,
-				"strict_route":   true,
-				"stack":          "system",
-			},
+			generatedTUNInbound(autoRedirect, tunIPv4Address, tunIPv6Address, excludedInterfaces, excludedCIDRs),
 		}
 	case "mixed":
 		// 纯 Mixed 模式
@@ -1807,15 +2822,7 @@ func (s *ConfigGeneratorService) generateInbounds(listen string, port int) []int
 	default:
 		// TUN + Mixed 双模式（默认）
 		inbounds = []interface{}{
-			map[string]interface{}{
-				"type":           "tun",
-				"tag":            "tun-in",
-				"interface_name": "tun0",
-				"address":        []string{"172.19.0.1/30"},
-				"auto_route":     true,
-				"strict_route":   true,
-				"stack":          "system",
-			},
+			generatedTUNInbound(autoRedirect, tunIPv4Address, tunIPv6Address, excludedInterfaces, excludedCIDRs),
 			map[string]interface{}{
 				"type":        "mixed",
 				"tag":         "mixed-in",
@@ -1824,8 +2831,96 @@ func (s *ConfigGeneratorService) generateInbounds(listen string, port int) []int
 			},
 		}
 	}
+	if autoRedirect && (mode == "tun" || mode == "tun_mixed") {
+		logging.Info("config_generator.inbound", "Linux TUN 已启用 auto_redirect，由 sing-box 管理 nftables/OpenWrt fw4 兼容规则")
+	}
 
-	return inbounds
+	return inbounds, nil
+}
+
+func generatedTUNInbound(autoRedirect bool, tunIPv4Address, tunIPv6Address string, excludedInterfaces, excludedCIDRs []string) map[string]interface{} {
+	inbound := map[string]interface{}{
+		"type":           "tun",
+		"tag":            "tun-in",
+		"interface_name": "tun0",
+		"address":        []string{tunIPv4Address, tunIPv6Address},
+		"auto_route":     true,
+		"strict_route":   true,
+		"stack":          "system",
+	}
+	if len(excludedInterfaces) > 0 {
+		inbound["exclude_interface"] = excludedInterfaces
+	}
+	if len(excludedCIDRs) > 0 {
+		inbound["route_exclude_address"] = excludedCIDRs
+	}
+	if autoRedirect {
+		inbound["auto_redirect"] = true
+		inbound["iproute2_table_index"] = defaultIPRoute2TableIndex
+		inbound["iproute2_rule_index"] = defaultIPRoute2RuleIndex
+		inbound["auto_redirect_iproute2_fallback_rule_index"] = defaultFallbackRuleIndex
+		inbound["auto_redirect_output_mark"] = fmt.Sprintf("0x%x", defaultAutoRedirectMark)
+	}
+	return inbound
+}
+
+func normalizeTUNAddresses(ipv4Address, ipv6Address string) (string, string, error) {
+	if strings.TrimSpace(ipv4Address) == previousDefaultTUNIPv4 {
+		ipv4Address = defaultTUNIPv4Address
+	}
+	if strings.TrimSpace(ipv6Address) == previousDefaultTUNIPv6 {
+		ipv6Address = defaultTUNIPv6Address
+	}
+	normalizedIPv4, err := normalizeTUNAddress(ipv4Address, defaultTUNIPv4Address, false)
+	if err != nil {
+		return "", "", fmt.Errorf("TUN IPv4 地址无效: %w", err)
+	}
+	normalizedIPv6, err := normalizeTUNAddress(ipv6Address, defaultTUNIPv6Address, true)
+	if err != nil {
+		return "", "", fmt.Errorf("TUN IPv6 地址无效: %w", err)
+	}
+	return normalizedIPv4, normalizedIPv6, nil
+}
+
+func normalizeTUNAddress(value, fallback string, ipv6 bool) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		value = fallback
+	}
+	ip, network, err := net.ParseCIDR(value)
+	if err != nil {
+		return "", fmt.Errorf("必须使用 CIDR 格式")
+	}
+	ones, bits := network.Mask.Size()
+	if ipv6 {
+		if bits != net.IPv6len*8 || ip.To4() != nil {
+			return "", fmt.Errorf("必须是 IPv6 地址")
+		}
+	} else {
+		if bits != net.IPv4len*8 {
+			return "", fmt.Errorf("必须是 IPv4 地址")
+		}
+		ip = ip.To4()
+		if ip == nil {
+			return "", fmt.Errorf("必须是 IPv4 地址")
+		}
+	}
+	if ip.IsUnspecified() || ip.IsLoopback() || ip.IsMulticast() {
+		return "", fmt.Errorf("不能使用未指定、回环或组播地址")
+	}
+	if ones < bits && ip.Equal(network.IP) {
+		return "", fmt.Errorf("必须填写网段内的主机地址，不能使用网段地址")
+	}
+	if !ipv6 && ones < 31 {
+		broadcast := append(net.IP(nil), network.IP...)
+		for i := range broadcast {
+			broadcast[i] |= ^network.Mask[i]
+		}
+		if ip.Equal(broadcast) {
+			return "", fmt.Errorf("必须填写网段内的主机地址，不能使用广播地址")
+		}
+	}
+	return fmt.Sprintf("%s/%d", ip.String(), ones), nil
 }
 
 // Preview 预览生成的配置
@@ -1852,19 +2947,28 @@ func (s *ConfigGeneratorService) Preview(defaultOutbound string) (map[string]int
 	if err != nil {
 		return nil, err
 	}
+	if !resp.Valid {
+		message := strings.TrimSpace(resp.Error)
+		if message == "" {
+			message = "未知校验错误"
+		}
+		return nil, fmt.Errorf("配置预览未通过 sing-box 校验: %s", message)
+	}
 	return resp.Config, nil
 }
 
 func (s *ConfigGeneratorService) previewRequest(defaultOutbound string) (*model.ConfigGenerateRequest, error) {
-	stored, err := s.store.GetConfigGenerateRequest()
+	stored, err := s.loadConfigGenerateRequest()
 	if err != nil {
-		return nil, fmt.Errorf("读取配置生成参数失败: %w", err)
+		return nil, err
 	}
 	if stored == nil {
 		stored = &model.ConfigGenerateRequest{
-			DefaultOutbound: "proxy",
-			InboundListen:   "127.0.0.1",
-			InboundPort:     7890,
+			DefaultOutbound: "direct",
+			InboundListen:   "0.0.0.0",
+			InboundPort:     model.DefaultMixedInboundPort,
+			TUNIPv4Address:  defaultTUNIPv4Address,
+			TUNIPv6Address:  defaultTUNIPv6Address,
 			LogLevel:        s.store.GetLogLevel(),
 		}
 	}
@@ -1881,7 +2985,7 @@ func (s *ConfigGeneratorService) writeConfigFile(path string, config map[string]
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+	return os.WriteFile(path, data, 0600)
 }
 
 func copyFile(src, dst string) error {
@@ -1889,5 +2993,5 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(dst, data, 0644)
+	return os.WriteFile(dst, data, 0600)
 }
