@@ -169,6 +169,43 @@ func TestSingboxRedirectRouteTableRequiresOnlyLoopbackLocalRoutes(t *testing.T) 
 	}
 }
 
+func TestParseRouteTableSnapshotFindsOnlyNumericTables(t *testing.T) {
+	snapshot := parseRouteTableSnapshot(`local 127.0.0.1 dev lo table 2751636479 proto kernel scope host src 127.0.0.1
+default via 192.0.2.1 dev eth0 table main
+local ::1 dev lo table 2751636479 proto kernel metric 0 pref medium
+local 192.0.2.2 dev eth0 table 100 proto kernel scope host
+`)
+
+	if !snapshot.has("2751636479") || !snapshot.has("100") {
+		t.Fatalf("numeric route tables were not detected: %v", snapshot)
+	}
+	if snapshot.has("main") || snapshot.has("718677876") {
+		t.Fatalf("unexpected route table detected: %v", snapshot)
+	}
+}
+
+func TestPlanRouteTableCleanupSkipsMissingRecordedTable(t *testing.T) {
+	rules := parseIPRuleSnapshot("1: from all lookup 718677876")
+	actions := planRouteTableCleanup(rules, routeTableSnapshot{}, []string{"718677876"})
+	want := []routeTableCleanupAction{{table: "718677876", deleteRule: true, flushTable: false}}
+	if !reflect.DeepEqual(actions, want) {
+		t.Fatalf("cleanup actions = %#v, want %#v", actions, want)
+	}
+}
+
+func TestPlanRouteTableCleanupFlushesOnlyRecordedExistingTables(t *testing.T) {
+	rules := parseIPRuleSnapshot("1: from all lookup 100")
+	existing := routeTableSnapshot{"100": {}, "200": {}}
+	actions := planRouteTableCleanup(rules, existing, []string{"100", "300"})
+	want := []routeTableCleanupAction{
+		{table: "100", deleteRule: true, flushTable: true},
+		{table: "300", deleteRule: false, flushTable: false},
+	}
+	if !reflect.DeepEqual(actions, want) {
+		t.Fatalf("cleanup actions = %#v, want %#v", actions, want)
+	}
+}
+
 func TestHasSingboxNFTTableMatchesExactTable(t *testing.T) {
 	if !hasSingboxNFTTable("table inet fw4\ntable   inet   sing-box\n") {
 		t.Fatal("expected exact sing-box nftables table")

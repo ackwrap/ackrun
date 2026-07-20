@@ -84,6 +84,48 @@ type ipRuleSnapshot struct {
 	lines map[int][]string
 }
 
+type routeTableSnapshot map[string]struct{}
+
+func parseRouteTableSnapshot(output string) routeTableSnapshot {
+	snapshot := make(routeTableSnapshot)
+	for line := range strings.SplitSeq(output, "\n") {
+		fields := strings.Fields(line)
+		for index := 0; index+1 < len(fields); index++ {
+			if fields[index] != "table" {
+				continue
+			}
+			table := fields[index+1]
+			if value, err := strconv.ParseUint(table, 10, 32); err == nil && value != 0 {
+				snapshot[table] = struct{}{}
+			}
+		}
+	}
+	return snapshot
+}
+
+func (snapshot routeTableSnapshot) has(table string) bool {
+	_, exists := snapshot[table]
+	return exists
+}
+
+type routeTableCleanupAction struct {
+	table      string
+	deleteRule bool
+	flushTable bool
+}
+
+func planRouteTableCleanup(rules ipRuleSnapshot, existing routeTableSnapshot, recorded []string) []routeTableCleanupAction {
+	actions := make([]routeTableCleanupAction, 0, len(recorded))
+	for _, table := range recorded {
+		actions = append(actions, routeTableCleanupAction{
+			table:      table,
+			deleteRule: rules.hasExactPriorityOneLookupTable(table),
+			flushTable: existing.has(table),
+		})
+	}
+	return actions
+}
+
 func parseIPRuleSnapshot(output string) ipRuleSnapshot {
 	snapshot := ipRuleSnapshot{lines: make(map[int][]string)}
 	for line := range strings.SplitSeq(output, "\n") {

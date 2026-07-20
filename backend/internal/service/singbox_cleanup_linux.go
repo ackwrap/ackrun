@@ -75,6 +75,10 @@ func cleanupPlatformSingboxState(statePath string) (platformCleanupResult, error
 	if err != nil {
 		return platformCleanupResult{}, err
 	}
+	ipv4Tables, ipv6Tables, err := readPlatformRouteTableSnapshots(ipPath, ownershipState.ExpectIPv4, ownershipState.ExpectIPv6)
+	if err != nil {
+		return platformCleanupResult{}, err
+	}
 	currentNFTHandle, nftTablePresent, err := currentSingboxNFTTableHandle(nftPath)
 	if err != nil {
 		return platformCleanupResult{}, err
@@ -90,7 +94,7 @@ func cleanupPlatformSingboxState(statePath string) (platformCleanupResult, error
 	if err := validateRecordedNFTTable(effectiveState.NFTTableHandle, currentNFTHandle, nftTablePresent); err != nil {
 		return platformCleanupResult{}, err
 	}
-	if err := validateOwnedRouteTables(ipPath, ipv4Rules, ipv6Rules, effectiveState); err != nil {
+	if err := validateOwnedRouteTables(ipPath, ipv4Tables, ipv6Tables, effectiveState); err != nil {
 		return platformCleanupResult{}, err
 	}
 	if err := validatePriorityOneRuleDeletions(ipv4Rules, effectiveState.IPv4Tables); err != nil {
@@ -141,8 +145,8 @@ func cleanupPlatformSingboxState(statePath string) (platformCleanupResult, error
 			cleanupErrors = append(cleanupErrors, cleanupCommandError("reload fw4", output, commandErr))
 		}
 	}
-	cleanupErrors = append(cleanupErrors, cleanupIPRuleSnapshot(ipPath, false, ipv4Rules, effectiveState.IPv4Tables, effectiveState.IPv4Rules)...)
-	cleanupErrors = append(cleanupErrors, cleanupIPRuleSnapshot(ipPath, true, ipv6Rules, effectiveState.IPv6Tables, effectiveState.IPv6Rules)...)
+	cleanupErrors = append(cleanupErrors, cleanupIPRuleSnapshot(ipPath, false, ipv4Rules, ipv4Tables, effectiveState.IPv4Tables, effectiveState.IPv4Rules)...)
+	cleanupErrors = append(cleanupErrors, cleanupIPRuleSnapshot(ipPath, true, ipv6Rules, ipv6Tables, effectiveState.IPv6Tables, effectiveState.IPv6Rules)...)
 	if len(cleanupErrors) == 0 && staleMarkerPresent {
 		if err := os.Remove(singboxStaleNFTMarker); err != nil && !os.IsNotExist(err) {
 			cleanupErrors = append(cleanupErrors, fmt.Errorf("remove sing-box cleanup marker: %w", err))
@@ -377,34 +381,65 @@ func readPlatformRuleSnapshots(ipPath string, expectIPv4, expectIPv6 bool) (ipRu
 	return ipv4Rules, ipv6Rules, nil
 }
 
-func validateOwnedRouteTables(ipPath string, ipv4Rules, ipv6Rules ipRuleSnapshot, state singboxRouteTableState) error {
+func readPlatformRouteTableSnapshots(ipPath string, expectIPv4, expectIPv6 bool) (routeTableSnapshot, routeTableSnapshot, error) {
+	ipv4Tables := make(routeTableSnapshot)
+	ipv6Tables := make(routeTableSnapshot)
+	if expectIPv4 {
+		output, err := runLinuxNetworkCommand(linuxNetworkCommandTimeout, ipPath, "-o", "route", "show", "table", "all")
+		if err != nil {
+			return nil, nil, cleanupCommandError("list IPv4 route tables", output, err)
+		}
+		ipv4Tables = parseRouteTableSnapshot(string(output))
+	}
+	if expectIPv6 {
+		output, err := runLinuxNetworkCommand(linuxNetworkCommandTimeout, ipPath, "-6", "-o", "route", "show", "table", "all")
+		if err != nil {
+			return nil, nil, cleanupCommandError("list IPv6 route tables", output, err)
+		}
+		ipv6Tables = parseRouteTableSnapshot(string(output))
+	}
+	return ipv4Tables, ipv6Tables, nil
+}
+
+func validateOwnedRouteTables(ipPath string, ipv4Tables, ipv6Tables routeTableSnapshot, state singboxRouteTableState) error {
 	var validationErrors []error
-	validate := func(ipv6 bool, tables []string) {
+	validate := func(ipv6 bool, tables []string, existing routeTableSnapshot) {
 		for _, table := range tables {
-			args := []string{"route", "show", "table", table}
-			familyName := "IPv4"
-			if ipv6 {
-				args = append([]string{"-6"}, args...)
-				familyName = "IPv6"
+			if !existing.has(table) {
+				continue
 			}
-			output, err := runLinuxNetworkCommand(linuxNetworkCommandTimeout, ipPath, args...)
-			if err != nil {
-				validationErrors = append(validationErrors, cleanupCommandError("inspect owned "+familyName+" redirect route table", output, err))
-			} else if !isSafeOwnedRedirectRouteTable(string(output), ipv6) {
-				validationErrors = append(validationErrors, fmt.Errorf("owned %s redirect route table %s contains unrecognized routes", familyName, table))
+			if err := inspectOwnedRouteTable(ipPath, ipv6, table); err != nil {
+				validationErrors = append(validationErrors, err)
 			}
 		}
 	}
 	if state.ExpectIPv4 {
-		validate(false, state.IPv4Tables)
+		validate(false, state.IPv4Tables, ipv4Tables)
 	}
 	if state.ExpectIPv6 {
-		validate(true, state.IPv6Tables)
+		validate(true, state.IPv6Tables, ipv6Tables)
 	}
 	return errors.Join(validationErrors...)
 }
 
-func cleanupIPRuleSnapshot(ipPath string, ipv6 bool, snapshot ipRuleSnapshot, redirectTables, managedRuleIDs []string) []error {
+func inspectOwnedRouteTable(ipPath string, ipv6 bool, table string) error {
+	args := []string{"route", "show", "table", table}
+	familyName := "IPv4"
+	if ipv6 {
+		args = append([]string{"-6"}, args...)
+		familyName = "IPv6"
+	}
+	output, err := runLinuxNetworkCommand(linuxNetworkCommandTimeout, ipPath, args...)
+	if err != nil {
+		return cleanupCommandError("inspect owned "+familyName+" redirect route table", output, err)
+	}
+	if !isSafeOwnedRedirectRouteTable(string(output), ipv6) {
+		return fmt.Errorf("owned %s redirect route table %s contains unrecognized routes", familyName, table)
+	}
+	return nil
+}
+
+func cleanupIPRuleSnapshot(ipPath string, ipv6 bool, rules ipRuleSnapshot, existingTables routeTableSnapshot, redirectTables, managedRuleIDs []string) []error {
 	var cleanupErrors []error
 	prefix := make([]string, 0, 1)
 	familyName := "IPv4"
@@ -419,15 +454,21 @@ func cleanupIPRuleSnapshot(ipPath string, ipv6 bool, snapshot ipRuleSnapshot, re
 		}
 	}
 
-	for _, table := range redirectTables {
-		if snapshot.hasExactPriorityOneLookupTable(table) {
-			run("delete "+familyName+" redirect rule", "rule", "del", "priority", "1", "from", "all", "lookup", table)
+	for _, action := range planRouteTableCleanup(rules, existingTables, redirectTables) {
+		if action.deleteRule {
+			run("delete "+familyName+" redirect rule", "rule", "del", "priority", "1", "from", "all", "lookup", action.table)
 		}
-		run("flush "+familyName+" redirect route table", "route", "flush", "table", table)
+		if action.flushTable {
+			if err := inspectOwnedRouteTable(ipPath, ipv6, action.table); err != nil {
+				cleanupErrors = append(cleanupErrors, err)
+				continue
+			}
+			run("flush "+familyName+" redirect route table", "route", "flush", "table", action.table)
+		}
 	}
 	for _, ruleID := range managedRuleIDs {
 		spec, ok := managedIPRuleSpecByID(ruleID)
-		if !ok || !snapshot.hasExactRule(spec.priority, spec.line) {
+		if !ok || !rules.hasExactRule(spec.priority, spec.line) {
 			continue
 		}
 		run("delete "+familyName+" managed "+ruleID+" rule", spec.delete...)
