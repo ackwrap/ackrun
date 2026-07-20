@@ -1,6 +1,8 @@
 package store
 
 import (
+	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -59,11 +61,18 @@ func TestRouteRuleStoreCRUDAndReorder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create second rule: %v", err)
 	}
+	if _, err := db.CreateRouteRule(&model.RouteRuleRequest{Name: first.Name, Enabled: true, RuleType: "domain", Values: []string{"duplicate.example"}, Outbound: "direct"}); err == nil {
+		t.Fatal("expected route rule name unique constraint")
+	}
+	if _, err := db.UpdateRouteRule(second.ID, &model.RouteRuleRequest{Name: first.Name, Enabled: true, Priority: second.Priority, RuleType: second.RuleType, Values: second.Values, Outbound: second.Outbound}); err == nil {
+		t.Fatal("expected route rule rename unique constraint")
+	}
 
 	items, err := db.ListRouteRules()
 	if err != nil {
 		t.Fatalf("list rules: %v", err)
 	}
+	items = ordinaryRouteRules(items)
 	if len(items) != 2 || items[0].ID != first.ID || items[1].ID != second.ID {
 		t.Fatalf("unexpected rule order: %+v", items)
 	}
@@ -76,13 +85,18 @@ func TestRouteRuleStoreCRUDAndReorder(t *testing.T) {
 		t.Fatalf("unexpected updated rule: %+v", updated)
 	}
 
-	if err := db.ReorderRouteRules([]int64{second.ID, first.ID}); err != nil {
+	allRules, err := db.ListRouteRules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReorderRouteRules([]int64{allRules[0].ID, second.ID, first.ID, allRules[len(allRules)-1].ID}); err != nil {
 		t.Fatalf("reorder rules: %v", err)
 	}
 	items, err = db.ListRouteRules()
 	if err != nil {
 		t.Fatalf("list reordered rules: %v", err)
 	}
+	items = ordinaryRouteRules(items)
 	if items[0].ID != second.ID || items[1].ID != first.ID {
 		t.Fatalf("unexpected reordered rules: %+v", items)
 	}
@@ -90,10 +104,14 @@ func TestRouteRuleStoreCRUDAndReorder(t *testing.T) {
 	if err := db.DeleteRouteRule(first.ID); err != nil {
 		t.Fatalf("delete rule: %v", err)
 	}
+	if err := db.DeleteRouteRule(999999); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("missing route rule delete error = %v", err)
+	}
 	items, err = db.ListRouteRules()
 	if err != nil {
 		t.Fatalf("list after delete: %v", err)
 	}
+	items = ordinaryRouteRules(items)
 	if len(items) != 1 || items[0].ID != second.ID {
 		t.Fatalf("unexpected rules after delete: %+v", items)
 	}
@@ -106,10 +124,11 @@ func TestRouteRuleStoreSystemKey(t *testing.T) {
 	}
 	defer db.Close()
 
-	created, err := db.CreateRouteRule(&model.RouteRuleRequest{Name: "广告拦截", Enabled: true, RuleType: "geosite", Values: []string{"category-ads-all"}, Outbound: "block", SystemKey: "ad_block"})
+	rules, err := db.ListRouteRules()
 	if err != nil {
-		t.Fatalf("create system rule: %v", err)
+		t.Fatal(err)
 	}
+	created := &rules[0]
 	if !created.IsSystem || created.SystemKey != "ad_block" {
 		t.Fatalf("expected system rule metadata: %+v", created)
 	}
@@ -121,6 +140,16 @@ func TestRouteRuleStoreSystemKey(t *testing.T) {
 	if !updated.IsSystem || updated.SystemKey != "ad_block" || updated.Enabled {
 		t.Fatalf("system key should survive normal update: %+v", updated)
 	}
+}
+
+func ordinaryRouteRules(items []model.RouteRule) []model.RouteRule {
+	ordinary := make([]model.RouteRule, 0, len(items))
+	for _, item := range items {
+		if !item.IsSystem {
+			ordinary = append(ordinary, item)
+		}
+	}
+	return ordinary
 }
 
 func TestRouteRuleSubscriptionStoreCRUD(t *testing.T) {

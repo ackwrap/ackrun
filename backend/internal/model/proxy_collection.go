@@ -7,6 +7,7 @@ type ProxyCollection struct {
 	Type               string `json:"type"`                 // selector, urltest
 	SourceType         string `json:"source_type"`          // 'node_groups', 'node_groups_and_nodes', 'manual'
 	ReferencedGroupIDs string `json:"referenced_group_ids"` // JSON: [1,2,3]
+	RouteRuleID        int64  `json:"route_rule_id"`        // canonical one-to-one route rule binding
 	RouteRuleIDs       string `json:"route_rule_ids"`       // JSON: [1,2,3]
 	NodeUIDs           string `json:"node_uids"`            // JSON: ["uid1","uid2"]
 	TestURL            string `json:"test_url"`
@@ -32,6 +33,7 @@ type ProxyCollectionRequest struct {
 	Type               string   `json:"type"`
 	SourceType         string   `json:"source_type"`
 	ReferencedGroupIDs []int64  `json:"referenced_group_ids"`
+	RouteRuleID        int64    `json:"route_rule_id"`
 	RouteRuleIDs       []int64  `json:"route_rule_ids"`
 	NodeUIDs           []string `json:"node_uids"`
 	TestURL            string   `json:"test_url"`

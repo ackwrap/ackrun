@@ -1,6 +1,7 @@
 package service
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,7 +30,13 @@ type ProxyCollectionService struct {
 	clashBaseURL string
 }
 
-var ErrSystemProxyCollectionProtected = errors.New("系统默认策略组不可编辑")
+var (
+	ErrSystemProxyCollectionProtected     = errors.New("系统默认策略组不可编辑")
+	ErrProxyCollectionRuleBindingInvalid  = errors.New("代理规则绑定无效")
+	ErrProxyCollectionRuleNotFound        = errors.New("绑定的路由规则不存在")
+	ErrProxyCollectionRuleBindingConflict = errors.New("代理规则绑定冲突")
+	ErrProxyCollectionNotFound            = errors.New("代理策略配置不存在")
+)
 
 const (
 	proxyCollectionSourceManual             = "manual"
@@ -51,6 +58,9 @@ func NewProxyCollectionService(store *store.Store, realtime *RealtimeService) *P
 
 // Create 创建代理集合
 func (s *ProxyCollectionService) Create(req model.ProxyCollectionRequest) (*model.ProxyCollectionWithNodes, error) {
+	if err := s.bindCollectionRequestToProxyRule(&req, 0); err != nil {
+		return nil, err
+	}
 	logging.Info("proxy_collection.create", "创建代理集合: %s", req.Name)
 	if IsReservedProxyCollectionName(req.Name) {
 		return nil, ErrSystemProxyCollectionProtected
@@ -89,6 +99,7 @@ func (s *ProxyCollectionService) Create(req model.ProxyCollectionRequest) (*mode
 		Type:               req.Type,
 		SourceType:         sourceType,
 		ReferencedGroupIDs: string(referencedGroupIDsJSON),
+		RouteRuleID:        req.RouteRuleID,
 		RouteRuleIDs:       string(routeRuleIDsJSON),
 		NodeUIDs:           string(nodeUIDsJSON),
 		TestURL:            req.TestURL,
@@ -98,7 +109,7 @@ func (s *ProxyCollectionService) Create(req model.ProxyCollectionRequest) (*mode
 	}
 
 	if err := s.store.CreateProxyCollection(pc); err != nil {
-		return nil, err
+		return nil, normalizeProxyCollectionRuleBindingError(err)
 	}
 	s.refreshHealthCheckJob(pc.ID)
 
@@ -135,9 +146,18 @@ func (s *ProxyCollectionService) Update(id int, req model.ProxyCollectionRequest
 	logging.Info("proxy_collection.update", "更新代理集合: %d", id)
 	existing, err := s.store.GetProxyCollection(id)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrProxyCollectionNotFound
+		}
 		return err
 	}
-	if IsSystemProxyCollectionName(existing.Name) || IsReservedProxyCollectionName(req.Name) {
+	if IsSystemProxyCollectionName(existing.Name) {
+		return ErrSystemProxyCollectionProtected
+	}
+	if err := s.bindCollectionRequestToProxyRule(&req, id); err != nil {
+		return err
+	}
+	if IsReservedProxyCollectionName(req.Name) {
 		return ErrSystemProxyCollectionProtected
 	}
 
@@ -174,6 +194,7 @@ func (s *ProxyCollectionService) Update(id int, req model.ProxyCollectionRequest
 		Type:               req.Type,
 		SourceType:         sourceType,
 		ReferencedGroupIDs: string(referencedGroupIDsJSON),
+		RouteRuleID:        req.RouteRuleID,
 		RouteRuleIDs:       string(routeRuleIDsJSON),
 		NodeUIDs:           string(nodeUIDsJSON),
 		TestURL:            req.TestURL,
@@ -183,10 +204,74 @@ func (s *ProxyCollectionService) Update(id int, req model.ProxyCollectionRequest
 	}
 
 	if err := s.store.UpdateProxyCollection(id, pc); err != nil {
-		return err
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrProxyCollectionNotFound
+		}
+		return normalizeProxyCollectionRuleBindingError(err)
 	}
 	s.refreshHealthCheckJob(id)
 	return nil
+}
+
+func (s *ProxyCollectionService) bindCollectionRequestToProxyRule(req *model.ProxyCollectionRequest, collectionID int) error {
+	routeRuleID := req.RouteRuleID
+	if routeRuleID <= 0 {
+		return fmt.Errorf("%w: 代理集合必须绑定且只能绑定一条代理规则", ErrProxyCollectionRuleBindingInvalid)
+	}
+	rule, err := s.store.GetRouteRule(routeRuleID)
+	if err != nil {
+		return err
+	}
+	if rule == nil {
+		return ErrProxyCollectionRuleNotFound
+	}
+	if rule.IsSystem || rule.Outbound != "proxy" {
+		return fmt.Errorf("%w: 代理集合只能绑定非系统代理规则", ErrProxyCollectionRuleBindingInvalid)
+	}
+	bound, err := s.store.GetProxyCollectionByRouteRuleID(routeRuleID)
+	if err != nil {
+		return err
+	}
+	if bound != nil && bound.ID != collectionID {
+		return fmt.Errorf("%w: 代理规则已绑定到其他集合", ErrProxyCollectionRuleBindingConflict)
+	}
+	req.RouteRuleID = routeRuleID
+	req.RouteRuleIDs = []int64{routeRuleID}
+	req.Name = rule.Name
+	if IsReservedProxyCollectionName(req.Name) {
+		return ErrSystemProxyCollectionProtected
+	}
+	return s.validateBoundCollectionOutboundName(req.Name, collectionID)
+}
+
+func (s *ProxyCollectionService) validateBoundCollectionOutboundName(name string, collectionID int) error {
+	groups, err := s.store.ListNodeGroups()
+	if err != nil {
+		return err
+	}
+	for _, group := range groups {
+		if group.Enabled && strings.TrimSpace(group.Name) == strings.TrimSpace(name) {
+			return fmt.Errorf("%w: 策略组名称 %q 与已启用节点组的 outbound tag 冲突", ErrProxyCollectionRuleBindingConflict, name)
+		}
+	}
+	collections, err := s.store.ListProxyCollections()
+	if err != nil {
+		return err
+	}
+	for _, collection := range collections {
+		if collection.ID != collectionID && collection.Enabled && strings.TrimSpace(collection.Name) == strings.TrimSpace(name) {
+			return fmt.Errorf("%w: 策略组名称 %q 与已启用策略组的 outbound tag 冲突", ErrProxyCollectionRuleBindingConflict, name)
+		}
+	}
+	return nil
+}
+
+func normalizeProxyCollectionRuleBindingError(err error) error {
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "unique constraint") && strings.Contains(message, "proxy_collections.route_rule_id") {
+		return fmt.Errorf("%w: 代理规则已绑定到其他集合", ErrProxyCollectionRuleBindingConflict)
+	}
+	return err
 }
 
 func isSupportedGroupType(groupType string) bool {
@@ -215,12 +300,18 @@ func (s *ProxyCollectionService) Delete(id int) error {
 	logging.Info("proxy_collection.delete", "删除代理集合: %d", id)
 	existing, err := s.store.GetProxyCollection(id)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrProxyCollectionNotFound
+		}
 		return err
 	}
 	if IsSystemProxyCollectionName(existing.Name) {
 		return ErrSystemProxyCollectionProtected
 	}
 	if err := s.store.DeleteProxyCollection(id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrProxyCollectionNotFound
+		}
 		return err
 	}
 	s.removeHealthCheckJob(id)
@@ -231,6 +322,9 @@ func (s *ProxyCollectionService) Delete(id int) error {
 func (s *ProxyCollectionService) ToggleEnabled(id int) error {
 	pc, err := s.store.GetProxyCollection(id)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrProxyCollectionNotFound
+		}
 		return err
 	}
 	if IsSystemProxyCollectionName(pc.Name) {
@@ -239,6 +333,9 @@ func (s *ProxyCollectionService) ToggleEnabled(id int) error {
 
 	pc.Enabled = !pc.Enabled
 	if err := s.store.UpdateProxyCollection(id, pc); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrProxyCollectionNotFound
+		}
 		return err
 	}
 	s.refreshHealthCheckJob(id)

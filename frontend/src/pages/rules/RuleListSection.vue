@@ -2,7 +2,10 @@
 import { Eye, Plus, Trash2 } from "lucide-vue-next";
 import OrderButtons from "@/components/ui/OrderButtons.vue";
 import type { RouteRule, RouteRuleSubscription } from "@/services/types";
-defineProps<{ rules: RouteRule[]; subscriptions: RouteRuleSubscription[] }>();
+const props = defineProps<{
+  rules: RouteRule[];
+  subscriptions: RouteRuleSubscription[];
+}>();
 defineEmits<{
   refresh: [];
   addGeo: [];
@@ -14,6 +17,50 @@ defineEmits<{
   remove: [RouteRule];
   detail: [RouteRule];
 }>();
+
+function isAdBlock(rule: RouteRule) {
+  return (
+    rule.system_key === "ad_block" ||
+    (rule.is_system && rule.name === "广告拦截")
+  );
+}
+
+function isGlobalDirect(rule: RouteRule) {
+  return (
+    rule.system_key === "global_direct" ||
+    ["fallback", "final"].includes(rule.rule_type) ||
+    (rule.is_system && rule.name === "全球直连")
+  );
+}
+
+function moveDisabled(index: number, direction: -1 | 1) {
+  const target = index + direction;
+  const currentRule = props.rules[index];
+  const targetRule = props.rules[target];
+  return (
+    !currentRule ||
+    !targetRule ||
+    isAdBlock(currentRule) ||
+    isAdBlock(targetRule) ||
+    isGlobalDirect(currentRule) ||
+    isGlobalDirect(targetRule)
+  );
+}
+
+function typeLabel(rule: RouteRule) {
+  return isGlobalDirect(rule) ? "最终规则" : rule.rule_type;
+}
+
+function valueLabel(rule: RouteRule) {
+  if (isGlobalDirect(rule)) return "默认兜底";
+  return rule.values.join(", ") || "无匹配值";
+}
+
+function statusToggleTitle(rule: RouteRule) {
+  if (isAdBlock(rule)) return "系统广告拦截规则为只读，不能切换状态";
+  if (isGlobalDirect(rule)) return "默认兜底规则为只读且必须保持启用";
+  return "";
+}
 </script>
 <template>
   <section
@@ -77,8 +124,8 @@ defineEmits<{
                   >#{{ i + 1 }}</span
                 >
                 <OrderButtons
-                  :up-disabled="i === 0"
-                  :down-disabled="i === rules.length - 1"
+                  :up-disabled="moveDisabled(i, -1)"
+                  :down-disabled="moveDisabled(i, 1)"
                   @up="$emit('move', i, -1)"
                   @down="$emit('move', i, 1)"
                 />
@@ -97,17 +144,19 @@ defineEmits<{
             <td>
               <span
                 class="rounded bg-[var(--button-secondary-bg)] px-2 py-1 text-xs"
-                >{{ r.rule_type }}</span
+                >{{ typeLabel(r) }}</span
               >
             </td>
-            <td class="max-w-[320px] truncate" :title="r.values.join('\n')">
-              {{ r.values.join(", ") }}
+            <td class="max-w-[320px] truncate" :title="valueLabel(r)">
+              {{ valueLabel(r) }}
             </td>
             <td>{{ r.outbound }}</td>
             <td>
               <button
                 class="aw-action-button"
                 :class="r.enabled ? 'aw-action-success' : 'aw-action-neutral'"
+                :disabled="isAdBlock(r) || isGlobalDirect(r)"
+                :title="statusToggleTitle(r)"
                 @click="$emit('toggle', r)"
               >
                 {{ r.enabled ? "启用" : "停用" }}

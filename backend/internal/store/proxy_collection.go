@@ -20,9 +20,9 @@ func (s *Store) CreateProxyCollection(pc *model.ProxyCollection) error {
 	}
 
 	result, err := s.db.Exec(
-		`INSERT INTO proxy_collections (name, type, source_type, referenced_group_ids, route_rule_ids, node_uids, test_url, test_interval, tolerance, enabled, priority, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		pc.Name, pc.Type, pc.SourceType, pc.ReferencedGroupIDs, pc.RouteRuleIDs, pc.NodeUIDs, pc.TestURL, pc.TestInterval, pc.Tolerance, boolToInt(pc.Enabled), pc.Priority, pc.CreatedAt, pc.UpdatedAt,
+		`INSERT INTO proxy_collections (name, type, source_type, referenced_group_ids, route_rule_id, route_rule_ids, node_uids, test_url, test_interval, tolerance, enabled, priority, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		pc.Name, pc.Type, pc.SourceType, pc.ReferencedGroupIDs, pc.RouteRuleID, pc.RouteRuleIDs, pc.NodeUIDs, pc.TestURL, pc.TestInterval, pc.Tolerance, boolToInt(pc.Enabled), pc.Priority, pc.CreatedAt, pc.UpdatedAt,
 	)
 	if err != nil {
 		return err
@@ -39,9 +39,9 @@ func (s *Store) GetProxyCollection(id int) (*model.ProxyCollection, error) {
 	var enabled int
 
 	err := s.db.QueryRow(
-		`SELECT id, name, type, source_type, referenced_group_ids, route_rule_ids, node_uids, test_url, test_interval, tolerance, enabled, priority, created_at, updated_at
+		`SELECT id, name, type, source_type, referenced_group_ids, route_rule_id, route_rule_ids, node_uids, test_url, test_interval, tolerance, enabled, priority, created_at, updated_at
 			FROM proxy_collections WHERE id = ?`, id,
-	).Scan(&pc.ID, &pc.Name, &pc.Type, &pc.SourceType, &pc.ReferencedGroupIDs, &pc.RouteRuleIDs, &pc.NodeUIDs, &pc.TestURL, &pc.TestInterval, &pc.Tolerance, &enabled, &pc.Priority, &pc.CreatedAt, &pc.UpdatedAt)
+	).Scan(&pc.ID, &pc.Name, &pc.Type, &pc.SourceType, &pc.ReferencedGroupIDs, &pc.RouteRuleID, &pc.RouteRuleIDs, &pc.NodeUIDs, &pc.TestURL, &pc.TestInterval, &pc.Tolerance, &enabled, &pc.Priority, &pc.CreatedAt, &pc.UpdatedAt)
 
 	if err != nil {
 		return nil, err
@@ -54,7 +54,7 @@ func (s *Store) GetProxyCollection(id int) (*model.ProxyCollection, error) {
 // ListProxyCollections 列出所有代理集合
 func (s *Store) ListProxyCollections() ([]*model.ProxyCollection, error) {
 	rows, err := s.db.Query(
-		`SELECT id, name, type, source_type, referenced_group_ids, route_rule_ids, node_uids, test_url, test_interval, tolerance, enabled, priority, created_at, updated_at
+		`SELECT id, name, type, source_type, referenced_group_ids, route_rule_id, route_rule_ids, node_uids, test_url, test_interval, tolerance, enabled, priority, created_at, updated_at
 			FROM proxy_collections ORDER BY CASE WHEN name = '全球直连' THEN 0 ELSE 1 END, priority ASC, id DESC`,
 	)
 	if err != nil {
@@ -67,7 +67,7 @@ func (s *Store) ListProxyCollections() ([]*model.ProxyCollection, error) {
 		var pc model.ProxyCollection
 		var enabled int
 
-		if err := rows.Scan(&pc.ID, &pc.Name, &pc.Type, &pc.SourceType, &pc.ReferencedGroupIDs, &pc.RouteRuleIDs, &pc.NodeUIDs, &pc.TestURL, &pc.TestInterval, &pc.Tolerance, &enabled, &pc.Priority, &pc.CreatedAt, &pc.UpdatedAt); err != nil {
+		if err := rows.Scan(&pc.ID, &pc.Name, &pc.Type, &pc.SourceType, &pc.ReferencedGroupIDs, &pc.RouteRuleID, &pc.RouteRuleIDs, &pc.NodeUIDs, &pc.TestURL, &pc.TestInterval, &pc.Tolerance, &enabled, &pc.Priority, &pc.CreatedAt, &pc.UpdatedAt); err != nil {
 			return nil, err
 		}
 
@@ -82,19 +82,50 @@ func (s *Store) ListProxyCollections() ([]*model.ProxyCollection, error) {
 func (s *Store) UpdateProxyCollection(id int, pc *model.ProxyCollection) error {
 	pc.UpdatedAt = time.Now().UnixMilli()
 
-	_, err := s.db.Exec(
-		`UPDATE proxy_collections SET name = ?, type = ?, source_type = ?, referenced_group_ids = ?, route_rule_ids = ?, node_uids = ?, test_url = ?, test_interval = ?, tolerance = ?, enabled = ?, updated_at = ?
+	result, err := s.db.Exec(
+		`UPDATE proxy_collections SET name = ?, type = ?, source_type = ?, referenced_group_ids = ?, route_rule_id = ?, route_rule_ids = ?, node_uids = ?, test_url = ?, test_interval = ?, tolerance = ?, enabled = ?, updated_at = ?
 			WHERE id = ?`,
-		pc.Name, pc.Type, pc.SourceType, pc.ReferencedGroupIDs, pc.RouteRuleIDs, pc.NodeUIDs, pc.TestURL, pc.TestInterval, pc.Tolerance, boolToInt(pc.Enabled), pc.UpdatedAt, id,
+		pc.Name, pc.Type, pc.SourceType, pc.ReferencedGroupIDs, pc.RouteRuleID, pc.RouteRuleIDs, pc.NodeUIDs, pc.TestURL, pc.TestInterval, pc.Tolerance, boolToInt(pc.Enabled), pc.UpdatedAt, id,
 	)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
 
-	return err
+func (s *Store) GetProxyCollectionByRouteRuleID(routeRuleID int64) (*model.ProxyCollection, error) {
+	var id int
+	err := s.db.QueryRow(`SELECT id FROM proxy_collections WHERE route_rule_id = ?`, routeRuleID).Scan(&id)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s.GetProxyCollection(id)
 }
 
 // DeleteProxyCollection 删除代理集合
 func (s *Store) DeleteProxyCollection(id int) error {
-	_, err := s.db.Exec(`DELETE FROM proxy_collections WHERE id = ?`, id)
-	return err
+	result, err := s.db.Exec(`DELETE FROM proxy_collections WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func (s *Store) ReorderProxyCollections(ids []int) error {

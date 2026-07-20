@@ -158,6 +158,7 @@ func (s *Store) migrate() error {
 			tolerance INTEGER NOT NULL DEFAULT 100,
 			enabled INTEGER NOT NULL DEFAULT 1,
 			priority INTEGER NOT NULL DEFAULT 0,
+			route_rule_id INTEGER NOT NULL DEFAULT 0,
 			created_at INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL
 		)`,
@@ -209,6 +210,7 @@ func (s *Store) migrate() error {
 		`ALTER TABLE proxy_collections ADD COLUMN source_type TEXT NOT NULL DEFAULT 'manual'`,
 		`ALTER TABLE proxy_collections ADD COLUMN referenced_group_ids TEXT NOT NULL DEFAULT '[]'`,
 		`ALTER TABLE proxy_collections ADD COLUMN route_rule_ids TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE proxy_collections ADD COLUMN route_rule_id INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE proxy_collections ADD COLUMN node_uids TEXT NOT NULL DEFAULT '[]'`,
 		`ALTER TABLE proxy_collections ADD COLUMN priority INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE dns_servers ADD COLUMN priority INTEGER NOT NULL DEFAULT 0`,
@@ -284,6 +286,15 @@ func (s *Store) migrate() error {
 	}
 
 	if err := s.dedupeNodeGroupsByName(); err != nil {
+		return err
+	}
+	if err := s.migrateRouteStrategies(); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_proxy_collections_route_rule_id ON proxy_collections(route_rule_id) WHERE route_rule_id > 0`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_route_rules_name ON route_rules(name)`); err != nil {
 		return err
 	}
 	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_node_groups_name ON node_groups(name)`); err != nil {
@@ -424,6 +435,7 @@ func isDuplicateColumnMigration(m string) bool {
 		`ALTER TABLE proxy_collections ADD COLUMN source_type TEXT NOT NULL DEFAULT 'manual'`,
 		`ALTER TABLE proxy_collections ADD COLUMN referenced_group_ids TEXT NOT NULL DEFAULT '[]'`,
 		`ALTER TABLE proxy_collections ADD COLUMN route_rule_ids TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE proxy_collections ADD COLUMN route_rule_id INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE proxy_collections ADD COLUMN node_uids TEXT NOT NULL DEFAULT '[]'`,
 		`ALTER TABLE proxy_collections ADD COLUMN priority INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE dns_servers ADD COLUMN priority INTEGER NOT NULL DEFAULT 0`,

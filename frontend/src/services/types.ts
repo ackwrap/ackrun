@@ -695,6 +695,7 @@ export interface ProxyCollection {
   test_interval: number;
   tolerance: number;
   enabled: boolean;
+  route_rule_id: number;
   created_at: number;
   updated_at: number;
 }
@@ -711,8 +712,20 @@ export interface ProxyCollectionRequest {
   test_interval: number;
   tolerance: number;
   enabled: boolean;
+  route_rule_id: number;
   route_rule_ids: number[];
   node_uids: string[];
+}
+
+export interface StrategyItem {
+  rule_id: number;
+  name: string;
+  priority: number;
+  kind: "reject" | "direct" | "proxy" | "final";
+  enabled: boolean;
+  read_only: boolean;
+  outbound_tag: string;
+  collection?: ProxyCollectionWithNodes;
 }
 
 export interface CollectionTestNodeResult {

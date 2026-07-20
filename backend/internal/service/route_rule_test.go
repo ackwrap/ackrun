@@ -82,6 +82,7 @@ func TestRouteRuleServicePreview(t *testing.T) {
 	if err != nil {
 		t.Fatalf("preview rules: %v", err)
 	}
+	stripSystemAdBlockPreview(preview)
 	if len(preview.Rules) != 2 || preview.Rules[0]["action"] != "route" || preview.Rules[0]["outbound"] != "proxy" {
 		t.Fatalf("unexpected preview: %+v", preview)
 	}
@@ -176,20 +177,14 @@ func TestRouteRuleServiceProtectsSystemRule(t *testing.T) {
 		t.Fatalf("expected create protection, got %v", err)
 	}
 
-	systemRule, err := db.CreateRouteRule(&model.RouteRuleRequest{Name: SystemAdBlockRouteRuleName, Enabled: true, Priority: 1, RuleType: "geosite", Values: []string{"category-ads-all"}, Outbound: "block", SystemKey: SystemRuleAdBlockKey})
+	rules, err := db.ListRouteRules()
 	if err != nil {
-		t.Fatalf("seed system rule: %v", err)
+		t.Fatal(err)
 	}
+	systemRule := &rules[0]
 
-	updated, err := svc.Update(systemRule.ID, &model.RouteRuleRequest{Name: "Changed", Enabled: false, Priority: 99, RuleType: "domain_suffix", Values: []string{"example.com"}, Outbound: "direct", Invert: true})
-	if err != nil {
-		t.Fatalf("update system rule enabled: %v", err)
-	}
-	if updated.Enabled || updated.Name != SystemAdBlockRouteRuleName || updated.RuleType != "geosite" || updated.Outbound != "block" || updated.Invert {
-		t.Fatalf("system rule fields should be preserved except enabled: %+v", updated)
-	}
-	if len(updated.Values) != 1 || updated.Values[0] != "category-ads-all" || updated.SystemKey != SystemRuleAdBlockKey || !updated.IsSystem {
-		t.Fatalf("system rule metadata should be preserved: %+v", updated)
+	if _, err := svc.Update(systemRule.ID, &model.RouteRuleRequest{Name: "Changed", Enabled: false, Priority: 99, RuleType: "domain_suffix", Values: []string{"example.com"}, Outbound: "direct", Invert: true}); !errors.Is(err, ErrSystemRouteRuleProtected) {
+		t.Fatalf("expected system update protection, got %v", err)
 	}
 
 	if _, err := svc.Delete(systemRule.ID); !errors.Is(err, ErrSystemRouteRuleProtected) {
@@ -243,13 +238,14 @@ func TestRouteRuleServicePreviewRuleSubscriptions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("preview rules: %v", err)
 	}
+	stripSystemAdBlockPreview(preview)
 	if len(preview.RuleSets) != 1 || preview.RuleSets[0]["tag"] != created.Tag {
 		t.Fatalf("unexpected rule set preview: %+v", preview)
 	}
 	if _, exists := preview.RuleSets[0]["download_detour"]; exists {
 		t.Fatalf("rule set preview contains deprecated download_detour: %+v", preview.RuleSets[0])
 	}
-	if len(preview.Rules) != 1 || preview.Rules[0]["outbound"] != "direct" {
+	if len(preview.Rules) != 1 || preview.Rules[0]["outbound"] != "CN Direct" {
 		t.Fatalf("unexpected route rule preview: %+v", preview)
 	}
 }
@@ -290,6 +286,7 @@ func TestRouteRuleSubscriptionAutoDetectsClashYAML(t *testing.T) {
 	if err != nil {
 		t.Fatalf("preview rules: %v", err)
 	}
+	stripSystemAdBlockPreview(preview)
 	if len(preview.RuleSets) != 1 {
 		t.Fatalf("expected one rule set: %+v", preview)
 	}
@@ -785,6 +782,7 @@ func TestRouteRulePreviewSupportsGeolocationNotCN(t *testing.T) {
 	if err != nil {
 		t.Fatalf("preview: %v", err)
 	}
+	stripSystemAdBlockPreview(preview)
 	const tag = "geosite-geolocation-!cn"
 	foundRuleSet := false
 	for _, ruleSet := range preview.RuleSets {
@@ -823,6 +821,7 @@ func TestPreviewUsesGeneratedGeoRuleSetCacheEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("preview: %v", err)
 	}
+	stripSystemAdBlockPreview(preview)
 	if len(preview.RuleSets) != 1 || preview.RuleSets[0]["url"] != "http://127.0.0.1:8080/api/v1/rules/geo/rule-sets/geoip-cn/content" || preview.RuleSets[0]["update_interval"] != "24h" {
 		t.Fatalf("unexpected generated geo rule set: %+v", preview.RuleSets)
 	}
@@ -843,4 +842,23 @@ func TestInternalAPIBaseURLUsesConfiguredListenPort(t *testing.T) {
 	if got := internalAPIBaseURL(); got != "http://127.0.0.1:9090" {
 		t.Fatalf("internal API base URL = %q", got)
 	}
+}
+
+func stripSystemAdBlockPreview(preview *model.RouteRulePreviewResponse) {
+	rules := preview.Rules[:0]
+	for _, rule := range preview.Rules {
+		if rule["action"] == "reject" && stringListContains(rule["rule_set"], "geosite-category-ads-all") {
+			continue
+		}
+		rules = append(rules, rule)
+	}
+	preview.Rules = rules
+	ruleSets := preview.RuleSets[:0]
+	for _, ruleSet := range preview.RuleSets {
+		if ruleSet["tag"] == "geosite-category-ads-all" {
+			continue
+		}
+		ruleSets = append(ruleSets, ruleSet)
+	}
+	preview.RuleSets = ruleSets
 }

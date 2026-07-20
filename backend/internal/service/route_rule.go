@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,18 +34,26 @@ import (
 // 智能快速配置时自动创建，配置生成时独立转换为 action=reject。
 const SystemAdBlockRouteRuleName = "广告拦截"
 
+const SystemGlobalDirectRouteRuleName = "全球直连"
+
 const routeRuleSubscriptionContentMaxSize int64 = 16 * 1024 * 1024
 
 // SystemRuleAdBlockKey 系统默认广告拦截规则内部标识。
 const SystemRuleAdBlockKey = "ad_block"
 
-// ErrSystemRouteRuleProtected 系统默认规则不可删除或修改名称/匹配，仅允许启停。
-var ErrSystemRouteRuleProtected = errors.New("系统默认规则不可删除或编辑，只能启用或停用")
+const SystemRuleGlobalDirectKey = "global_direct"
+
+// ErrSystemRouteRuleProtected 表示系统默认规则拒绝当前修改。
+var (
+	ErrSystemRouteRuleProtected = errors.New("系统默认规则受保护")
+	ErrRouteRuleNotFound        = errors.New("路由规则不存在")
+	ErrRouteRuleNameConflict    = errors.New("路由规则名称冲突")
+)
 
 // IsSystemRouteRuleKey 判断规则是否为系统默认规则。
 func IsSystemRouteRuleKey(systemKey string) bool {
 	switch strings.TrimSpace(systemKey) {
-	case SystemRuleAdBlockKey:
+	case SystemRuleAdBlockKey, SystemRuleGlobalDirectKey:
 		return true
 	default:
 		return false
@@ -53,7 +62,12 @@ func IsSystemRouteRuleKey(systemKey string) bool {
 
 // IsSystemRouteRuleName 仅用于阻止用户创建占用系统默认显示名的普通规则。
 func IsSystemRouteRuleName(name string) bool {
-	return strings.TrimSpace(name) == SystemAdBlockRouteRuleName
+	switch strings.TrimSpace(name) {
+	case SystemAdBlockRouteRuleName, SystemGlobalDirectRouteRuleName:
+		return true
+	default:
+		return false
+	}
 }
 
 type RouteRuleService struct {
@@ -218,6 +232,58 @@ func (svc *RouteRuleService) List() ([]model.RouteRule, error) {
 	return svc.store.ListRouteRules()
 }
 
+func (svc *RouteRuleService) Strategies() ([]model.RouteStrategyItem, error) {
+	logging.Info("route_rule.strategies", "listing route strategies")
+	rules, err := svc.store.ListRouteRules()
+	if err != nil {
+		return nil, err
+	}
+	collections, err := svc.store.ListProxyCollectionsWithNodes()
+	if err != nil {
+		return nil, err
+	}
+	byRuleID := make(map[int64]*model.ProxyCollectionWithNodes, len(collections))
+	for _, collection := range collections {
+		if collection.RouteRuleID > 0 {
+			byRuleID[collection.RouteRuleID] = collection
+		}
+	}
+	items := make([]model.RouteStrategyItem, 0, len(rules))
+	for _, rule := range rules {
+		item := model.RouteStrategyItem{
+			RuleID:   rule.ID,
+			Name:     rule.Name,
+			Priority: rule.Priority,
+			Enabled:  rule.Enabled,
+		}
+		switch {
+		case rule.SystemKey == SystemRuleGlobalDirectKey || rule.RuleType == "fallback":
+			item.Kind = "final"
+			item.ReadOnly = true
+			item.Collection = byRuleID[rule.ID]
+			item.OutboundTag = SystemGlobalDirectRouteRuleName
+		case rule.Outbound == "block" || rule.Outbound == "reject":
+			item.Kind = "reject"
+			item.ReadOnly = true
+		case rule.Outbound == "direct":
+			item.Kind = "direct"
+			item.ReadOnly = true
+			item.OutboundTag = rule.Name
+		case rule.Outbound == "proxy":
+			item.Kind = "proxy"
+			item.Collection = byRuleID[rule.ID]
+			item.OutboundTag = "proxy"
+			if item.Collection != nil && item.Collection.Enabled {
+				item.OutboundTag = item.Collection.Name
+			}
+		default:
+			return nil, fmt.Errorf("route rule %d has unsupported outbound %q", rule.ID, rule.Outbound)
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
 func (svc *RouteRuleService) Create(req *model.RouteRuleRequest) (*model.RouteRule, error) {
 	if IsSystemRouteRuleName(req.Name) {
 		return nil, ErrSystemRouteRuleProtected
@@ -225,8 +291,15 @@ func (svc *RouteRuleService) Create(req *model.RouteRuleRequest) (*model.RouteRu
 	if err := svc.validateRouteRule(req); err != nil {
 		return nil, err
 	}
+	if err := svc.validateRouteRuleOutboundName(req, 0); err != nil {
+		return nil, err
+	}
 	logging.Info("route_rule.create", "creating route rule: %s", req.Name)
-	return svc.store.CreateRouteRule(req)
+	item, err := svc.store.CreateRouteRule(req)
+	if err != nil {
+		return nil, normalizeRouteRuleNameConflict(err)
+	}
+	return item, nil
 }
 
 func (svc *RouteRuleService) Update(id int64, req *model.RouteRuleRequest) (*model.RouteRule, error) {
@@ -235,27 +308,10 @@ func (svc *RouteRuleService) Update(id int64, req *model.RouteRuleRequest) (*mod
 		return nil, err
 	}
 	if existing == nil {
-		return nil, fmt.Errorf("route rule not found")
+		return nil, ErrRouteRuleNotFound
 	}
-	// 系统默认规则只允许启停，其余字段强制保持原值。
 	if IsSystemRouteRuleKey(existing.SystemKey) {
-		logging.Info("route_rule.update", "updating system route rule enabled only: %d (%s)", id, existing.Name)
-		item, err := svc.store.UpdateRouteRule(id, &model.RouteRuleRequest{
-			Name:     existing.Name,
-			Enabled:  req.Enabled,
-			Priority: existing.Priority,
-			RuleType: existing.RuleType,
-			Values:   existing.Values,
-			Outbound: existing.Outbound,
-			Invert:   existing.Invert,
-		})
-		if err != nil {
-			return nil, err
-		}
-		if item == nil {
-			return nil, fmt.Errorf("route rule not found")
-		}
-		return item, nil
+		return nil, ErrSystemRouteRuleProtected
 	}
 	if IsSystemRouteRuleName(req.Name) {
 		return nil, ErrSystemRouteRuleProtected
@@ -263,13 +319,16 @@ func (svc *RouteRuleService) Update(id int64, req *model.RouteRuleRequest) (*mod
 	if err := svc.validateRouteRule(req); err != nil {
 		return nil, err
 	}
+	if err := svc.validateRouteRuleOutboundName(req, id); err != nil {
+		return nil, err
+	}
 	logging.Info("route_rule.update", "updating route rule: %d", id)
 	item, err := svc.store.UpdateRouteRule(id, req)
 	if err != nil {
-		return nil, err
+		return nil, normalizeRouteRuleNameConflict(err)
 	}
 	if item == nil {
-		return nil, fmt.Errorf("route rule not found")
+		return nil, ErrRouteRuleNotFound
 	}
 	return item, nil
 }
@@ -283,7 +342,13 @@ func (svc *RouteRuleService) Delete(id int64) (*model.ActionResponse, error) {
 	if existing != nil && IsSystemRouteRuleKey(existing.SystemKey) {
 		return nil, ErrSystemRouteRuleProtected
 	}
+	if existing == nil {
+		return nil, ErrRouteRuleNotFound
+	}
 	if err := svc.store.DeleteRouteRule(id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrRouteRuleNotFound
+		}
 		return nil, err
 	}
 	return &model.ActionResponse{Success: true, Message: "route rule deleted"}, nil
@@ -338,12 +403,25 @@ func (svc *RouteRuleService) PreviewWithBaseURL(baseURL string) (*model.RouteRul
 		ruleSets = append(ruleSets, ruleSet)
 	}
 	rules := make([]map[string]any, 0)
+	ruleOutboundOverrides, err := svc.routeRuleOutboundOverrides(items)
+	if err != nil {
+		return nil, err
+	}
 	for _, item := range items {
 		if !item.Enabled {
 			continue
 		}
+		if item.RuleType == "fallback" || item.SystemKey == SystemRuleGlobalDirectKey {
+			continue
+		}
+		outbound := item.Outbound
+		if outbound == "direct" {
+			outbound = item.Name
+		} else if override, ok := ruleOutboundOverrides[item.ID]; ok && outbound == "proxy" {
+			outbound = override
+		}
 		if item.RuleType == "mixed" {
-			mixedRules, err := mixedSingboxRouteRules(item.Values, item.Outbound, item.Invert)
+			mixedRules, err := mixedSingboxRouteRules(item.Values, outbound, item.Invert)
 			if err != nil {
 				return nil, err
 			}
@@ -354,9 +432,27 @@ func (svc *RouteRuleService) PreviewWithBaseURL(baseURL string) (*model.RouteRul
 		if item.RuleType == "geoip" || item.RuleType == "geosite" {
 			ruleSets = appendGeneratedGeoRuleSets(ruleSets, ruleSetTags, item.RuleType, item.Values, baseURL)
 		}
-		rules = append(rules, singboxRouteRule(item.RuleType, item.Values, item.Outbound, item.Invert))
+		rules = append(rules, singboxRouteRule(item.RuleType, item.Values, outbound, item.Invert))
 	}
 	return &model.RouteRulePreviewResponse{Rules: rules, RuleSets: ruleSets}, nil
+}
+
+func (svc *RouteRuleService) routeRuleOutboundOverrides(rules []model.RouteRule) (map[int64]string, error) {
+	overrides := make(map[int64]string)
+	collections, err := svc.store.ListProxyCollectionsWithNodes()
+	if err != nil {
+		return nil, fmt.Errorf("读取策略组规则绑定失败: %w", err)
+	}
+	collections, err = effectiveRouteStrategyCollections(collections, rules, false)
+	if err != nil {
+		return nil, err
+	}
+	for _, collection := range collections {
+		if collection.Enabled && collection.RouteRuleID > 0 {
+			overrides[collection.RouteRuleID] = collection.Name
+		}
+	}
+	return overrides, nil
 }
 
 func (svc *RouteRuleService) ListSubscriptions() ([]model.RouteRuleSubscription, error) {
@@ -1249,6 +1345,58 @@ func (svc *RouteRuleService) validateRouteRule(req *model.RouteRuleRequest) erro
 		return err
 	}
 	return svc.validateGeoSiteRuleValues(req.RuleType, req.Values)
+}
+
+func (svc *RouteRuleService) validateRouteRuleOutboundName(req *model.RouteRuleRequest, currentRuleID int64) error {
+	name := strings.TrimSpace(req.Name)
+	switch strings.ToLower(name) {
+	case "direct", "proxy", "block", "reject":
+		return fmt.Errorf("路由规则名称 %q 占用保留 outbound tag", name)
+	}
+
+	rules, err := svc.store.ListRouteRules()
+	if err != nil {
+		return err
+	}
+	for _, rule := range rules {
+		if rule.ID != currentRuleID && strings.TrimSpace(rule.Name) == name {
+			return fmt.Errorf("%w: 路由规则名称 %q 已存在", ErrRouteRuleNameConflict, name)
+		}
+	}
+	if req.Outbound != "direct" && req.Outbound != "proxy" {
+		return nil
+	}
+
+	groups, err := svc.store.ListNodeGroups()
+	if err != nil {
+		return err
+	}
+	for _, group := range groups {
+		if group.Enabled && strings.TrimSpace(group.Name) == name {
+			return fmt.Errorf("%w: 路由规则名称 %q 与已启用节点组的 outbound tag 冲突", ErrRouteRuleNameConflict, name)
+		}
+	}
+	collections, err := svc.store.ListProxyCollections()
+	if err != nil {
+		return err
+	}
+	for _, collection := range collections {
+		if !collection.Enabled || (currentRuleID > 0 && collection.RouteRuleID == currentRuleID) {
+			continue
+		}
+		if strings.TrimSpace(collection.Name) == name {
+			return fmt.Errorf("%w: 路由规则名称 %q 与已启用策略组的 outbound tag 冲突", ErrRouteRuleNameConflict, name)
+		}
+	}
+	return nil
+}
+
+func normalizeRouteRuleNameConflict(err error) error {
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "unique constraint") && strings.Contains(message, "route_rules.name") {
+		return fmt.Errorf("%w: 路由规则名称已存在", ErrRouteRuleNameConflict)
+	}
+	return err
 }
 
 func validateRouteRule(req *model.RouteRuleRequest) error {

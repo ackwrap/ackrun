@@ -142,6 +142,13 @@ async function saveRule() {
   }
 }
 async function toggleRule(r: RouteRule) {
+  if (
+    r.system_key === "ad_block" ||
+    r.system_key === "global_direct" ||
+    ["fallback", "final"].includes(r.rule_type) ||
+    (r.is_system && ["广告拦截", "全球直连"].includes(r.name))
+  )
+    return;
   try {
     await api.updateRouteRule(r.id, {
       name: r.name,
@@ -171,6 +178,12 @@ async function removeRule() {
 async function move(i: number, d: -1 | 1) {
   const n = i + d;
   if (n < 0 || n >= rules.value.length) return;
+  const protectedRule = (rule: RouteRule) =>
+    rule.system_key === "ad_block" ||
+    rule.system_key === "global_direct" ||
+    ["fallback", "final"].includes(rule.rule_type) ||
+    (rule.is_system && ["广告拦截", "全球直连"].includes(rule.name));
+  if (protectedRule(rules.value[i]) || protectedRule(rules.value[n])) return;
   const next = [...rules.value];
   [next[i], next[n]] = [next[n], next[i]];
   rules.value = next;

@@ -18,8 +18,8 @@ func TestCreateDefaultProxyCollectionsKeepsAdBlockAsRouteRule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created != 1 {
-		t.Fatalf("created default collections = %d, want 1", created)
+	if created != 0 {
+		t.Fatalf("created default collections = %d, want migration-seeded collection", created)
 	}
 	collections, err := db.ListProxyCollections()
 	if err != nil {

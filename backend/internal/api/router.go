@@ -149,6 +149,7 @@ func RegisterRoutes(
 		v1.POST("/config/apply", configGenH.Apply)
 
 		v1.GET("/rules", routeRuleH.List)
+		v1.GET("/rules/strategies", routeRuleH.Strategies)
 		v1.POST("/rules", routeRuleH.Create)
 		v1.GET("/rules/subscriptions", routeRuleH.ListSubscriptions)
 		v1.POST("/rules/subscriptions", routeRuleH.CreateSubscription)

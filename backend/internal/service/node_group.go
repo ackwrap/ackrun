@@ -257,10 +257,10 @@ func (svc *NodeGroupService) ensureAdBlockRouteRule() (int64, error) {
 		return 0, err
 	}
 	for _, rule := range rules {
-		if IsSystemRouteRuleKey(rule.SystemKey) {
+		if rule.SystemKey == SystemRuleAdBlockKey {
 			return rule.ID, nil
 		}
-		if rule.SystemKey == "" && IsSystemRouteRuleName(rule.Name) {
+		if rule.SystemKey == "" && strings.TrimSpace(rule.Name) == SystemAdBlockRouteRuleName {
 			if err := svc.store.SetRouteRuleSystemKey(rule.ID, SystemRuleAdBlockKey); err != nil {
 				return 0, err
 			}
@@ -283,33 +283,6 @@ func (svc *NodeGroupService) ensureAdBlockRouteRule() (int64, error) {
 	}
 	logging.Info("node_group.quick_setup", "创建系统默认广告拦截规则: %s (geosite category-ads-all)", SystemAdBlockRouteRuleName)
 	return created.ID, nil
-}
-
-// bindRouteRuleToCollection 把路由规则 ID 绑定到指定名称的策略组 route_rule_ids（去重）。
-func (svc *NodeGroupService) bindRouteRuleToCollection(collectionName string, ruleID int64) error {
-	collections, err := svc.store.ListProxyCollections()
-	if err != nil {
-		return err
-	}
-	for _, collection := range collections {
-		if collection.Name != collectionName {
-			continue
-		}
-		var ruleIDs []int64
-		if collection.RouteRuleIDs != "" && collection.RouteRuleIDs != "[]" {
-			_ = json.Unmarshal([]byte(collection.RouteRuleIDs), &ruleIDs)
-		}
-		for _, existing := range ruleIDs {
-			if existing == ruleID {
-				return nil
-			}
-		}
-		ruleIDs = append(ruleIDs, ruleID)
-		ruleIDsJSON, _ := json.Marshal(ruleIDs)
-		collection.RouteRuleIDs = string(ruleIDsJSON)
-		return svc.store.UpdateProxyCollection(collection.ID, collection)
-	}
-	return nil
 }
 
 func isNodeGroupDuplicateName(err error) bool {

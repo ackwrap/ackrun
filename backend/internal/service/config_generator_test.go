@@ -763,9 +763,13 @@ func TestGenerateOutboundsUsesGlobalConnectivitySettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	rule, err := db.CreateRouteRule(&model.RouteRuleRequest{Name: "Auto Service", Enabled: true, RuleType: "domain", Values: []string{"auto.example"}, Outbound: "proxy"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	collection := &model.ProxyCollection{
 		Name: "Auto Service", Type: "urltest", SourceType: proxyCollectionSourceNodeGroups,
-		ReferencedGroupIDs: fmt.Sprintf("[%d]", group.ID), RouteRuleIDs: "[]", NodeUIDs: "[]",
+		ReferencedGroupIDs: fmt.Sprintf("[%d]", group.ID), RouteRuleID: rule.ID, RouteRuleIDs: "[" + fmt.Sprint(rule.ID) + "]", NodeUIDs: "[]",
 		TestURL: "https://legacy.example/check", TestInterval: 900, Tolerance: 90, Enabled: true,
 	}
 	if err := db.CreateProxyCollection(collection); err != nil {
@@ -882,7 +886,15 @@ func TestGenerateRejectsDirectProxyFallbackWhenDNSDependsOnProxy(t *testing.T) {
 				t.Fatal(err)
 			}
 		}},
-		{name: "route final", defaultOutbound: "proxy"},
+		{name: "proxy route", setup: func(t *testing.T, db *store.Store) {
+			rule, err := db.CreateRouteRule(&model.RouteRuleRequest{Name: "Proxy Route", Enabled: true, RuleType: "domain", Values: []string{"proxy.example"}, Outbound: "proxy"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := db.CreateProxyCollection(&model.ProxyCollection{Name: rule.Name, Type: "selector", SourceType: "manual", ReferencedGroupIDs: "[]", RouteRuleID: rule.ID, RouteRuleIDs: "[" + fmt.Sprint(rule.ID) + "]", NodeUIDs: `["direct"]`, Enabled: true}); err != nil {
+				t.Fatal(err)
+			}
+		}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			dataDir := t.TempDir()
@@ -920,9 +932,11 @@ func TestGenerateRejectsAutomaticProxyWithOnlyDirectMembersWhenDNSDependsOnProxy
 	if _, err := db.CreateDNSServer(&model.DNSServerRequest{Tag: "dns_proxy", Enabled: true, ServerType: "udp", Address: "1.1.1.1"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.CreateProxyCollection(&model.ProxyCollection{
-		Name: "全球直连", Type: "selector", SourceType: "manual", NodeUIDs: `["direct"]`, ReferencedGroupIDs: "[]", RouteRuleIDs: "[]", Enabled: true,
-	}); err != nil {
+	rule, err := db.CreateRouteRule(&model.RouteRuleRequest{Name: "Proxy Route", Enabled: true, RuleType: "domain", Values: []string{"proxy.example"}, Outbound: "proxy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CreateProxyCollection(&model.ProxyCollection{Name: rule.Name, Type: "selector", SourceType: "manual", ReferencedGroupIDs: "[]", RouteRuleID: rule.ID, RouteRuleIDs: "[" + fmt.Sprint(rule.ID) + "]", NodeUIDs: `["direct"]`, Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -955,11 +969,14 @@ func TestGenerateRejectsDNSDetourWithoutNonDirectPath(t *testing.T) {
 			},
 		},
 		{
-			name:            "route final strategy",
-			defaultOutbound: "regional-proxy",
+			name: "bound route strategy",
 			setup: func(t *testing.T, db *store.Store) {
+				rule, err := db.CreateRouteRule(&model.RouteRuleRequest{Name: "Regional Proxy", Enabled: true, RuleType: "domain", Values: []string{"regional.example"}, Outbound: "proxy"})
+				if err != nil {
+					t.Fatal(err)
+				}
 				if err := db.CreateProxyCollection(&model.ProxyCollection{
-					Name: "regional-proxy", Type: "selector", SourceType: "manual", NodeUIDs: `["direct"]`, ReferencedGroupIDs: "[]", RouteRuleIDs: "[]", Enabled: true,
+					Name: "Regional Proxy", Type: "selector", SourceType: "manual", NodeUIDs: `["direct"]`, ReferencedGroupIDs: "[]", RouteRuleID: rule.ID, RouteRuleIDs: "[" + fmt.Sprint(rule.ID) + "]", Enabled: true,
 				}); err != nil {
 					t.Fatal(err)
 				}
@@ -1702,8 +1719,14 @@ func TestGeneratedDNSConfigurationPassesAvailableSingBoxCheck(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.CreateRouteRule(&model.RouteRuleRequest{
+	proxyRule, err := db.CreateRouteRule(&model.RouteRuleRequest{
 		Name: "Proxy GeoSite", Enabled: true, Priority: 10, RuleType: "geosite", Values: []string{"cn"}, Outbound: "proxy",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CreateProxyCollection(&model.ProxyCollection{
+		Name: proxyRule.Name, Type: "selector", SourceType: "manual", NodeUIDs: fmt.Sprintf("[%q]", nodes[0].UID), ReferencedGroupIDs: "[]", RouteRuleID: proxyRule.ID, RouteRuleIDs: "[" + fmt.Sprint(proxyRule.ID) + "]", Enabled: true,
 	}); err != nil {
 		t.Fatal(err)
 	}

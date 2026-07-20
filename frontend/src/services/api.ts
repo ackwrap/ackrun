@@ -53,6 +53,7 @@ import type {
   GeoLookupResponse,
   ProxyCollectionWithNodes,
   ProxyCollectionRequest,
+  StrategyItem,
   CollectionTestResponse,
   ConfigGenerateRequest,
   ConfigGenerateResponse,
@@ -352,6 +353,7 @@ export const api = {
     }),
 
   getRouteRules: () => request<RouteRule[]>("/rules"),
+  getRouteStrategies: () => request<StrategyItem[]>("/rules/strategies"),
   createRouteRule: (body: RouteRuleRequest) =>
     request<RouteRule>("/rules", {
       method: "POST",

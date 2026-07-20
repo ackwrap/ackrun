@@ -468,11 +468,12 @@ func (s *Store) UpdateProxyCollectionWithGroups(id int, req *model.ProxyCollecti
 	}
 
 	referencedGroupIDsJSON, _ := json.Marshal(req.ReferencedGroupIDs)
+	routeRuleIDsJSON, _ := json.Marshal(req.RouteRuleIDs)
 
 	nodeUIDsJSON, _ := json.Marshal(req.NodeUIDs)
 
-	_, err := s.db.Exec(`UPDATE proxy_collections SET name = ?, type = ?, source_type = ?, referenced_group_ids = ?, node_uids = ?, test_url = ?, test_interval = ?, tolerance = ?, enabled = ?, updated_at = ? WHERE id = ?`,
-		req.Name, req.Type, sourceType, string(referencedGroupIDsJSON), string(nodeUIDsJSON), req.TestURL, req.TestInterval, req.Tolerance, req.Enabled, now, id)
+	_, err := s.db.Exec(`UPDATE proxy_collections SET name = ?, type = ?, source_type = ?, referenced_group_ids = ?, route_rule_id = ?, route_rule_ids = ?, node_uids = ?, test_url = ?, test_interval = ?, tolerance = ?, enabled = ?, updated_at = ? WHERE id = ?`,
+		req.Name, req.Type, sourceType, string(referencedGroupIDsJSON), req.RouteRuleID, string(routeRuleIDsJSON), string(nodeUIDsJSON), req.TestURL, req.TestInterval, req.Tolerance, req.Enabled, now, id)
 	return err
 }
 
@@ -486,11 +487,12 @@ func (s *Store) CreateProxyCollectionWithGroups(req *model.ProxyCollectionReques
 	}
 
 	referencedGroupIDsJSON, _ := json.Marshal(req.ReferencedGroupIDs)
+	routeRuleIDsJSON, _ := json.Marshal(req.RouteRuleIDs)
 
 	nodeUIDsJSON, _ := json.Marshal(req.NodeUIDs)
 
-	result, err := s.db.Exec(`INSERT INTO proxy_collections (name, type, source_type, referenced_group_ids, node_uids, test_url, test_interval, tolerance, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		req.Name, req.Type, sourceType, string(referencedGroupIDsJSON), string(nodeUIDsJSON), req.TestURL, req.TestInterval, req.Tolerance, req.Enabled, now, now)
+	result, err := s.db.Exec(`INSERT INTO proxy_collections (name, type, source_type, referenced_group_ids, route_rule_id, route_rule_ids, node_uids, test_url, test_interval, tolerance, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		req.Name, req.Type, sourceType, string(referencedGroupIDsJSON), req.RouteRuleID, string(routeRuleIDsJSON), string(nodeUIDsJSON), req.TestURL, req.TestInterval, req.Tolerance, req.Enabled, now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -503,8 +505,8 @@ func (s *Store) CreateProxyCollectionWithGroups(req *model.ProxyCollectionReques
 func (s *Store) GetProxyCollectionWithNodes(id int) (*model.ProxyCollectionWithNodes, error) {
 	var c model.ProxyCollection
 	var enabled int
-	err := s.db.QueryRow(`SELECT id, name, type, source_type, referenced_group_ids, route_rule_ids, node_uids, test_url, test_interval, tolerance, enabled, created_at, updated_at FROM proxy_collections WHERE id = ?`, id).
-		Scan(&c.ID, &c.Name, &c.Type, &c.SourceType, &c.ReferencedGroupIDs, &c.RouteRuleIDs, &c.NodeUIDs, &c.TestURL, &c.TestInterval, &c.Tolerance, &enabled, &c.CreatedAt, &c.UpdatedAt)
+	err := s.db.QueryRow(`SELECT id, name, type, source_type, referenced_group_ids, route_rule_id, route_rule_ids, node_uids, test_url, test_interval, tolerance, enabled, priority, created_at, updated_at FROM proxy_collections WHERE id = ?`, id).
+		Scan(&c.ID, &c.Name, &c.Type, &c.SourceType, &c.ReferencedGroupIDs, &c.RouteRuleID, &c.RouteRuleIDs, &c.NodeUIDs, &c.TestURL, &c.TestInterval, &c.Tolerance, &enabled, &c.Priority, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}

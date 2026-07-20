@@ -362,6 +362,14 @@ func (s *ConfigGeneratorService) generateOutbounds(requireUsableProxy ...bool) (
 	if err != nil {
 		return nil, nil, err
 	}
+	routeRules, err := s.store.ListRouteRules()
+	if err != nil {
+		return nil, nil, err
+	}
+	collections, err = effectiveRouteStrategyCollections(collections, routeRules, s.store.GetProxyMode() == "rule")
+	if err != nil {
+		return nil, nil, err
+	}
 
 	// 3. 获取节点组匹配的节点 UID。sing-box group 不支持 Ackwrap 的筛选字段，必须在生成配置前完成匹配。
 	nodeGroups, err := s.store.ListNodeGroups()
@@ -495,6 +503,9 @@ func (s *ConfigGeneratorService) generateOutbounds(requireUsableProxy ...bool) (
 		effectiveCollection := *col
 		effectiveCollection.TestURL = connectivitySettings.TestURL
 		effectiveCollection.TestInterval = connectivitySettings.IntervalSeconds
+		if IsSystemProxyCollectionName(effectiveCollection.Name) {
+			effectiveCollection.Type = "selector"
+		}
 		outbound, err := s.generateCollectionOutbound(&effectiveCollection, validGroupTags, generatedNodeTags, groupNodeUIDs)
 		if err != nil {
 			if col.Name != "proxy" {
@@ -513,7 +524,7 @@ func (s *ConfigGeneratorService) generateOutbounds(requireUsableProxy ...bool) (
 
 		if col.Name == "proxy" {
 			hasProxyCollection = true
-		} else {
+		} else if col.Name != SystemGlobalDirectRouteRuleName {
 			collectionTags = append(collectionTags, col.Name)
 		}
 		outbounds = append(outbounds, outbound)
@@ -536,8 +547,85 @@ func (s *ConfigGeneratorService) generateOutbounds(requireUsableProxy ...bool) (
 			"outbounds": collectionTags,
 		})
 	}
+	if s.store.GetProxyMode() == "rule" {
+		outbounds, err = s.appendDirectStrategyOutbounds(outbounds, endpoints)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
 
 	return outbounds, endpoints, nil
+}
+
+func effectiveRouteStrategyCollections(collections []*model.ProxyCollectionWithNodes, rules []model.RouteRule, failOnMissingProxy bool) ([]*model.ProxyCollectionWithNodes, error) {
+	rulesByID := make(map[int64]model.RouteRule, len(rules))
+	for _, rule := range rules {
+		rulesByID[rule.ID] = rule
+	}
+
+	effective := make([]*model.ProxyCollectionWithNodes, 0, len(collections))
+	boundProxyRules := make(map[int64]bool)
+	for _, collection := range collections {
+		if !collection.Enabled {
+			continue
+		}
+		name := strings.TrimSpace(collection.Name)
+		if collection.RouteRuleID > 0 {
+			rule, ok := rulesByID[collection.RouteRuleID]
+			if ok && rule.Enabled && name == SystemGlobalDirectRouteRuleName && rule.SystemKey == SystemRuleGlobalDirectKey {
+				effective = append(effective, collection)
+				continue
+			}
+			if ok && rule.Enabled && !rule.IsSystem && rule.Outbound == "proxy" && strings.TrimSpace(rule.Name) == name {
+				effective = append(effective, collection)
+				boundProxyRules[rule.ID] = true
+				continue
+			}
+		}
+		logging.Info("config_generator.outbound", "策略组 %s 未规范绑定到启用的代理规则，保留数据但跳过生成", collection.Name)
+	}
+
+	if failOnMissingProxy {
+		for _, rule := range rules {
+			if rule.Enabled && !rule.IsSystem && rule.Outbound == "proxy" && !boundProxyRules[rule.ID] {
+				return nil, fmt.Errorf("代理规则 %q 已启用，但未绑定启用且有效的策略组，请先完成策略组配置或停用该规则", rule.Name)
+			}
+		}
+	}
+	return effective, nil
+}
+
+func (s *ConfigGeneratorService) appendDirectStrategyOutbounds(outbounds, endpoints []interface{}) ([]interface{}, error) {
+	tags := make(map[string]bool, len(outbounds)+len(endpoints))
+	for _, entry := range append(append([]interface{}{}, outbounds...), endpoints...) {
+		item, ok := entry.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if tag, _ := item["tag"].(string); tag != "" {
+			tags[tag] = true
+		}
+	}
+	rules, err := s.store.ListRouteRules()
+	if err != nil {
+		return nil, err
+	}
+	for _, rule := range rules {
+		if !rule.Enabled || rule.Outbound != "direct" || rule.RuleType == "fallback" || rule.IsSystem {
+			continue
+		}
+		tag := strings.TrimSpace(rule.Name)
+		if tags[tag] {
+			return nil, fmt.Errorf("直连策略 %q 的 outbound tag 与现有出站冲突", tag)
+		}
+		tags[tag] = true
+		outbounds = append(outbounds, map[string]interface{}{
+			"tag":       tag,
+			"type":      "selector",
+			"outbounds": []string{"direct"},
+		})
+	}
+	return outbounds, nil
 }
 
 func (s *ConfigGeneratorService) dnsRequiresUsableProxy(defaultOutbound string) (bool, error) {
@@ -564,16 +652,13 @@ func (s *ConfigGeneratorService) dnsRequiresUsableProxy(defaultOutbound string) 
 	return false, nil
 }
 
-func (s *ConfigGeneratorService) dnsNeedsProxyFinal(defaultOutbound string) (bool, error) {
+func (s *ConfigGeneratorService) dnsNeedsProxyFinal(_ string) (bool, error) {
 	switch s.store.GetProxyMode() {
 	case "global":
 		return true, nil
 	case "direct":
 		return false, nil
 	case "rule":
-		if defaultOutbound != "" && defaultOutbound != "direct" {
-			return true, nil
-		}
 		rules, err := s.store.ListRouteRules()
 		if err != nil {
 			return false, fmt.Errorf("读取 DNS 防泄漏关联路由规则失败: %w", err)
@@ -587,7 +672,7 @@ func (s *ConfigGeneratorService) dnsNeedsProxyFinal(defaultOutbound string) (boo
 				continue
 			}
 			outbound := rule.Outbound
-			if override, exists := overrides[rule.ID]; exists {
+			if override, exists := overrides[rule.ID]; exists && rule.Outbound == "proxy" {
 				outbound = override
 			}
 			if outbound != "" && outbound != "direct" {
@@ -1364,8 +1449,17 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 			if !rule.Enabled {
 				continue
 			}
-			if outbound, ok := ruleOutboundOverrides[rule.ID]; ok && rule.Outbound != "block" {
+			if rule.RuleType == "fallback" || rule.SystemKey == SystemRuleGlobalDirectKey {
+				continue
+			}
+			if rule.Outbound == "proxy" {
+				outbound, ok := ruleOutboundOverrides[rule.ID]
+				if !ok {
+					return nil, fmt.Errorf("代理规则 %q 已启用，但未绑定启用且有效的策略组，请先完成策略组配置或停用该规则", rule.Name)
+				}
 				rule.Outbound = outbound
+			} else if rule.Outbound == "direct" {
+				rule.Outbound = rule.Name
 			}
 
 			ruleMaps, err := s.generateRouteRules(&rule)
@@ -1436,15 +1530,8 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 		// 直连模式：所有流量直连
 		finalOutbound = "direct"
 	case "rule":
-		// 规则模式：未匹配规则的流量走 defaultOutbound 或 direct
-		if defaultOutbound != "" {
-			if defaultOutbound == "block" || defaultOutbound == "reject" {
-				return nil, fmt.Errorf("默认出站不能是 %s：sing-box route.final 必须引用真实 outbound tag", defaultOutbound)
-			}
-			finalOutbound = defaultOutbound
-		} else {
-			finalOutbound = "direct"
-		}
+		// 规则模式的最终策略由受保护的全球直连系统规则和 selector 承接。
+		finalOutbound = SystemGlobalDirectRouteRuleName
 	default:
 		finalOutbound = "direct"
 	}
@@ -2080,19 +2167,17 @@ func (s *ConfigGeneratorService) routeRuleOutboundOverrides() (map[int64]string,
 	if err != nil {
 		return nil, fmt.Errorf("读取策略组规则绑定失败: %w", err)
 	}
+	rules, err := s.store.ListRouteRules()
+	if err != nil {
+		return nil, fmt.Errorf("读取策略组关联规则失败: %w", err)
+	}
+	collections, err = effectiveRouteStrategyCollections(collections, rules, false)
+	if err != nil {
+		return nil, err
+	}
 	for _, collection := range collections {
-		if !collection.Enabled {
-			continue
-		}
-		for _, ruleID := range collection.RouteRuleIDs {
-			if ruleID <= 0 {
-				continue
-			}
-			if _, exists := overrides[ruleID]; exists {
-				logging.Info("config_generator.route", "规则 %d 绑定多个策略组，保留第一个策略组", ruleID)
-				continue
-			}
-			overrides[ruleID] = collection.Name
+		if collection.RouteRuleID > 0 {
+			overrides[collection.RouteRuleID] = collection.Name
 		}
 	}
 	return overrides, nil

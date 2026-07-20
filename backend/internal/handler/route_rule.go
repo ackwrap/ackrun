@@ -28,6 +28,15 @@ func (h *RouteRuleHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, items)
 }
 
+func (h *RouteRuleHandler) Strategies(c *gin.Context) {
+	items, err := h.svc.Strategies()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Error: model.APIError{Code: "ROUTE_STRATEGY_LIST_FAILED", Message: err.Error()}})
+		return
+	}
+	c.JSON(http.StatusOK, items)
+}
+
 func (h *RouteRuleHandler) Create(c *gin.Context) {
 	var req model.RouteRuleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -36,11 +45,7 @@ func (h *RouteRuleHandler) Create(c *gin.Context) {
 	}
 	item, err := h.svc.Create(&req)
 	if err != nil {
-		if errors.Is(err, service.ErrSystemRouteRuleProtected) {
-			c.JSON(http.StatusForbidden, model.ErrorResponse{Error: model.APIError{Code: "SYSTEM_RULE_PROTECTED", Message: err.Error()}})
-			return
-		}
-		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "ROUTE_RULE_CREATE_FAILED", Message: err.Error()}})
+		writeRouteRuleMutationError(c, http.StatusBadRequest, "ROUTE_RULE_CREATE_FAILED", err)
 		return
 	}
 	c.JSON(http.StatusOK, item)
@@ -58,11 +63,7 @@ func (h *RouteRuleHandler) Update(c *gin.Context) {
 	}
 	item, err := h.svc.Update(id, &req)
 	if err != nil {
-		if errors.Is(err, service.ErrSystemRouteRuleProtected) {
-			c.JSON(http.StatusForbidden, model.ErrorResponse{Error: model.APIError{Code: "SYSTEM_RULE_PROTECTED", Message: err.Error()}})
-			return
-		}
-		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "ROUTE_RULE_UPDATE_FAILED", Message: err.Error()}})
+		writeRouteRuleMutationError(c, http.StatusBadRequest, "ROUTE_RULE_UPDATE_FAILED", err)
 		return
 	}
 	c.JSON(http.StatusOK, item)
@@ -75,14 +76,23 @@ func (h *RouteRuleHandler) Delete(c *gin.Context) {
 	}
 	resp, err := h.svc.Delete(id)
 	if err != nil {
-		if errors.Is(err, service.ErrSystemRouteRuleProtected) {
-			c.JSON(http.StatusForbidden, model.ErrorResponse{Error: model.APIError{Code: "SYSTEM_RULE_PROTECTED", Message: err.Error()}})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Error: model.APIError{Code: "ROUTE_RULE_DELETE_FAILED", Message: err.Error()}})
+		writeRouteRuleMutationError(c, http.StatusInternalServerError, "ROUTE_RULE_DELETE_FAILED", err)
 		return
 	}
 	c.JSON(http.StatusOK, resp)
+}
+
+func writeRouteRuleMutationError(c *gin.Context, fallbackStatus int, fallbackCode string, err error) {
+	status, code := fallbackStatus, fallbackCode
+	switch {
+	case errors.Is(err, service.ErrSystemRouteRuleProtected):
+		status, code = http.StatusForbidden, "SYSTEM_RULE_PROTECTED"
+	case errors.Is(err, service.ErrRouteRuleNotFound):
+		status, code = http.StatusNotFound, "ROUTE_RULE_NOT_FOUND"
+	case errors.Is(err, service.ErrRouteRuleNameConflict):
+		status, code = http.StatusConflict, "ROUTE_RULE_NAME_CONFLICT"
+	}
+	c.JSON(status, model.ErrorResponse{Error: model.APIError{Code: code, Message: err.Error()}})
 }
 
 func (h *RouteRuleHandler) Reorder(c *gin.Context) {

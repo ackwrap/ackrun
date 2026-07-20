@@ -1,11 +1,28 @@
 package store
 
 import (
+	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
 
 	"github.com/ackwrap/ackwrap/internal/model"
 )
+
+func TestProxyCollectionWritesReportMissingRows(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	missing := &model.ProxyCollection{Name: "Missing", Type: "selector", SourceType: "manual", ReferencedGroupIDs: "[]", RouteRuleIDs: "[]", NodeUIDs: "[]", Enabled: true}
+	if err := db.UpdateProxyCollection(999999, missing); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("missing collection update error = %v", err)
+	}
+	if err := db.DeleteProxyCollection(999999); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("missing collection delete error = %v", err)
+	}
+}
 
 func TestProxyCollectionStoreReorder(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
@@ -13,6 +30,11 @@ func TestProxyCollectionStoreReorder(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
+	existing, err := db.ListProxyCollections()
+	if err != nil {
+		t.Fatal(err)
+	}
+	globalID := existing[0].ID
 	collections := []*model.ProxyCollection{
 		{Name: "first", Type: "selector", SourceType: "manual", ReferencedGroupIDs: "[]", RouteRuleIDs: "[]", NodeUIDs: "[]", Enabled: true},
 		{Name: "second", Type: "selector", SourceType: "manual", ReferencedGroupIDs: "[]", RouteRuleIDs: "[]", NodeUIDs: "[]", Enabled: true},
@@ -23,14 +45,14 @@ func TestProxyCollectionStoreReorder(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := db.ReorderProxyCollections([]int{collections[2].ID, collections[0].ID, collections[1].ID}); err != nil {
+	if err := db.ReorderProxyCollections([]int{globalID, collections[2].ID, collections[0].ID, collections[1].ID}); err != nil {
 		t.Fatal(err)
 	}
 	items, err := db.ListProxyCollections()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 3 || items[0].ID != collections[2].ID || items[1].ID != collections[0].ID || items[2].ID != collections[1].ID {
+	if len(items) != 4 || items[0].ID != globalID || items[1].ID != collections[2].ID || items[2].ID != collections[0].ID || items[3].ID != collections[1].ID {
 		t.Fatalf("unexpected collection order: %+v", items)
 	}
 }
@@ -41,6 +63,11 @@ func TestProxyCollectionStoreReorderRejectsIncompleteOrUnknownIDs(t *testing.T) 
 		t.Fatal(err)
 	}
 	defer db.Close()
+	existing, err := db.ListProxyCollections()
+	if err != nil {
+		t.Fatal(err)
+	}
+	globalID := existing[0].ID
 	collections := []*model.ProxyCollection{
 		{Name: "first", Type: "selector", SourceType: "manual", ReferencedGroupIDs: "[]", RouteRuleIDs: "[]", NodeUIDs: "[]", Enabled: true},
 		{Name: "second", Type: "selector", SourceType: "manual", ReferencedGroupIDs: "[]", RouteRuleIDs: "[]", NodeUIDs: "[]", Enabled: true},
@@ -53,7 +80,7 @@ func TestProxyCollectionStoreReorderRejectsIncompleteOrUnknownIDs(t *testing.T) 
 	if err := db.ReorderProxyCollections([]int{collections[1].ID}); err == nil {
 		t.Fatal("expected incomplete collection order to fail")
 	}
-	if err := db.ReorderProxyCollections([]int{collections[1].ID, 999999}); err == nil {
+	if err := db.ReorderProxyCollections([]int{globalID, collections[1].ID, 999999}); err == nil {
 		t.Fatal("expected unknown collection ID to fail")
 	}
 }
@@ -64,16 +91,16 @@ func TestProxyCollectionStoreKeepsGlobalDirectFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	collections := []*model.ProxyCollection{
-		{Name: "全球直连", Type: "selector", SourceType: "manual", ReferencedGroupIDs: "[]", RouteRuleIDs: "[]", NodeUIDs: `["direct"]`, Enabled: true},
-		{Name: "Google", Type: "selector", SourceType: "manual", ReferencedGroupIDs: "[]", RouteRuleIDs: "[]", NodeUIDs: "[]", Enabled: true},
+	existing, err := db.ListProxyCollections()
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, collection := range collections {
-		if err := db.CreateProxyCollection(collection); err != nil {
-			t.Fatal(err)
-		}
+	direct := existing[0]
+	google := &model.ProxyCollection{Name: "Google", Type: "selector", SourceType: "manual", ReferencedGroupIDs: "[]", RouteRuleIDs: "[]", NodeUIDs: "[]", Enabled: true}
+	if err := db.CreateProxyCollection(google); err != nil {
+		t.Fatal(err)
 	}
-	if err := db.ReorderProxyCollections([]int{collections[1].ID, collections[0].ID}); err == nil {
+	if err := db.ReorderProxyCollections([]int{google.ID, direct.ID}); err == nil {
 		t.Fatal("expected moving 全球直连 away from first place to fail")
 	}
 	if _, err := db.db.Exec(`UPDATE proxy_collections SET priority = CASE WHEN name = '全球直连' THEN 99 ELSE 0 END`); err != nil {
@@ -83,7 +110,7 @@ func TestProxyCollectionStoreKeepsGlobalDirectFirst(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 2 || items[0].Name != "全球直连" {
+	if len(items) != 2 || items[0].ID != direct.ID {
 		t.Fatalf("collection order = %+v, want 全球直连 first", items)
 	}
 }
@@ -155,19 +182,44 @@ func TestExistingReorderStoresRejectInvalidIDSets(t *testing.T) {
 	tests := []struct {
 		name    string
 		reorder func([]int64) error
+		valid   []int64
 	}{
-		{name: "node groups", reorder: db.ReorderNodeGroups},
-		{name: "route rules", reorder: db.ReorderRouteRules},
-		{name: "DNS rules", reorder: db.ReorderDNSRules},
+		{name: "node groups", reorder: db.ReorderNodeGroups, valid: []int64{2, 1}},
+		{name: "DNS rules", reorder: db.ReorderDNSRules, valid: []int64{2, 1}},
 	}
+	routeRules, err := db.ListRouteRules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	routeValid := make([]int64, 0, len(routeRules))
+	for _, rule := range routeRules {
+		if rule.SystemKey == systemRuleAdBlockKey {
+			routeValid = append([]int64{rule.ID}, routeValid...)
+		} else if rule.SystemKey == systemRuleGlobalDirectKey {
+			continue
+		} else {
+			routeValid = append(routeValid, rule.ID)
+		}
+	}
+	for _, rule := range routeRules {
+		if rule.SystemKey == systemRuleGlobalDirectKey {
+			routeValid = append(routeValid, rule.ID)
+		}
+	}
+	tests = append(tests, struct {
+		name    string
+		reorder func([]int64) error
+		valid   []int64
+	}{name: "route rules", reorder: db.ReorderRouteRules, valid: routeValid})
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			for _, ids := range [][]int64{{}, {1}, {1, 1}, {1, 999999}} {
+			first := test.valid[0]
+			for _, ids := range [][]int64{{}, {first}, {first, first}, append(append([]int64{}, test.valid[:len(test.valid)-1]...), 999999)} {
 				if err := test.reorder(ids); err == nil {
 					t.Fatalf("expected invalid ID set %v to fail", ids)
 				}
 			}
-			if err := test.reorder([]int64{2, 1}); err != nil {
+			if err := test.reorder(test.valid); err != nil {
 				t.Fatalf("valid reorder failed: %v", err)
 			}
 		})

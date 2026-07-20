@@ -43,8 +43,9 @@ func TestCollectionHealthCheckUsesClashAPIAndPersistsResult(t *testing.T) {
 
 	svc := NewProxyCollectionService(db, nil)
 	svc.clashBaseURL = server.URL
+	routeRuleID := createHealthTestProxyRule(t, db, "Auto")
 	collection, err := svc.Create(model.ProxyCollectionRequest{
-		Name: "Auto", Type: "urltest", SourceType: "manual", NodeUIDs: []string{"node-1"},
+		Name: "Auto", RouteRuleID: routeRuleID, Type: "urltest", SourceType: "manual", NodeUIDs: []string{"node-1"},
 		TestURL: "https://legacy.example/generate_204", TestInterval: 300, Tolerance: 100, Enabled: true,
 	})
 	if err != nil {
@@ -130,8 +131,9 @@ func TestCollectionHealthCheckUsesManualNodeGroupUIDs(t *testing.T) {
 		t.Fatalf("create node group: %v", err)
 	}
 	svc := NewProxyCollectionService(db, nil)
+	routeRuleID := createHealthTestProxyRule(t, db, "Combined")
 	collection, err := svc.Create(model.ProxyCollectionRequest{
-		Name: "Combined", Type: "selector", SourceType: proxyCollectionSourceNodeGroupsAndNodes,
+		Name: "Combined", RouteRuleID: routeRuleID, Type: "selector", SourceType: proxyCollectionSourceNodeGroupsAndNodes,
 		ReferencedGroupIDs: []int64{group.ID}, Enabled: true,
 	})
 	if err != nil {
@@ -153,8 +155,9 @@ func TestCollectionHealthJobRefreshesDoNotLeaveDuplicateEntries(t *testing.T) {
 	}
 	defer db.Close()
 	svc := NewProxyCollectionService(db, nil)
+	routeRuleID := createHealthTestProxyRule(t, db, "Auto")
 	collection, err := svc.Create(model.ProxyCollectionRequest{
-		Name: "Auto", Type: "urltest", SourceType: "manual", NodeUIDs: []string{"node-1"},
+		Name: "Auto", RouteRuleID: routeRuleID, Type: "urltest", SourceType: "manual", NodeUIDs: []string{"node-1"},
 		TestURL: "https://example.com/generate_204", TestInterval: 300, Tolerance: 100, Enabled: true,
 	})
 	if err != nil {
@@ -184,4 +187,13 @@ func TestCollectionHealthJobRefreshesDoNotLeaveDuplicateEntries(t *testing.T) {
 	if tracked != 1 {
 		t.Fatalf("tracked entries = %d, want 1", tracked)
 	}
+}
+
+func createHealthTestProxyRule(t *testing.T, db *store.Store, name string) int64 {
+	t.Helper()
+	rule, err := db.CreateRouteRule(&model.RouteRuleRequest{Name: name, Enabled: true, RuleType: "domain", Values: []string{strings.ToLower(name) + ".example"}, Outbound: "proxy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rule.ID
 }

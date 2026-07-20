@@ -36,6 +36,17 @@ type RouteRulePreviewResponse struct {
 	RuleSets []map[string]any `json:"rule_sets"`
 }
 
+type RouteStrategyItem struct {
+	RuleID      int64                     `json:"rule_id"`
+	Name        string                    `json:"name"`
+	Priority    int                       `json:"priority"`
+	Kind        string                    `json:"kind"`
+	Enabled     bool                      `json:"enabled"`
+	ReadOnly    bool                      `json:"read_only"`
+	OutboundTag string                    `json:"outbound_tag"`
+	Collection  *ProxyCollectionWithNodes `json:"collection,omitempty"`
+}
+
 type RouteRuleSubscription struct {
 	ID              int64   `json:"id"`
 	Name            string  `json:"name"`
