@@ -1390,6 +1390,55 @@ func TestGenerateMixedOnlyDoesNotEnableTransparentRouting(t *testing.T) {
 	}
 }
 
+func TestCacheFileConfigPersistsFakeIPMappings(t *testing.T) {
+	dataDir := t.TempDir()
+	db, err := store.Open(filepath.Join(dataDir, "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.CreateDNSServer(&model.DNSServerRequest{Tag: "dns_direct", Enabled: true, ServerType: "udp", Address: "1.1.1.1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetExperimentalSettings(&model.ExperimentalSettings{ClashAPIPort: "9090"}); err != nil {
+		t.Fatal(err)
+	}
+
+	service := NewConfigGeneratorService(db, &paths.Paths{DataDir: dataDir})
+	generate := func(name string) map[string]interface{} {
+		t.Helper()
+		result, err := service.generateLockedTo(&model.ConfigGenerateRequest{
+			DefaultOutbound: "direct", InboundListen: "127.0.0.1", InboundPort: model.DefaultMixedInboundPort,
+			TUNIPv4Address: defaultTUNIPv4Address, TUNIPv6Address: defaultTUNIPv6Address, LogLevel: "warn",
+		}, filepath.Join(dataDir, name+".json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result.Config
+	}
+	cacheFile := generate("tun")["experimental"].(map[string]interface{})["cache_file"].(map[string]interface{})
+	if cacheFile["path"] != filepath.Join(dataDir, "cache.db") {
+		t.Fatalf("cache path = %q", cacheFile["path"])
+	}
+	if cacheFile["store_fakeip"] != true || cacheFile["enabled"] != true {
+		t.Fatalf("FakeIP cache config = %+v", cacheFile)
+	}
+	settings, err := db.GetExperimentalSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.CacheFileEnabled || settings.CacheFileStoreFakeIP {
+		t.Fatalf("FakeIP cache generation changed persisted settings: %+v", settings)
+	}
+
+	if err := db.SetInboundMode("mixed"); err != nil {
+		t.Fatal(err)
+	}
+	if cacheFile, exists := generate("mixed")["experimental"].(map[string]interface{})["cache_file"]; exists || cacheFile != nil {
+		t.Fatalf("mixed mode cache file = %+v, want none", cacheFile)
+	}
+}
+
 func TestGenerateDNSFakeIPFollowsTUNMode(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {

@@ -80,7 +80,7 @@ func TestDNSGlobalSettingsFallBackToLegacySettingsWhenUnmigrated(t *testing.T) {
 	if settings.Enabled || settings.Final != "dns_legacy" || settings.Strategy != "ipv4_only" || !settings.FakeIPEnabled {
 		t.Fatalf("legacy DNS fallback = %+v", settings)
 	}
-	if settings.FakeIPInet4Range != "198.18.0.0/15" || settings.FakeIPInet6Range != "fdfe:dcba:9876::/48" {
+	if settings.FakeIPInet4Range != "198.18.0.1/16" || settings.FakeIPInet6Range != "fdfe:dcba:9876::/48" {
 		t.Fatalf("default FakeIP ranges = %s, %s", settings.FakeIPInet4Range, settings.FakeIPInet6Range)
 	}
 	if _, err := s.db.Exec(`INSERT INTO app_settings (key, value, updated_at) VALUES ('dns_global.enabled', 'true', 2)`); err != nil {

@@ -45,7 +45,7 @@ const defaults = {
     cache_capacity: 4096,
     client_subnet: "",
     fakeip_enabled: false,
-    fakeip_inet4_range: "198.18.0.0/15",
+    fakeip_inet4_range: "198.18.0.1/16",
     fakeip_inet6_range: "fdfe:dcba:9876::/48",
   },
   servers = ref<Server[]>([]),

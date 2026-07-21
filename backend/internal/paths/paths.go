@@ -166,3 +166,7 @@ func (p *Paths) AppUpdateLockPath() string {
 func (p *Paths) AppUpdateResultPath() string {
 	return filepath.Join(p.DataDir, ".app-update-result")
 }
+
+func (p *Paths) CacheFilePath() string {
+	return filepath.Join(p.DataDir, "cache.db")
+}

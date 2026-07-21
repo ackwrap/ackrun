@@ -207,7 +207,7 @@ func (s *Store) GetDNSGlobalSettings() (*model.DNSGlobalSettings, error) {
 		CacheCapacity:    4096,
 		ClientSubnet:     "",
 		FakeIPEnabled:    false,
-		FakeIPInet4Range: "198.18.0.0/15",
+		FakeIPInet4Range: "198.18.0.1/16",
 		FakeIPInet6Range: "fdfe:dcba:9876::/48",
 	}
 

@@ -355,17 +355,8 @@ func (s *ConfigGeneratorService) generateLockedTo(req *model.ConfigGenerateReque
 	experimental["clash_api"] = clashAPI
 	logging.Info("config_generator.experimental", "Clash API 已强制启用: %s:%s, 模式: %s", controllerHost, port, proxyMode)
 
-	// 缓存文件（全局，独立于 clash_api）
-	if expSettings.CacheFileEnabled {
-		cacheFile := map[string]interface{}{
-			"enabled":      true,
-			"path":         "cache.db",
-			"cache_id":     "default",
-			"store_fakeip": expSettings.CacheFileStoreFakeIP,
-			"store_dns":    expSettings.CacheFileStoreDNS,
-		}
+	if cacheFile := s.cacheFileConfig(expSettings, dnsGlobalSettings != nil && dnsGlobalSettings.FakeIPEnabled); cacheFile != nil {
 		experimental["cache_file"] = cacheFile
-		logging.Info("config_generator.experimental", "启用缓存文件: store_fakeip=%t, store_dns=%t", expSettings.CacheFileStoreFakeIP, expSettings.CacheFileStoreDNS)
 	}
 
 	config["experimental"] = experimental
@@ -1738,6 +1729,30 @@ func mapMihomoUDPFlagToSingboxNetwork(nodeData map[string]interface{}) {
 	}
 }
 
+func (s *ConfigGeneratorService) cacheFileConfig(settings *model.ExperimentalSettingsResponse, fakeIPEnabled bool) map[string]interface{} {
+	cacheFileEnabled := settings.CacheFileEnabled || fakeIPEnabled
+	if !cacheFileEnabled {
+		return nil
+	}
+	storeFakeIP := settings.CacheFileStoreFakeIP || fakeIPEnabled
+	if fakeIPEnabled && (!settings.CacheFileEnabled || !settings.CacheFileStoreFakeIP) {
+		logging.Info("config_generator.experimental", "FakeIP 已启用，强制持久化 FakeIP 映射")
+	}
+	cachePath := "cache.db"
+	if s.paths != nil && s.paths.DataDir != "" {
+		cachePath = s.paths.CacheFilePath()
+	}
+	cacheFile := map[string]interface{}{
+		"enabled":      true,
+		"path":         cachePath,
+		"cache_id":     "default",
+		"store_fakeip": storeFakeIP,
+		"store_dns":    settings.CacheFileStoreDNS,
+	}
+	logging.Info("config_generator.experimental", "启用缓存文件: store_fakeip=%t, store_dns=%t", storeFakeIP, settings.CacheFileStoreDNS)
+	return cacheFile
+}
+
 func enabledDNSServerTags(servers []model.DNSServer, fakeIPEnabled bool) map[string]bool {
 	tags := make(map[string]bool)
 	for _, server := range servers {
@@ -2177,7 +2192,7 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase(routeFinal ...string) (
 			CacheCapacity:    4096,
 			ClientSubnet:     "",
 			FakeIPEnabled:    false,
-			FakeIPInet4Range: "198.18.0.0/15",
+			FakeIPInet4Range: "198.18.0.1/16",
 			FakeIPInet6Range: "fdfe:dcba:9876::/48",
 		}
 	}
