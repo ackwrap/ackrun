@@ -263,6 +263,11 @@ export interface NTPSettingsResponse {
   detour: string;
 }
 
+export interface MixedInboundSettings {
+  username: string;
+  password: string;
+}
+
 export interface DNSSettings {
   enabled: boolean;
   proxy_server?: string;

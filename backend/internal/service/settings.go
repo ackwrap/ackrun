@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/ackwrap/ackrun/internal/logging"
@@ -24,6 +25,7 @@ type SettingsService struct {
 	configGenerator          modeConfigGenerator
 	connectivitySettingsHook func()
 	dashboardsDir            string
+	mixedInboundMu           sync.Mutex
 }
 
 type modeConfigGenerator interface {
@@ -33,6 +35,7 @@ type modeConfigGenerator interface {
 var ErrModeChangeWhileRunning = errors.New("核心运行时不能切换模式，请先停止核心")
 var ErrConnectivitySettingsInvalid = errors.New("连通性测速设置无效")
 var ErrTrafficBypassSettingsInvalid = errors.New("流量排除设置无效")
+var ErrMixedInboundSettingsInvalid = errors.New("Mixed 代理认证设置无效")
 
 func NewSettingsService(s *store.Store) *SettingsService {
 	return &SettingsService{store: s}
@@ -194,6 +197,66 @@ func (svc *SettingsService) GetNTPSettings() (*model.NTPSettingsResponse, error)
 
 func (svc *SettingsService) SetNTPSettings(req *model.NTPSettings) error {
 	return svc.store.SetNTPSettings(req)
+}
+
+func (svc *SettingsService) GetMixedInboundSettings() (*model.MixedInboundSettings, error) {
+	svc.mixedInboundMu.Lock()
+	defer svc.mixedInboundMu.Unlock()
+	return svc.store.GetMixedInboundSettings()
+}
+
+func (svc *SettingsService) SetMixedInboundSettings(req *model.MixedInboundSettings) error {
+	svc.mixedInboundMu.Lock()
+	defer svc.mixedInboundMu.Unlock()
+	if req == nil {
+		return fmt.Errorf("%w: 设置不能为空", ErrMixedInboundSettingsInvalid)
+	}
+	req.Username = strings.TrimSpace(req.Username)
+	usernameEmpty := req.Username == ""
+	passwordEmpty := req.Password == ""
+	if usernameEmpty != passwordEmpty {
+		return fmt.Errorf("%w: 用户名和密码必须同时填写或同时清空", ErrMixedInboundSettingsInvalid)
+	}
+	if utf8.RuneCountInString(req.Username) > 64 || strings.ContainsAny(req.Username, "\r\n\x00") {
+		return fmt.Errorf("%w: 用户名必须是 64 个字符以内的单行文本", ErrMixedInboundSettingsInvalid)
+	}
+	if utf8.RuneCountInString(req.Password) > 128 || strings.ContainsAny(req.Password, "\r\n\x00") {
+		return fmt.Errorf("%w: 密码必须是 128 个字符以内的单行文本", ErrMixedInboundSettingsInvalid)
+	}
+	previous, err := svc.store.GetMixedInboundSettings()
+	if err != nil {
+		return err
+	}
+	if previous.Username == req.Username && previous.Password == req.Password {
+		return nil
+	}
+	if err := svc.store.SetMixedInboundSettings(req); err != nil {
+		return err
+	}
+	logging.Info("settings.mixed_inbound", "Mixed 代理认证设置已更新，认证启用: %t", !usernameEmpty)
+	if svc.configGenerator == nil {
+		return nil
+	}
+	result, err := svc.configGenerator.ReconcileCurrent()
+	if err == nil && result != nil && !result.Valid {
+		err = fmt.Errorf("配置校验失败: %s", result.Error)
+	}
+	if err == nil {
+		return nil
+	}
+	if rollbackErr := svc.store.SetMixedInboundSettings(previous); rollbackErr != nil {
+		return fmt.Errorf("应用 Mixed 代理认证失败: %v；回滚设置也失败: %w", err, rollbackErr)
+	}
+	if result != nil && result.Valid {
+		rollbackResult, rollbackErr := svc.configGenerator.ReconcileCurrent()
+		if rollbackErr == nil && rollbackResult != nil && !rollbackResult.Valid {
+			rollbackErr = fmt.Errorf("配置校验失败: %s", rollbackResult.Error)
+		}
+		if rollbackErr != nil {
+			return fmt.Errorf("应用 Mixed 代理认证失败: %v；设置已回滚，但恢复配置失败: %w", err, rollbackErr)
+		}
+	}
+	return fmt.Errorf("应用 Mixed 代理认证失败，已回滚: %w", err)
 }
 
 func (svc *SettingsService) GetDNSSettings() (*model.DNSSettingsResponse, error) {

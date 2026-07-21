@@ -20,6 +20,7 @@ import type {
   GeoIPProviderListResponse,
   NTPSettings,
   NTPSettingsResponse,
+  MixedInboundSettings,
   DNSSettings,
   DNSSettingsResponse,
   ExperimentalSettings,
@@ -222,6 +223,13 @@ export const api = {
   getNTPSettings: () => request<NTPSettingsResponse>("/settings/ntp"),
   setNTPSettings: (body: NTPSettings) =>
     request<ActionResponse>("/settings/ntp", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  getMixedInboundSettings: () =>
+    request<MixedInboundSettings>("/settings/mixed-inbound"),
+  setMixedInboundSettings: (body: MixedInboundSettings) =>
+    request<ActionResponse>("/settings/mixed-inbound", {
       method: "PUT",
       body: JSON.stringify(body),
     }),

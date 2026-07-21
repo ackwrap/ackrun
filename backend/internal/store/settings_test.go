@@ -56,6 +56,35 @@ func TestLogSettingsPersistLevelAndTimestamp(t *testing.T) {
 	}
 }
 
+func TestMixedInboundSettingsRoundTripAndClear(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	if err := s.SetMixedInboundSettings(&model.MixedInboundSettings{Username: "proxy-user", Password: "short-pass"}); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := s.GetMixedInboundSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Username != "proxy-user" || settings.Password != "short-pass" {
+		t.Fatal("mixed inbound settings did not round trip")
+	}
+	if err := s.SetMixedInboundSettings(&model.MixedInboundSettings{}); err != nil {
+		t.Fatal(err)
+	}
+	settings, err = s.GetMixedInboundSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Username != "" || settings.Password != "" {
+		t.Fatal("mixed inbound settings were not cleared")
+	}
+}
+
 func TestDNSGlobalSettingsFallBackToLegacySettingsWhenUnmigrated(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {

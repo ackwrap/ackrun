@@ -6,7 +6,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/ackwrap/ackrun/internal/model"
 	"github.com/ackwrap/ackrun/internal/store"
@@ -16,6 +18,25 @@ type modeConfigGeneratorStub struct {
 	calls  int
 	result *model.ConfigGenerateResponse
 	err    error
+}
+
+type blockingConfigGeneratorStub struct {
+	mu      sync.Mutex
+	calls   int
+	started chan struct{}
+	release chan struct{}
+}
+
+func (stub *blockingConfigGeneratorStub) ReconcileCurrent() (*model.ConfigGenerateResponse, error) {
+	stub.mu.Lock()
+	stub.calls++
+	call := stub.calls
+	stub.mu.Unlock()
+	if call == 1 {
+		close(stub.started)
+		<-stub.release
+	}
+	return &model.ConfigGenerateResponse{Valid: true}, nil
 }
 
 func (stub *modeConfigGeneratorStub) ReconcileCurrent() (*model.ConfigGenerateResponse, error) {
@@ -136,6 +157,100 @@ func TestSetInboundModeRollsBackWhenConfigIsInvalid(t *testing.T) {
 	}
 	if got := svc.GetInboundMode(); got != "tun_mixed" {
 		t.Fatalf("inbound mode = %q, want rollback to tun_mixed", got)
+	}
+}
+
+func TestSetMixedInboundSettingsPersistsAndReconciles(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	generator := &modeConfigGeneratorStub{result: &model.ConfigGenerateResponse{Valid: true}}
+	svc := NewSettingsService(db)
+	svc.SetModeDependencies(nil, generator)
+	if err := svc.SetMixedInboundSettings(&model.MixedInboundSettings{Username: "  proxy-user  ", Password: "short-pass"}); err != nil {
+		t.Fatal(err)
+	}
+	if generator.calls != 1 {
+		t.Fatalf("config reconcile calls = %d, want 1", generator.calls)
+	}
+	settings, err := svc.GetMixedInboundSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Username != "proxy-user" || settings.Password != "short-pass" {
+		t.Fatalf("mixed inbound settings were not persisted and normalized")
+	}
+	if err := svc.SetMixedInboundSettings(&model.MixedInboundSettings{Username: "proxy-user"}); !errors.Is(err, ErrMixedInboundSettingsInvalid) {
+		t.Fatalf("partial credentials error = %v, want validation error", err)
+	}
+}
+
+func TestSetMixedInboundSettingsRollsBackWhenConfigIsInvalid(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.SetMixedInboundSettings(&model.MixedInboundSettings{Username: "old-user", Password: "old-pass"}); err != nil {
+		t.Fatal(err)
+	}
+
+	generator := &modeConfigGeneratorStub{result: &model.ConfigGenerateResponse{Valid: false, Error: "invalid mixed config"}}
+	svc := NewSettingsService(db)
+	svc.SetModeDependencies(nil, generator)
+	err = svc.SetMixedInboundSettings(&model.MixedInboundSettings{Username: "new-user", Password: "new-pass"})
+	if err == nil || !strings.Contains(err.Error(), "已回滚") {
+		t.Fatalf("error = %v, want rollback error", err)
+	}
+	settings, getErr := svc.GetMixedInboundSettings()
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if settings.Username != "old-user" || settings.Password != "old-pass" {
+		t.Fatal("mixed inbound settings were not rolled back")
+	}
+}
+
+func TestSetMixedInboundSettingsSerializesConcurrentUpdates(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	generator := &blockingConfigGeneratorStub{started: make(chan struct{}), release: make(chan struct{})}
+	svc := NewSettingsService(db)
+	svc.SetModeDependencies(nil, generator)
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- svc.SetMixedInboundSettings(&model.MixedInboundSettings{Username: "first-user", Password: "first-pass"})
+	}()
+	<-generator.started
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- svc.SetMixedInboundSettings(&model.MixedInboundSettings{Username: "second-user", Password: "second-pass"})
+	}()
+	select {
+	case err := <-secondDone:
+		t.Fatalf("second update completed before first reconciliation: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(generator.release)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatal(err)
+	}
+	settings, err := svc.GetMixedInboundSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Username != "second-user" || settings.Password != "second-pass" {
+		t.Fatal("concurrent mixed inbound update was overwritten")
 	}
 }
 

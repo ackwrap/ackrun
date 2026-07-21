@@ -1301,11 +1301,42 @@ func TestGenerateInboundsUsesPublicMixedDefaults(t *testing.T) {
 			if inbound["listen"] != "0.0.0.0" || inbound["listen_port"] != model.DefaultMixedInboundPort {
 				t.Fatalf("mixed inbound = %+v, want 0.0.0.0:%d", inbound, model.DefaultMixedInboundPort)
 			}
+			if _, exists := inbound["users"]; exists {
+				t.Fatalf("mixed inbound unexpectedly requires authentication: %+v", inbound)
+			}
 		}
 	}
 	if !foundTUN || !foundMixed {
 		t.Fatalf("generated inbounds missing tun=%t mixed=%t: %+v", foundTUN, foundMixed, inbounds)
 	}
+}
+
+func TestGenerateInboundsIncludesMixedAuthentication(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.SetMixedInboundSettings(&model.MixedInboundSettings{Username: "proxy-user", Password: "short-pass"}); err != nil {
+		t.Fatal(err)
+	}
+
+	inbounds, err := NewConfigGeneratorService(db, nil).generateInbounds("127.0.0.1", 7893, defaultTUNIPv4Address, defaultTUNIPv6Address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range inbounds {
+		inbound, _ := item.(map[string]interface{})
+		if inbound["type"] != "mixed" {
+			continue
+		}
+		users, ok := inbound["users"].([]map[string]string)
+		if !ok || len(users) != 1 || users[0]["username"] != "proxy-user" || users[0]["password"] != "short-pass" {
+			t.Fatalf("mixed inbound users = %#v, want one configured user", inbound["users"])
+		}
+		return
+	}
+	t.Fatal("mixed inbound not generated")
 }
 
 func TestTrafficBypassSettingsApplyToTUNAndRoute(t *testing.T) {

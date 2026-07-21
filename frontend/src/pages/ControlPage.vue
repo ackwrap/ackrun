@@ -35,6 +35,7 @@ import Modal from "@/components/ui/Modal.vue";
 import ControlOverview from "./ControlOverview.vue";
 import ControlNetworkOverview from "./ControlNetworkOverview.vue";
 import ControlRestartSchedule from "./ControlRestartSchedule.vue";
+import ControlMixedProxyCard from "./ControlMixedProxyCard.vue";
 const runtime = ref<RuntimeResponse | null>(null),
   installStatus = ref<any>(null),
   configStatus = ref<any>(null),
@@ -779,7 +780,11 @@ onBeforeUnmount(() => {
             }}</Button
           ></template
         ></ControlOverview
-      ><ControlNetworkOverview
+      ><ControlMixedProxyCard
+        :proxy-port="runtime?.proxy_port || 0"
+        :inbound-mode="inboundMode"
+        @message="notify"
+      /><ControlNetworkOverview
         :is-running="isRunning"
         :proxy-port="runtime?.proxy_port || 0"
         @message="notify"

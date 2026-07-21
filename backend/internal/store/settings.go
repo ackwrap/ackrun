@@ -308,6 +308,60 @@ func (s *Store) SetNTPSettings(req *model.NTPSettings) error {
 	return nil
 }
 
+func (s *Store) GetMixedInboundSettings() (*model.MixedInboundSettings, error) {
+	settings := &model.MixedInboundSettings{}
+	rows, err := s.db.Query(`SELECT key, value FROM app_settings WHERE key IN ('mixed.username', 'mixed.password')`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			return nil, err
+		}
+		switch key {
+		case "mixed.username":
+			settings.Username = value
+		case "mixed.password":
+			settings.Password = value
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return settings, nil
+}
+
+func (s *Store) SetMixedInboundSettings(settings *model.MixedInboundSettings) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().Unix()
+	values := map[string]string{
+		"mixed.username": settings.Username,
+		"mixed.password": settings.Password,
+	}
+	for key, value := range values {
+		if value == "" {
+			if _, err := tx.Exec(`DELETE FROM app_settings WHERE key = ?`, key); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO app_settings (key, value, updated_at)
+			VALUES (?, ?, ?)
+			ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+		`, key, value, now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // GetDNSSettings 获取 DNS 设置
 func (s *Store) GetDNSSettings() (*model.DNSSettingsResponse, error) {
 	r := &model.DNSSettingsResponse{

@@ -54,6 +54,12 @@ type NTPSettingsResponse struct {
 	Detour     string `json:"detour"`
 }
 
+// MixedInboundSettings controls authentication for the mixed HTTP/SOCKS inbound.
+type MixedInboundSettings struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
 // DNSSettings DNS 管理设置
 type DNSSettings struct {
 	Enabled          bool   `json:"enabled"`

@@ -169,6 +169,38 @@ func (h *SettingsHandler) SetNTPSettings(c *gin.Context) {
 	c.JSON(http.StatusOK, model.ActionResponse{Success: true, Message: "ntp settings updated"})
 }
 
+func (h *SettingsHandler) GetMixedInboundSettings(c *gin.Context) {
+	resp, err := h.svc.GetMixedInboundSettings()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
+			Error: model.APIError{Code: "SETTINGS_ERROR", Message: err.Error()},
+		})
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+func (h *SettingsHandler) SetMixedInboundSettings(c *gin.Context) {
+	var req model.MixedInboundSettings
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{
+			Error: model.APIError{Code: "SETTINGS_INVALID", Message: err.Error()},
+		})
+		return
+	}
+	if err := h.svc.SetMixedInboundSettings(&req); err != nil {
+		status := http.StatusInternalServerError
+		code := "SETTINGS_SAVE_FAILED"
+		if errors.Is(err, service.ErrMixedInboundSettingsInvalid) {
+			status = http.StatusBadRequest
+			code = "SETTINGS_INVALID"
+		}
+		c.JSON(status, model.ErrorResponse{Error: model.APIError{Code: code, Message: err.Error()}})
+		return
+	}
+	c.JSON(http.StatusOK, model.ActionResponse{Success: true, Message: "mixed inbound settings updated"})
+}
+
 func (h *SettingsHandler) GetDNSSettings(c *gin.Context) {
 	resp, err := h.svc.GetDNSSettings()
 	if err != nil {

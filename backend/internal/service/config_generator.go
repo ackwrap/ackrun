@@ -2917,6 +2917,25 @@ func (s *ConfigGeneratorService) generateInbounds(listen string, port int, tunIP
 		return nil, fmt.Errorf("加载流量排除设置失败: %w", err)
 	}
 	_, excludedInterfaces, excludedCIDRs, _, _ := trafficBypassValues(bypassSettings)
+	var mixedInbound map[string]interface{}
+	if mode != "tun" {
+		authSettings, err := s.store.GetMixedInboundSettings()
+		if err != nil {
+			return nil, fmt.Errorf("加载 Mixed 代理认证设置失败: %w", err)
+		}
+		mixedInbound = map[string]interface{}{
+			"type":        "mixed",
+			"tag":         "mixed-in",
+			"listen":      listen,
+			"listen_port": port,
+		}
+		if authSettings.Username != "" && authSettings.Password != "" {
+			mixedInbound["users"] = []map[string]string{{
+				"username": authSettings.Username,
+				"password": authSettings.Password,
+			}}
+		}
+	}
 
 	var inbounds []interface{}
 
@@ -2929,12 +2948,7 @@ func (s *ConfigGeneratorService) generateInbounds(listen string, port int, tunIP
 	case "mixed":
 		// 纯 Mixed 模式
 		inbounds = []interface{}{
-			map[string]interface{}{
-				"type":        "mixed",
-				"tag":         "mixed-in",
-				"listen":      listen,
-				"listen_port": port,
-			},
+			mixedInbound,
 		}
 	case "tun_mixed":
 		fallthrough
@@ -2942,12 +2956,7 @@ func (s *ConfigGeneratorService) generateInbounds(listen string, port int, tunIP
 		// TUN + Mixed 双模式（默认）
 		inbounds = []interface{}{
 			generatedTUNInbound(autoRedirect, tunIPv4Address, tunIPv6Address, excludedInterfaces, excludedCIDRs),
-			map[string]interface{}{
-				"type":        "mixed",
-				"tag":         "mixed-in",
-				"listen":      listen,
-				"listen_port": port,
-			},
+			mixedInbound,
 		}
 	}
 	if autoRedirect && (mode == "tun" || mode == "tun_mixed") {
