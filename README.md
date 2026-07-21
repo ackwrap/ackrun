@@ -31,7 +31,7 @@
 <p align="center"><sub>Core control, policy modes, health checks, traffic, and maintenance in one dashboard.</sub></p>
 
 > [!WARNING]
-> `v0.0.1` is the first public test release. Back up your data and configuration before upgrading. Breaking database, configuration, and runtime changes may occur before the first stable release.
+> `v0.0.3` is a public test release. Back up your data and configuration before upgrading. Breaking database, configuration, and runtime changes may occur before the first stable release.
 
 ## Why Ackwrap
 
@@ -77,25 +77,25 @@ Ackwrap keeps the browser thin and the backend authoritative. Parsing, filtering
 
 ## Download
 
-The current public test release is [`v0.0.1`](https://github.com/ackwrap/ackrun/releases/tag/v0.0.1).
+The current public test release is [`v0.0.3`](https://github.com/ackwrap/ackrun/releases/tag/v0.0.3).
 
 | Artifact | Target | Download |
 |---|---|---|
-| Combined IPK | OpenWrt x86_64 | [`ackwrap_0.0.1-1_x86_64.ipk`](https://github.com/ackwrap/ackrun/releases/download/v0.0.1/ackwrap_0.0.1-1_x86_64.ipk) |
-| Standalone binary | OpenWrt amd64 | [`ackwrap-openwrt-amd64`](https://github.com/ackwrap/ackrun/releases/download/v0.0.1/ackwrap-openwrt-amd64) |
+| Combined IPK | OpenWrt x86_64 | [`ackwrap_0.0.3-1_x86_64.ipk`](https://github.com/ackwrap/ackrun/releases/download/v0.0.3/ackwrap_0.0.3-1_x86_64.ipk) |
+| Standalone binary | OpenWrt amd64 | [`ackwrap-openwrt-amd64`](https://github.com/ackwrap/ackrun/releases/download/v0.0.3/ackwrap-openwrt-amd64) |
 
 ### OpenWrt Quick Install
 
 ```bash
-scp ackwrap_0.0.1-1_x86_64.ipk root@ROUTER_IP:/tmp/
+scp ackwrap_0.0.3-1_x86_64.ipk root@ROUTER_IP:/tmp/
 ssh root@ROUTER_IP
-opkg install /tmp/ackwrap_0.0.1-1_x86_64.ipk
+opkg install /tmp/ackwrap_0.0.3-1_x86_64.ipk
 ```
 
 After installation, open **LuCI > Services > Ackwrap** and use the launch button to establish an authenticated Ackwrap session.
 
 > [!NOTE]
-> The published `v0.0.1` package currently targets OpenWrt x86_64. Other targets can be built from source.
+> The published `v0.0.3` package currently targets OpenWrt x86_64. Other targets can be built from source.
 
 ## Architecture
 

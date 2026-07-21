@@ -31,7 +31,7 @@
 <p align="center"><sub>在一张面板中完成核心控制、模式切换、访问检查、流量观察和高级维护。</sub></p>
 
 > [!WARNING]
-> `v0.0.1` 是首个公开测试版。升级前请备份数据和配置；首个稳定版发布前，数据库、配置格式和运行行为都可能发生不兼容变更。
+> `v0.0.3` 是公开测试版。升级前请备份数据和配置；首个稳定版发布前，数据库、配置格式和运行行为都可能发生不兼容变更。
 
 ## 为什么选择 Ackwrap
 
@@ -77,25 +77,25 @@ Ackwrap 保持前端轻量、后端权威。解析、过滤、同步、持久化
 
 ## 下载
 
-当前公开测试版为 [`v0.0.1`](https://github.com/ackwrap/ackrun/releases/tag/v0.0.1)。
+当前公开测试版为 [`v0.0.3`](https://github.com/ackwrap/ackrun/releases/tag/v0.0.3)。
 
 | 产物 | 目标平台 | 下载 |
 |---|---|---|
-| 整合 IPK | OpenWrt x86_64 | [`ackwrap_0.0.1-1_x86_64.ipk`](https://github.com/ackwrap/ackrun/releases/download/v0.0.1/ackwrap_0.0.1-1_x86_64.ipk) |
-| 独立二进制 | OpenWrt amd64 | [`ackwrap-openwrt-amd64`](https://github.com/ackwrap/ackrun/releases/download/v0.0.1/ackwrap-openwrt-amd64) |
+| 整合 IPK | OpenWrt x86_64 | [`ackwrap_0.0.3-1_x86_64.ipk`](https://github.com/ackwrap/ackrun/releases/download/v0.0.3/ackwrap_0.0.3-1_x86_64.ipk) |
+| 独立二进制 | OpenWrt amd64 | [`ackwrap-openwrt-amd64`](https://github.com/ackwrap/ackrun/releases/download/v0.0.3/ackwrap-openwrt-amd64) |
 
 ### OpenWrt 快速安装
 
 ```bash
-scp ackwrap_0.0.1-1_x86_64.ipk root@ROUTER_IP:/tmp/
+scp ackwrap_0.0.3-1_x86_64.ipk root@ROUTER_IP:/tmp/
 ssh root@ROUTER_IP
-opkg install /tmp/ackwrap_0.0.1-1_x86_64.ipk
+opkg install /tmp/ackwrap_0.0.3-1_x86_64.ipk
 ```
 
 安装完成后，打开 **LuCI > 服务 > Ackwrap**，通过启动按钮进入已认证的 Ackwrap 会话。
 
 > [!NOTE]
-> 已发布的 `v0.0.1` 安装包目前只面向 OpenWrt x86_64；其他平台可从源码构建。
+> 已发布的 `v0.0.3` 安装包目前只面向 OpenWrt x86_64；其他平台可从源码构建。
 
 ## 架构
 
