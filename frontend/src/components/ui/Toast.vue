@@ -21,6 +21,7 @@ const emit = defineEmits<{ dismiss: [] }>();
 const items = ref<ToastItem[]>([]);
 const timers = new Map<number, number>();
 let nextID = 0;
+let currentID: number | undefined;
 
 function icon(type: ToastType) {
   return type === "success" ? Check : type === "error" ? AlertTriangle : Info;
@@ -35,14 +36,21 @@ function remove(id: number) {
   if (timer !== undefined) window.clearTimeout(timer);
   timers.delete(id);
   items.value = items.value.filter((item) => item.id !== id);
-  emit("dismiss");
+  if (currentID === id) {
+    currentID = undefined;
+    emit("dismiss");
+  }
 }
 
 watch(
   () => [props.message, props.type, props.duration] as const,
   ([message, type, duration]) => {
-    if (!message) return;
+    if (!message) {
+      currentID = undefined;
+      return;
+    }
     const id = ++nextID;
+    currentID = id;
     items.value.push({ id, message, type });
     const dismissAfter = duration ?? (type === "error" ? 5000 : 3000);
     if (dismissAfter > 0) {
