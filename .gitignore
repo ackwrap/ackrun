@@ -45,8 +45,8 @@ Thumbs.db
 # Data
 *.tmp
 /tmp/
+/docs/
 ackwrap.db
 dist/
 backend/.dev/
 python-openwrt.py
-
