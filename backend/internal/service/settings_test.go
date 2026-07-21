@@ -143,6 +143,60 @@ func TestSetExperimentalSettingsRejectsInvalidClashAPIPort(t *testing.T) {
 	}
 }
 
+func TestSetExperimentalSettingsReconcilesConfig(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	generator := &modeConfigGeneratorStub{result: &model.ConfigGenerateResponse{Valid: true}}
+	svc := NewSettingsService(db)
+	svc.SetModeDependencies(nil, generator)
+	if err := svc.SetExperimentalSettings(&model.ExperimentalSettings{ClashAPIPort: "9091", CacheFileEnabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if generator.calls != 1 {
+		t.Fatalf("config reconcile calls = %d, want 1", generator.calls)
+	}
+	settings, err := db.GetExperimentalSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.ClashAPIPort != "9091" {
+		t.Fatalf("Clash API port = %q, want 9091", settings.ClashAPIPort)
+	}
+}
+
+func TestSetExperimentalSettingsRollsBackWhenConfigIsInvalid(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.SetExperimentalSettings(&model.ExperimentalSettings{ClashAPIEnabled: true, ClashAPIPort: "9090", CacheFileEnabled: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	generator := &modeConfigGeneratorStub{result: &model.ConfigGenerateResponse{Valid: false, Error: "invalid experimental config"}}
+	svc := NewSettingsService(db)
+	svc.SetModeDependencies(nil, generator)
+	err = svc.SetExperimentalSettings(&model.ExperimentalSettings{ClashAPIPort: "9091", CacheFileEnabled: true})
+	if err == nil || !strings.Contains(err.Error(), "已回滚") {
+		t.Fatalf("error = %v, want rollback error", err)
+	}
+	if generator.calls != 1 {
+		t.Fatalf("config reconcile calls = %d, want 1", generator.calls)
+	}
+	settings, err := db.GetExperimentalSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.ClashAPIPort != "9090" {
+		t.Fatalf("Clash API port = %q, want rollback to 9090", settings.ClashAPIPort)
+	}
+}
+
 func TestSetLogSettingsPersistsLevelInGenerationRequest(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {

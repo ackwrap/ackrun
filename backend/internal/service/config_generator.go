@@ -336,10 +336,11 @@ func (s *ConfigGeneratorService) generateLockedTo(req *model.ConfigGenerateReque
 	}
 	// 使用 proxy.mode 作为 Clash API 的默认模式，与控制面板保持一致
 	proxyMode := s.store.GetProxyMode()
+	controllerHost := clashAPIControllerHost(expSettings.ClashAPIExternalUI, expSettings.ClashAPISecret)
 	clashAPI := map[string]interface{}{
-		"external_controller": fmt.Sprintf("127.0.0.1:%s", port),
+		"external_controller": fmt.Sprintf("%s:%s", controllerHost, port),
 		"default_mode":        proxyMode,
-		// 安全设置：禁止外部 CORS 访问（所有请求通过 Ackwrap 后端代理）
+		// 面板与 API 同源，不需要开放跨域访问。
 		"access_control_allow_origin":          []string{},
 		"access_control_allow_private_network": false,
 	}
@@ -353,7 +354,7 @@ func (s *ConfigGeneratorService) generateLockedTo(req *model.ConfigGenerateReque
 		clashAPI["external_ui_download_url"] = expSettings.ClashAPIExternalUIDownloadURL
 	}
 	experimental["clash_api"] = clashAPI
-	logging.Info("config_generator.experimental", "Clash API 已强制启用: 127.0.0.1:%s, 模式: %s", port, proxyMode)
+	logging.Info("config_generator.experimental", "Clash API 已强制启用: %s:%s, 模式: %s", controllerHost, port, proxyMode)
 
 	// 缓存文件（全局，独立于 clash_api）
 	if expSettings.CacheFileEnabled {
@@ -407,6 +408,13 @@ func (s *ConfigGeneratorService) generateLockedTo(req *model.ConfigGenerateReque
 		Error:    redactAccessToken(errMsg),
 		FilePath: tmpPath,
 	}, nil
+}
+
+func clashAPIControllerHost(externalUI, secret string) string {
+	if strings.TrimSpace(externalUI) != "" && strings.TrimSpace(secret) != "" {
+		return "0.0.0.0"
+	}
+	return "127.0.0.1"
 }
 
 func redactConfigAccessTokens(value interface{}) interface{} {

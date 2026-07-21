@@ -25,11 +25,15 @@ const clashApiPort = ref("9090");
 const clashApiSecret = ref("");
 const showClashApiSecret = ref(false);
 const dashboardID = ref("");
+const savedDashboardID = ref("");
+const savedClashApiPort = ref("9090");
+const savedClashApiSecret = ref("");
 const cacheFileEnabled = ref(true);
 const cacheFileStoreFakeIP = ref(true);
 const cacheFileStoreDNS = ref(true);
 const dashboards = ref<Dashboard[]>([]);
 const loading = ref(true);
+const saving = ref(false);
 const checking = ref(false);
 const installingID = ref("");
 const deletingID = ref("");
@@ -43,12 +47,32 @@ const input =
 const selectedDashboard = computed(
   () => dashboards.value.find((item) => item.id === dashboardID.value) || null,
 );
-const dashboardURL = computed(() =>
-  dashboardID.value &&
-  (dashboardID.value === "custom" || selectedDashboard.value?.installed)
-    ? `${window.location.origin}/api/v1/clash/ui/`
-    : "",
-);
+const dashboardURL = computed(() => {
+  if (
+    dashboardID.value !== savedDashboardID.value ||
+    !savedDashboardID.value ||
+    !savedClashApiSecret.value ||
+    (dashboardID.value !== "custom" && !selectedDashboard.value?.installed)
+  )
+    return "";
+  return `http://${window.location.hostname}:${savedClashApiPort.value}/ui/`;
+});
+const dashboardLaunchURL = computed(() => {
+  if (!dashboardURL.value) return "";
+  const search = new URLSearchParams({
+    hostname: window.location.hostname,
+    port: savedClashApiPort.value,
+    secret: savedClashApiSecret.value,
+  });
+  if (savedDashboardID.value === "zashboard") {
+    search.set("type", "clash");
+    return `${dashboardURL.value}#/setup?${search}`;
+  }
+  if (["metacubexd", "yacd"].includes(savedDashboardID.value)) {
+    return `${dashboardURL.value}?${search}`;
+  }
+  return dashboardURL.value;
+});
 
 function generateSecret() {
   const alphabet =
@@ -61,11 +85,25 @@ function generateSecret() {
 }
 
 async function copyDashboardURL() {
+  let fallback: HTMLTextAreaElement | null = null;
   try {
-    await navigator.clipboard.writeText(dashboardURL.value);
+    if (window.isSecureContext && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(dashboardLaunchURL.value);
+    } else {
+      fallback = document.createElement("textarea");
+      fallback.value = dashboardLaunchURL.value;
+      fallback.style.position = "fixed";
+      fallback.style.opacity = "0";
+      document.body.appendChild(fallback);
+      fallback.focus();
+      fallback.select();
+      if (!document.execCommand("copy")) throw new Error("copy rejected");
+    }
     emit("notify", "面板地址已复制", "success");
   } catch {
     emit("notify", "复制失败，请手动选择面板地址", "error");
+  } finally {
+    fallback?.remove();
   }
 }
 
@@ -77,8 +115,11 @@ async function load() {
       api.listDashboards(),
     ]);
     clashApiPort.value = settings.clash_api_port || "9090";
+    savedClashApiPort.value = clashApiPort.value;
     clashApiSecret.value = settings.clash_api_secret || "";
+    savedClashApiSecret.value = clashApiSecret.value;
     dashboardID.value = settings.clash_api_dashboard || "";
+    savedDashboardID.value = dashboardID.value;
     cacheFileEnabled.value = settings.cache_file_enabled !== false;
     cacheFileStoreFakeIP.value = settings.cache_file_store_fakeip !== false;
     cacheFileStoreDNS.value = settings.cache_file_store_dns !== false;
@@ -90,11 +131,13 @@ async function load() {
   }
 }
 
-async function save() {
+async function persistSettings(successMessage: string) {
+  if (saving.value) return false;
   if (selectedDashboard.value && !selectedDashboard.value.installed) {
     emit("notify", "请先安装所选控制面板", "error");
-    return;
+    return false;
   }
+  saving.value = true;
   try {
     await api.setExperimentalSettings({
       clash_api_enabled: true,
@@ -105,18 +148,41 @@ async function save() {
       cache_file_store_fakeip: cacheFileStoreFakeIP.value,
       cache_file_store_dns: cacheFileStoreDNS.value,
     });
-    emit("notify", "实验性功能设置已保存", "success");
-    dashboards.value = await api.listDashboards();
+    savedDashboardID.value = dashboardID.value;
+    savedClashApiPort.value = clashApiPort.value;
+    savedClashApiSecret.value = clashApiSecret.value;
+    emit("notify", successMessage, "success");
+    try {
+      dashboards.value = await api.listDashboards();
+    } catch (cause: any) {
+      emit("notify", `控制面板状态刷新失败: ${cause.message}`, "error");
+    }
+    return true;
   } catch (cause: any) {
     emit("notify", `保存失败: ${cause.message}`, "error");
+    return false;
+  } finally {
+    saving.value = false;
   }
 }
 
-async function checkUpdates(showSuccess = true) {
+async function save() {
+  await persistSettings("实验性功能设置已保存");
+}
+
+async function saveDashboardSelection() {
+  const previous = savedDashboardID.value;
+  if (dashboardID.value && !clashApiSecret.value) generateSecret();
+  if (!(await persistSettings("控制面板选择已保存，正在应用配置"))) {
+    dashboardID.value = previous;
+  }
+}
+
+async function checkUpdates() {
   checking.value = true;
   try {
     dashboards.value = await api.checkDashboardUpdates();
-    if (showSuccess) emit("notify", "控制面板更新检查完成", "success");
+    emit("notify", "控制面板更新检查完成", "success");
   } catch (cause: any) {
     emit("notify", `检查控制面板更新失败: ${cause.message}`, "error");
   } finally {
@@ -165,10 +231,7 @@ async function deleteSelected() {
   }
 }
 
-onMounted(async () => {
-  await load();
-  if (dashboards.value.length) await checkUpdates(false);
-});
+onMounted(load);
 </script>
 
 <template>
@@ -232,7 +295,12 @@ onMounted(async () => {
         </div>
         <label class="block text-xs">
           控制面板
-          <select v-model="dashboardID" :class="input">
+          <select
+            v-model="dashboardID"
+            :class="input"
+            :disabled="saving"
+            @change="saveDashboardSelection"
+          >
             <option value="">不启用外部控制面板</option>
             <option v-if="dashboardID === 'custom'" value="custom">
               现有自定义控制面板
@@ -261,7 +329,7 @@ onMounted(async () => {
               <p class="mt-0.5 text-xs text-[var(--text-secondary)]">
                 {{
                   selectedDashboard?.description ||
-                  "选择 MetaCubeXD、Yacd-meta 或 Zashboard，文件保存在数据目录的 dash 文件夹。"
+                  "选择后自动保存并应用配置；启用面板时 Clash API 会监听 LAN。"
                 }}
               </p>
             </div>
@@ -337,7 +405,7 @@ onMounted(async () => {
             <div>
               <p class="text-xs font-medium">完整面板地址</p>
               <p class="mt-0.5 text-xs text-[var(--text-secondary)]">
-                保存设置并重新生成配置后，由运行中的 sing-box Clash API 托管。
+                已包含连接参数和 API 密钥，请按凭据妥善保管。
               </p>
             </div>
             <div class="flex gap-2">
@@ -346,7 +414,7 @@ onMounted(async () => {
                 复制
               </Button>
               <a
-                :href="dashboardURL"
+                :href="dashboardLaunchURL"
                 target="_blank"
                 rel="noreferrer"
                 class="btn-press focus-ring inline-flex h-7 items-center justify-center gap-1.5 rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--button-secondary-bg)] px-3 text-xs font-medium"
@@ -356,7 +424,7 @@ onMounted(async () => {
             </div>
           </div>
           <input
-            :value="dashboardURL"
+            :value="dashboardLaunchURL"
             readonly
             class="aw-input w-full select-all font-mono text-xs"
             aria-label="完整面板地址"
@@ -426,7 +494,9 @@ onMounted(async () => {
         控制面板检查与下载使用全局更新代理；选中面板后，下次生成配置会自动写入本地 external_ui 路径。
       </div>
 
-      <Button size="sm" class="self-start" @click="save">保存实验性功能设置</Button>
+      <Button size="sm" class="self-start" :loading="saving" @click="save">
+        保存实验性功能设置
+      </Button>
     </div>
   </section>
 

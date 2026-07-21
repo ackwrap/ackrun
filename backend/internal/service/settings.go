@@ -281,13 +281,17 @@ func (svc *SettingsService) SetExperimentalSettings(req *model.ExperimentalSetti
 	if err != nil || port < 1 || port > 65535 {
 		return fmt.Errorf("Clash API 端口必须是 1-65535 之间的整数")
 	}
+	existing, err := svc.store.GetExperimentalSettings()
+	if err != nil {
+		return err
+	}
+	previous := model.ExperimentalSettings{}
+	if existing != nil {
+		previous = model.ExperimentalSettings(*existing)
+	}
 	req.ClashAPIEnabled = true
 	req.ClashAPIDashboard = strings.TrimSpace(strings.ToLower(req.ClashAPIDashboard))
 	if req.ClashAPIDashboard == "custom" {
-		existing, err := svc.store.GetExperimentalSettings()
-		if err != nil {
-			return err
-		}
 		if existing == nil || strings.TrimSpace(existing.ClashAPIExternalUI) == "" {
 			return fmt.Errorf("现有自定义控制面板配置不存在")
 		}
@@ -296,6 +300,9 @@ func (svc *SettingsService) SetExperimentalSettings(req *model.ExperimentalSetti
 	} else if req.ClashAPIDashboard != "" {
 		if svc.dashboardsDir == "" || findDashboardCatalogItem(req.ClashAPIDashboard) == nil {
 			return fmt.Errorf("控制面板选择无效")
+		}
+		if strings.TrimSpace(req.ClashAPISecret) == "" {
+			return fmt.Errorf("启用外部控制面板必须设置 Clash API 密钥")
 		}
 		dashboardPath := filepath.Join(svc.dashboardsDir, req.ClashAPIDashboard)
 		if info, err := os.Stat(filepath.Join(dashboardPath, "index.html")); err != nil || info.IsDir() {
@@ -309,7 +316,33 @@ func (svc *SettingsService) SetExperimentalSettings(req *model.ExperimentalSetti
 		req.ClashAPIExternalUI = ""
 		req.ClashAPIExternalUIDownloadURL = ""
 	}
-	return svc.store.SetExperimentalSettings(req)
+	if err := svc.store.SetExperimentalSettings(req); err != nil {
+		return err
+	}
+	logging.Info("settings.experimental", "实验性功能设置已更新，控制面板: %s", req.ClashAPIDashboard)
+	if svc.configGenerator == nil {
+		return nil
+	}
+	result, err := svc.configGenerator.ReconcileCurrent()
+	if err == nil && result != nil && !result.Valid {
+		err = fmt.Errorf("配置校验失败: %s", result.Error)
+	}
+	if err == nil {
+		return nil
+	}
+	if rollbackErr := svc.store.SetExperimentalSettings(&previous); rollbackErr != nil {
+		return fmt.Errorf("应用实验性功能设置失败: %v；回滚设置也失败: %w", err, rollbackErr)
+	}
+	if result != nil && result.Valid {
+		rollbackResult, rollbackErr := svc.configGenerator.ReconcileCurrent()
+		if rollbackErr == nil && rollbackResult != nil && !rollbackResult.Valid {
+			rollbackErr = fmt.Errorf("配置校验失败: %s", rollbackResult.Error)
+		}
+		if rollbackErr != nil {
+			return fmt.Errorf("应用实验性功能设置失败: %v；设置已回滚，但恢复配置失败: %w", err, rollbackErr)
+		}
+	}
+	return fmt.Errorf("应用实验性功能设置失败，已回滚: %w", err)
 }
 
 func (svc *SettingsService) ListNodeFilters() ([]model.NodeFilter, error) {

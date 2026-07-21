@@ -84,7 +84,10 @@ func TestExperimentalSettingsMapsDashboardToLocalPath(t *testing.T) {
 	defer db.Close()
 	service := NewSettingsService(db)
 	service.SetDashboardsDir(dashboardsDir)
-	if err := service.SetExperimentalSettings(&model.ExperimentalSettings{ClashAPIPort: "9090", ClashAPIDashboard: "zashboard", CacheFileEnabled: true}); err != nil {
+	if err := service.SetExperimentalSettings(&model.ExperimentalSettings{ClashAPIPort: "9090", ClashAPIDashboard: "zashboard", CacheFileEnabled: true}); err == nil {
+		t.Fatal("dashboard without Clash API secret was accepted")
+	}
+	if err := service.SetExperimentalSettings(&model.ExperimentalSettings{ClashAPIPort: "9090", ClashAPISecret: "test-secret", ClashAPIDashboard: "zashboard", CacheFileEnabled: true}); err != nil {
 		t.Fatal(err)
 	}
 	settings, err := db.GetExperimentalSettings()
@@ -151,6 +154,26 @@ func TestExperimentalSettingsAcceptsLegacyCustomDashboardRequest(t *testing.T) {
 	}
 	if stored.ClashAPIDashboard != "custom" || stored.ClashAPIExternalUI != legacyPath {
 		t.Fatalf("settings = %+v", stored)
+	}
+}
+
+func TestClashAPIControllerHost(t *testing.T) {
+	tests := []struct {
+		name       string
+		externalUI string
+		secret     string
+		want       string
+	}{
+		{name: "local without dashboard", want: "127.0.0.1"},
+		{name: "local without secret", externalUI: "/data/dash/panel", want: "127.0.0.1"},
+		{name: "lan with secured dashboard", externalUI: "/data/dash/panel", secret: "secret", want: "0.0.0.0"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := clashAPIControllerHost(test.externalUI, test.secret); got != test.want {
+				t.Fatalf("host = %q, want %q", got, test.want)
+			}
+		})
 	}
 }
 

@@ -147,10 +147,10 @@ onMounted(load);
         :key="index"
         class="grid gap-2 border-b border-[var(--border-default)] p-3 last:border-b-0 sm:grid-cols-[180px_minmax(0,1fr)_44px] sm:gap-3"
       >
-        <span class="self-center text-sm text-[var(--text-secondary)]">
+        <span class="self-center text-xs text-[var(--text-secondary)]">
           {{ typeLabel(rule.type) }}
         </span>
-        <span class="min-w-0 self-center truncate font-mono text-sm" :title="rule.value">
+        <span class="min-w-0 self-center truncate font-mono text-xs" :title="rule.value">
           {{ rule.value }}
         </span>
         <button
