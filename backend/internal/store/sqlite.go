@@ -7,7 +7,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/ackwrap/ackwrap/internal/logging"
+	"github.com/ackwrap/ackrun/internal/logging"
 )
 
 type Store struct {

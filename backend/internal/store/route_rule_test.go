@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ackwrap/ackwrap/internal/model"
+	"github.com/ackwrap/ackrun/internal/model"
 )
 
 func TestGeoAssetAvailabilityTracksLocalFile(t *testing.T) {

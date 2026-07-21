@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ackwrap/ackwrap/internal/model"
-	"github.com/ackwrap/ackwrap/internal/store"
-	"github.com/ackwrap/ackwrap/internal/traceroute"
+	"github.com/ackwrap/ackrun/internal/model"
+	"github.com/ackwrap/ackrun/internal/store"
+	"github.com/ackwrap/ackrun/internal/traceroute"
 )
 
 func TestLookupNodeExitIPUsesDedicatedCoreAPI(t *testing.T) {

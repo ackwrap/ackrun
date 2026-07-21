@@ -12,9 +12,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ackwrap/ackwrap/internal/buildinfo"
-	"github.com/ackwrap/ackwrap/internal/model"
-	"github.com/ackwrap/ackwrap/internal/paths"
+	"github.com/ackwrap/ackrun/internal/buildinfo"
+	"github.com/ackwrap/ackrun/internal/model"
+	"github.com/ackwrap/ackrun/internal/paths"
 )
 
 func TestBuildAppUpdateRequestAttemptsRequiresConfiguredProxy(t *testing.T) {

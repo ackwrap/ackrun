@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ackwrap/ackwrap/internal/model"
-	"github.com/ackwrap/ackwrap/internal/traceroute"
+	"github.com/ackwrap/ackrun/internal/model"
+	"github.com/ackwrap/ackrun/internal/traceroute"
 )
 
 const customGeoMaxResponse = 64 << 10

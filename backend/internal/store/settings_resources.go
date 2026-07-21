@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ackwrap/ackwrap/internal/model"
+	"github.com/ackwrap/ackrun/internal/model"
 )
 
 func (s *Store) ListGeoIPProviders() ([]model.GeoIPProvider, error) {

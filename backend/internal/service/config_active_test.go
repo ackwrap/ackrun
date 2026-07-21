@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ackwrap/ackwrap/internal/paths"
+	"github.com/ackwrap/ackrun/internal/paths"
 )
 
 func TestNormalizeConfigFileName(t *testing.T) {

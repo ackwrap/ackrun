@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ackwrap/ackwrap/internal/handler"
-	"github.com/ackwrap/ackwrap/internal/service"
-	"github.com/ackwrap/ackwrap/internal/store"
+	"github.com/ackwrap/ackrun/internal/handler"
+	"github.com/ackwrap/ackrun/internal/service"
+	"github.com/ackwrap/ackrun/internal/store"
 	"github.com/gin-gonic/gin"
 )
 

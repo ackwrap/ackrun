@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/ackwrap/ackwrap/internal/model"
+	"github.com/ackwrap/ackrun/internal/model"
 )
 
 const configGeneratorRequestKey = "config_generator.request"

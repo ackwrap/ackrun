@@ -19,13 +19,13 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/ackwrap/ackwrap/internal/api"
-	"github.com/ackwrap/ackwrap/internal/logging"
-	"github.com/ackwrap/ackwrap/internal/model"
-	"github.com/ackwrap/ackwrap/internal/paths"
-	"github.com/ackwrap/ackwrap/internal/service"
-	"github.com/ackwrap/ackwrap/internal/store"
-	"github.com/ackwrap/ackwrap/internal/webui"
+	"github.com/ackwrap/ackrun/internal/api"
+	"github.com/ackwrap/ackrun/internal/logging"
+	"github.com/ackwrap/ackrun/internal/model"
+	"github.com/ackwrap/ackrun/internal/paths"
+	"github.com/ackwrap/ackrun/internal/service"
+	"github.com/ackwrap/ackrun/internal/store"
+	"github.com/ackwrap/ackrun/internal/webui"
 )
 
 const defaultListenAddr = "0.0.0.0:8080"

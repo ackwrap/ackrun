@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ackwrap/ackwrap/internal/model"
+	"github.com/ackwrap/ackrun/internal/model"
 )
 
 func TestUsesUDPTransport(t *testing.T) {

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ackwrap/ackwrap/internal/model"
+	"github.com/ackwrap/ackrun/internal/model"
 )
 
 func parseVmess(raw string) (*model.ParsedNode, error) {

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ackwrap/ackwrap/internal/model"
-	"github.com/ackwrap/ackwrap/internal/service"
+	"github.com/ackwrap/ackrun/internal/model"
+	"github.com/ackwrap/ackrun/internal/service"
 	"github.com/gin-gonic/gin"
 )
 

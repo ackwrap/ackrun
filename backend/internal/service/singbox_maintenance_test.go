@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ackwrap/ackwrap/internal/paths"
+	"github.com/ackwrap/ackrun/internal/paths"
 )
 
 func TestDiagnosticsDoesNotExposeCoreLogContent(t *testing.T) {

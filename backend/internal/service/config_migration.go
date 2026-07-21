@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ackwrap/ackwrap/internal/logging"
+	"github.com/ackwrap/ackrun/internal/logging"
 )
 
 const legacyUpdateProxyInboundTag = "ackwrap-update-in"

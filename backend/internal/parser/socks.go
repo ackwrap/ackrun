@@ -4,7 +4,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/ackwrap/ackwrap/internal/model"
+	"github.com/ackwrap/ackrun/internal/model"
 )
 
 func parseSocks(raw string) (*model.ParsedNode, error) {

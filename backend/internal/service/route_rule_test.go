@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ackwrap/ackwrap/internal/model"
-	"github.com/ackwrap/ackwrap/internal/paths"
-	"github.com/ackwrap/ackwrap/internal/store"
+	"github.com/ackwrap/ackrun/internal/model"
+	"github.com/ackwrap/ackrun/internal/paths"
+	"github.com/ackwrap/ackrun/internal/store"
 )
 
 func newTestRouteRuleService(t *testing.T, db *store.Store) *RouteRuleService {

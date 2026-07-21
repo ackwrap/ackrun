@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ackwrap/ackwrap/internal/model"
+	"github.com/ackwrap/ackrun/internal/model"
 )
 
 func TestFetchLatestSingboxVersion(t *testing.T) {
@@ -151,7 +151,7 @@ func TestBuildUpdateRequestAttemptsRecognizesCustomJSDelivrURL(t *testing.T) {
 }
 
 func TestBuildUpdateRequestAttemptsSkipsJSDelivrForReleaseAssets(t *testing.T) {
-	upstream := "https://github.com/ackwrap/ackwrap/releases/download/v1.0.0/ackwrap.zip"
+	upstream := "https://github.com/ackwrap/ackrun/releases/download/v1.0.0/ackwrap.zip"
 	attempts, err := buildUpdateRequestAttempts(&model.UpdateSettingsResponse{Acceleration: "jsdelivr_cdn"}, upstream)
 	if err != nil {
 		t.Fatalf("build attempts: %v", err)

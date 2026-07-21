@@ -12,10 +12,10 @@ import (
 
 	"github.com/robfig/cron/v3"
 
-	"github.com/ackwrap/ackwrap/internal/logging"
-	"github.com/ackwrap/ackwrap/internal/model"
-	"github.com/ackwrap/ackwrap/internal/parser"
-	"github.com/ackwrap/ackwrap/internal/store"
+	"github.com/ackwrap/ackrun/internal/logging"
+	"github.com/ackwrap/ackrun/internal/model"
+	"github.com/ackwrap/ackrun/internal/parser"
+	"github.com/ackwrap/ackrun/internal/store"
 )
 
 var syncTimePattern = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$`)

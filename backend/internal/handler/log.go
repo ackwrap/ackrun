@@ -6,8 +6,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/ackwrap/ackwrap/internal/logging"
-	"github.com/ackwrap/ackwrap/internal/service"
+	"github.com/ackwrap/ackrun/internal/logging"
+	"github.com/ackwrap/ackrun/internal/service"
 )
 
 type LogHandler struct {

@@ -3,7 +3,7 @@ package parser
 import (
 	"net/url"
 
-	"github.com/ackwrap/ackwrap/internal/model"
+	"github.com/ackwrap/ackrun/internal/model"
 )
 
 func parseMieru(raw string) (*model.ParsedNode, error) {

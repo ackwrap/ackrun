@@ -52,7 +52,7 @@ def build_binary(target: str, arch: str, version: str, output_dir: Path) -> Path
             "build",
             "-trimpath",
             "-ldflags=-s -w "
-            f"-X github.com/ackwrap/ackwrap/internal/buildinfo.Version={version}",
+            f"-X github.com/ackwrap/ackrun/internal/buildinfo.Version={version}",
             "-o",
             str(output),
             "./cmd/server",

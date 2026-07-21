@@ -3,8 +3,8 @@ package api
 import (
 	"github.com/gin-gonic/gin"
 
-	"github.com/ackwrap/ackwrap/internal/handler"
-	"github.com/ackwrap/ackwrap/internal/service"
+	"github.com/ackwrap/ackrun/internal/handler"
+	"github.com/ackwrap/ackrun/internal/service"
 )
 
 func RegisterRoutes(

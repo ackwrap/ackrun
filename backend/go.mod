@@ -1,4 +1,4 @@
-module github.com/ackwrap/ackwrap
+module github.com/ackwrap/ackrun
 
 go 1.26.3
 

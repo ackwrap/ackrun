@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ackwrap/ackwrap/internal/model"
+	"github.com/ackwrap/ackrun/internal/model"
 )
 
 func (s *Store) ListSubscriptions() ([]model.Subscription, error) {

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ackwrap/ackwrap/internal/store"
+	"github.com/ackwrap/ackrun/internal/store"
 )
 
 func TestTracerouteRejectsUnknownNode(t *testing.T) {

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ackwrap/ackwrap/internal/paths"
-	"github.com/ackwrap/ackwrap/internal/store"
+	"github.com/ackwrap/ackrun/internal/paths"
+	"github.com/ackwrap/ackrun/internal/store"
 )
 
 func TestMigrateInlineACMEConfigForSingbox114(t *testing.T) {

@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ackwrap/ackwrap/internal/model"
-	"github.com/ackwrap/ackwrap/internal/store"
+	"github.com/ackwrap/ackrun/internal/model"
+	"github.com/ackwrap/ackrun/internal/store"
 )
 
 func TestDNSGlobalSettingsFakeIPFollowsTUNMode(t *testing.T) {

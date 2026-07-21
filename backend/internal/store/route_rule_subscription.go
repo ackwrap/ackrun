@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/ackwrap/ackwrap/internal/model"
+	"github.com/ackwrap/ackrun/internal/model"
 )
 
 func (s *Store) ListRouteRuleSubscriptions() ([]model.RouteRuleSubscription, error) {

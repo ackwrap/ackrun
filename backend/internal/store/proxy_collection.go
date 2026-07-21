@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ackwrap/ackwrap/internal/model"
+	"github.com/ackwrap/ackrun/internal/model"
 )
 
 // CreateProxyCollection 创建代理集合

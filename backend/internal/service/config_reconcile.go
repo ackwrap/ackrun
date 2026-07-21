@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ackwrap/ackwrap/internal/logging"
-	"github.com/ackwrap/ackwrap/internal/model"
+	"github.com/ackwrap/ackrun/internal/logging"
+	"github.com/ackwrap/ackrun/internal/model"
 )
 
 const configReconcileDebounce = 1200 * time.Millisecond

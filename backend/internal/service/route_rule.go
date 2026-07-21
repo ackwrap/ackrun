@@ -22,12 +22,12 @@ import (
 
 	"github.com/robfig/cron/v3"
 
-	"github.com/ackwrap/ackwrap/internal/geoquery"
-	"github.com/ackwrap/ackwrap/internal/logging"
-	"github.com/ackwrap/ackwrap/internal/model"
-	"github.com/ackwrap/ackwrap/internal/parser"
-	"github.com/ackwrap/ackwrap/internal/paths"
-	"github.com/ackwrap/ackwrap/internal/store"
+	"github.com/ackwrap/ackrun/internal/geoquery"
+	"github.com/ackwrap/ackrun/internal/logging"
+	"github.com/ackwrap/ackrun/internal/model"
+	"github.com/ackwrap/ackrun/internal/parser"
+	"github.com/ackwrap/ackrun/internal/paths"
+	"github.com/ackwrap/ackrun/internal/store"
 )
 
 // SystemAdBlockRouteRuleName 系统默认广告拦截规则名称。

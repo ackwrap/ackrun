@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ackwrap/ackwrap/internal/paths"
+	"github.com/ackwrap/ackrun/internal/paths"
 )
 
 func TestBuildDownloadURLForSupportedPlatforms(t *testing.T) {

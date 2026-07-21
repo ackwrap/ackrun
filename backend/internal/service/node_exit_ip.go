@@ -13,10 +13,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ackwrap/ackwrap/internal/geoquery"
-	"github.com/ackwrap/ackwrap/internal/logging"
-	"github.com/ackwrap/ackwrap/internal/model"
-	"github.com/ackwrap/ackwrap/internal/traceroute"
+	"github.com/ackwrap/ackrun/internal/geoquery"
+	"github.com/ackwrap/ackrun/internal/logging"
+	"github.com/ackwrap/ackrun/internal/model"
+	"github.com/ackwrap/ackrun/internal/traceroute"
 )
 
 const (

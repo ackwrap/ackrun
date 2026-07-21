@@ -3,7 +3,7 @@ package store
 import (
 	"encoding/json"
 
-	"github.com/ackwrap/ackwrap/internal/logging"
+	"github.com/ackwrap/ackrun/internal/logging"
 )
 
 func (s *Store) migrate() error {

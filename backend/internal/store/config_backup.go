@@ -1,6 +1,6 @@
 package store
 
-import "github.com/ackwrap/ackwrap/internal/model"
+import "github.com/ackwrap/ackrun/internal/model"
 
 func (s *Store) ReplaceConfigBackups(backups []model.ConfigBackup) error {
 	tx, err := s.db.Begin()

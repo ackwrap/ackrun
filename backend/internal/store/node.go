@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ackwrap/ackwrap/internal/model"
+	"github.com/ackwrap/ackrun/internal/model"
 )
 
 func (s *Store) ReplaceSubscriptionNodes(subscriptionID int64, nodes []model.ParsedNode) error {
