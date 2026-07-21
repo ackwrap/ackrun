@@ -184,6 +184,27 @@ sing-box-wrap/    Ackwrap-maintained sing-box submodule
 
 </details>
 
+## Interface Preview
+
+<table>
+  <tr>
+    <td width="50%" align="center">
+      <a href="./image/ip.png"><img src="./image/ip.png" width="100%" alt="IP intelligence and connectivity checks"></a><br>
+      <sub>IP intelligence and connectivity checks</sub>
+    </td>
+    <td width="50%" align="center">
+      <a href="./image/rules.png"><img src="./image/rules.png" width="100%" alt="Routing rules and rule subscriptions"></a><br>
+      <sub>Routing rules and rule subscriptions</sub>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center">
+      <a href="./image/traceroute.png"><img src="./image/traceroute.png" width="100%" alt="Visual route tracing"></a><br>
+      <sub>Visual route tracing</sub>
+    </td>
+  </tr>
+</table>
+
 ## License
 
 Ackwrap is released under the [MIT License](./LICENSE). Third-party code and assets remain under their original licenses.

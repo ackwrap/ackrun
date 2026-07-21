@@ -184,6 +184,27 @@ sing-box-wrap/    Ackwrap 维护的 sing-box 子模块
 
 </details>
 
+## 界面预览
+
+<table>
+  <tr>
+    <td width="50%" align="center">
+      <a href="./image/ip.png"><img src="./image/ip.png" width="100%" alt="IP 信息与连通性检查"></a><br>
+      <sub>IP 信息与连通性检查</sub>
+    </td>
+    <td width="50%" align="center">
+      <a href="./image/rules.png"><img src="./image/rules.png" width="100%" alt="路由规则与规则订阅"></a><br>
+      <sub>路由规则与规则订阅</sub>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center">
+      <a href="./image/traceroute.png"><img src="./image/traceroute.png" width="100%" alt="可视化路由追踪"></a><br>
+      <sub>可视化路由追踪</sub>
+    </td>
+  </tr>
+</table>
+
 ## 许可证
 
 Ackwrap 使用 [MIT License](./LICENSE) 发布。第三方代码与资源仍遵循其原始许可证。
