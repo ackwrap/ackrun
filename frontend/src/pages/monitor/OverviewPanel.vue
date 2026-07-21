@@ -1,9 +1,17 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { Bolt, Eye, EyeOff, RefreshCw } from "lucide-vue-next";
-import type { Connection, ProxyGroup } from "@/services/clash";
+import type { Connection, ProxyGroup, ProxyNode } from "@/services/clash";
 import { formatBytes, formatSpeed } from "./monitorUtils";
 import MiniSparkline from "@/components/monitor/MiniSparkline.vue";
+import NodeFlagName from "@/components/NodeFlagName.vue";
+import ProxyGroupIcon from "./ProxyGroupIcon.vue";
+import {
+  displayProxyGroupName,
+  displayProxyName,
+  latencyTagClass,
+  latestDelay,
+} from "./proxyGroupUtils";
 
 interface LatencyTarget {
   name: string;
@@ -28,6 +36,8 @@ const props = defineProps<{
   connectionCount: number;
   connections: Connection[];
   proxyGroups: ProxyGroup[];
+  proxies: Record<string, ProxyGroup | ProxyNode>;
+  nodeFlags: Record<string, string>;
   uploadSpeedHistory: number[];
   downloadSpeedHistory: number[];
   connectionCountHistory: number[];
@@ -70,6 +80,25 @@ const statCards = computed(() => [
     color: "purple" as const,
   },
 ]);
+
+function activeProxyName(group: ProxyGroup) {
+  let current = group.now;
+  const visited = new Set<string>();
+  while (current && !visited.has(current)) {
+    visited.add(current);
+    const selected = props.proxies[current];
+    if (!selected?.now || selected.now === current) break;
+    current = selected.now;
+  }
+  return current || group.now;
+}
+
+const currentStrategies = computed(() =>
+  props.proxyGroups.map((group) => {
+    const node = activeProxyName(group);
+    return { group, node, delay: latestDelay(props.proxies[node]) };
+  }),
+);
 
 function latencyStats(values: number[]) {
   const successful = values.filter((value) => value > 0);
@@ -197,9 +226,9 @@ onBeforeUnmount(() => window.clearInterval(ipTimer));
 </script>
 
 <template>
-  <div class="grid items-start gap-4 pb-5 xl:grid-cols-2">
+  <div class="grid gap-4 pb-5 xl:grid-cols-2">
     <section
-      class="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-4 shadow-[var(--shadow-card)]"
+      class="h-full rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-4 shadow-[var(--shadow-card)]"
     >
       <div class="grid gap-3 sm:grid-cols-2">
         <article
@@ -265,7 +294,7 @@ onBeforeUnmount(() => window.clearInterval(ipTimer));
     </section>
 
     <section
-      class="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-4 shadow-[var(--shadow-card)]"
+      class="h-full rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-4 shadow-[var(--shadow-card)]"
     >
       <article class="rounded-xl bg-[var(--bg-base)] p-4">
         <header class="flex items-center justify-between">
@@ -397,6 +426,79 @@ onBeforeUnmount(() => window.clearInterval(ipTimer));
           </div>
         </div>
       </article>
+    </section>
+
+    <section
+      class="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-4 shadow-[var(--shadow-card)] xl:col-span-2"
+    >
+      <header class="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <h3
+            class="text-xs font-semibold tracking-wider text-[var(--text-secondary)] uppercase"
+          >
+            当前策略
+          </h3>
+          <p class="mt-1 text-xs text-[var(--text-tertiary)]">
+            各策略组当前实际使用的节点与最新延迟
+          </p>
+        </div>
+        <span
+          class="rounded-full bg-[var(--bg-base)] px-2.5 py-1 text-xs tabular-nums text-[var(--text-secondary)]"
+        >
+          {{ currentStrategies.length }} 组
+        </span>
+      </header>
+
+      <div
+        v-if="currentStrategies.length"
+        class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4"
+      >
+        <article
+          v-for="strategy in currentStrategies"
+          :key="strategy.group.name"
+          class="min-w-0 rounded-xl bg-[var(--bg-base)] p-3.5"
+        >
+          <div class="flex min-w-0 items-center gap-2.5">
+            <ProxyGroupIcon :group="strategy.group" class="h-5 w-5 shrink-0" />
+            <div class="min-w-0 flex-1">
+              <div class="truncate text-sm font-semibold text-[var(--text-primary)]">
+                {{ displayProxyGroupName(strategy.group.name) }}
+              </div>
+              <div
+                class="mt-0.5 text-[10px] font-medium tracking-wider text-[var(--text-tertiary)] uppercase"
+              >
+                {{ strategy.group.type }}
+              </div>
+            </div>
+            <span
+              class="shrink-0 rounded-full px-2 py-1 text-[11px] font-medium tabular-nums"
+              :class="latencyTagClass(strategy.delay)"
+            >
+              {{ strategy.delay ? `${strategy.delay} ms` : "未测速" }}
+            </span>
+          </div>
+          <div class="mt-3 border-t border-[var(--border-light)] pt-3">
+            <div class="text-[10px] text-[var(--text-tertiary)]">当前节点</div>
+            <NodeFlagName
+              v-if="strategy.node"
+              :name="strategy.node"
+              :flag="nodeFlags[strategy.node]"
+              class="mt-1 w-full text-xs font-medium text-[var(--text-secondary)]"
+            >
+              {{ displayProxyName(strategy.node) }}
+            </NodeFlagName>
+            <span v-else class="mt-1 block text-xs text-[var(--text-tertiary)]">
+              未选择节点
+            </span>
+          </div>
+        </article>
+      </div>
+      <div
+        v-else
+        class="rounded-xl bg-[var(--bg-base)] px-4 py-8 text-center text-xs text-[var(--text-tertiary)]"
+      >
+        暂无可用策略组
+      </div>
     </section>
   </div>
 </template>

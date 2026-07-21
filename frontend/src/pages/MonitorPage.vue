@@ -128,17 +128,20 @@ async function suspendWhenCoreStops() {
   })();
   return runtimeCheckPromise;
 }
-async function loadProxies() {
+async function loadProxies(refreshFlags = true) {
   if (!connected.value && !(await ensure())) return;
+  if (loadingProxies.value) return;
   loadingProxies.value = true;
   try {
     proxies.value = (await client.getProxies()).proxies;
-    const inferred = await api.inferNodeFlags(
-      Object.keys(proxies.value).map((name) => ({ key: name, name })),
-    );
-    proxyFlags.value = Object.fromEntries(
-      inferred.items.map((item) => [item.key, item.flag]),
-    );
+    if (refreshFlags) {
+      const inferred = await api.inferNodeFlags(
+        Object.keys(proxies.value).map((name) => ({ key: name, name })),
+      );
+      proxyFlags.value = Object.fromEntries(
+        inferred.items.map((item) => [item.key, item.flag]),
+      );
+    }
   } catch (e: any) {
     offline(e) ? unavailable(e) : show(`加载策略组失败: ${e.message}`);
   } finally {
@@ -178,7 +181,12 @@ async function loadRules() {
 }
 const groups = computed(() =>
     Object.entries(proxies.value)
-      .filter(([, x]) => x.type === "Selector" || x.type === "URLTest")
+      .filter(
+        ([name, proxy]) =>
+          name !== "GLOBAL" &&
+          Array.isArray(proxy.all) &&
+          typeof proxy.now === "string",
+      )
       .map(([name, x]) => ({ ...x, name }) as ProxyGroup),
   ),
   filteredRules = computed(() =>
@@ -196,11 +204,14 @@ async function activateTab(t: MonitorTab) {
   if (t === "proxies") await loadProxies();
   if (t === "rules") await loadRules();
   if (t === "overview" || t === "connections") {
-    await loadConnections();
-    timer = window.setInterval(
-      loadConnections,
-      t === "connections" ? 1000 : 3000,
-    );
+    await Promise.all([
+      loadConnections(),
+      t === "overview" ? loadProxies() : Promise.resolve(),
+    ]);
+    timer = window.setInterval(() => {
+      void loadConnections();
+      if (t === "overview") void loadProxies(false);
+    }, t === "connections" ? 1000 : 3000);
   }
 }
 watch(activeTab, activateTab);
@@ -235,7 +246,8 @@ async function startMonitor() {
     },
   );
   const initialLoads: Promise<void>[] = [activateTab(activeTab.value)];
-  if (activeTab.value !== "proxies") initialLoads.push(loadProxies());
+  if (activeTab.value !== "proxies" && activeTab.value !== "overview")
+    initialLoads.push(loadProxies());
   await Promise.all(initialLoads);
 }
 onMounted(async () => {
@@ -466,6 +478,8 @@ function returnToControl() {
           connectionCount: connections.length,
           connections,
           proxyGroups: groups,
+          proxies,
+          nodeFlags: proxyFlags,
           uploadSpeedHistory: upHistory,
           downloadSpeedHistory: downHistory,
           connectionCountHistory: connectionHistory,
