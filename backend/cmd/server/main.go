@@ -180,7 +180,7 @@ func main() {
 	settingsSvc.SetConnectivitySettingsHook(proxyCollectionSvc.RefreshHealthCheckJobs)
 	reconcileSvc := service.NewConfigReconcileService(configGenSvc, realtimeSvc)
 	defer reconcileSvc.Close()
-	coreRestartSvc := service.NewCoreRestartScheduler(db, singboxSvc, realtimeSvc)
+	coreRestartSvc := service.NewCoreRestartScheduler(db, singboxSvc, configGenSvc, realtimeSvc)
 	if err := coreRestartSvc.StartScheduler(); err != nil {
 		logging.Error("core.restart_scheduler", "启动核心定时重启调度器失败: %v", err)
 	}

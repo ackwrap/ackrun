@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -40,10 +42,16 @@ const (
 
 // ConfigGeneratorService 配置生成服务
 type ConfigGeneratorService struct {
-	store    *store.Store
-	paths    *paths.Paths
-	singbox  *SingboxService
-	configMu sync.Mutex
+	store                 *store.Store
+	paths                 *paths.Paths
+	singbox               configGeneratorCore
+	configMu              sync.Mutex
+	coreRestartGeneration atomic.Uint64
+}
+
+type configGeneratorCore interface {
+	ReloadConfig() (*model.ActionResponse, error)
+	ScheduledRestart() (*model.ActionResponse, error)
 }
 
 // NewConfigGeneratorService 创建配置生成服务
@@ -61,6 +69,8 @@ func NewConfigGeneratorService(store *store.Store, paths *paths.Paths, singbox .
 
 // Generate 生成完整配置
 func (s *ConfigGeneratorService) Generate(req *model.ConfigGenerateRequest) (*model.ConfigGenerateResponse, error) {
+	releaseConfigSnapshot := s.store.HoldConfigSnapshot()
+	defer releaseConfigSnapshot()
 	s.configMu.Lock()
 	defer s.configMu.Unlock()
 	result, err := s.generateLocked(req)
@@ -84,6 +94,8 @@ func (s *ConfigGeneratorService) Generate(req *model.ConfigGenerateRequest) (*mo
 
 // GenerateCurrent 使用最近一次校验通过的参数生成配置。
 func (s *ConfigGeneratorService) GenerateCurrent() (*model.ConfigGenerateResponse, error) {
+	releaseConfigSnapshot := s.store.HoldConfigSnapshot()
+	defer releaseConfigSnapshot()
 	s.configMu.Lock()
 	defer s.configMu.Unlock()
 	return s.generateCurrentLocked()
@@ -98,16 +110,100 @@ func (s *ConfigGeneratorService) GetGenerateRequest() (*model.ConfigGenerateRequ
 
 // ReconcileCurrent 在同一临界区内生成并应用配置，避免临时文件被并发请求替换。
 func (s *ConfigGeneratorService) ReconcileCurrent() (*model.ConfigGenerateResponse, error) {
+	releaseConfigSnapshot := s.store.HoldConfigSnapshot()
+	defer releaseConfigSnapshot()
 	s.configMu.Lock()
 	defer s.configMu.Unlock()
+	defer s.discardGeneratedConfig()
 	result, err := s.generateCurrentLocked()
-	if err != nil || !result.Valid {
+	if err != nil {
 		return result, err
+	}
+	if !result.Valid {
+		return result, err
+	}
+	unchanged, err := s.generatedConfigMatchesActive()
+	if err != nil {
+		return result, err
+	}
+	if unchanged {
+		logging.Info("config_generator.reconcile", "生成配置与活动配置一致，跳过应用和核心重载")
+		return result, nil
 	}
 	if err := s.applyLocked("", true); err != nil {
 		return result, err
 	}
 	return result, nil
+}
+
+// ReconcileCurrentForScheduledRestart regenerates and applies the latest
+// database state before performing exactly one scheduled core restart.
+func (s *ConfigGeneratorService) ReconcileCurrentForScheduledRestart(observedRestartGeneration uint64) (*model.ConfigGenerateResponse, error) {
+	releaseConfigSnapshot := s.store.HoldConfigSnapshot()
+	defer releaseConfigSnapshot()
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+	defer s.discardGeneratedConfig()
+	result, err := s.generateCurrentLocked()
+	if err != nil {
+		return result, err
+	}
+	if !result.Valid {
+		return result, err
+	}
+	unchanged, err := s.generatedConfigMatchesActive()
+	if err != nil {
+		return result, err
+	}
+	if unchanged {
+		if s.CoreRestartGeneration() > observedRestartGeneration {
+			logging.Info("config_generator.reconcile", "配置协调已完成本次定时重启所需的核心重载，跳过重复重启")
+			return result, nil
+		}
+	}
+	if !unchanged {
+		if err := s.applyLocked("", false); err != nil {
+			return result, err
+		}
+	}
+	if s.singbox == nil {
+		return result, fmt.Errorf("配置已应用，但定时重启服务不可用")
+	}
+	if _, err := s.singbox.ScheduledRestart(); err != nil {
+		return result, fmt.Errorf("配置已应用，但定时重启核心失败: %w", err)
+	}
+	s.coreRestartGeneration.Add(1)
+	return result, nil
+}
+
+func (s *ConfigGeneratorService) CoreRestartGeneration() uint64 {
+	return s.coreRestartGeneration.Load()
+}
+
+func (s *ConfigGeneratorService) discardGeneratedConfig() {
+	tmpPath := filepath.Join(s.paths.DataDir, "config.tmp.json")
+	if err := os.Remove(tmpPath); err != nil && !os.IsNotExist(err) {
+		logging.Info("config_generator.reconcile", "删除未变更的生成配置失败: %v", err)
+	}
+}
+
+func (s *ConfigGeneratorService) generatedConfigMatchesActive() (bool, error) {
+	configPath, exists, err := s.paths.ActiveConfigPath()
+	if err != nil {
+		return false, fmt.Errorf("获取活动配置失败: %w", err)
+	}
+	if !exists {
+		return false, nil
+	}
+	generated, err := os.ReadFile(filepath.Join(s.paths.DataDir, "config.tmp.json"))
+	if err != nil {
+		return false, fmt.Errorf("读取生成配置失败: %w", err)
+	}
+	active, err := os.ReadFile(configPath)
+	if err != nil {
+		return false, fmt.Errorf("读取活动配置失败: %w", err)
+	}
+	return bytes.Equal(generated, active), nil
 }
 
 func (s *ConfigGeneratorService) generateCurrentLocked() (*model.ConfigGenerateResponse, error) {
@@ -1620,9 +1716,16 @@ func mapMihomoUDPFlagToSingboxNetwork(nodeData map[string]interface{}) {
 	// proxy must not handle UDP. sing-box has no equivalent udp outbound field;
 	// the closest schema mapping is network="tcp" for UDP-disabled nodes. true is
 	// sing-box's default TCP+UDP behavior, so the flag is intentionally omitted.
+	// For V2Ray-family URIs, network="tcp" describes the server transport rather
+	// than outbound capability and must not disable XUDP.
 	if udp, ok := nodeData["udp"]; ok {
 		if !configBoolValue(udp) {
 			nodeData["network"] = "tcp"
+		} else if strings.EqualFold(firstStringValue(nodeData, "network"), "tcp") {
+			switch strings.ToLower(firstStringValue(nodeData, "type")) {
+			case "vmess", "vless", "trojan":
+				delete(nodeData, "network")
+			}
 		}
 		delete(nodeData, "udp")
 	}
@@ -2653,6 +2756,7 @@ func (s *ConfigGeneratorService) applyLocked(fileName string, restartCore bool) 
 		if _, err := s.singbox.ReloadConfig(); err != nil {
 			return fmt.Errorf("配置已应用，但重载核心失败: %w", err)
 		}
+		s.coreRestartGeneration.Add(1)
 	}
 
 	return nil

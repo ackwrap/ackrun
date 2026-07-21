@@ -48,6 +48,11 @@ func TestMapMihomoUDPFlagToSingboxNetwork(t *testing.T) {
 		{name: "udp string false maps tcp", input: map[string]interface{}{"udp": "false"}, wantNetwork: "tcp"},
 		{name: "udp string true omitted", input: map[string]interface{}{"udp": "true"}, wantNetwork: nil},
 		{name: "existing network preserved when udp true", input: map[string]interface{}{"udp": true, "network": "tcp"}, wantNetwork: "tcp"},
+		{name: "vless tcp transport with udp enabled allows both networks", input: map[string]interface{}{"type": "vless", "udp": true, "network": "tcp"}, wantNetwork: nil},
+		{name: "vmess tcp transport with udp enabled allows both networks", input: map[string]interface{}{"type": "vmess", "udp": true, "network": "tcp"}, wantNetwork: nil},
+		{name: "trojan tcp transport with udp enabled allows both networks", input: map[string]interface{}{"type": "trojan", "udp": true, "network": "tcp"}, wantNetwork: nil},
+		{name: "native sing-box tcp restriction is preserved", input: map[string]interface{}{"type": "vless", "network": "tcp"}, wantNetwork: "tcp"},
+		{name: "vless udp disabled remains tcp only", input: map[string]interface{}{"type": "vless", "udp": false, "network": "tcp"}, wantNetwork: "tcp"},
 	}
 
 	for _, tt := range tests {
@@ -60,6 +65,23 @@ func TestMapMihomoUDPFlagToSingboxNetwork(t *testing.T) {
 				t.Fatalf("network = %v, want %v", got, tt.wantNetwork)
 			}
 		})
+	}
+}
+
+func TestGenerateVLESSOutboundDoesNotTreatTCPTransportAsUDPRestriction(t *testing.T) {
+	node := &model.Node{
+		Type:    "vless",
+		RawJSON: `{"type":"vless","server":"node.example.com","server_port":443,"uuid":"00000000-0000-4000-8000-000000000001","network":"tcp","udp":true,"tls":{"enabled":true}}`,
+	}
+	outbound, err := (&ConfigGeneratorService{}).generateNodeOutbound(node, "test-vless", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := outbound["udp"]; exists {
+		t.Fatalf("generated outbound contains unsupported Mihomo udp field: %+v", outbound)
+	}
+	if _, exists := outbound["network"]; exists {
+		t.Fatalf("TCP transport incorrectly restricted generated VLESS outbound to TCP: %+v", outbound)
 	}
 }
 

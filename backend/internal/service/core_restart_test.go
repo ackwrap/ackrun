@@ -9,14 +9,26 @@ import (
 
 type scheduledCoreStub struct {
 	running bool
-	calls   int
-	err     error
 }
 
 func (stub *scheduledCoreStub) IsRunning() bool { return stub.running }
-func (stub *scheduledCoreStub) ScheduledRestart() (*model.ActionResponse, error) {
+
+type scheduledConfigGeneratorStub struct {
+	calls                     int
+	restartGeneration         uint64
+	observedRestartGeneration uint64
+	result                    *model.ConfigGenerateResponse
+	err                       error
+}
+
+func (stub *scheduledConfigGeneratorStub) CoreRestartGeneration() uint64 {
+	return stub.restartGeneration
+}
+
+func (stub *scheduledConfigGeneratorStub) ReconcileCurrentForScheduledRestart(observedRestartGeneration uint64) (*model.ConfigGenerateResponse, error) {
 	stub.calls++
-	return &model.ActionResponse{Success: stub.err == nil}, stub.err
+	stub.observedRestartGeneration = observedRestartGeneration
+	return stub.result, stub.err
 }
 
 func TestCoreRestartCronSpec(t *testing.T) {
@@ -47,18 +59,41 @@ func TestCoreRestartCronSpec(t *testing.T) {
 
 func TestRunScheduledRestartSkipsStoppedCore(t *testing.T) {
 	core := &scheduledCoreStub{}
-	svc := &CoreRestartScheduler{core: core}
+	config := &scheduledConfigGeneratorStub{}
+	svc := &CoreRestartScheduler{core: core, config: config}
 	svc.runScheduledRestart()
-	if core.calls != 0 {
-		t.Fatalf("restart calls = %d, want 0", core.calls)
+	if config.calls != 0 {
+		t.Fatalf("config reconcile calls = %d, want 0", config.calls)
 	}
 }
 
-func TestRunScheduledRestartRestartsRunningCore(t *testing.T) {
+func TestRunScheduledRestartReconcilesConfigAndRestartsRunningCore(t *testing.T) {
 	core := &scheduledCoreStub{running: true}
-	svc := &CoreRestartScheduler{core: core}
+	config := &scheduledConfigGeneratorStub{restartGeneration: 7, result: &model.ConfigGenerateResponse{Valid: true}}
+	svc := &CoreRestartScheduler{core: core, config: config}
 	svc.runScheduledRestart()
-	if core.calls != 1 {
-		t.Fatalf("restart calls = %d, want 1", core.calls)
+	if config.calls != 1 {
+		t.Fatalf("config reconcile calls = %d, want 1", config.calls)
+	}
+	if config.observedRestartGeneration != config.restartGeneration {
+		t.Fatalf("observed restart generation = %d, want %d", config.observedRestartGeneration, config.restartGeneration)
+	}
+}
+
+func TestRunScheduledRestartStopsWhenGeneratedConfigIsInvalid(t *testing.T) {
+	config := &scheduledConfigGeneratorStub{result: &model.ConfigGenerateResponse{Error: "invalid config"}}
+	svc := &CoreRestartScheduler{core: &scheduledCoreStub{running: true}, config: config}
+	svc.runScheduledRestart()
+	if config.calls != 1 {
+		t.Fatalf("config reconcile calls = %d, want 1", config.calls)
+	}
+}
+
+func TestRunScheduledRestartReportsConfigReconcileFailure(t *testing.T) {
+	config := &scheduledConfigGeneratorStub{err: errors.New("generate failed")}
+	svc := &CoreRestartScheduler{core: &scheduledCoreStub{running: true}, config: config}
+	svc.runScheduledRestart()
+	if config.calls != 1 {
+		t.Fatalf("config reconcile calls = %d, want 1", config.calls)
 	}
 }

@@ -258,6 +258,8 @@ func (svc *SubscriptionService) SyncAll() (*model.ActionResponse, error) {
 }
 
 func (svc *SubscriptionService) runSync(id int64) {
+	releaseConfigUpdate := svc.store.HoldConfigUpdate()
+	defer releaseConfigUpdate()
 	if !svc.beginSync(id) {
 		item, _ := svc.store.GetSubscription(id)
 		if item != nil {

@@ -17,12 +17,17 @@ var ErrInvalidCoreRestartSettings = errors.New("定时重启设置无效")
 
 type scheduledCore interface {
 	IsRunning() bool
-	ScheduledRestart() (*model.ActionResponse, error)
+}
+
+type scheduledConfigGenerator interface {
+	CoreRestartGeneration() uint64
+	ReconcileCurrentForScheduledRestart(uint64) (*model.ConfigGenerateResponse, error)
 }
 
 type CoreRestartScheduler struct {
 	store    *store.Store
 	core     scheduledCore
+	config   scheduledConfigGenerator
 	realtime *RealtimeService
 	cron     *cron.Cron
 
@@ -31,10 +36,11 @@ type CoreRestartScheduler struct {
 	started bool
 }
 
-func NewCoreRestartScheduler(db *store.Store, core scheduledCore, realtime *RealtimeService) *CoreRestartScheduler {
+func NewCoreRestartScheduler(db *store.Store, core scheduledCore, config scheduledConfigGenerator, realtime *RealtimeService) *CoreRestartScheduler {
 	return &CoreRestartScheduler{
 		store:    db,
 		core:     core,
+		config:   config,
 		realtime: realtime,
 		cron:     cron.New(cron.WithSeconds()),
 	}
@@ -128,9 +134,20 @@ func (svc *CoreRestartScheduler) runScheduledRestart() {
 	}
 	logging.Info("core.restart_scheduler", "开始执行核心定时重启")
 	svc.broadcast("started", "")
-	if _, err := svc.core.ScheduledRestart(); err != nil {
+	observedRestartGeneration := svc.config.CoreRestartGeneration()
+	result, err := svc.config.ReconcileCurrentForScheduledRestart(observedRestartGeneration)
+	if err != nil {
 		logging.Error("core.restart_scheduler", "核心定时重启失败: %v", err)
 		svc.broadcast("failed", err.Error())
+		return
+	}
+	if result == nil || !result.Valid {
+		errorMessage := "定时重启前配置校验失败"
+		if result != nil && result.Error != "" {
+			errorMessage += ": " + result.Error
+		}
+		logging.Error("core.restart_scheduler", "%s", errorMessage)
+		svc.broadcast("failed", errorMessage)
 		return
 	}
 	logging.Info("core.restart_scheduler", "核心定时重启完成")

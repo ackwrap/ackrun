@@ -11,8 +11,9 @@ import (
 )
 
 type Store struct {
-	db         *sql.DB
-	nodeRefsMu sync.Mutex
+	db             *sql.DB
+	nodeRefsMu     sync.Mutex
+	configUpdateMu sync.RWMutex
 }
 
 func Open(dbPath string) (*Store, error) {
@@ -42,4 +43,18 @@ func (s *Store) Close() error {
 
 func (s *Store) DB() *sql.DB {
 	return s.db
+}
+
+// HoldConfigUpdate marks a node mutation that must finish before a configuration
+// snapshot is generated. Multiple subscription syncs may run concurrently.
+func (s *Store) HoldConfigUpdate() func() {
+	s.configUpdateMu.RLock()
+	return s.configUpdateMu.RUnlock
+}
+
+// HoldConfigSnapshot blocks new configuration-visible mutations until the
+// generated configuration has been applied and its core lifecycle action ends.
+func (s *Store) HoldConfigSnapshot() func() {
+	s.configUpdateMu.Lock()
+	return s.configUpdateMu.Unlock
 }
