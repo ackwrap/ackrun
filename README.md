@@ -169,7 +169,6 @@ The frontend is embedded into the Go binary. OpenWrt source templates live under
 backend/          Go API, business services, persistence, parsers, and embedded UI
 frontend/         Vue web console
 openwrt/          UCI, procd, LuCI, iStoreOS, and package control files
-docs/             Architecture, API, database, deployment, and test documentation
 sing-box-wrap/    Ackwrap-maintained sing-box submodule
 ```
 

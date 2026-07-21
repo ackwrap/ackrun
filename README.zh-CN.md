@@ -169,7 +169,6 @@ python build.py --target openwrt --arch arm64
 backend/          Go API、业务服务、持久化、解析器和嵌入式前端
 frontend/         Vue Web 控制台
 openwrt/          UCI、procd、LuCI、iStoreOS 和软件包控制文件
-docs/             架构、API、数据库、部署和测试文档
 sing-box-wrap/    Ackwrap 维护的 sing-box 子模块
 ```
 
