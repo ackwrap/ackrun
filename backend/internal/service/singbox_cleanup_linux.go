@@ -264,6 +264,7 @@ func recordPlatformSingboxRouteTables(statePath string, processExited <-chan str
 	}
 	deadline := time.NewTimer(ownershipRecordTimeout)
 	defer deadline.Stop()
+	var lastObservationErr error
 	for {
 		select {
 		case <-processExited:
@@ -280,9 +281,12 @@ func recordPlatformSingboxRouteTables(statePath string, processExited <-chan str
 		}
 		readyState, ready, err := derivePendingSingboxOwnership(state, ipv4Rules, ipv6Rules, nftHandle, nftPresent)
 		if err != nil {
-			return err
-		}
-		if ready {
+			// sing-box installs IPv4 and IPv6 policy rules in several steps. A
+			// reserved priority can therefore contain a transitional rule while
+			// the process is still starting; only treat it as a conflict if it
+			// remains until the observation deadline.
+			lastObservationErr = err
+		} else if ready {
 			includeIdentity, includePresent, err := currentSingboxNFTIncludeIdentity(singboxOpenWrtNFTInclude)
 			if err != nil {
 				return err
@@ -294,11 +298,16 @@ func recordPlatformSingboxRouteTables(statePath string, processExited <-chan str
 				return fmt.Errorf("record ready sing-box network ownership: %w", err)
 			}
 			return nil
+		} else {
+			lastObservationErr = nil
 		}
 		select {
 		case <-processExited:
 			return fmt.Errorf("sing-box exited before network ownership could be recorded")
 		case <-deadline.C:
+			if lastObservationErr != nil {
+				return fmt.Errorf("timed out recording sing-box network ownership: %w", lastObservationErr)
+			}
 			return fmt.Errorf("timed out recording sing-box network ownership")
 		case <-time.After(ownershipRecordInterval):
 		}
