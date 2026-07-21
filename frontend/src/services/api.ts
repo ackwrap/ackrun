@@ -7,6 +7,8 @@ import type {
   ActionResponse,
   UpdateSettings,
   UpdateSettingsResponse,
+  AppUpdateStatus,
+  AppUpdateInstallResponse,
   TrafficBypassSettings,
   LogSettings,
   LogSettingsResponse,
@@ -22,6 +24,7 @@ import type {
   DNSSettingsResponse,
   ExperimentalSettings,
   ExperimentalSettingsResponse,
+  Dashboard,
   NodeFilter,
   NodeFilterRequest,
   Subscription,
@@ -159,6 +162,9 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(body),
     }),
+  checkAppUpdate: () => request<AppUpdateStatus>("/app/update"),
+  installAppUpdate: () =>
+    request<AppUpdateInstallResponse>("/app/update", { method: "POST" }),
   getTrafficBypassSettings: () =>
     request<TrafficBypassSettings>("/settings/traffic-bypass"),
   setTrafficBypassSettings: (body: TrafficBypassSettings) =>
@@ -241,6 +247,17 @@ export const api = {
     request<ActionResponse>("/settings/experimental", {
       method: "PUT",
       body: JSON.stringify(body),
+    }),
+  listDashboards: () => request<Dashboard[]>("/settings/dashboards"),
+  checkDashboardUpdates: () =>
+    request<Dashboard[]>("/settings/dashboards/check", { method: "POST" }),
+  installDashboard: (id: string) =>
+    request<Dashboard>(`/settings/dashboards/${encodeURIComponent(id)}/install`, {
+      method: "POST",
+    }),
+  deleteDashboard: (id: string) =>
+    request<ActionResponse>(`/settings/dashboards/${encodeURIComponent(id)}`, {
+      method: "DELETE",
     }),
   getNodeFilters: () => request<NodeFilter[]>("/settings/node-filters"),
   createNodeFilter: (body: NodeFilterRequest) =>

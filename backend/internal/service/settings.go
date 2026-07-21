@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/netip"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -20,6 +22,7 @@ type SettingsService struct {
 	singbox                  *SingboxService
 	configGenerator          modeConfigGenerator
 	connectivitySettingsHook func()
+	dashboardsDir            string
 }
 
 type modeConfigGenerator interface {
@@ -41,6 +44,10 @@ func (svc *SettingsService) SetModeDependencies(singbox *SingboxService, generat
 
 func (svc *SettingsService) SetConnectivitySettingsHook(hook func()) {
 	svc.connectivitySettingsHook = hook
+}
+
+func (svc *SettingsService) SetDashboardsDir(dir string) {
+	svc.dashboardsDir = dir
 }
 
 func (svc *SettingsService) GetUpdateSettings() (*model.UpdateSettingsResponse, error) {
@@ -247,7 +254,22 @@ func (svc *SettingsService) setMode(previous, next string, persist func(string) 
 }
 
 func (svc *SettingsService) GetExperimentalSettings() (*model.ExperimentalSettingsResponse, error) {
-	return svc.store.GetExperimentalSettings()
+	settings, err := svc.store.GetExperimentalSettings()
+	if err != nil || settings == nil {
+		return settings, err
+	}
+	if settings.ClashAPIDashboard == "" && settings.ClashAPIExternalUI != "" && svc.dashboardsDir != "" {
+		for _, item := range dashboardCatalog {
+			if sameDashboardPath(settings.ClashAPIExternalUI, filepath.Join(svc.dashboardsDir, item.ID)) {
+				settings.ClashAPIDashboard = item.ID
+				break
+			}
+		}
+		if settings.ClashAPIDashboard == "" {
+			settings.ClashAPIDashboard = "custom"
+		}
+	}
+	return settings, nil
 }
 
 func (svc *SettingsService) SetExperimentalSettings(req *model.ExperimentalSettings) error {
@@ -260,6 +282,33 @@ func (svc *SettingsService) SetExperimentalSettings(req *model.ExperimentalSetti
 		return fmt.Errorf("Clash API 端口必须是 1-65535 之间的整数")
 	}
 	req.ClashAPIEnabled = true
+	req.ClashAPIDashboard = strings.TrimSpace(strings.ToLower(req.ClashAPIDashboard))
+	if req.ClashAPIDashboard == "custom" {
+		existing, err := svc.store.GetExperimentalSettings()
+		if err != nil {
+			return err
+		}
+		if existing == nil || strings.TrimSpace(existing.ClashAPIExternalUI) == "" {
+			return fmt.Errorf("现有自定义控制面板配置不存在")
+		}
+		req.ClashAPIExternalUI = existing.ClashAPIExternalUI
+		req.ClashAPIExternalUIDownloadURL = existing.ClashAPIExternalUIDownloadURL
+	} else if req.ClashAPIDashboard != "" {
+		if svc.dashboardsDir == "" || findDashboardCatalogItem(req.ClashAPIDashboard) == nil {
+			return fmt.Errorf("控制面板选择无效")
+		}
+		dashboardPath := filepath.Join(svc.dashboardsDir, req.ClashAPIDashboard)
+		if info, err := os.Stat(filepath.Join(dashboardPath, "index.html")); err != nil || info.IsDir() {
+			return fmt.Errorf("所选控制面板尚未安装")
+		}
+		req.ClashAPIExternalUI = dashboardPath
+		req.ClashAPIExternalUIDownloadURL = ""
+	} else if strings.TrimSpace(req.ClashAPIExternalUI) != "" {
+		req.ClashAPIDashboard = "custom"
+	} else if svc.dashboardsDir != "" {
+		req.ClashAPIExternalUI = ""
+		req.ClashAPIExternalUIDownloadURL = ""
+	}
 	return svc.store.SetExperimentalSettings(req)
 }
 

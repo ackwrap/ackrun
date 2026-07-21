@@ -119,6 +119,27 @@ export interface UpdateSettingsResponse {
   custom_mirror_url: string;
 }
 
+export interface AppUpdateStatus {
+  current_version: string;
+  latest_version: string;
+  update_available: boolean;
+  can_install: boolean;
+  platform: string;
+  architecture: string;
+  release_url?: string;
+  published_at?: string;
+  asset_name?: string;
+  message?: string;
+  updating: boolean;
+  update_error?: string;
+}
+
+export interface AppUpdateInstallResponse {
+  success: boolean;
+  message: string;
+  version: string;
+}
+
 export type TrafficBypassRuleType =
   | "process_name"
   | "interface"
@@ -287,6 +308,7 @@ export interface ExperimentalSettings {
   clash_api_secret?: string;
   clash_api_external_ui?: string;
   clash_api_external_ui_download_url?: string;
+  clash_api_dashboard?: string;
   cache_file_enabled: boolean;
   cache_file_store_fakeip: boolean;
   cache_file_store_dns: boolean;
@@ -298,9 +320,24 @@ export interface ExperimentalSettingsResponse {
   clash_api_secret?: string;
   clash_api_external_ui?: string;
   clash_api_external_ui_download_url?: string;
+  clash_api_dashboard?: string;
   cache_file_enabled: boolean;
   cache_file_store_fakeip: boolean;
   cache_file_store_dns: boolean;
+}
+
+export interface Dashboard {
+  id: string;
+  name: string;
+  description: string;
+  installed: boolean;
+  selected: boolean;
+  local_path?: string;
+  updated_at?: number;
+  current_version?: string;
+  latest_version?: string;
+  update_available: boolean;
+  check_error?: string;
 }
 
 export interface NodeFilter {

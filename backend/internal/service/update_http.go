@@ -119,7 +119,7 @@ func isGitHubFileURL(rawURL string) bool {
 		return false
 	}
 	switch strings.ToLower(parsed.Hostname()) {
-	case "raw.githubusercontent.com", "github.com":
+	case "raw.githubusercontent.com", "github.com", "api.github.com":
 		return true
 	default:
 		return false

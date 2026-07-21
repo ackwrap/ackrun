@@ -40,7 +40,7 @@ def run_checks() -> None:
     run(["go", "vet", "./..."], BACKEND)
 
 
-def build_binary(target: str, arch: str, output_dir: Path) -> Path:
+def build_binary(target: str, arch: str, version: str, output_dir: Path) -> Path:
     goos = "windows" if target == "windows" else "linux"
     extension = ".exe" if target == "windows" else ""
     output = output_dir / f"ackwrap-{target}-{arch}{extension}"
@@ -51,7 +51,8 @@ def build_binary(target: str, arch: str, output_dir: Path) -> Path:
             "go",
             "build",
             "-trimpath",
-            "-ldflags=-s -w",
+            "-ldflags=-s -w "
+            f"-X github.com/ackwrap/ackwrap/internal/buildinfo.Version={version}",
             "-o",
             str(output),
             "./cmd/server",
@@ -240,7 +241,7 @@ def main() -> None:
     targets = ("windows", "linux", "openwrt") if args.target == "all" else (args.target,)
     built: dict[str, Path] = {}
     for target in targets:
-        output = build_binary(target, args.arch, output_dir)
+        output = build_binary(target, args.arch, args.version, output_dir)
         built[target] = output
         print(f"Built {output}")
     if "openwrt" in built:

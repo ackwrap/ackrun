@@ -531,6 +531,8 @@ func (s *Store) GetExperimentalSettings() (*model.ExperimentalSettingsResponse, 
 			r.ClashAPIExternalUI = value
 		case "experimental.clash_api.external_ui_download_url":
 			r.ClashAPIExternalUIDownloadURL = value
+		case "experimental.clash_api.dashboard":
+			r.ClashAPIDashboard = value
 		case "experimental.cache_file.enabled":
 			r.CacheFileEnabled = value == "true"
 		case "experimental.cache_file.store_fakeip":
@@ -562,6 +564,7 @@ func (s *Store) SetExperimentalSettings(req *model.ExperimentalSettings) error {
 		"experimental.clash_api.secret":                   req.ClashAPISecret,
 		"experimental.clash_api.external_ui":              req.ClashAPIExternalUI,
 		"experimental.clash_api.external_ui_download_url": req.ClashAPIExternalUIDownloadURL,
+		"experimental.clash_api.dashboard":                req.ClashAPIDashboard,
 		"experimental.cache_file.enabled":                 fmt.Sprintf("%t", req.CacheFileEnabled),
 		"experimental.cache_file.store_fakeip":            fmt.Sprintf("%t", req.CacheFileStoreFakeIP),
 		"experimental.cache_file.store_dns":               fmt.Sprintf("%t", req.CacheFileStoreDNS),

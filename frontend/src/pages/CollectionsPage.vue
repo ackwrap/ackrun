@@ -5,6 +5,7 @@ import PageHeader from "@/components/layout/PageHeader.vue";
 import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
 import Modal from "@/components/ui/Modal.vue";
 import Toast from "@/components/ui/Toast.vue";
+import { useHashTab } from "@/composables/useHashTab";
 import { useRealtimeSocket } from "@/composables/useRealtimeSocket";
 import { api } from "@/services/api";
 import { authenticatedFetch } from "@/services/apiAuth";
@@ -36,7 +37,11 @@ interface MatchedNode {
   status: string;
 }
 
-const active = ref<"node-groups" | "collections">("node-groups");
+type CollectionTab = "node-groups" | "collections";
+const { activeTab: active, selectTab } = useHashTab<CollectionTab>(
+  ["node-groups", "collections"],
+  "node-groups",
+);
 const groups = ref<NodeGroup[]>([]);
 const strategies = ref<StrategyItem[]>([]);
 const facets = ref<{
@@ -338,7 +343,7 @@ onMounted(load);
             ? 'border-b-2 border-[var(--color-primary)] text-[var(--text-primary)]'
             : ''
         "
-        @click="active = 'node-groups'"
+        @click="selectTab('node-groups')"
       >
         <Layers :size="16" class="inline" /> 节点组（地域划分）
       </button>
@@ -349,7 +354,7 @@ onMounted(load);
             ? 'border-b-2 border-[var(--color-primary)] text-[var(--text-primary)]'
             : ''
         "
-        @click="active = 'collections'"
+        @click="selectTab('collections')"
       >
         <Zap :size="16" class="inline" /> 策略组（业务用途）
       </button>

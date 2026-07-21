@@ -25,6 +25,8 @@ func RegisterRoutes(
 	nodeGroupSvc *service.NodeGroupService,
 	reconcileSvc *service.ConfigReconcileService,
 	coreRestartSvc *service.CoreRestartScheduler,
+	appUpdateSvc *service.AppUpdateService,
+	dashboardSvc *service.DashboardService,
 ) {
 	runtimeH := handler.NewRuntimeHandler(runtimeSvc)
 	installerH := handler.NewInstallerHandler(installerSvc)
@@ -41,6 +43,8 @@ func RegisterRoutes(
 	dnsH := handler.NewDNSHandler(dnsSvc)
 	nodeGroupH := handler.NewNodeGroupHandler(nodeGroupSvc)
 	coreRestartH := handler.NewCoreRestartHandler(coreRestartSvc)
+	appUpdateH := handler.NewAppUpdateHandler(appUpdateSvc)
+	dashboardH := handler.NewDashboardHandler(dashboardSvc)
 
 	clashProxyH := handler.NewClashProxyHandler(settingsSvc)
 
@@ -83,6 +87,8 @@ func RegisterRoutes(
 
 		v1.GET("/settings/update", settingsH.GetUpdateSettings)
 		v1.PUT("/settings/update", settingsH.SetUpdateSettings)
+		v1.GET("/app/update", appUpdateH.Check)
+		v1.POST("/app/update", appUpdateH.Install)
 		v1.GET("/settings/traffic-bypass", settingsH.GetTrafficBypassSettings)
 		v1.PUT("/settings/traffic-bypass", settingsH.SetTrafficBypassSettings)
 		v1.GET("/settings/log", settingsH.GetLogSettings)
@@ -107,6 +113,10 @@ func RegisterRoutes(
 		v1.PUT("/settings/proxy-mode", settingsH.SetProxyMode)
 		v1.GET("/settings/experimental", settingsH.GetExperimentalSettings)
 		v1.PUT("/settings/experimental", settingsH.SetExperimentalSettings)
+		v1.GET("/settings/dashboards", dashboardH.List)
+		v1.POST("/settings/dashboards/check", dashboardH.CheckUpdates)
+		v1.POST("/settings/dashboards/:id/install", dashboardH.Install)
+		v1.DELETE("/settings/dashboards/:id", dashboardH.Delete)
 		v1.GET("/settings/node-filters", settingsH.ListNodeFilters)
 		v1.POST("/settings/node-filters", settingsH.CreateNodeFilter)
 		v1.PUT("/settings/node-filters/:id", settingsH.UpdateNodeFilter)

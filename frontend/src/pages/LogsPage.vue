@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
 import PageHeader from "@/components/layout/PageHeader.vue";
 import Button from "@/components/ui/Button.vue";
+import { useHashTab } from "@/composables/useHashTab";
 import { useRealtimeSocket } from "@/composables/useRealtimeSocket";
 import { api } from "@/services/api";
 import type { CoreLogEntry, ToolLogEntry, WSEvent } from "@/services/types";
@@ -21,7 +22,10 @@ interface ClearContext<T> {
 }
 
 const retainedLogLimit = 1000;
-const activeTab = ref<LogTab>("core");
+const { activeTab, selectTab } = useHashTab<LogTab>(
+  ["core", "tool"],
+  "core",
+);
 const coreLogs = ref<CoreLogEntry[]>([]);
 const toolLogs = ref<ToolLogEntry[]>([]);
 const logFilter = ref<LogFilter>("all");
@@ -207,14 +211,6 @@ async function clearLogs() {
   }
 }
 
-function switchTab(tab: LogTab) {
-  if (activeTab.value === tab) return;
-  invalidateLoad(activeTab.value);
-  activeTab.value = tab;
-  logFilter.value = "all";
-  void loadLogs(tab);
-}
-
 const { connected } = useRealtimeSocket((event: WSEvent) => {
   if (event.type === "core.log") {
     const entry = event.data as CoreLogEntry;
@@ -279,6 +275,11 @@ function handleLogScroll() {
 watch(displayLogs, () => {
   if (autoScroll.value) void scrollToLatest();
 });
+watch(activeTab, (tab, previousTab) => {
+  invalidateLoad(previousTab);
+  logFilter.value = "all";
+  void loadLogs(tab);
+});
 onMounted(() => void loadLogs());
 </script>
 
@@ -302,7 +303,7 @@ onMounted(() => void loadLogs());
             :class="{ active: activeTab === 'core' }"
             role="tab"
             :aria-selected="activeTab === 'core'"
-            @click="switchTab('core')"
+            @click="selectTab('core')"
           >
             核心日志
           </button>
@@ -311,7 +312,7 @@ onMounted(() => void loadLogs());
             :class="{ active: activeTab === 'tool' }"
             role="tab"
             :aria-selected="activeTab === 'tool'"
-            @click="switchTab('tool')"
+            @click="selectTab('tool')"
           >
             工具日志
           </button>

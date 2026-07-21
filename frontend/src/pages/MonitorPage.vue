@@ -4,6 +4,7 @@ import { useRouter } from "vue-router";
 import PageHeader from "@/components/layout/PageHeader.vue";
 import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
 import Toast from "@/components/ui/Toast.vue";
+import { useHashTab } from "@/composables/useHashTab";
 import { api } from "@/services/api";
 import { getClashClient } from "@/services/clash";
 import type { ConnectivityTarget } from "@/services/types";
@@ -21,8 +22,11 @@ import ConnectionsPanel from "./monitor/ConnectionsPanel.vue";
 import RulesPanel from "./monitor/RulesPanel.vue";
 import type { MonitorTab } from "./monitor/monitorUtils";
 const router = useRouter();
-const activeTab = ref<MonitorTab>("overview"),
-  runtimeChecking = ref(true),
+const { activeTab, selectTab } = useHashTab<MonitorTab>(
+  ["overview", "proxies", "connections", "rules"],
+  "overview",
+);
+const runtimeChecking = ref(true),
   runtimeBlocked = ref(false),
   runtimeBlockedMessage = ref("sing-box 核心未运行，请先在控制台启动核心。"),
   totalUp = ref(0),
@@ -186,7 +190,7 @@ const groups = computed(() =>
         ),
     ),
   );
-watch(activeTab, async (t) => {
+async function activateTab(t: MonitorTab) {
   clearInterval(timer);
   if (monitorSuspended) return;
   if (t === "proxies") await loadProxies();
@@ -198,7 +202,8 @@ watch(activeTab, async (t) => {
       t === "connections" ? 1000 : 3000,
     );
   }
-});
+}
+watch(activeTab, activateTab);
 async function waitForClashAPI() {
   for (let attempt = 0; attempt < 10; attempt += 1) {
     if (await ensure()) return true;
@@ -229,8 +234,9 @@ async function startMonitor() {
       void suspendWhenCoreStops();
     },
   );
-  await Promise.all([loadProxies(), loadConnections()]);
-  timer = window.setInterval(loadConnections, 3000);
+  const initialLoads: Promise<void>[] = [activateTab(activeTab.value)];
+  if (activeTab.value !== "proxies") initialLoads.push(loadProxies());
+  await Promise.all(initialLoads);
 }
 onMounted(async () => {
   try {
@@ -444,7 +450,7 @@ function returnToControl() {
       @dismiss="message = ''"
     /><PageHeader title="仪表盘" /><MonitorTabs
       :active-tab="activeTab"
-      @change="activeTab = $event"
+      @change="selectTab"
     />
     <div class="flex-1 overflow-auto">
       <OverviewPanel
@@ -465,8 +471,8 @@ function returnToControl() {
           connectionCountHistory: connectionHistory,
           memoryHistory,
         }"
-        @open-connections="activeTab = 'connections'"
-        @open-proxies="activeTab = 'proxies'"
+        @open-connections="selectTab('connections')"
+        @open-proxies="selectTab('proxies')"
       /><ProxyGroupsPanel
         v-else-if="activeTab === 'proxies'"
         :proxies="proxies"

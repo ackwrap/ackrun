@@ -4,30 +4,30 @@ import { api } from "@/services/api";
 import Button from "@/components/ui/Button.vue";
 import PageHeader from "@/components/layout/PageHeader.vue";
 import Toast from "@/components/ui/Toast.vue";
+import { useHashTab } from "@/composables/useHashTab";
 import ConnectivityResourcesPanel from "./settings/ConnectivityResourcesPanel.vue";
 import GeoIPProvidersPanel from "./settings/GeoIPProvidersPanel.vue";
 import TrafficBypassPanel from "./settings/TrafficBypassPanel.vue";
+import AppUpdatePanel from "./settings/AppUpdatePanel.vue";
+import ExperimentalSettingsPanel from "./settings/ExperimentalSettingsPanel.vue";
 import {
   Clock3,
-  Download,
   FlaskConical,
+  RefreshCw,
   Settings,
   ShieldOff,
 } from "lucide-vue-next";
-type SettingsTab = "general" | "bypass" | "experimental";
-const acceleration = ref("ghproxy"),
-  customMirror = ref(""),
-  message = ref(""),
+type SettingsTab = "general" | "bypass" | "experimental" | "update";
+const settingsTabs = [
+  "general",
+  "bypass",
+  "experimental",
+  "update",
+] as const satisfies readonly SettingsTab[];
+const message = ref(""),
   messageType = ref<"success" | "error" | "info">("success");
-const activeTab = ref<SettingsTab>("general"),
-  clashApiPort = ref("9090"),
-  clashApiSecret = ref(""),
-  clashApiExternalUI = ref(""),
-  clashApiExternalUIDownloadURL = ref(""),
-  cacheFileEnabled = ref(true),
-  cacheFileStoreFakeIP = ref(true),
-  cacheFileStoreDNS = ref(true),
-  ntpEnabled = ref(true),
+const { activeTab, selectTab } = useHashTab(settingsTabs, "general");
+const ntpEnabled = ref(true),
   ntpServer = ref("time.apple.com"),
   ntpServerPort = ref(123),
   ntpInterval = ref("30m"),
@@ -37,26 +37,6 @@ function notify(v: string, t: "success" | "error" | "info" = "success") {
   messageType.value = t;
 }
 onMounted(() => {
-  api
-    .getUpdateSettings()
-    .then((d) => {
-      acceleration.value = d.acceleration || "ghproxy";
-      customMirror.value = d.custom_mirror_url || "";
-    })
-    .catch(() => {});
-  api
-    .getExperimentalSettings()
-    .then((d) => {
-      clashApiPort.value = d.clash_api_port || "9090";
-      clashApiSecret.value = d.clash_api_secret || "";
-      clashApiExternalUI.value = d.clash_api_external_ui || "";
-      clashApiExternalUIDownloadURL.value =
-        d.clash_api_external_ui_download_url || "";
-      cacheFileEnabled.value = d.cache_file_enabled !== false;
-      cacheFileStoreFakeIP.value = d.cache_file_store_fakeip !== false;
-      cacheFileStoreDNS.value = d.cache_file_store_dns !== false;
-    })
-    .catch(() => {});
   api
     .getNTPSettings()
     .then((d) => {
@@ -68,34 +48,6 @@ onMounted(() => {
     })
     .catch(() => {});
 });
-async function saveUpdate() {
-  try {
-    await api.setUpdateSettings({
-      acceleration: acceleration.value,
-      custom_mirror_url: customMirror.value,
-    });
-    notify("更新设置已保存");
-  } catch (e: any) {
-    notify(`保存失败: ${e.message}`, "error");
-  }
-}
-async function saveExperimental() {
-  try {
-    await api.setExperimentalSettings({
-      clash_api_enabled: true,
-      clash_api_port: clashApiPort.value,
-      clash_api_secret: clashApiSecret.value,
-      clash_api_external_ui: clashApiExternalUI.value,
-      clash_api_external_ui_download_url: clashApiExternalUIDownloadURL.value,
-      cache_file_enabled: cacheFileEnabled.value,
-      cache_file_store_fakeip: cacheFileStoreFakeIP.value,
-      cache_file_store_dns: cacheFileStoreDNS.value,
-    });
-    notify("实验性功能设置已保存");
-  } catch (e: any) {
-    notify(`保存失败: ${e.message}`, "error");
-  }
-}
 async function saveNTP() {
   try {
     await api.setNTPSettings({
@@ -127,28 +79,28 @@ const input =
       <button
         class="relative flex items-center gap-2 px-4 py-2.5 text-sm font-medium outline-none"
         :class="
-          activeTab === 'bypass'
-            ? 'text-[var(--color-primary)]'
-            : 'text-[var(--text-secondary)] hover:bg-[var(--bg-sidebar-hover)]'
-        "
-        role="tab"
-        :aria-selected="activeTab === 'bypass'"
-        @click="activeTab = 'bypass'"
-      >
-        <ShieldOff :size="16" />流量排除
-      </button>
-      <button
-        class="relative flex items-center gap-2 px-4 py-2.5 text-sm font-medium outline-none"
-        :class="
           activeTab === 'general'
             ? 'text-[var(--color-primary)]'
             : 'text-[var(--text-secondary)] hover:bg-[var(--bg-sidebar-hover)]'
         "
         role="tab"
         :aria-selected="activeTab === 'general'"
-        @click="activeTab = 'general'"
+        @click="selectTab('general')"
       >
-        <Settings :size="16" />常规功能
+        <Settings :size="16" />常规设置
+      </button>
+      <button
+        class="relative flex items-center gap-2 px-4 py-2.5 text-sm font-medium outline-none"
+        :class="
+          activeTab === 'bypass'
+            ? 'text-[var(--color-primary)]'
+            : 'text-[var(--text-secondary)] hover:bg-[var(--bg-sidebar-hover)]'
+        "
+        role="tab"
+        :aria-selected="activeTab === 'bypass'"
+        @click="selectTab('bypass')"
+      >
+        <ShieldOff :size="16" />流量排除
       </button>
       <button
         class="relative flex items-center gap-2 px-4 py-2.5 text-sm font-medium outline-none"
@@ -159,9 +111,22 @@ const input =
         "
         role="tab"
         :aria-selected="activeTab === 'experimental'"
-        @click="activeTab = 'experimental'"
+        @click="selectTab('experimental')"
       >
         <FlaskConical :size="16" />实验性功能
+      </button>
+      <button
+        class="relative flex items-center gap-2 px-4 py-2.5 text-sm font-medium outline-none"
+        :class="
+          activeTab === 'update'
+            ? 'text-[var(--color-primary)]'
+            : 'text-[var(--text-secondary)] hover:bg-[var(--bg-sidebar-hover)]'
+        "
+        role="tab"
+        :aria-selected="activeTab === 'update'"
+        @click="selectTab('update')"
+      >
+        <RefreshCw :size="16" />检查更新
       </button>
     </div>
 
@@ -222,35 +187,6 @@ const input =
         </div>
       </section>
 
-      <section :class="panel" class="flex h-full flex-col">
-        <div class="mb-4 flex items-center gap-2">
-          <Download :size="18" class="text-[var(--color-primary)]" />
-          <h2 class="font-semibold">更新设置</h2>
-        </div>
-        <div class="flex flex-1 flex-col gap-4">
-          <label class="block text-sm"
-            >下载加速<select v-model="acceleration" :class="input">
-              <option value="">无加速</option>
-              <option value="ghproxy">https://gh-proxy.com/</option>
-              <option value="ghproxy_vip">https://ghproxy.vip/</option>
-              <option value="jsdelivr_fastly">
-                https://fastly.jsdelivr.net/
-              </option>
-              <option value="jsdelivr_testingcf">
-                https://testingcf.jsdelivr.net/
-              </option>
-              <option value="jsdelivr_cdn">https://cdn.jsdelivr.net/</option>
-              <option value="custom">自定义镜像</option>
-            </select></label
-          ><label v-if="acceleration === 'custom'" class="block text-sm"
-            >自定义镜像 URL<input
-              v-model="customMirror"
-              :class="input" /></label
-          ><Button class="mt-auto self-start" size="sm" @click="saveUpdate"
-            >保存更新设置</Button
-          >
-        </div>
-      </section>
     </div>
 
     <TrafficBypassPanel
@@ -258,94 +194,11 @@ const input =
       @notify="notify"
     />
 
-    <section v-else :class="panel" class="flex flex-col" role="tabpanel">
-      <div class="mb-4 flex items-center gap-2">
-        <h2 class="font-semibold">实验性功能</h2>
-        <span
-          class="rounded-[var(--radius-sm)] bg-[var(--color-warning-bg)] px-2 py-0.5 text-xs text-[var(--color-warning)]"
-          >实验性</span
-        >
-      </div>
-      <div class="grid gap-4 lg:grid-cols-2">
-        <div
-          class="rounded-[var(--radius-lg)] border border-[var(--border-default)] p-4"
-        >
-          <div class="mb-3 flex justify-between gap-3">
-            <div>
-              <h3>Clash API</h3>
-              <p class="text-xs text-[var(--text-secondary)]">
-                提供 RESTful API 用于实时监控和策略组切换，核心功能（强制开启）
-              </p>
-            </div>
-            <span class="shrink-0 text-xs text-[var(--color-success)]"
-              >● 已强制启用</span
-            >
-          </div>
-          <div class="space-y-3">
-            <label class="block text-xs"
-              >端口<input
-                v-model="clashApiPort"
-                :class="input"
-                placeholder="9090" /></label
-            ><label class="block text-xs"
-              >密钥（可选，留空则无密钥）<input
-                v-model="clashApiSecret"
-                type="password"
-                :class="input" /></label
-            ><label class="block text-xs"
-              >外部 UI 面板路径（可选）<input
-                v-model="clashApiExternalUI"
-                :class="input" /></label
-            ><label class="block text-xs"
-              >外部 UI 下载 URL（可选）<input
-                v-model="clashApiExternalUIDownloadURL"
-                :class="input"
-                placeholder="https://github.com/MetaCubeX/metacubexd/..."
-            /></label>
-            <div
-              class="rounded-[var(--radius-md)] bg-[var(--color-success-bg)] p-2 text-xs text-[var(--color-success)]"
-            >
-              <b>说明：</b> Clash API 已强制启用。所有请求通过 Ackwrap
-              后端代理访问，外部无法直接访问。地址为 127.0.0.1:{{
-                clashApiPort || "9090"
-              }}。
-            </div>
-          </div>
-        </div>
-        <div
-          class="rounded-[var(--radius-lg)] border border-[var(--border-default)] p-4"
-        >
-          <div class="mb-3 flex justify-between gap-3">
-            <div>
-              <h3>缓存文件</h3>
-              <p class="text-xs text-[var(--text-secondary)]">
-                缓存 FakeIP、规则集等数据，提高性能
-              </p>
-            </div>
-            <input v-model="cacheFileEnabled" type="checkbox" />
-          </div>
-          <div v-if="cacheFileEnabled" class="space-y-3">
-            <label class="flex justify-between text-xs"
-              >缓存 FakeIP<input
-                v-model="cacheFileStoreFakeIP"
-                type="checkbox" /></label
-            ><label class="flex justify-between text-xs"
-              >持久化完整 DNS 缓存<input
-                v-model="cacheFileStoreDNS"
-                type="checkbox"
-            /></label>
-            <div
-              class="rounded-[var(--radius-md)] bg-[var(--color-warning-bg)] p-2 text-xs text-[var(--color-warning)]"
-            >
-              <b>说明：</b>缓存文件保存到
-              <code>cache.db</code>，重启后自动恢复。
-            </div>
-          </div>
-        </div>
-      </div>
-      <div class="mt-4">
-        <Button size="sm" @click="saveExperimental">保存实验性功能设置</Button>
-      </div>
-    </section>
+    <ExperimentalSettingsPanel
+      v-else-if="activeTab === 'experimental'"
+      @notify="notify"
+    />
+
+    <AppUpdatePanel v-else @notify="notify" />
   </div>
 </template>

@@ -104,6 +104,7 @@ type ExperimentalSettings struct {
 	ClashAPISecret                string `json:"clash_api_secret,omitempty"`
 	ClashAPIExternalUI            string `json:"clash_api_external_ui,omitempty"`
 	ClashAPIExternalUIDownloadURL string `json:"clash_api_external_ui_download_url,omitempty"`
+	ClashAPIDashboard             string `json:"clash_api_dashboard,omitempty"`
 	CacheFileEnabled              bool   `json:"cache_file_enabled"`
 	CacheFileStoreFakeIP          bool   `json:"cache_file_store_fakeip"`
 	CacheFileStoreDNS             bool   `json:"cache_file_store_dns"`
@@ -116,6 +117,7 @@ type ExperimentalSettingsResponse struct {
 	ClashAPISecret                string `json:"clash_api_secret,omitempty"`
 	ClashAPIExternalUI            string `json:"clash_api_external_ui,omitempty"`
 	ClashAPIExternalUIDownloadURL string `json:"clash_api_external_ui_download_url,omitempty"`
+	ClashAPIDashboard             string `json:"clash_api_dashboard,omitempty"`
 	CacheFileEnabled              bool   `json:"cache_file_enabled"`
 	CacheFileStoreFakeIP          bool   `json:"cache_file_store_fakeip"`
 	CacheFileStoreDNS             bool   `json:"cache_file_store_dns"`

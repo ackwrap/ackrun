@@ -155,6 +155,7 @@ func main() {
 		return err
 	})
 	settingsSvc := service.NewSettingsService(db)
+	settingsSvc.SetDashboardsDir(p.DashboardsDir)
 
 	// 初始化实验性功能默认配置（如果未设置）
 	expSettings, _ := settingsSvc.GetExperimentalSettings()
@@ -181,6 +182,8 @@ func main() {
 	reconcileSvc := service.NewConfigReconcileService(configGenSvc, realtimeSvc)
 	defer reconcileSvc.Close()
 	coreRestartSvc := service.NewCoreRestartScheduler(db, singboxSvc, configGenSvc, realtimeSvc)
+	appUpdateSvc := service.NewAppUpdateService(db, p, singboxSvc, realtimeSvc)
+	dashboardSvc := service.NewDashboardService(db, p)
 	if err := coreRestartSvc.StartScheduler(); err != nil {
 		logging.Error("core.restart_scheduler", "启动核心定时重启调度器失败: %v", err)
 	}
@@ -205,7 +208,7 @@ func main() {
 	)
 
 	r.Use(api.SecurityMiddleware(serverCfg.APIToken))
-	api.RegisterRoutes(r, runtimeSvc, installerSvc, singboxSvc, configSvc, settingsSvc, subscriptionSvc, nodeSvc, routeRuleSvc, proxyCollectionSvc, configGenSvc, realtimeSvc, coreLogSvc, dnsSvc, nodeGroupSvc, reconcileSvc, coreRestartSvc)
+	api.RegisterRoutes(r, runtimeSvc, installerSvc, singboxSvc, configSvc, settingsSvc, subscriptionSvc, nodeSvc, routeRuleSvc, proxyCollectionSvc, configGenSvc, realtimeSvc, coreLogSvc, dnsSvc, nodeGroupSvc, reconcileSvc, coreRestartSvc, appUpdateSvc, dashboardSvc)
 	if err := registerWebUI(r); err != nil {
 		log.Fatalf("register embedded UI: %v", err)
 	}
@@ -220,6 +223,7 @@ func main() {
 		logging.Info("main", "starting server on %s", serverCfg.ListenAddr)
 		serverErrors <- server.ListenAndServe()
 	}()
+	go appUpdateSvc.RestoreCoreAfterUpdate()
 
 	shutdownSignals := make(chan os.Signal, 1)
 	signal.Notify(shutdownSignals, os.Interrupt, syscall.SIGTERM)
