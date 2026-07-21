@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { Cloud, FileJson2, Link2 } from "lucide-vue-next";
+import { FileJson2 } from "lucide-vue-next";
 import PageHeader from "@/components/layout/PageHeader.vue";
 import Modal from "@/components/ui/Modal.vue";
 import Toast from "@/components/ui/Toast.vue";
@@ -18,6 +18,8 @@ import GeoDatabaseSection from "./rules/GeoDatabaseSection.vue";
 import RuleListSection from "./rules/RuleListSection.vue";
 import RouteRuleFormModal from "./rules/RouteRuleFormModal.vue";
 import RuleSubscriptionActionsModal from "./rules/RuleSubscriptionActionsModal.vue";
+import RuleSubscriptionFormModal from "./rules/RuleSubscriptionFormModal.vue";
+import RuleSubscriptionSection from "./rules/RuleSubscriptionSection.vue";
 const rules = ref<RouteRule[]>([]),
   subscriptions = ref<RouteRuleSubscription[]>([]),
   geoAssets = ref<GeoAsset[]>([]),
@@ -35,6 +37,7 @@ const rules = ref<RouteRule[]>([]),
   outbound = ref("direct"),
   invert = ref(false),
   subEdit = ref<RouteRuleSubscription | null>(null),
+  subFormOpen = ref(false),
   sub = ref({
     name: "",
     enabled: true,
@@ -221,6 +224,14 @@ function resetSub() {
   generate.value = true;
   referenceOutbound.value = "proxy";
 }
+function addSub() {
+  resetSub();
+  subFormOpen.value = true;
+}
+function closeSubForm() {
+  subFormOpen.value = false;
+  resetSub();
+}
 function editSub(x: RouteRuleSubscription) {
   actions.value = null;
   subEdit.value = x;
@@ -235,6 +246,7 @@ function editSub(x: RouteRuleSubscription) {
     sync_time: x.sync_time,
     sync_weekday: x.sync_weekday,
   };
+  subFormOpen.value = true;
 }
 async function saveSub() {
   try {
@@ -254,6 +266,7 @@ async function saveSub() {
         });
     }
     show(subEdit.value ? "规则订阅已更新" : "规则订阅已添加");
+    subFormOpen.value = false;
     resetSub();
     await load();
   } catch (e: any) {
@@ -432,156 +445,13 @@ onBeforeUnmount(() => clearInterval(poll));
         @remove="pending = $event"
         @detail="detailRule = $event"
       />
-      <section
-        class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
-      >
-        <header class="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h3 class="flex items-center gap-2 font-semibold">
-              <Cloud :size="17" />规则订阅
-            </h3>
-            <p class="mt-1 text-xs text-[var(--text-secondary)]">
-              支持 sing-box binary/source 和 Clash Rule Provider YAML；选择 clash 或由 auto 按 .yml/.yaml 自动识别，转换后生成 sing-box rule_set 引用。不支持完整 Clash 节点订阅配置。
-            </p>
-          </div>
-          <button class="aw-action-button aw-action-neutral" @click="syncAll">
-            同步全部
-          </button>
-        </header>
-        <div class="grid gap-4 xl:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
-          <div
-            class="rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--bg-base)] p-4"
-          >
-            <h4 class="mb-3 font-medium">
-              {{ subEdit ? "编辑" : "新增" }}订阅
-            </h4>
-            <div class="grid gap-3 sm:grid-cols-2">
-              <label class="text-xs"
-                >名称<input v-model="sub.name" placeholder="订阅名称"
-              /></label>
-              <label class="text-xs"
-                >规则集 tag<input v-model="sub.tag" placeholder="例如 private"
-              /></label>
-              <label class="text-xs sm:col-span-2"
-                >下载地址<input v-model="sub.url" placeholder="https://..."
-              /></label>
-              <label class="text-xs"
-                >格式<select v-model="sub.format">
-                  <option
-                    v-for="x in ['auto', 'binary', 'source', 'clash']"
-                    :key="x"
-                  >
-                    {{ x }}
-                  </option>
-                </select></label
-              >
-              <label class="text-xs"
-                >同步周期<select v-model="sub.sync_mode">
-                  <option
-                    v-for="x in ['off', 'daily', 'weekly', 'monthly']"
-                    :key="x"
-                  >
-                    {{ x }}
-                  </option>
-                </select></label
-              >
-              <label class="text-xs"
-                >同步时间<input v-model="sub.sync_time" type="time" step="1"
-              /></label>
-              <label class="text-xs"
-                >星期/日期<input
-                  v-model.number="sub.sync_weekday"
-                  type="number"
-              /></label>
-            </div>
-            <div
-              class="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs"
-            >
-              <label class="flex items-center gap-2"
-                ><input v-model="sub.enabled" type="checkbox" />启用</label
-              >
-              <label class="flex items-center gap-2"
-                ><input
-                  v-model="sub.use_proxy"
-                  type="checkbox"
-                />下载走代理</label
-              >
-              <label v-if="!subEdit" class="flex items-center gap-2"
-                ><input
-                  v-model="generate"
-                  type="checkbox"
-                />同时生成引用规则</label
-              >
-              <label v-if="!subEdit" class="flex items-center gap-2"
-                >引用出站<select
-                  v-model="referenceOutbound"
-                  class="!mt-0 !w-28"
-                >
-                  <option v-for="x in ['proxy', 'direct', 'block']" :key="x">
-                    {{ x }}
-                  </option>
-                </select></label
-              >
-            </div>
-            <div class="mt-4 flex justify-end gap-2">
-              <button
-                v-if="subEdit"
-                class="aw-action-button aw-action-neutral"
-                @click="resetSub"
-              >
-                取消编辑
-              </button>
-              <button
-                class="aw-action-button aw-action-success"
-                @click="saveSub"
-              >
-                <Link2 :size="13" />{{ subEdit ? "更新" : "添加" }}订阅
-              </button>
-            </div>
-          </div>
-          <div
-            class="overflow-hidden rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--bg-base)]"
-          >
-            <div
-              v-if="!subscriptions.length"
-              class="grid min-h-48 place-items-center text-[var(--text-tertiary)]"
-            >
-              暂无规则订阅
-            </div>
-            <article
-              v-for="x in subscriptions"
-              :key="x.id"
-              class="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-light)] p-4 last:border-b-0"
-            >
-              <div class="min-w-0">
-                <div class="flex flex-wrap items-center gap-2">
-                  <b>{{ x.name }}</b
-                  ><span
-                    class="rounded bg-[var(--button-secondary-bg)] px-2 py-0.5 text-[11px]"
-                    >{{ x.tag }}</span
-                  ><span class="text-[11px] text-[var(--text-tertiary)]">{{
-                    x.sync_status
-                  }}</span>
-                </div>
-                <small
-                  class="mt-1 block truncate text-[var(--text-tertiary)]"
-                  :title="x.url"
-                  >{{ x.url }}</small
-                >
-                <p v-if="x.sync_error" class="mt-1 text-xs text-red-400">
-                  {{ x.sync_error }}
-                </p>
-              </div>
-              <button
-                class="aw-action-button aw-action-neutral"
-                @click="actions = x"
-              >
-                管理
-              </button>
-            </article>
-          </div>
-        </div>
-      </section></template
+      <RuleSubscriptionSection
+        :subscriptions="subscriptions"
+        :syncing="isRuleSubscriptionSyncing"
+        @add="addSub"
+        @sync-all="syncAll"
+        @manage="actions = $event"
+      /></template
     ><RouteRuleFormModal
       v-if="formOpen"
       :editing="editing"
@@ -607,6 +477,14 @@ onBeforeUnmount(() => clearInterval(poll));
       @toggle="toggleSub"
       @edit="editSub"
       @remove="deleteSub"
+    /><RuleSubscriptionFormModal
+      v-if="subFormOpen"
+      :editing="!!subEdit"
+      v-model:form="sub"
+      v-model:generate="generate"
+      v-model:reference-outbound="referenceOutbound"
+      @close="closeSubForm"
+      @save="saveSub"
     />
     <Modal
       :open="!!detailRule"

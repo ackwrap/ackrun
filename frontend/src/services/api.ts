@@ -98,8 +98,10 @@ export const api = {
   install: () =>
     request<ActionResponse>("/installer/sing-box/install", { method: "POST" }),
 
-  getConfigStatus: () => request<ConfigStatus>("/config/status"),
-  getConfigFiles: () => request<ConfigFileItem[]>("/config/files"),
+  getConfigStatus: (validate = true) =>
+    request<ConfigStatus>(`/config/status${validate ? "" : "?validate=false"}`),
+  getConfigFiles: (validate = true) =>
+    request<ConfigFileItem[]>(`/config/files${validate ? "" : "?validate=false"}`),
   getConfigBackups: () => request<ConfigBackup[]>("/config/backups"),
   setActiveConfig: (fileName: string) =>
     request<ConfigStatus>("/config/active", {

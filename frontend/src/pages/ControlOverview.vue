@@ -21,7 +21,11 @@ import {
 import { api } from "@/services/api";
 const props = defineProps<{
     refreshKey: number;
-    configStatus: { has_config: boolean; valid: boolean } | null;
+    configStatus: {
+      has_config: boolean;
+      validated: boolean;
+      valid: boolean;
+    } | null;
     proxyMode: string;
   }>(),
   emit = defineEmits<{
@@ -166,7 +170,8 @@ const warnings = computed(() => {
   const w: any[] = [];
   if (
     props.configStatus &&
-    !(props.configStatus.has_config && props.configStatus.valid)
+    (!props.configStatus.has_config ||
+      (props.configStatus.validated && !props.configStatus.valid))
   )
     w.push([
       "配置尚未就绪",

@@ -156,10 +156,10 @@ async function initial() {
   if (!runtime.value || runtime.value.status === "not_installed") return;
 
   const localResults = await Promise.allSettled([
-    api.getConfigStatus().then((value) => {
+    api.getConfigStatus(false).then((value) => {
       if (!cancelled && run === initialRun) configStatus.value = value;
     }),
-    api.getConfigFiles().then((value) => {
+    api.getConfigFiles(false).then((value) => {
       if (cancelled || run !== initialRun) return;
       configFiles.value = value;
       selectedConfig.value = value.find((item) => item.active)?.name || "";
@@ -229,7 +229,7 @@ async function action(fn: () => Promise<any>, label: string) {
       .then((r) => (runtime.value = r))
       .catch(() => {});
     api
-      .getConfigStatus()
+      .getConfigStatus(false)
       .then((r) => (configStatus.value = r))
       .catch(() => {});
     api
@@ -574,9 +574,10 @@ onBeforeUnmount(() => {
                   v-for="item in configFiles"
                   :key="item.path"
                   :value="item.name"
-                  :disabled="!item.valid"
+                  :disabled="item.validated && !item.valid"
                 >
-                  {{ item.name }}{{ item.valid ? "" : "（校验失败）" }}
+                  {{ item.name
+                  }}{{ item.validated && !item.valid ? "（校验失败）" : "" }}
                 </option>
               </select>
             </label>
@@ -589,9 +590,11 @@ onBeforeUnmount(() => {
               ['核心版本', currentVersion || '--'],
               [
                 '配置状态',
-                configStatus?.has_config && configStatus.valid
-                  ? '校验通过'
-                  : '需要处理',
+                isRunning
+                  ? '已加载'
+                  : configStatus?.has_config
+                    ? '已配置'
+                    : '需要处理',
               ],
             ]"
             :key="x[0]"
@@ -742,7 +745,7 @@ onBeforeUnmount(() => {
         @message="notify"
         @resources-changed="
           refreshKey++;
-          api.getConfigStatus().then((r) => (configStatus = r));
+          api.getConfigStatus(false).then((r) => (configStatus = r));
         "
         ><template #installation
           ><h3>安装信息</h3>

@@ -78,6 +78,14 @@ func (svc *ConfigService) HasConfig() (bool, error) {
 }
 
 func (svc *ConfigService) GetConfigStatus() (*model.ConfigStatusResponse, error) {
+	return svc.getConfigStatus(true)
+}
+
+func (svc *ConfigService) GetConfigStatusMetadata() (*model.ConfigStatusResponse, error) {
+	return svc.getConfigStatus(false)
+}
+
+func (svc *ConfigService) getConfigStatus(validate bool) (*model.ConfigStatusResponse, error) {
 	configPath, ok, err := svc.paths.ActiveConfigPath()
 	if err != nil {
 		return nil, err
@@ -93,10 +101,14 @@ func (svc *ConfigService) GetConfigStatus() (*model.ConfigStatusResponse, error)
 
 	status := &model.ConfigStatusResponse{
 		HasConfig: true,
+		Validated: validate,
 		FileName:  filepath.Base(configPath),
 		UpdatedAt: info.ModTime().UnixMilli(),
 	}
 
+	if !validate {
+		return status, nil
+	}
 	if err := svc.validateFileCached(configPath, info); err != nil {
 		status.Valid = false
 		return status, nil
@@ -106,6 +118,14 @@ func (svc *ConfigService) GetConfigStatus() (*model.ConfigStatusResponse, error)
 }
 
 func (svc *ConfigService) ListConfigFiles() ([]model.ConfigFileItem, error) {
+	return svc.listConfigFiles(true)
+}
+
+func (svc *ConfigService) ListConfigFilesMetadata() ([]model.ConfigFileItem, error) {
+	return svc.listConfigFiles(false)
+}
+
+func (svc *ConfigService) listConfigFiles(validate bool) ([]model.ConfigFileItem, error) {
 	logging.Info("config.list", "listing config files")
 	if err := os.MkdirAll(svc.paths.ConfigDir, 0755); err != nil {
 		return nil, fmt.Errorf("create config dir: %w", err)
@@ -134,11 +154,14 @@ func (svc *ConfigService) ListConfigFiles() ([]model.ConfigFileItem, error) {
 			Active:    hasActive && filepath.Clean(path) == filepath.Clean(activePath),
 			SizeBytes: info.Size(),
 			UpdatedAt: info.ModTime().UnixMilli(),
-			Valid:     true,
+			Validated: validate,
 		}
-		if err := svc.validateFileCached(path, info); err != nil {
-			item.Valid = false
-			item.Error = err.Error()
+		if validate {
+			item.Valid = true
+			if err := svc.validateFileCached(path, info); err != nil {
+				item.Valid = false
+				item.Error = err.Error()
+			}
 		}
 		items = append(items, item)
 	}
@@ -186,6 +209,7 @@ func (svc *ConfigService) SetActiveConfig(fileName string) (*model.ConfigStatusR
 	}
 	status := &model.ConfigStatusResponse{
 		HasConfig: true,
+		Validated: true,
 		Valid:     true,
 		FileName:  requestedName,
 		UpdatedAt: info.ModTime().UnixMilli(),
@@ -260,6 +284,7 @@ func (svc *ConfigService) GenerateDefault() error {
 
 	svc.realtime.Broadcast("config.status", model.ConfigStatusResponse{
 		HasConfig: true,
+		Validated: true,
 		Valid:     true,
 		FileName:  filepath.Base(svc.paths.ConfigPath),
 		UpdatedAt: time.Now().UnixMilli(),

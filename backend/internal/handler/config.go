@@ -19,7 +19,13 @@ func NewConfigHandler(svc *service.ConfigService) *ConfigHandler {
 }
 
 func (h *ConfigHandler) GetStatus(c *gin.Context) {
-	status, err := h.svc.GetConfigStatus()
+	var status *model.ConfigStatusResponse
+	var err error
+	if c.Query("validate") == "false" {
+		status, err = h.svc.GetConfigStatusMetadata()
+	} else {
+		status, err = h.svc.GetConfigStatus()
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
 			Error: model.APIError{Code: "CONFIG_ERROR", Message: err.Error()},
@@ -30,7 +36,13 @@ func (h *ConfigHandler) GetStatus(c *gin.Context) {
 }
 
 func (h *ConfigHandler) ListFiles(c *gin.Context) {
-	items, err := h.svc.ListConfigFiles()
+	var items []model.ConfigFileItem
+	var err error
+	if c.Query("validate") == "false" {
+		items, err = h.svc.ListConfigFilesMetadata()
+	} else {
+		items, err = h.svc.ListConfigFiles()
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
 			Error: model.APIError{Code: "CONFIG_LIST_FAILED", Message: err.Error()},

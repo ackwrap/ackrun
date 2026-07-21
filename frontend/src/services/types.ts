@@ -30,6 +30,7 @@ export interface InstallerProgressData {
 
 export interface ConfigStatus {
   has_config: boolean;
+  validated: boolean;
   valid: boolean;
   file_name?: string;
   updated_at?: number;
@@ -42,6 +43,7 @@ export interface ConfigFileItem {
   active: boolean;
   size_bytes: number;
   updated_at: number;
+  validated: boolean;
   valid: boolean;
   error?: string;
 }

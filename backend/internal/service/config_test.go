@@ -128,6 +128,46 @@ func TestConfigStatusCachesValidationUntilFileChanges(t *testing.T) {
 	}
 }
 
+func TestConfigMetadataReadsSkipValidation(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(configPath, []byte("{}"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewConfigService(&paths.Paths{
+		ConfigDir:  dir,
+		ConfigPath: configPath,
+	}, nil, nil)
+	validationCount := 0
+	svc.configValidator = func(string) error {
+		validationCount++
+		return nil
+	}
+
+	status, err := svc.GetConfigStatusMetadata()
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := svc.ListConfigFilesMetadata()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if validationCount != 0 {
+		t.Fatalf("metadata reads validated config %d times, want 0", validationCount)
+	}
+	if status.Validated || len(items) != 1 || items[0].Validated {
+		t.Fatalf("metadata unexpectedly marked validated: status=%+v items=%+v", status, items)
+	}
+
+	status, err = svc.GetConfigStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Validated || !status.Valid || validationCount != 1 {
+		t.Fatalf("validated status=%+v count=%d, want valid with one validation", status, validationCount)
+	}
+}
+
 func TestExplicitConfigValidationRefreshesFailedCache(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
