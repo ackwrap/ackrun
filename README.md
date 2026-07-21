@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ackwrap/ackrun/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/ackwrap/ackrun?display_name=tag&style=for-the-badge&label=Test%20Release&color=2563eb"></a>
+  <a href="https://github.com/ackwrap/ackrun/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/ackwrap/ackrun?display_name=tag&style=for-the-badge&label=Release&color=2563eb"></a>
   <a href="./LICENSE"><img alt="MIT License" src="https://img.shields.io/github/license/ackwrap/ackrun?style=for-the-badge&color=0f766e"></a>
   <img alt="OpenWrt x86_64" src="https://img.shields.io/badge/OpenWrt-x86__64-00B5E2?style=for-the-badge&logo=openwrt&logoColor=white">
   <img alt="Go and Vue" src="https://img.shields.io/badge/Go%20%2B%20Vue-Local--first-334155?style=for-the-badge">
@@ -29,9 +29,6 @@
 </p>
 
 <p align="center"><sub>Core control, policy modes, health checks, traffic, and maintenance in one dashboard.</sub></p>
-
-> [!WARNING]
-> `v0.0.3` is a public test release. Back up your data and configuration before upgrading. Breaking database, configuration, and runtime changes may occur before the first stable release.
 
 ## Why Ackwrap
 
@@ -77,25 +74,25 @@ Ackwrap keeps the browser thin and the backend authoritative. Parsing, filtering
 
 ## Download
 
-The current public test release is [`v0.0.3`](https://github.com/ackwrap/ackrun/releases/tag/v0.0.3).
+Download the latest build from [GitHub Releases](https://github.com/ackwrap/ackrun/releases/latest).
 
-| Artifact | Target | Download |
+| Artifact | Target | Filename |
 |---|---|---|
-| Combined IPK | OpenWrt x86_64 | [`ackwrap_0.0.3-1_x86_64.ipk`](https://github.com/ackwrap/ackrun/releases/download/v0.0.3/ackwrap_0.0.3-1_x86_64.ipk) |
-| Standalone binary | OpenWrt amd64 | [`ackwrap-openwrt-amd64`](https://github.com/ackwrap/ackrun/releases/download/v0.0.3/ackwrap-openwrt-amd64) |
+| Combined IPK | OpenWrt x86_64 | `ackwrap_VERSION-1_x86_64.ipk` |
+| Standalone binary | OpenWrt amd64 | `ackwrap-openwrt-amd64` |
+| Combined IPK | OpenWrt ARM64 | `ackwrap_VERSION-1_aarch64_generic.ipk` |
+| Standalone binary | OpenWrt arm64 | `ackwrap-openwrt-arm64` |
 
 ### OpenWrt Quick Install
 
 ```bash
-scp ackwrap_0.0.3-1_x86_64.ipk root@ROUTER_IP:/tmp/
-ssh root@ROUTER_IP
-opkg install /tmp/ackwrap_0.0.3-1_x86_64.ipk
+scp ackwrap_VERSION-1_x86_64.ipk root@ROUTER_IP:/tmp/ackwrap.ipk
+ssh root@ROUTER_IP 'opkg install /tmp/ackwrap.ipk'
 ```
 
 After installation, open **LuCI > Services > Ackwrap** and use the launch button to establish an authenticated Ackwrap session.
 
-> [!NOTE]
-> The published `v0.0.3` package currently targets OpenWrt x86_64. Other targets can be built from source.
+Use the `x86_64` IPK for amd64 routers and `aarch64_generic` for arm64 routers.
 
 ## Architecture
 

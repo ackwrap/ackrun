@@ -46,6 +46,10 @@ def build_binary(target: str, arch: str, version: str, output_dir: Path) -> Path
     output = output_dir / f"ackwrap-{target}-{arch}{extension}"
     env = os.environ.copy()
     env.update({"GOOS": goos, "GOARCH": arch, "CGO_ENABLED": "0"})
+    if arch == "amd64":
+        env["GOAMD64"] = "v1"
+    elif arch == "arm64":
+        env["GOARM64"] = "v8.0"
     run(
         [
             "go",

@@ -1,6 +1,6 @@
-name: Build OpenWrt amd64
+name: Build OpenWrt
 
-run-name: Release v${{ inputs.version }} for OpenWrt amd64
+run-name: Release v${{ inputs.version }} for OpenWrt
 
 on:
   workflow_dispatch:
@@ -19,9 +19,17 @@ permissions:
 
 jobs:
   build:
-    name: Build OpenWrt x86_64
+    name: Build OpenWrt ${{ matrix.package_arch }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goarch: amd64
+            package_arch: x86_64
+          - goarch: arm64
+            package_arch: aarch64_generic
 
     steps:
       - name: Checkout
@@ -58,18 +66,18 @@ jobs:
           fi
           git check-ref-format "refs/tags/v${VERSION}"
 
-      - name: Build OpenWrt amd64
+      - name: Build OpenWrt ${{ matrix.goarch }}
         env:
           VERSION: ${{ inputs.version }}
-        run: python build.py --target openwrt --arch amd64 --version "$VERSION"
+        run: python build.py --target openwrt --arch "${{ matrix.goarch }}" --version "$VERSION"
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ackwrap-${{ inputs.version }}-openwrt-amd64
+          name: ackwrap-${{ inputs.version }}-openwrt-${{ matrix.goarch }}
           path: |
-            dist/ackwrap-openwrt-amd64
-            dist/ackwrap_${{ inputs.version }}-1_x86_64.ipk
+            dist/ackwrap-openwrt-${{ matrix.goarch }}
+            dist/ackwrap_${{ inputs.version }}-1_${{ matrix.package_arch }}.ipk
           if-no-files-found: error
           retention-days: 14
 
@@ -86,10 +94,16 @@ jobs:
       - name: Checkout release commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Download workflow artifact
+      - name: Download amd64 workflow artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ackwrap-${{ inputs.version }}-openwrt-amd64
+          path: dist
+
+      - name: Download arm64 workflow artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ackwrap-${{ inputs.version }}-openwrt-arm64
           path: dist
 
       - name: Publish GitHub Release
@@ -102,6 +116,8 @@ jobs:
           assets=(
             "dist/ackwrap-openwrt-amd64"
             "dist/ackwrap_${VERSION}-1_x86_64.ipk"
+            "dist/ackwrap-openwrt-arm64"
+            "dist/ackwrap_${VERSION}-1_aarch64_generic.ipk"
           )
           resolve_remote_commit() {
             local commit

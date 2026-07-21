@@ -23,7 +23,7 @@ npm run build
 **构建：**
 - 前端构建输出到 `backend/internal/webui/dist/`，通过 `go:embed` 打包进后端二进制
 - `backend/internal/webui/dist/` 是本地生成目录，除嵌入占位文件外禁止提交其中的 hashed JS/CSS、HTML、图片或其他编译产物
-- 发布构建统一从仓库根目录运行 `python build.py`，默认生成 Windows、Linux、OpenWrt amd64 单文件产物；OpenWrt 目标同时生成包含核心、LuCI 和 iStoreOS app-meta 的单一 IPK
+- 发布构建统一从仓库根目录运行 `python build.py`，默认生成 Windows、Linux、OpenWrt amd64 单文件产物；CI 发布同时生成 OpenWrt amd64 和 arm64 产物，OpenWrt 目标生成包含核心、LuCI 和 iStoreOS app-meta 的单一 IPK
 - 后端入口：`backend/cmd/server/main.go`
 
 ---
