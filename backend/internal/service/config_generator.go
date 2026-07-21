@@ -50,7 +50,6 @@ type ConfigGeneratorService struct {
 }
 
 type configGeneratorCore interface {
-	ReloadConfig() (*model.ActionResponse, error)
 	ScheduledRestart() (*model.ActionResponse, error)
 }
 
@@ -127,10 +126,10 @@ func (s *ConfigGeneratorService) ReconcileCurrent() (*model.ConfigGenerateRespon
 		return result, err
 	}
 	if unchanged {
-		logging.Info("config_generator.reconcile", "生成配置与活动配置一致，跳过应用和核心重载")
+		logging.Info("config_generator.reconcile", "生成配置与活动配置一致，跳过应用")
 		return result, nil
 	}
-	if err := s.applyLocked("", true); err != nil {
+	if err := s.applyLocked(""); err != nil {
 		return result, err
 	}
 	return result, nil
@@ -162,7 +161,7 @@ func (s *ConfigGeneratorService) ReconcileCurrentForScheduledRestart(observedRes
 		}
 	}
 	if !unchanged {
-		if err := s.applyLocked("", false); err != nil {
+		if err := s.applyLocked(""); err != nil {
 			return result, err
 		}
 	}
@@ -2178,7 +2177,7 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase(routeFinal ...string) (
 			CacheCapacity:    4096,
 			ClientSubnet:     "",
 			FakeIPEnabled:    false,
-			FakeIPInet4Range: "198.19.0.0/16",
+			FakeIPInet4Range: "198.18.0.0/15",
 			FakeIPInet6Range: "fdfe:dcba:9876::/48",
 		}
 	}
@@ -2742,29 +2741,22 @@ func (s *ConfigGeneratorService) validateConfig(configPath string) (bool, string
 }
 
 // Apply 将最近生成并校验通过的配置保存为命名文件并设为当前配置。
-func (s *ConfigGeneratorService) Apply(fileName string, restartCore bool) error {
+func (s *ConfigGeneratorService) Apply(fileName string) error {
 	fileName, err := normalizeConfigFileName(fileName)
 	if err != nil {
 		return err
 	}
 	s.configMu.Lock()
 	defer s.configMu.Unlock()
-	return s.applyLocked(fileName, restartCore)
+	return s.applyLocked(fileName)
 }
 
-func (s *ConfigGeneratorService) applyLocked(fileName string, restartCore bool) error {
+func (s *ConfigGeneratorService) applyLocked(fileName string) error {
 	configFileMu.Lock()
 	err := s.applyConfigFileLocked(fileName)
 	configFileMu.Unlock()
 	if err != nil {
 		return err
-	}
-
-	if restartCore && s.singbox != nil {
-		if _, err := s.singbox.ReloadConfig(); err != nil {
-			return fmt.Errorf("配置已应用，但重载核心失败: %w", err)
-		}
-		s.coreRestartGeneration.Add(1)
 	}
 
 	return nil

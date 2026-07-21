@@ -190,7 +190,6 @@ async function apply() {
     applying.value = true;
     await api.applyConfig({
       file_name: applyFileName.value.trim(),
-      restart_core: true,
     });
     applyDialog.value = false;
     await loadConfigFiles();

@@ -131,40 +131,41 @@ func TestScheduledRestartKeepsActiveConfigWhenGenerationIsInvalid(t *testing.T) 
 	}
 }
 
-func TestScheduledRestartCoalescesConcurrentConfigReload(t *testing.T) {
-	core := &configGeneratorCoreStub{
-		reloadStarted: make(chan struct{}, 1),
-		releaseReload: make(chan struct{}),
-	}
+func TestConfigApplyAndReconcileDoNotReloadCore(t *testing.T) {
+	core := &configGeneratorCoreStub{}
 	svc, db, _, _ := newScheduledRestartConfigGenerator(t, core)
-	if err := db.SetLogSettings(&model.LogSettings{Level: "debug", Timestamp: true}); err != nil {
+	result, err := svc.GenerateCurrent()
+	if err != nil {
 		t.Fatal(err)
 	}
-	reconcileDone := make(chan error, 1)
-	go func() {
-		_, err := svc.ReconcileCurrent()
-		reconcileDone <- err
-	}()
-	select {
-	case <-core.reloadStarted:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for concurrent config reload")
+	if !result.Valid {
+		t.Fatalf("generated config is invalid: %s", result.Error)
 	}
-
-	observedRestartGeneration := svc.CoreRestartGeneration()
-	close(core.releaseReload)
-	if err := <-reconcileDone; err != nil {
-		t.Fatal(err)
-	}
-	if svc.CoreRestartGeneration() <= observedRestartGeneration {
-		t.Fatalf("restart generation = %d, want greater than %d", svc.CoreRestartGeneration(), observedRestartGeneration)
-	}
-	if _, err := svc.ReconcileCurrentForScheduledRestart(observedRestartGeneration); err != nil {
+	if err := svc.Apply("manual.json"); err != nil {
 		t.Fatal(err)
 	}
 	reloads, scheduled := core.calls()
-	if reloads != 1 || scheduled != 0 {
-		t.Fatalf("core calls = reload:%d scheduled:%d, want one coalesced reload", reloads, scheduled)
+	if reloads != 0 || scheduled != 0 {
+		t.Fatalf("manual config apply core calls = reload:%d scheduled:%d, want none", reloads, scheduled)
+	}
+	if err := db.SetLogSettings(&model.LogSettings{Level: "debug", Timestamp: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ReconcileCurrent(); err != nil {
+		t.Fatal(err)
+	}
+	reloads, scheduled = core.calls()
+	if reloads != 0 || scheduled != 0 {
+		t.Fatalf("automatic reconcile core calls = reload:%d scheduled:%d, want none", reloads, scheduled)
+	}
+
+	observedRestartGeneration := svc.CoreRestartGeneration()
+	if _, err := svc.ReconcileCurrentForScheduledRestart(observedRestartGeneration); err != nil {
+		t.Fatal(err)
+	}
+	reloads, scheduled = core.calls()
+	if reloads != 0 || scheduled != 1 {
+		t.Fatalf("core calls = reload:%d scheduled:%d, want one scheduled restart", reloads, scheduled)
 	}
 }
 
@@ -322,7 +323,7 @@ func newScheduledRestartConfigGenerator(t *testing.T, core configGeneratorCore) 
 	if !result.Valid {
 		t.Fatalf("initial config is invalid: %s", result.Error)
 	}
-	if err := svc.Apply("config.json", false); err != nil {
+	if err := svc.Apply("config.json"); err != nil {
 		t.Fatal(err)
 	}
 	return svc, db, p, p.BinaryPath

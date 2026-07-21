@@ -324,7 +324,7 @@ func (s *Store) GetDNSSettings() (*model.DNSSettingsResponse, error) {
 		ReverseMapping:   false,
 		ClientSubnet:     "",
 		FakeIPEnabled:    false,
-		FakeIPInet4Range: "198.19.0.0/16",
+		FakeIPInet4Range: "198.18.0.0/15",
 		FakeIPInet6Range: "fdfe:dcba:9876::/48",
 		RouteCN:          true,
 		RouteNonCN:       true,

@@ -68,7 +68,7 @@ func (h *ConfigGeneratorHandler) Apply(c *gin.Context) {
 		return
 	}
 
-	if err := h.service.Apply(req.FileName, req.RestartCore); err != nil {
+	if err := h.service.Apply(req.FileName); err != nil {
 		if errors.Is(err, service.ErrInvalidConfigFileName) {
 			c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "INVALID_CONFIG_FILE_NAME", Message: err.Error()}})
 			return

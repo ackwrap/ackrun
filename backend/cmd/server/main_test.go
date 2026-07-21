@@ -2,10 +2,14 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -110,5 +114,54 @@ func TestRegisterWebUIServesEmbeddedSPAAndAssets(t *testing.T) {
 	router.ServeHTTP(apiRecorder, httptest.NewRequest(http.MethodGet, "/api/v1/missing", nil))
 	if apiRecorder.Code != http.StatusNotFound || !strings.Contains(apiRecorder.Body.String(), "NOT_FOUND") {
 		t.Fatalf("API fallback = %d %s", apiRecorder.Code, apiRecorder.Body.String())
+	}
+}
+
+func TestStartHTTPServerAndCoreSkipsCoreWhenListenFails(t *testing.T) {
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Close()
+
+	restored := false
+	started := false
+	server := &http.Server{Addr: occupied.Addr().String(), Handler: http.NewServeMux()}
+	if _, err := startHTTPServerAndCore(server, func() { restored = true }, func() error {
+		started = true
+		return nil
+	}); err == nil {
+		t.Fatal("expected occupied listener error")
+	}
+	if restored || started {
+		t.Fatal("core restore or auto-start ran before the HTTP listener was available")
+	}
+}
+
+func TestStartHTTPServerAndCoreStartsCoreAfterListen(t *testing.T) {
+	restored := make(chan struct{}, 1)
+	started := make(chan struct{}, 1)
+	server := &http.Server{Addr: "127.0.0.1:0", Handler: http.NewServeMux()}
+	serverErrors, err := startHTTPServerAndCore(server, func() { restored <- struct{}{} }, func() error {
+		<-restored
+		started <- struct{}{}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for core auto-start")
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-serverErrors; !errors.Is(err, http.ErrServerClosed) {
+		t.Fatalf("server error = %v, want %v", err, http.ErrServerClosed)
 	}
 }

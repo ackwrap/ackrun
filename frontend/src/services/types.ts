@@ -820,7 +820,6 @@ export interface ConfigGenerateResponse {
 
 export interface ConfigApplyRequest {
   file_name: string;
-  restart_core: boolean;
 }
 
 export interface CoreRestartSettings {

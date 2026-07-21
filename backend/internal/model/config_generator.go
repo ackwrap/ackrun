@@ -22,8 +22,7 @@ type ConfigGenerateResponse struct {
 
 // ConfigApplyRequest 配置应用请求
 type ConfigApplyRequest struct {
-	FileName    string `json:"file_name"`    // 保存到配置目录的文件名
-	RestartCore bool   `json:"restart_core"` // 是否重启核心
+	FileName string `json:"file_name"` // 保存到配置目录的文件名
 }
 
 // SingboxOutbound sing-box outbound 配置

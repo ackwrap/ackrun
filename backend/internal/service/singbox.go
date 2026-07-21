@@ -57,6 +57,45 @@ func (svc *SingboxService) Start() (*model.ActionResponse, error) {
 	return svc.start()
 }
 
+// StartIfConfigured starts the core after backend startup when both its binary
+// and an active configuration are available.
+func (svc *SingboxService) StartIfConfigured() error {
+	return startIfConfigured(
+		svc.IsRunning,
+		svc.paths.BinaryPath,
+		svc.paths.ActiveConfigPath,
+		func() error {
+			_, err := svc.Start()
+			return err
+		},
+	)
+}
+
+func startIfConfigured(isRunning func() bool, binaryPath string, activeConfig func() (string, bool, error), start func() error) error {
+	if isRunning() {
+		logging.Info("core.auto_start", "sing-box is already running")
+		return nil
+	}
+	if _, err := os.Stat(binaryPath); err != nil {
+		if os.IsNotExist(err) {
+			logging.Info("core.auto_start", "skipping auto-start because sing-box is not installed")
+			return nil
+		}
+		return fmt.Errorf("check sing-box binary: %w", err)
+	}
+	_, configured, err := activeConfig()
+	if err != nil {
+		return fmt.Errorf("check active config: %w", err)
+	}
+	if !configured {
+		logging.Info("core.auto_start", "skipping auto-start because no active config exists")
+		return nil
+	}
+
+	logging.Info("core.auto_start", "starting sing-box after Ackwrap startup")
+	return start()
+}
+
 func (svc *SingboxService) start() (*model.ActionResponse, error) {
 	svc.networkLifecycleMu.Lock()
 	defer svc.networkLifecycleMu.Unlock()

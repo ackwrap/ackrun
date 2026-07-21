@@ -218,12 +218,14 @@ func main() {
 		Handler:           r,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	serverErrors := make(chan error, 1)
-	go func() {
-		logging.Info("main", "starting server on %s", serverCfg.ListenAddr)
-		serverErrors <- server.ListenAndServe()
-	}()
-	go appUpdateSvc.RestoreCoreAfterUpdate()
+	serverErrors, err := startHTTPServerAndCore(
+		server,
+		appUpdateSvc.RestoreCoreAfterUpdate,
+		singboxSvc.StartIfConfigured,
+	)
+	if err != nil {
+		log.Fatalf("listen server: %v", err)
+	}
 
 	shutdownSignals := make(chan os.Signal, 1)
 	signal.Notify(shutdownSignals, os.Interrupt, syscall.SIGTERM)
@@ -249,4 +251,23 @@ func main() {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("server shutdown: %v", err)
 	}
+}
+
+func startHTTPServerAndCore(server *http.Server, restoreCore func(), startCore func() error) (<-chan error, error) {
+	listener, err := net.Listen("tcp", server.Addr)
+	if err != nil {
+		return nil, err
+	}
+	serverErrors := make(chan error, 1)
+	go func() {
+		logging.Info("main", "starting server on %s", server.Addr)
+		serverErrors <- server.Serve(listener)
+	}()
+	go func() {
+		restoreCore()
+		if err := startCore(); err != nil {
+			logging.Error("core.auto_start", "start sing-box after Ackwrap startup failed: %v", err)
+		}
+	}()
+	return serverErrors, nil
 }

@@ -80,6 +80,9 @@ func TestDNSGlobalSettingsFallBackToLegacySettingsWhenUnmigrated(t *testing.T) {
 	if settings.Enabled || settings.Final != "dns_legacy" || settings.Strategy != "ipv4_only" || !settings.FakeIPEnabled {
 		t.Fatalf("legacy DNS fallback = %+v", settings)
 	}
+	if settings.FakeIPInet4Range != "198.18.0.0/15" || settings.FakeIPInet6Range != "fdfe:dcba:9876::/48" {
+		t.Fatalf("default FakeIP ranges = %s, %s", settings.FakeIPInet4Range, settings.FakeIPInet6Range)
+	}
 	if _, err := s.db.Exec(`INSERT INTO app_settings (key, value, updated_at) VALUES ('dns_global.enabled', 'true', 2)`); err != nil {
 		t.Fatal(err)
 	}
@@ -89,6 +92,25 @@ func TestDNSGlobalSettingsFallBackToLegacySettingsWhenUnmigrated(t *testing.T) {
 	}
 	if !settings.Enabled {
 		t.Fatal("explicit global DNS enabled setting did not override legacy state")
+	}
+}
+
+func TestDNSGlobalSettingsPreservesPersistedFakeIPRange(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.db.Exec(`INSERT INTO app_settings (key, value, updated_at) VALUES ('dns_global.fakeip_inet4_range', '198.19.0.0/16', 1)`); err != nil {
+		t.Fatal(err)
+	}
+
+	settings, err := s.GetDNSGlobalSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.FakeIPInet4Range != "198.19.0.0/16" {
+		t.Fatalf("persisted FakeIP IPv4 range = %q", settings.FakeIPInet4Range)
 	}
 }
 
