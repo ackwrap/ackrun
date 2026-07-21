@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Ackwrap</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="panel" aria-live="polite">
+        <div class="mark" aria-hidden="true">
+          <span></span><span></span><span></span>
+        </div>
+        <p class="eyebrow">ACKWRAP FOR WINDOWS</p>
+        <h1>正在连接后台服务</h1>
+        <p id="message" class="message">正在检查 Ackwrap Service 运行状态</p>
+        <div class="progress" aria-hidden="true"><span></span></div>
+        <div class="meta">
+          <span id="endpoint">127.0.0.1:18080</span>
+          <span id="attempt">准备连接</span>
+        </div>
+        <button id="retry" type="button" hidden>重新连接</button>
+      </section>
+      <p class="footnote">关闭此窗口不会停止 Ackwrap Service 或代理核心</p>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>

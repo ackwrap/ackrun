@@ -50,3 +50,4 @@ ackwrap.db
 dist/
 backend/.dev/
 python-openwrt.py
+gui/windows.md

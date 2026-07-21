@@ -1,0 +1,19 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "Ackwrap GUI",
+  "outputfilename": "ackwrap-gui",
+  "frontend:dir": "loader",
+  "assetdir": "loader",
+  "wailsjsdir": "loader/wailsjs",
+  "build:dir": "build",
+  "frontend:install": "",
+  "frontend:build": "",
+  "frontend:dev:build": "",
+  "info": {
+    "companyName": "Ackwrap",
+    "productName": "Ackwrap GUI",
+    "productVersion": "0.1.0",
+    "copyright": "Copyright Ackwrap",
+    "comments": "Windows desktop shell for Ackwrap Service"
+  }
+}

@@ -1,0 +1,200 @@
+:root {
+  font-family:
+    Inter, "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  color: #e8eef8;
+  background: #09111d;
+  font-synthesis: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  min-width: 320px;
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 18% 22%, rgba(51, 115, 255, 0.2), transparent 34%),
+    radial-gradient(circle at 82% 78%, rgba(37, 196, 174, 0.1), transparent 30%),
+    linear-gradient(145deg, #08101b 0%, #0c1725 100%);
+}
+
+.shell {
+  display: grid;
+  min-height: 100%;
+  place-content: center;
+  gap: 24px;
+  padding: 32px;
+}
+
+.panel {
+  width: min(520px, calc(100vw - 48px));
+  padding: 42px;
+  border: 1px solid rgba(152, 177, 214, 0.18);
+  border-radius: 24px;
+  background: rgba(15, 27, 43, 0.86);
+  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.38);
+  backdrop-filter: blur(24px);
+}
+
+.mark {
+  display: flex;
+  align-items: end;
+  gap: 5px;
+  width: 44px;
+  height: 36px;
+  margin-bottom: 28px;
+}
+
+.mark span {
+  width: 8px;
+  border-radius: 4px;
+  background: linear-gradient(180deg, #72a7ff, #2867dc);
+  box-shadow: 0 0 18px rgba(69, 129, 235, 0.45);
+}
+
+.mark span:nth-child(1) {
+  height: 55%;
+}
+
+.mark span:nth-child(2) {
+  height: 100%;
+}
+
+.mark span:nth-child(3) {
+  height: 75%;
+}
+
+.eyebrow {
+  margin: 0 0 10px;
+  color: #79a8f4;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+}
+
+h1 {
+  margin: 0;
+  color: #f3f7fd;
+  font-size: clamp(26px, 4vw, 34px);
+  font-weight: 650;
+  letter-spacing: -0.035em;
+}
+
+.message {
+  min-height: 24px;
+  margin: 14px 0 24px;
+  color: #9baac0;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.progress {
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(134, 158, 192, 0.14);
+}
+
+.progress span {
+  display: block;
+  width: 34%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #3378eb, #67b4ff);
+  animation: scan 1.4s ease-in-out infinite;
+}
+
+.panel.failed .progress span {
+  width: 100%;
+  animation: none;
+  background: #e66c78;
+}
+
+.meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 14px;
+  color: #617189;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 11px;
+}
+
+button {
+  width: 100%;
+  margin-top: 24px;
+  padding: 11px 16px;
+  border: 1px solid rgba(111, 164, 250, 0.45);
+  border-radius: 10px;
+  color: #edf5ff;
+  background: rgba(47, 112, 221, 0.22);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:hover {
+  background: rgba(47, 112, 221, 0.34);
+}
+
+.footnote {
+  margin: 0;
+  color: #5f6d81;
+  font-size: 12px;
+  text-align: center;
+}
+
+@keyframes scan {
+  from {
+    transform: translateX(-105%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color: #172033;
+    background: #edf2f8;
+  }
+
+  body {
+    background:
+      radial-gradient(circle at 18% 22%, rgba(43, 108, 226, 0.14), transparent 34%),
+      linear-gradient(145deg, #f5f8fc 0%, #e8eef6 100%);
+  }
+
+  .panel {
+    border-color: rgba(64, 83, 111, 0.16);
+    background: rgba(255, 255, 255, 0.88);
+    box-shadow: 0 30px 70px rgba(47, 68, 98, 0.18);
+  }
+
+  h1 {
+    color: #172033;
+  }
+
+  .message {
+    color: #5c6b80;
+  }
+
+  .footnote,
+  .meta {
+    color: #758298;
+  }
+
+  button {
+    color: #174b9c;
+    background: rgba(51, 120, 235, 0.1);
+  }
+}
