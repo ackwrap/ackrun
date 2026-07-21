@@ -11,8 +11,9 @@ type UpdateSettingsResponse struct {
 }
 
 type TrafficBypassRule struct {
-	Type  string `json:"type"`
-	Value string `json:"value"`
+	Type   string `json:"type"`
+	Value  string `json:"value"`
+	Remark string `json:"remark,omitempty"`
 }
 
 type TrafficBypassSettings struct {

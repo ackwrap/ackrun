@@ -72,18 +72,28 @@ func TestTrafficBypassSettingsDefaultsAndValidation(t *testing.T) {
 		t.Fatalf("unexpected traffic bypass defaults: %+v", defaults.Rules)
 	}
 	settings := &model.TrafficBypassSettings{Rules: []model.TrafficBypassRule{
-		{Type: "ip_cidr", Value: "10.9.8.7/8"},
+		{Type: "ip_cidr", Value: "10.9.8.7/8", Remark: "  内网网段  "},
 		{Type: "domain_suffix", Value: "Example.COM."},
 		{Type: "process_name", Value: "custom-agent"},
 	}}
 	if err := svc.SetTrafficBypassSettings(settings); err != nil {
 		t.Fatal(err)
 	}
-	if settings.Rules[0].Value != "10.0.0.0/8" || settings.Rules[1].Value != "example.com" {
+	if settings.Rules[0].Value != "10.0.0.0/8" || settings.Rules[0].Remark != "内网网段" || settings.Rules[1].Value != "example.com" {
 		t.Fatalf("traffic bypass settings were not normalized: %+v", settings.Rules)
+	}
+	persisted, err := svc.GetTrafficBypassSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Rules[0].Remark != "内网网段" {
+		t.Fatalf("traffic bypass remark was not persisted: %+v", persisted.Rules)
 	}
 	if err := svc.SetTrafficBypassSettings(&model.TrafficBypassSettings{Rules: []model.TrafficBypassRule{{Type: "ip_cidr", Value: "invalid"}}}); !errors.Is(err, ErrTrafficBypassSettingsInvalid) {
 		t.Fatalf("expected invalid CIDR error, got %v", err)
+	}
+	if err := svc.SetTrafficBypassSettings(&model.TrafficBypassSettings{Rules: []model.TrafficBypassRule{{Type: "process_name", Value: "test", Remark: "two\nlines"}}}); !errors.Is(err, ErrTrafficBypassSettingsInvalid) {
+		t.Fatalf("expected invalid remark error, got %v", err)
 	}
 }
 

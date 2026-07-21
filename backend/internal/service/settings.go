@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/ackwrap/ackwrap/internal/logging"
 	"github.com/ackwrap/ackwrap/internal/model"
@@ -86,6 +87,10 @@ func (svc *SettingsService) SetTrafficBypassSettings(settings *model.TrafficBypa
 	for _, rule := range settings.Rules {
 		rule.Type = strings.TrimSpace(rule.Type)
 		rule.Value = strings.TrimSpace(rule.Value)
+		rule.Remark = strings.TrimSpace(rule.Remark)
+		if utf8.RuneCountInString(rule.Remark) > 200 || strings.ContainsAny(rule.Remark, "\r\n\x00") {
+			return fmt.Errorf("%w: 备注必须是 200 字以内的单行文本", ErrTrafficBypassSettingsInvalid)
+		}
 		if rule.Value == "" {
 			continue
 		}

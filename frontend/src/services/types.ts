@@ -152,6 +152,7 @@ export type TrafficBypassRuleType =
 export interface TrafficBypassRule {
   type: TrafficBypassRuleType;
   value: string;
+  remark?: string;
 }
 
 export interface TrafficBypassSettings {

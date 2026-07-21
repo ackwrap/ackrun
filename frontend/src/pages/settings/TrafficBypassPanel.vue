@@ -19,6 +19,7 @@ const addOpen = ref(false);
 const draft = ref<TrafficBypassRule>({
   type: "process_name",
   value: "",
+  remark: "",
 });
 const types: Array<{
   value: TrafficBypassRuleType;
@@ -61,7 +62,7 @@ async function load() {
 }
 
 function openAdd() {
-  draft.value = { type: "process_name", value: "" };
+  draft.value = { type: "process_name", value: "", remark: "" };
   addOpen.value = true;
 }
 
@@ -69,6 +70,7 @@ function addRule() {
   const rule = {
     type: draft.value.type,
     value: draft.value.value.trim(),
+    remark: draft.value.remark?.trim() || "",
   };
   if (!rule.value) {
     emit("notify", "请输入排除项的匹配值", "error");
@@ -126,11 +128,11 @@ onMounted(load);
       </Button>
     </div>
 
-    <div class="overflow-hidden rounded-[var(--radius-lg)] border border-[var(--border-default)]">
+    <div class="overflow-x-auto rounded-[var(--radius-lg)] border border-[var(--border-default)]">
       <div
-        class="hidden grid-cols-[180px_minmax(0,1fr)_44px] gap-3 border-b border-[var(--border-default)] bg-[var(--bg-base)] px-3 py-2 text-xs text-[var(--text-secondary)] sm:grid"
+        class="hidden grid-cols-[180px_minmax(240px,1fr)_minmax(180px,0.7fr)_44px] gap-3 border-b border-[var(--border-default)] bg-[var(--bg-base)] px-3 py-2 text-xs text-[var(--text-secondary)] sm:grid"
       >
-        <span>排除类型</span><span>匹配值</span><span></span>
+        <span>排除类型</span><span>匹配值</span><span>备注</span><span></span>
       </div>
       <div v-if="loading" class="py-10 text-center text-sm text-[var(--text-secondary)]">
         加载中...
@@ -145,13 +147,19 @@ onMounted(load);
         v-for="(rule, index) in rules"
         v-else
         :key="index"
-        class="grid gap-2 border-b border-[var(--border-default)] p-3 last:border-b-0 sm:grid-cols-[180px_minmax(0,1fr)_44px] sm:gap-3"
+        class="grid gap-2 border-b border-[var(--border-default)] p-3 last:border-b-0 sm:grid-cols-[180px_minmax(240px,1fr)_minmax(180px,0.7fr)_44px] sm:gap-3"
       >
         <span class="self-center text-xs text-[var(--text-secondary)]">
           {{ typeLabel(rule.type) }}
         </span>
         <span class="min-w-0 self-center truncate font-mono text-xs" :title="rule.value">
           {{ rule.value }}
+        </span>
+        <span
+          class="min-w-0 self-center truncate text-xs text-[var(--text-secondary)]"
+          :title="rule.remark || ''"
+        >
+          {{ rule.remark || "--" }}
         </span>
         <button
           type="button"
@@ -185,6 +193,15 @@ onMounted(load);
             class="aw-input w-full"
             :placeholder="placeholder(draft.type)"
             autofocus
+          />
+        </label>
+        <label class="block space-y-1.5">
+          <span class="text-xs text-[var(--text-secondary)]">备注（可选）</span>
+          <input
+            v-model="draft.remark"
+            class="aw-input w-full"
+            maxlength="200"
+            placeholder="可留空"
           />
         </label>
       </form>
