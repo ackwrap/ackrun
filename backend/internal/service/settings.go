@@ -62,7 +62,7 @@ func (svc *SettingsService) SetUpdateSettings(req *model.UpdateSettings) error {
 	req.Acceleration = strings.TrimSpace(req.Acceleration)
 	req.CustomMirrorURL = strings.TrimSpace(req.CustomMirrorURL)
 	switch req.Acceleration {
-	case "", "ghproxy", "ghproxy_vip", "jsdelivr_fastly", "jsdelivr_testingcf", "jsdelivr_cdn", "custom":
+	case "", "ghproxy", "ghproxy_vip", "ghfast", "custom":
 	default:
 		return fmt.Errorf("更新加速方式无效")
 	}

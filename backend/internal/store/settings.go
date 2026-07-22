@@ -83,6 +83,10 @@ func (s *Store) GetUpdateSettings() (*model.UpdateSettingsResponse, error) {
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
+	switch r.Acceleration {
+	case "jsdelivr_fastly", "jsdelivr_testingcf", "jsdelivr_cdn":
+		r.Acceleration = ""
+	}
 	return r, nil
 }
 

@@ -111,56 +111,6 @@ func TestBuildUpdateRequestAttemptsUsesGHProxyVIPAndFallback(t *testing.T) {
 	}
 }
 
-func TestBuildUpdateRequestAttemptsConvertsGitHubFilesForJSDelivr(t *testing.T) {
-	tests := []struct {
-		acceleration string
-		baseURL      string
-	}{
-		{acceleration: "jsdelivr_fastly", baseURL: "https://fastly.jsdelivr.net"},
-		{acceleration: "jsdelivr_testingcf", baseURL: "https://testingcf.jsdelivr.net"},
-		{acceleration: "jsdelivr_cdn", baseURL: "https://cdn.jsdelivr.net"},
-	}
-	for _, test := range tests {
-		t.Run(test.acceleration, func(t *testing.T) {
-			upstream := "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-google.srs"
-			attempts, err := buildUpdateRequestAttempts(&model.UpdateSettingsResponse{Acceleration: test.acceleration}, upstream)
-			if err != nil {
-				t.Fatalf("build attempts: %v", err)
-			}
-			want := test.baseURL + "/gh/SagerNet/sing-geosite@rule-set/geosite-google.srs"
-			if len(attempts) != 2 || attempts[0].url != want || attempts[1].url != upstream {
-				t.Fatalf("unexpected attempts: %+v", attempts)
-			}
-		})
-	}
-}
-
-func TestBuildUpdateRequestAttemptsRecognizesCustomJSDelivrURL(t *testing.T) {
-	upstream := "https://github.com/SagerNet/sing-geosite/raw/rule-set/geosite-google.srs"
-	attempts, err := buildUpdateRequestAttempts(&model.UpdateSettingsResponse{
-		Acceleration:    "custom",
-		CustomMirrorURL: "https://fastly.jsdelivr.net/",
-	}, upstream)
-	if err != nil {
-		t.Fatalf("build attempts: %v", err)
-	}
-	want := "https://fastly.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-google.srs"
-	if len(attempts) != 2 || attempts[0].url != want || attempts[1].url != upstream {
-		t.Fatalf("unexpected attempts: %+v", attempts)
-	}
-}
-
-func TestBuildUpdateRequestAttemptsSkipsJSDelivrForReleaseAssets(t *testing.T) {
-	upstream := "https://github.com/ackwrap/ackrun/releases/download/v1.0.0/ackwrap.zip"
-	attempts, err := buildUpdateRequestAttempts(&model.UpdateSettingsResponse{Acceleration: "jsdelivr_cdn"}, upstream)
-	if err != nil {
-		t.Fatalf("build attempts: %v", err)
-	}
-	if len(attempts) != 1 || attempts[0].url != upstream || attempts[0].name != "direct" {
-		t.Fatalf("unexpected attempts: %+v", attempts)
-	}
-}
-
 func TestCompareSingboxVersions(t *testing.T) {
 	tests := []struct {
 		left  string

@@ -42,6 +42,27 @@ func TestBuildAppUpdateRequestAttemptsRequiresConfiguredProxy(t *testing.T) {
 	}
 }
 
+func TestBuildUpdateRequestAttemptsSupportsGHFast(t *testing.T) {
+	rawURL := "https://github.com/ackwrap/ackrun/releases/download/v1.2.3/ackwrap.ipk"
+	attempts, err := buildUpdateRequestAttempts(&model.UpdateSettingsResponse{Acceleration: "ghfast"}, rawURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(attempts) != 2 || attempts[0].name != "ghfast" || attempts[0].url != "https://ghfast.top/"+rawURL {
+		t.Fatalf("ghfast attempts = %+v", attempts)
+	}
+}
+
+func TestBuildAppUpdateDownloadAttemptsAllowsSlowOpenWrtDownloads(t *testing.T) {
+	attempts, err := buildAppUpdateDownloadAttempts(&model.UpdateSettingsResponse{}, "https://github.com/ackwrap/ackrun/releases/download/v1.2.3/ackwrap.ipk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(attempts) != 1 || attempts[0].client.Timeout != appUpdateDownloadTimeout {
+		t.Fatalf("download attempts = %+v", attempts)
+	}
+}
+
 func TestFetchLatestAppRelease(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Header.Get("Accept") != "application/vnd.github+json" {

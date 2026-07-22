@@ -647,9 +647,7 @@ func TestBuildGitHubDownloadAttemptsUsesAllAcceleratorsAndOfficialFallback(t *te
 	wantNames := []string{
 		"ghproxy_vip",
 		"ghproxy",
-		"jsdelivr_fastly",
-		"jsdelivr_testingcf",
-		"jsdelivr_cdn",
+		"ghfast",
 		"official_direct",
 	}
 	if len(attempts) != len(wantNames) {

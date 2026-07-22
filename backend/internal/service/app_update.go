@@ -24,9 +24,10 @@ import (
 )
 
 const (
-	ackwrapLatestReleaseURL = "https://api.github.com/repos/ackwrap/ackrun/releases/latest"
-	appUpdateMaxSize        = 128 << 20
-	appUpdateLogMaxSize     = 64 << 10
+	ackwrapLatestReleaseURL  = "https://api.github.com/repos/ackwrap/ackrun/releases/latest"
+	appUpdateMaxSize         = 128 << 20
+	appUpdateLogMaxSize      = 64 << 10
+	appUpdateDownloadTimeout = 10 * time.Minute
 )
 
 var (
@@ -164,7 +165,7 @@ func (svc *AppUpdateService) Install(ctx context.Context) (response *model.AppUp
 	if err != nil {
 		return nil, fmt.Errorf("读取更新代理设置失败: %w", err)
 	}
-	attempts, err := buildAppUpdateRequestAttempts(settings, asset.DownloadURL)
+	attempts, err := buildAppUpdateDownloadAttempts(settings, asset.DownloadURL)
 	if err != nil {
 		return nil, err
 	}
@@ -301,14 +302,14 @@ func (svc *AppUpdateService) RestoreCoreAfterUpdate() {
 }
 
 func (svc *AppUpdateService) check(ctx context.Context) (*model.AppUpdateStatus, *appRelease, error) {
-	settings, err := svc.store.GetUpdateSettings()
-	if err != nil {
-		return nil, nil, fmt.Errorf("读取更新代理设置失败: %w", err)
-	}
-	attempts, err := buildAppUpdateRequestAttempts(settings, svc.releaseAPIURL)
-	if err != nil {
-		return nil, nil, err
-	}
+	attempts := []updateRequestAttempt{{
+		name: "official_direct",
+		url:  svc.releaseAPIURL,
+		client: &http.Client{
+			Timeout:   60 * time.Second,
+			Transport: directHTTPTransport(),
+		},
+	}}
 	release, err := fetchLatestAppRelease(ctx, attempts)
 	if err != nil {
 		return nil, nil, err
@@ -406,6 +407,19 @@ func buildAppUpdateRequestAttempts(settings *model.UpdateSettingsResponse, rawUR
 		return nil, fmt.Errorf("当前更新代理不支持该 GitHub 地址")
 	}
 	return proxied, nil
+}
+
+func buildAppUpdateDownloadAttempts(settings *model.UpdateSettingsResponse, rawURL string) ([]updateRequestAttempt, error) {
+	attempts, err := buildAppUpdateRequestAttempts(settings, rawURL)
+	if err != nil {
+		return nil, err
+	}
+	for index := range attempts {
+		client := *attempts[index].client
+		client.Timeout = appUpdateDownloadTimeout
+		attempts[index].client = &client
+	}
+	return attempts, nil
 }
 
 func fetchLatestAppRelease(ctx context.Context, attempts []updateRequestAttempt) (*appRelease, error) {

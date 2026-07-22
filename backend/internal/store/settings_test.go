@@ -204,4 +204,14 @@ func TestUpdateSettingsDefaultsToGHProxyAndPreservesCustomMirror(t *testing.T) {
 	if settings.Acceleration != "" || settings.CustomMirrorURL != "" {
 		t.Fatalf("direct update settings = %+v, want persisted empty acceleration", settings)
 	}
+	if err := s.SetUpdateSettings(&model.UpdateSettings{Acceleration: "jsdelivr_cdn"}); err != nil {
+		t.Fatal(err)
+	}
+	settings, err = s.GetUpdateSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Acceleration != "" {
+		t.Fatalf("legacy jsDelivr setting = %+v, want direct normalization", settings)
+	}
 }

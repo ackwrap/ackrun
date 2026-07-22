@@ -23,6 +23,7 @@ const acceleration = ref("ghproxy");
 const customMirror = ref("");
 const status = ref<AppUpdateStatus | null>(null);
 const checking = ref(false);
+const checked = ref(false);
 const installing = ref(false);
 const confirmOpen = ref(false);
 const checkError = ref("");
@@ -38,6 +39,7 @@ const statusTone = computed(() => {
   if (checkError.value || status.value?.update_error) return "error";
   if (!status.value) return "neutral";
   if (installing.value || status.value.updating) return "warning";
+  if (!checked.value) return "neutral";
   return status.value.update_available ? "warning" : "success";
 });
 
@@ -46,6 +48,7 @@ const statusLabel = computed(() => {
   if (checkError.value || status.value?.update_error) return "安装失败";
   if (!status.value) return "尚未检查";
   if (installing.value || status.value.updating) return "正在安装";
+  if (!checked.value) return "尚未检查";
   return status.value.update_available ? "发现新版本" : "已是最新版本";
 });
 
@@ -71,7 +74,6 @@ async function saveSettings() {
       custom_mirror_url: customMirror.value,
     });
     emit("notify", "更新代理设置已保存", "success");
-    await checkUpdate();
   } catch (cause: any) {
     emit("notify", `保存失败: ${cause.message}`, "error");
   }
@@ -82,7 +84,9 @@ async function checkUpdate() {
   checkError.value = "";
   try {
     status.value = await api.checkAppUpdate();
+    checked.value = true;
   } catch (cause: any) {
+    checked.value = true;
     checkError.value = cause.message;
     emit("notify", `检查更新失败: ${cause.message}`, "error");
   } finally {
@@ -201,7 +205,11 @@ async function waitForInstalledVersion(version: string, generation: number) {
 
 onMounted(async () => {
   await loadSettings();
-  await checkUpdate();
+  try {
+    applyInstallStatus(await api.getAppUpdateInstallStatus());
+  } catch {
+    // A manual update check will surface API errors.
+  }
 });
 onUnmounted(() => {
   installPollGeneration++;
@@ -302,7 +310,7 @@ onUnmounted(() => {
         <div class="mt-5 flex flex-wrap items-center gap-2">
           <Button :loading="checking" @click="checkUpdate">
             <template #icon><RefreshCw :size="14" /></template>
-            重新检查
+            {{ checked ? "重新检查" : "检查更新" }}
           </Button>
           <Button
             v-if="status?.update_available && !status?.updating"
@@ -339,9 +347,7 @@ onUnmounted(() => {
             <option value="">无加速（直连）</option>
             <option value="ghproxy">https://gh-proxy.com/</option>
             <option value="ghproxy_vip">https://ghproxy.vip/</option>
-            <option value="jsdelivr_fastly">https://fastly.jsdelivr.net/</option>
-            <option value="jsdelivr_testingcf">https://testingcf.jsdelivr.net/</option>
-            <option value="jsdelivr_cdn">https://cdn.jsdelivr.net/</option>
+            <option value="ghfast">https://ghfast.top/</option>
             <option value="custom">自定义镜像</option>
           </select>
         </label>
@@ -355,7 +361,7 @@ onUnmounted(() => {
           <div class="flex gap-2">
             <CheckCircle2 :size="15" class="mt-0.5 shrink-0" />
             <span>
-              检查版本和下载 IPK 都使用这里配置的代理。启用代理后不会回退直连。
+              版本检查直接访问 GitHub API；下载 IPK 使用这里配置的代理。启用代理后不会回退直连。
             </span>
           </div>
         </div>
