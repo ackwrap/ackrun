@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -349,6 +350,41 @@ func TestMigrateManagedConfigMovesAckwrapKernelBypassBeforeSniff(t *testing.T) {
 	secondResult, secondMigrated, err := migrateManagedConfigData(result)
 	if err != nil || secondMigrated != 0 || string(secondResult) != string(result) {
 		t.Fatalf("kernel bypass migration is not idempotent: migrated=%d err=%v", secondMigrated, err)
+	}
+}
+
+func TestMigrateAckwrapProcessBypassKeepsDNSHijackFirst(t *testing.T) {
+	rules := []interface{}{
+		map[string]interface{}{"action": "sniff"},
+		map[string]interface{}{
+			"process_name": []interface{}{"ackwrap", "sing-box"},
+			"inbound":      []interface{}{"tun-in"},
+			"action":       "bypass",
+			"outbound":     "direct",
+		},
+		map[string]interface{}{"inbound": dnsInboundTag, "action": "hijack-dns"},
+		map[string]interface{}{"domain_suffix": []interface{}{"example.com"}, "action": "route", "outbound": "proxy"},
+	}
+
+	migratedRules, migrated := migrateAckwrapProcessBypassRules(rules)
+	if migrated != 1 {
+		t.Fatalf("migrated = %d, want ordering migration", migrated)
+	}
+	first := migratedRules[0].(map[string]interface{})
+	if first["inbound"] != dnsInboundTag || first["action"] != "hijack-dns" {
+		t.Fatalf("DNS hijack is not first: %+v", migratedRules)
+	}
+	second := migratedRules[1].(map[string]interface{})
+	if second["action"] != "bypass" || second["outbound"] != "direct" {
+		t.Fatalf("kernel bypass is not second: %+v", migratedRules)
+	}
+	if migratedRules[2].(map[string]interface{})["action"] != "sniff" {
+		t.Fatalf("sniff rule ordering changed unexpectedly: %+v", migratedRules)
+	}
+
+	secondPass, secondMigrated := migrateAckwrapProcessBypassRules(migratedRules)
+	if secondMigrated != 0 || !reflect.DeepEqual(secondPass, migratedRules) {
+		t.Fatalf("migration is not idempotent: migrated=%d rules=%+v", secondMigrated, secondPass)
 	}
 }
 

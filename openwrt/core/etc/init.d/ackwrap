@@ -3,6 +3,8 @@
 USE_PROCD=1
 START=95
 STOP=10
+EXTRA_COMMANDS="network_repair"
+EXTRA_HELP="\tnetwork_repair\tSafely restore Ackwrap-owned DNS and network state"
 
 generate_token() {
 	local token
@@ -68,4 +70,35 @@ service_triggers() {
 reload_service() {
 	stop
 	start
+}
+
+network_repair() {
+	local data_dir status
+	if pidof sing-box >/dev/null 2>&1; then
+		echo "ERROR"
+		echo "网络修复失败：sing-box 核心正在运行，请先停止核心后再执行网络修复。"
+		return 2
+	fi
+	config_load ackwrap
+	config_get data_dir main data_dir /etc/ackwrap
+	ACKWRAP_DATA_DIR="$data_dir" ACKWRAP_BINARY_DIR="$data_dir/bin" /usr/bin/ackwrap network-repair >/dev/null 2>&1
+	status=$?
+	case "$status" in
+		0)
+			logger -t ackwrap-network-repair "network repair completed"
+			echo "OK"
+			echo "网络修复完成：已检查并恢复 Ackwrap 接管的网络状态。"
+			;;
+		2)
+			logger -t ackwrap-network-repair "network repair rejected because sing-box is running"
+			echo "ERROR"
+			echo "网络修复失败：sing-box 核心正在运行，请先停止核心后再执行网络修复。"
+			;;
+		*)
+			logger -t ackwrap-network-repair "network repair failed"
+			echo "ERROR"
+			echo "网络修复失败：未能安全恢复 Ackwrap 网络状态，请检查系统日志。"
+			;;
+	esac
+	return "$status"
 }

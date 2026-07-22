@@ -16,6 +16,7 @@ import (
 	"github.com/ackwrap/ackrun/internal/application"
 	"github.com/ackwrap/ackrun/internal/logging"
 	"github.com/ackwrap/ackrun/internal/paths"
+	"github.com/ackwrap/ackrun/internal/service"
 )
 
 const defaultListenAddr = "0.0.0.0:8080"
@@ -52,6 +53,24 @@ func loadServerConfig() (serverConfig, error) {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "network-repair" {
+		if len(os.Args) != 2 {
+			fmt.Fprintln(os.Stderr, "网络修复失败：network-repair 不接受额外参数")
+			os.Exit(1)
+		}
+		message, err := service.RepairNetwork(paths.Default())
+		if err != nil {
+			if errors.Is(err, service.ErrNetworkRepairCoreRunning) {
+				fmt.Fprintf(os.Stderr, "网络修复失败：%v\n", err)
+				os.Exit(2)
+			} else {
+				fmt.Fprintln(os.Stderr, "网络修复失败：未能安全恢复 Ackwrap 网络状态，请检查系统日志。")
+			}
+			os.Exit(1)
+		}
+		fmt.Println(message)
+		return
+	}
 	if err := run(); err != nil {
 		log.Printf("server stopped: %v", err)
 		os.Exit(1)

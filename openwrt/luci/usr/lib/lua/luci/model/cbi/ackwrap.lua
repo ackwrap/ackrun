@@ -1,6 +1,10 @@
 local sys = require "luci.sys"
 local dispatcher = require "luci.dispatcher"
 
+local function trim(value)
+	return (value or ""):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
 local function generate_api_token()
 	local random = io.open("/dev/urandom", "rb")
 	if not random then
@@ -65,5 +69,22 @@ data_dir.rmempty = false
 
 local logger = settings:option(Flag, "logger", translate("启用日志"))
 logger.default = logger.enabled
+
+local network_repair = settings:option(Button, "_network_repair", translate("网络修复"))
+network_repair.inputtitle = translate("立即修复")
+network_repair.inputstyle = "apply"
+network_repair.description = translate("核心异常停止后，恢复 Ackwrap 接管的 DNS、路由和防火墙状态。检测到 sing-box 核心仍在运行时将拒绝修复。")
+function network_repair.write()
+	local output = trim(sys.exec("/etc/init.d/ackwrap network_repair 2>&1"))
+	local marker, message = output:match("^([^\n]+)\n?(.*)$")
+	message = trim(message)
+	if marker == "OK" then
+		m.message = message ~= "" and message or translate("网络修复完成。")
+	elseif marker == "ERROR" then
+		m.message = message ~= "" and message or translate("网络修复失败，请检查系统日志。")
+	else
+		m.message = translate("网络修复失败：未收到有效执行结果。")
+	end
+end
 
 return m

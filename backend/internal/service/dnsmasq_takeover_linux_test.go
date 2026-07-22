@@ -17,6 +17,7 @@ type fakeDNSMasqCommands struct {
 	pendingChanges string
 	restartCalls   int
 	failRestarts   int
+	failCommits    int
 	usedDeltaDir   bool
 }
 
@@ -84,6 +85,10 @@ func (fake *fakeDNSMasqCommands) run(_ string, path string, args ...string) ([]b
 	case "commit":
 		if !slices.Equal(commandArgs, []string{"dhcp"}) {
 			return nil, fmt.Errorf("invalid commit arguments: %v", args)
+		}
+		if fake.failCommits > 0 {
+			fake.failCommits--
+			return []byte("commit failed"), errors.New("exit status 1")
 		}
 	default:
 		return nil, fmt.Errorf("unexpected UCI command: %v", args)
@@ -216,6 +221,54 @@ func TestOpenWrtDNSMasqLifecycleRejectsPendingDHCPChanges(t *testing.T) {
 		t.Fatalf("activate error = %v", err)
 	}
 	if fake.restartCalls != 0 {
+		t.Fatalf("restart calls = %d", fake.restartCalls)
+	}
+}
+
+func TestOpenWrtDNSMasqLifecycleRestoresOrphanedManagedSnapshot(t *testing.T) {
+	fake := &fakeDNSMasqCommands{snapshot: managedDNSMasqSnapshot("cfg01411c")}
+	manager := newFakeOpenWrtDNSMasqLifecycle(t, fake)
+
+	restored, err := manager.Restore()
+	if err != nil || !restored {
+		t.Fatalf("restore = %t, %v", restored, err)
+	}
+	want := dnsmasqOptionsSnapshot{Section: "cfg01411c"}
+	if !dnsmasqSnapshotsEqual(fake.snapshot, want) {
+		t.Fatalf("restored snapshot = %+v", fake.snapshot)
+	}
+	if fake.restartCalls != 1 {
+		t.Fatalf("restart calls = %d", fake.restartCalls)
+	}
+}
+
+func TestOpenWrtDNSMasqLifecycleLeavesUnknownSnapshotWithoutState(t *testing.T) {
+	original := dnsmasqOptionsSnapshot{Section: "cfg01411c", ServersExist: true, Servers: []string{"192.0.2.53"}}
+	fake := &fakeDNSMasqCommands{snapshot: original}
+	manager := newFakeOpenWrtDNSMasqLifecycle(t, fake)
+
+	restored, err := manager.Restore()
+	if err != nil || restored {
+		t.Fatalf("restore = %t, %v", restored, err)
+	}
+	if !dnsmasqSnapshotsEqual(fake.snapshot, original) || fake.restartCalls != 0 {
+		t.Fatalf("snapshot changed without ownership state: %+v, restarts=%d", fake.snapshot, fake.restartCalls)
+	}
+}
+
+func TestOpenWrtDNSMasqLifecycleRollsBackOrphanCleanupCommitFailure(t *testing.T) {
+	managed := managedDNSMasqSnapshot("cfg01411c")
+	fake := &fakeDNSMasqCommands{snapshot: managed, failCommits: 1}
+	manager := newFakeOpenWrtDNSMasqLifecycle(t, fake)
+
+	restored, err := manager.Restore()
+	if err == nil || restored || !strings.Contains(err.Error(), "清理无状态") {
+		t.Fatalf("restore = %t, %v", restored, err)
+	}
+	if !dnsmasqSnapshotsEqual(fake.snapshot, managed) {
+		t.Fatalf("rollback snapshot = %+v", fake.snapshot)
+	}
+	if fake.restartCalls != 1 {
 		t.Fatalf("restart calls = %d", fake.restartCalls)
 	}
 }

@@ -162,12 +162,32 @@ func (manager *openWrtDNSMasqLifecycle) Restore() (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("读取 dnsmasq 接管状态失败: %w", err)
 	}
-	if !exists {
-		return false, nil
-	}
 	current, err := manager.currentSnapshot()
 	if err != nil {
 		return false, err
+	}
+	if !exists {
+		managed := managedDNSMasqSnapshot(current.Section)
+		if !dnsmasqSnapshotsEqual(current, managed) {
+			return false, nil
+		}
+		fallback := dnsmasqOptionsSnapshot{Section: current.Section}
+		rollbackState := dnsmasqTakeoverState{Original: managed, Managed: fallback}
+		if err := manager.applySnapshot(current, fallback); err != nil {
+			return false, manager.rollbackActivation(rollbackState, fmt.Errorf("清理无状态 dnsmasq 接管失败: %w", err))
+		}
+		restored, readErr := manager.currentSnapshot()
+		if readErr != nil {
+			return false, manager.rollbackActivation(rollbackState, readErr)
+		}
+		if !dnsmasqSnapshotsEqual(restored, fallback) {
+			return false, manager.rollbackActivation(rollbackState, errors.New("清理后的 dnsmasq 配置不匹配"))
+		}
+		if err := manager.restart(); err != nil {
+			return false, manager.rollbackActivation(rollbackState, err)
+		}
+		logging.Info("dnsmasq.restore", "已清理缺少状态文件的 Ackwrap dnsmasq 接管")
+		return true, nil
 	}
 	switch {
 	case dnsmasqSnapshotsEqual(current, state.Original):

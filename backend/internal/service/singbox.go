@@ -101,6 +101,11 @@ func startIfConfigured(isRunning func() bool, binaryPath string, activeConfig fu
 func (svc *SingboxService) start() (*model.ActionResponse, error) {
 	svc.networkLifecycleMu.Lock()
 	defer svc.networkLifecycleMu.Unlock()
+	releaseNetworkLock, err := acquireNetworkLifecycleFileLock(svc.paths.NetworkLifecycleLockPath())
+	if err != nil {
+		return nil, err
+	}
+	defer releaseNetworkLock()
 
 	svc.mu.Lock()
 	defer svc.mu.Unlock()
@@ -237,6 +242,7 @@ func (svc *SingboxService) start() (*model.ActionResponse, error) {
 		err := cmd.Wait()
 		close(processExited)
 		svc.networkLifecycleMu.Lock()
+		releaseNetworkLock, networkLockErr := acquireNetworkLifecycleFileLock(svc.paths.NetworkLifecycleLockPath())
 		logWG.Wait()
 		<-ownershipResult
 		svc.mu.Lock()
@@ -251,7 +257,7 @@ func (svc *SingboxService) start() (*model.ActionResponse, error) {
 		svc.mu.Unlock()
 
 		statusMsg, runtimeStatus, errorMessage := coreExitState(err, intentionalStop, svc.lastError)
-		cleanupErr := svc.recoverStoppedState(true, false)
+		cleanupErr := svc.cleanupAfterProcessExit(networkLockErr)
 		if cleanupErr != nil {
 			statusMsg = "error"
 			runtimeStatus = model.RuntimeError
@@ -277,6 +283,9 @@ func (svc *SingboxService) start() (*model.ActionResponse, error) {
 		svc.mu.Lock()
 		svc.stopping = false
 		svc.mu.Unlock()
+		if releaseNetworkLock != nil {
+			releaseNetworkLock()
+		}
 		svc.networkLifecycleMu.Unlock()
 		done <- cleanupErr
 		close(done)
@@ -305,6 +314,13 @@ func (svc *SingboxService) start() (*model.ActionResponse, error) {
 	svc.broadcastRuntimeStatus(model.RuntimeRunning, svc.pid)
 
 	return &model.ActionResponse{Success: true, Message: "service started"}, nil
+}
+
+func (svc *SingboxService) cleanupAfterProcessExit(networkLockErr error) error {
+	if networkLockErr != nil {
+		return fmt.Errorf("acquire network lifecycle lock before exit cleanup: %w", networkLockErr)
+	}
+	return svc.recoverStoppedState(true, false)
 }
 
 func (svc *SingboxService) shouldActivateDNSMasqTakeover(tunState activeTUNState) (bool, error) {
@@ -405,6 +421,11 @@ func (svc *SingboxService) RecoverStaleState() error {
 	defer svc.lifecycleMu.Unlock()
 	svc.networkLifecycleMu.Lock()
 	defer svc.networkLifecycleMu.Unlock()
+	releaseNetworkLock, err := acquireNetworkLifecycleFileLock(svc.paths.NetworkLifecycleLockPath())
+	if err != nil {
+		return err
+	}
+	defer releaseNetworkLock()
 
 	svc.mu.Lock()
 	running := svc.isRunning()
@@ -416,13 +437,27 @@ func (svc *SingboxService) RecoverStaleState() error {
 }
 
 func (svc *SingboxService) recoverStoppedState(forceDNS, rejectRunning bool) error {
+	recovery, err := svc.recoverStoppedStateDetailed(forceDNS)
+	if err != nil {
+		return err
+	}
+	if recovery.ProcessRunning && rejectRunning {
+		return fmt.Errorf("an unmanaged sing-box process is already running")
+	}
+	return nil
+}
+
+type stoppedStateRecovery struct {
+	ProcessRunning  bool
+	NetworkCleaned  bool
+	DNSMasqRestored bool
+}
+
+func (svc *SingboxService) recoverStoppedStateDetailed(forceDNS bool) (stoppedStateRecovery, error) {
 	result, cleanupErr := cleanupPlatformSingboxState(svc.routeTableStatePath())
 	if result.ProcessRunning {
-		if rejectRunning {
-			return fmt.Errorf("an unmanaged sing-box process is already running")
-		}
 		logging.Info("core.cleanup", "skipping stale-state cleanup because a sing-box process is running")
-		return nil
+		return stoppedStateRecovery{ProcessRunning: true}, nil
 	}
 	if result.Cleaned && cleanupErr == nil {
 		logging.Info("core.cleanup", "removed stale sing-box OpenWrt network state")
@@ -444,7 +479,10 @@ func (svc *SingboxService) recoverStoppedState(forceDNS, rejectRunning bool) err
 			failures = append(failures, err)
 		}
 	}
-	return errors.Join(failures...)
+	return stoppedStateRecovery{
+		NetworkCleaned:  result.Cleaned,
+		DNSMasqRestored: dnsmasqRestored,
+	}, errors.Join(failures...)
 }
 
 func (svc *SingboxService) routeTableStatePath() string {

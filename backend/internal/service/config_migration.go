@@ -280,17 +280,26 @@ func migrateManagedConfig(config map[string]interface{}) (int, error) {
 }
 
 func migrateAckwrapProcessBypassRules(rules []interface{}) ([]interface{}, int) {
+	dnsHijackRules := make([]interface{}, 0, 1)
 	bypassRules := make([]interface{}, 0, 1)
 	remainingRules := make([]interface{}, 0, len(rules))
 	migrated := 0
-	reachedOtherRule := false
+	lastCategory := 0
 	needsReorder := false
 	for _, rawRule := range rules {
 		rule, ok := rawRule.(map[string]interface{})
+		managedDNSHijack := ok && rule["action"] == "hijack-dns" && (rule["inbound"] == dnsInboundTag || stringListContains(rule["inbound"], dnsInboundTag))
+		if managedDNSHijack {
+			if lastCategory > 0 {
+				needsReorder = true
+			}
+			dnsHijackRules = append(dnsHijackRules, rawRule)
+			continue
+		}
 		ackwrapNames, _ := splitAckwrapProcessNames(rule["process_name"])
 		managedBypass := ok && rule["outbound"] == "direct" && stringListContains(rule["inbound"], "tun-in") && len(ackwrapNames) > 0
 		if !managedBypass {
-			reachedOtherRule = true
+			lastCategory = 2
 			remainingRules = append(remainingRules, rawRule)
 			continue
 		}
@@ -298,15 +307,19 @@ func migrateAckwrapProcessBypassRules(rules []interface{}) ([]interface{}, int) 
 			rule["action"] = "bypass"
 			migrated++
 		}
-		if reachedOtherRule {
+		if lastCategory > 1 {
 			needsReorder = true
+		}
+		if lastCategory < 1 {
+			lastCategory = 1
 		}
 		bypassRules = append(bypassRules, rawRule)
 	}
 	if !needsReorder {
 		return rules, migrated
 	}
-	orderedRules := append(bypassRules, remainingRules...)
+	orderedRules := append(dnsHijackRules, bypassRules...)
+	orderedRules = append(orderedRules, remainingRules...)
 	return orderedRules, migrated + 1
 }
 
