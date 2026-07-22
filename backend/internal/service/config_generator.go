@@ -2196,6 +2196,7 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase(routeFinal ...string) (
 		globalSettings = &model.DNSGlobalSettings{
 			Enabled:          true,
 			Final:            "dns_proxy",
+			ProxyFinal:       "",
 			Strategy:         "prefer_ipv4",
 			DisableCache:     false,
 			DisableExpire:    false,
@@ -2310,7 +2311,14 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase(routeFinal ...string) (
 	}
 	proxyFinalServer := ""
 	if proxyFinalRequired {
-		generatedServer, finalServer, err := generateProxyDNSFinal(globalSettings.Final, servers, serverTags)
+		proxyFinalPreference := strings.TrimSpace(globalSettings.ProxyFinal)
+		if proxyFinalPreference == "" {
+			proxyFinalPreference = strategyDNSFallbackServerTag(globalSettings.Final, servers)
+			if proxyFinalPreference != "" {
+				logging.Info("config_generator.dns", "代理 DNS Final 未显式设置，兼容选择 %s", proxyFinalPreference)
+			}
+		}
+		generatedServer, finalServer, err := generateProxyDNSFinal(proxyFinalPreference, servers, serverTags)
 		if err != nil {
 			return nil, err
 		}
@@ -2435,16 +2443,19 @@ func dnsRuleMap(conditions map[string]interface{}, settings *model.DNSRule) map[
 }
 
 func generateProxyDNSFinal(preferred string, servers []map[string]interface{}, serverTags map[string]bool) (map[string]interface{}, string, error) {
-	baseTag := strategyDNSFallbackServerTag(preferred, servers)
-	if baseTag == "" {
+	if preferred == "" {
 		return nil, "", fmt.Errorf("DNS 防泄漏没有可用远程 Server，请启用 udp/tcp/tls/https/quic/h3 DNS")
 	}
 	for _, server := range servers {
-		if server["tag"] != baseTag {
+		if server["tag"] != preferred {
 			continue
 		}
+		serverType, _ := server["type"].(string)
+		if !isStrategyDNSRemoteType(serverType) {
+			break
+		}
 		if server["detour"] == "proxy" {
-			return nil, baseTag, nil
+			return nil, preferred, nil
 		}
 		tag := uniqueDNSServerTag("ackwrap-proxy-dns", serverTags)
 		serverTags[tag] = true
@@ -2454,10 +2465,10 @@ func generateProxyDNSFinal(preferred string, servers []map[string]interface{}, s
 		}
 		clone["tag"] = tag
 		clone["detour"] = "proxy"
-		logging.Info("config_generator.dns", "使用 %s 生成统一代理 DNS final", baseTag)
+		logging.Info("config_generator.dns", "使用 %s 生成统一代理 DNS final", preferred)
 		return clone, tag, nil
 	}
-	return nil, "", fmt.Errorf("DNS 防泄漏 Server %s 未生成", baseTag)
+	return nil, "", fmt.Errorf("代理 DNS Final Server %s 不存在、未启用或不支持远程查询", preferred)
 }
 
 func isStrategyDNSRemoteType(serverType string) bool {
@@ -3110,6 +3121,8 @@ func normalizeTUNAddress(value, fallback string, ipv6 bool) (string, error) {
 
 // Preview 预览生成的配置
 func (s *ConfigGeneratorService) Preview(defaultOutbound string) (map[string]interface{}, error) {
+	releaseConfigSnapshot := s.store.HoldConfigSnapshot()
+	defer releaseConfigSnapshot()
 	s.configMu.Lock()
 	defer s.configMu.Unlock()
 

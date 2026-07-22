@@ -109,6 +109,9 @@ func TestGenerateProxyDNSFinalUsesOneStableServer(t *testing.T) {
 	if err != nil || generated != nil || final != "dns_proxy" {
 		t.Fatalf("existing proxy DNS final generated=%+v final=%q err=%v", generated, final, err)
 	}
+	if _, _, err := generateProxyDNSFinal("missing", servers, map[string]bool{"dns_direct": true, "dns_proxy": true}); err == nil || !strings.Contains(err.Error(), "不存在") {
+		t.Fatalf("missing selected proxy DNS final error = %v", err)
+	}
 }
 
 func TestApplyDomainResolverBinding(t *testing.T) {
@@ -1833,6 +1836,14 @@ func TestGenerateDNSLeakProtectionModeMatrix(t *testing.T) {
 				if err := db.SetInboundMode(inboundMode); err != nil {
 					t.Fatal(err)
 				}
+				settings, err := db.GetDNSGlobalSettings()
+				if err != nil {
+					t.Fatal(err)
+				}
+				settings.ProxyFinal = "dns_proxy"
+				if err := db.SetDNSGlobalSettings(settings); err != nil {
+					t.Fatal(err)
+				}
 
 				routeFinal := "direct"
 				if proxyMode == "global" {
@@ -2351,6 +2362,33 @@ func TestPreviewRejectsUnvalidatedConfiguration(t *testing.T) {
 	service := NewConfigGeneratorService(db, &paths.Paths{DataDir: dataDir})
 	if _, err := service.Preview("direct"); err == nil || !strings.Contains(err.Error(), "sing-box 未安装") {
 		t.Fatalf("unvalidated preview error = %v", err)
+	}
+}
+
+func TestPreviewWaitsForConfigUpdates(t *testing.T) {
+	dataDir := t.TempDir()
+	db, err := store.Open(filepath.Join(dataDir, "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	service := NewConfigGeneratorService(db, &paths.Paths{DataDir: dataDir})
+
+	releaseConfigUpdate := db.HoldConfigUpdate()
+	done := make(chan error, 1)
+	go func() {
+		_, err := service.Preview("direct")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		releaseConfigUpdate()
+		t.Fatalf("preview completed during config update: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	releaseConfigUpdate()
+	if err := <-done; err == nil || !strings.Contains(err.Error(), "sing-box 未安装") {
+		t.Fatalf("preview error after config update = %v", err)
 	}
 }
 

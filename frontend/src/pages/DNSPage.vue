@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { Plus, Save, ServerCog, Trash2 } from "lucide-vue-next";
+import { Plus, Trash2 } from "lucide-vue-next";
 import PageHeader from "@/components/layout/PageHeader.vue";
 import Toast from "@/components/ui/Toast.vue";
 import OrderButtons from "@/components/ui/OrderButtons.vue";
 import { authenticatedFetch } from "@/services/apiAuth";
 import DNSRuleFormModal from "./dns/DNSRuleFormModal.vue";
 import DNSServerFormModal from "./dns/DNSServerFormModal.vue";
+import DNSGlobalSettingsCard from "./dns/DNSGlobalSettingsCard.vue";
 interface Server {
   id: number;
   tag: string;
@@ -37,6 +38,7 @@ interface Col {
 const defaults = {
     enabled: true,
     final: "dns_proxy",
+    proxy_final: "",
     strategy: "prefer_ipv4",
     disable_cache: false,
     disable_expire: false,
@@ -451,85 +453,36 @@ onMounted(load);
     <div v-if="loading" class="py-20 text-center">加载中...</div>
     <template v-else
       ><div class="grid gap-4 lg:grid-cols-2">
+        <DNSGlobalSettingsCard
+          v-model="global"
+          :servers="servers"
+          :strategies="strategies"
+          @save="saveGlobal"
+        />
         <section
-        class="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
-      >
-        <div class="flex justify-between">
-          <h3><ServerCog class="inline" /> 全局设置</h3>
-          <label
-            ><input v-model="global.enabled" type="checkbox" /> 启用 DNS
-            管理</label
-          >
-        </div>
-        <div class="mt-4 grid gap-3 md:grid-cols-5">
-          <label
-            >默认 Server<select v-model="global.final">
-              <option value="">请选择</option>
-              <option
-                v-for="s in servers.filter((x) => x.enabled && x.server_type !== 'fakeip')"
-                :value="s.tag"
-              >
-                {{ s.tag }}
-              </option>
-            </select></label
-          ><label
-            >IP 返回策略<select v-model="global.strategy">
-              <option v-for="x in strategies">{{ x }}</option>
-            </select></label
-          ><label
-            >缓存容量<input
-              v-model.number="global.cache_capacity"
-              type="number" /></label
-          ><label>Client Subnet<input v-model="global.client_subnet" /></label
-          ><button
-            class="aw-action-button aw-action-success self-end justify-self-end px-4"
-            @click="saveGlobal"
-          >
-            <Save :size="13" />保存全局设置
-          </button>
-        </div>
-        <div class="mt-3 flex gap-4">
-          <label
-            v-for="x in [
-              'disable_cache',
-              'disable_expire',
-              ...(global.independent_cache_supported ? ['independent_cache'] : []),
-              'reverse_mapping',
-            ]"
-            ><input
-              v-model="global[x as keyof typeof global]"
-              type="checkbox"
-            />
-            {{ x }}</label
-          >
-        </div>
-        <p
-          v-if="!global.independent_cache_supported"
-          class="mt-2 text-xs text-[var(--text-tertiary)]"
+          class="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
         >
-          当前核心已按 DNS transport 隔离缓存，无需 independent_cache。
-        </p>
-        </section>
-        <section
-        class="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
-      >
-        <div class="flex justify-between">
-          <h3>FakeIP</h3>
-          <label class="text-sm text-[var(--text-secondary)]">
-            <input :checked="global.fakeip_enabled" type="checkbox" disabled />
-            {{ global.fakeip_enabled ? "已随 TUN 启用" : "已随 TUN 停用" }}
-          </label>
-        </div>
-        <p class="mt-2 text-xs text-[var(--text-tertiary)]">
-          FakeIP 由运行模式自动管理：TUN / TUN + Mixed 启用，Mixed 停用。
-          显式 DNS 规则用于国内和局域网等真实 IP 例外；启用时，所有未命中显式规则的
-          A/AAAA 查询使用 FakeIP，其余查询统一经过安全 DNS final。
-        </p>
-        <div class="mt-3 grid gap-3 md:grid-cols-3">
-          <input v-model="global.fakeip_inet4_range" /><input
-            v-model="global.fakeip_inet6_range"
-          /><button @click="saveGlobal">保存 FakeIP</button>
-        </div>
+          <div class="flex justify-between">
+            <h3>FakeIP</h3>
+            <label class="text-sm text-[var(--text-secondary)]">
+              <input
+                :checked="global.fakeip_enabled"
+                type="checkbox"
+                disabled
+              />
+              {{ global.fakeip_enabled ? "已随 TUN 启用" : "已随 TUN 停用" }}
+            </label>
+          </div>
+          <p class="mt-2 text-xs text-[var(--text-tertiary)]">
+            FakeIP 由运行模式自动管理：TUN / TUN + Mixed 启用，Mixed 停用。 显式
+            DNS 规则用于国内和局域网等真实 IP 例外；启用时，所有未命中显式规则的
+            A/AAAA 查询使用 FakeIP，其余查询统一经过安全 DNS final。
+          </p>
+          <div class="mt-3 grid gap-3 md:grid-cols-3">
+            <input v-model="global.fakeip_inet4_range" /><input
+              v-model="global.fakeip_inet6_range"
+            /><button @click="saveGlobal">保存 FakeIP</button>
+          </div>
         </section>
       </div>
       <section
@@ -797,7 +750,11 @@ onMounted(load);
       v-if="ruleForm"
       :form="ruleForm"
       :conditions="conditions"
-      :servers="servers.filter((server) => server.enabled && server.server_type !== 'fakeip')"
+      :servers="
+        servers.filter(
+          (server) => server.enabled && server.server_type !== 'fakeip',
+        )
+      "
       :saving="ruleSaving"
       @close="ruleForm = null"
       @save="saveRule"

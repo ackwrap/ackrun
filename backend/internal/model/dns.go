@@ -63,6 +63,7 @@ type DNSRuleRequest struct {
 type DNSGlobalSettings struct {
 	Enabled                   bool   `json:"enabled"`
 	Final                     string `json:"final"`
+	ProxyFinal                string `json:"proxy_final"`
 	Strategy                  string `json:"strategy"`
 	DisableCache              bool   `json:"disable_cache"`
 	DisableExpire             bool   `json:"disable_expire"`

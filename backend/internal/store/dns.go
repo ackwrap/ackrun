@@ -199,6 +199,7 @@ func (s *Store) GetDNSGlobalSettings() (*model.DNSGlobalSettings, error) {
 	r := &model.DNSGlobalSettings{
 		Enabled:          true,
 		Final:            "dns_proxy",
+		ProxyFinal:       "",
 		Strategy:         "prefer_ipv4",
 		DisableCache:     false,
 		DisableExpire:    false,
@@ -234,6 +235,8 @@ func (s *Store) GetDNSGlobalSettings() (*model.DNSGlobalSettings, error) {
 			if value != "" {
 				r.Final = value
 			}
+		case "dns_global.proxy_final":
+			r.ProxyFinal = value
 		case "dns_global.strategy":
 			if value != "" {
 				r.Strategy = value
@@ -331,6 +334,7 @@ func (s *Store) setDNSGlobalSettings(req *model.DNSGlobalSettings, independentCa
 		"dns_global.enabled":            fmt.Sprintf("%t", req.Enabled),
 		"dns.final":                     req.Final,
 		"dns_global.final":              req.Final,
+		"dns_global.proxy_final":        req.ProxyFinal,
 		"dns.strategy":                  req.Strategy,
 		"dns_global.strategy":           req.Strategy,
 		"dns.disable_cache":             fmt.Sprintf("%t", req.DisableCache),

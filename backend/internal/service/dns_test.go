@@ -89,6 +89,76 @@ func TestDNSGlobalSettingsOmitsIndependentCacheForNewCore(t *testing.T) {
 	}
 }
 
+func TestDNSGlobalSettingsValidatesAndProtectsProxyFinal(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	svc := NewDNSService(db, nil)
+	remote, err := svc.CreateDNSServer(&model.DNSServerRequest{
+		Tag: "dns_remote", Enabled: true, ServerType: "https", Address: "https://dns.example.com/dns-query", Detour: "proxy",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CreateDNSServer(&model.DNSServerRequest{Tag: "dns_local", Enabled: true, ServerType: "local"}); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := svc.GetDNSGlobalSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.ProxyFinal = "missing"
+	if err := svc.SetDNSGlobalSettings(settings); err == nil || !strings.Contains(err.Error(), "不存在") {
+		t.Fatalf("missing proxy final error = %v", err)
+	}
+	settings.ProxyFinal = "dns_local"
+	if err := svc.SetDNSGlobalSettings(settings); err == nil || !strings.Contains(err.Error(), "不支持远程查询") {
+		t.Fatalf("local proxy final error = %v", err)
+	}
+	settings.ProxyFinal = remote.Tag
+	releaseSnapshot := db.HoldConfigSnapshot()
+	saveDone := make(chan error, 1)
+	go func() { saveDone <- svc.SetDNSGlobalSettings(settings) }()
+	select {
+	case err := <-saveDone:
+		releaseSnapshot()
+		t.Fatalf("proxy final save completed during config snapshot: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	releaseSnapshot()
+	if err := <-saveDone; err != nil {
+		t.Fatal(err)
+	}
+	stored, err := svc.GetDNSGlobalSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.ProxyFinal != remote.Tag {
+		t.Fatalf("proxy final = %q, want %q", stored.ProxyFinal, remote.Tag)
+	}
+	if err := svc.UpdateDNSServer(remote.ID, &model.DNSServerRequest{
+		Tag: remote.Tag, Enabled: false, ServerType: remote.ServerType, Address: remote.Address, Detour: remote.Detour,
+	}); err == nil || !strings.Contains(err.Error(), "请先更换") {
+		t.Fatalf("disable selected proxy final error = %v", err)
+	}
+	if err := svc.UpdateDNSServer(remote.ID, &model.DNSServerRequest{
+		Tag: "dns_renamed", Enabled: true, ServerType: remote.ServerType, Address: remote.Address, Detour: remote.Detour,
+	}); err == nil || !strings.Contains(err.Error(), "请先更换") {
+		t.Fatalf("rename selected proxy final error = %v", err)
+	}
+	if err := svc.UpdateDNSServer(remote.ID, &model.DNSServerRequest{
+		Tag: remote.Tag, Enabled: true, ServerType: "local",
+	}); err == nil || !strings.Contains(err.Error(), "请先更换") {
+		t.Fatalf("change selected proxy final type error = %v", err)
+	}
+	if err := svc.DeleteDNSServer(remote.ID); err == nil || !strings.Contains(err.Error(), "请先更换") {
+		t.Fatalf("delete selected proxy final error = %v", err)
+	}
+}
+
 func TestDNSIndependentCacheMigrationSerializesWithSave(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {

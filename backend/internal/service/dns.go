@@ -69,6 +69,8 @@ func (svc *DNSService) CreateDNSServer(req *model.DNSServerRequest) (*model.DNSS
 	if err := validateDNSServerRequest(req); err != nil {
 		return nil, err
 	}
+	releaseConfigUpdate := svc.store.HoldConfigUpdate()
+	defer releaseConfigUpdate()
 	return svc.store.CreateDNSServer(req)
 }
 
@@ -76,13 +78,43 @@ func (svc *DNSService) UpdateDNSServer(id int64, req *model.DNSServerRequest) er
 	if req == nil {
 		return fmt.Errorf("DNS Server 请求不能为空")
 	}
+	releaseConfigUpdate := svc.store.HoldConfigUpdate()
+	defer releaseConfigUpdate()
+	svc.cacheMu.Lock()
+	defer svc.cacheMu.Unlock()
 	if err := validateDNSServerRequest(req); err != nil {
 		return err
+	}
+	current, err := svc.store.GetDNSServer(id)
+	if err != nil {
+		return err
+	}
+	settings, err := svc.store.GetDNSGlobalSettings()
+	if err != nil {
+		return fmt.Errorf("读取 DNS 全局设置失败: %w", err)
+	}
+	if settings.ProxyFinal == current.Tag && (req.Tag != current.Tag || !req.Enabled || !isStrategyDNSRemoteType(req.ServerType)) {
+		return fmt.Errorf("DNS Server %s 正在作为代理 DNS Final，请先更换代理 DNS Final", current.Tag)
 	}
 	return svc.store.UpdateDNSServer(id, req)
 }
 
 func (svc *DNSService) DeleteDNSServer(id int64) error {
+	releaseConfigUpdate := svc.store.HoldConfigUpdate()
+	defer releaseConfigUpdate()
+	svc.cacheMu.Lock()
+	defer svc.cacheMu.Unlock()
+	server, err := svc.store.GetDNSServer(id)
+	if err != nil {
+		return err
+	}
+	settings, err := svc.store.GetDNSGlobalSettings()
+	if err != nil {
+		return fmt.Errorf("读取 DNS 全局设置失败: %w", err)
+	}
+	if settings.ProxyFinal == server.Tag {
+		return fmt.Errorf("DNS Server %s 正在作为代理 DNS Final，请先更换代理 DNS Final", server.Tag)
+	}
 	return svc.store.DeleteDNSServer(id)
 }
 
@@ -97,6 +129,8 @@ func (svc *DNSService) ReorderDNSServers(ids []int64) error {
 		}
 		seen[id] = true
 	}
+	releaseConfigUpdate := svc.store.HoldConfigUpdate()
+	defer releaseConfigUpdate()
 	logging.Info("dns.server.reorder", "调整 %d 个 DNS Server 的顺序", len(ids))
 	return svc.store.ReorderDNSServers(ids)
 }
@@ -112,6 +146,8 @@ func (svc *DNSService) GetDNSRule(id int64) (*model.DNSRule, error) {
 }
 
 func (svc *DNSService) CreateDNSRule(req *model.DNSRuleRequest) (*model.DNSRule, error) {
+	releaseConfigUpdate := svc.store.HoldConfigUpdate()
+	defer releaseConfigUpdate()
 	if err := svc.validateDNSRuleRequest(req); err != nil {
 		return nil, err
 	}
@@ -119,6 +155,8 @@ func (svc *DNSService) CreateDNSRule(req *model.DNSRuleRequest) (*model.DNSRule,
 }
 
 func (svc *DNSService) UpdateDNSRule(id int64, req *model.DNSRuleRequest) error {
+	releaseConfigUpdate := svc.store.HoldConfigUpdate()
+	defer releaseConfigUpdate()
 	if err := svc.validateDNSRuleRequest(req); err != nil {
 		return err
 	}
@@ -152,6 +190,8 @@ func (svc *DNSService) rejectFakeIPServerReference(tag string) error {
 }
 
 func (svc *DNSService) DeleteDNSRule(id int64) error {
+	releaseConfigUpdate := svc.store.HoldConfigUpdate()
+	defer releaseConfigUpdate()
 	return svc.store.DeleteDNSRule(id)
 }
 
@@ -166,6 +206,8 @@ func (svc *DNSService) ReorderDNSRules(ids []int64) error {
 		}
 		seen[id] = true
 	}
+	releaseConfigUpdate := svc.store.HoldConfigUpdate()
+	defer releaseConfigUpdate()
 	logging.Info("dns.rule.reorder", "调整 %d 条 DNS 规则的顺序", len(ids))
 	return svc.store.ReorderDNSRules(ids)
 }
@@ -189,22 +231,53 @@ func (svc *DNSService) SetDNSGlobalSettings(req *model.DNSGlobalSettings) error 
 	if req == nil {
 		return fmt.Errorf("DNS 全局设置不能为空")
 	}
+	releaseConfigUpdate := svc.store.HoldConfigUpdate()
+	defer releaseConfigUpdate()
+	svc.cacheMu.Lock()
+	defer svc.cacheMu.Unlock()
+	req.ProxyFinal = strings.TrimSpace(req.ProxyFinal)
+	if err := svc.validateProxyDNSFinal(req.ProxyFinal); err != nil {
+		return err
+	}
 	if err := svc.rejectFakeIPServerReference(req.Final); err != nil {
 		return err
 	}
-	svc.cacheMu.Lock()
-	defer svc.cacheMu.Unlock()
 	supported := svc.independentCacheSupported()
 	req.IndependentCacheSupported = supported
 	if !supported {
 		req.IndependentCache = false
 	}
 	applyTUNManagedFakeIP(req, svc.store.GetInboundMode())
-	logging.Info("dns.global.update", "FakeIP 跟随 TUN 模式，当前状态: %t", req.FakeIPEnabled)
+	logging.Info("dns.global.update", "代理 DNS Final=%s, FakeIP 跟随 TUN 模式=%t", req.ProxyFinal, req.FakeIPEnabled)
 	return svc.store.SetDNSGlobalSettingsForCore(req, supported)
 }
 
+func (svc *DNSService) validateProxyDNSFinal(tag string) error {
+	if tag == "" {
+		return nil
+	}
+	servers, err := svc.store.ListDNSServers()
+	if err != nil {
+		return fmt.Errorf("读取 DNS Server 失败: %w", err)
+	}
+	for _, server := range servers {
+		if server.Tag != tag {
+			continue
+		}
+		if !server.Enabled {
+			return fmt.Errorf("代理 DNS Final Server %s 未启用", tag)
+		}
+		if !isStrategyDNSRemoteType(server.ServerType) {
+			return fmt.Errorf("代理 DNS Final Server %s 类型 %s 不支持远程查询", tag, server.ServerType)
+		}
+		return nil
+	}
+	return fmt.Errorf("代理 DNS Final Server %s 不存在", tag)
+}
+
 func (svc *DNSService) MigrateIndependentCache(version string) (bool, error) {
+	releaseConfigUpdate := svc.store.HoldConfigUpdate()
+	defer releaseConfigUpdate()
 	svc.cacheMu.Lock()
 	defer svc.cacheMu.Unlock()
 	if strings.TrimSpace(version) == "" {
