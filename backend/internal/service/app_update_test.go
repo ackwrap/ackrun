@@ -332,6 +332,7 @@ func TestOpenWrtInstallerScriptRecordsLifecycleAndCleansLock(t *testing.T) {
 		p.AppUpdateResultPath(),
 		p.AppUpdateLockPath(),
 		"trap finish 0",
+		"date '+%Y-%m-%dT%H:%M:%S%z'",
 		"开始执行 opkg install",
 		"安装完成",
 		`opkg_pid=""`,

@@ -574,7 +574,7 @@ func (svc *AppUpdateService) appendInstallLog(message string) {
 		return
 	}
 	defer file.Close()
-	if _, err := fmt.Fprintf(file, "[%s] %s\n", time.Now().Format("2006-01-02 15:04:05"), message); err != nil {
+	if _, err := fmt.Fprintf(file, "[%s] %s\n", time.Now().Format("2006-01-02T15:04:05-0700"), message); err != nil {
 		logging.Error("app_update.install", "write install log failed: %v", err)
 	}
 }
@@ -628,7 +628,7 @@ lock=%s
 opkg_pid=""
 
 log_line() {
-  printf '[%%s] %%s\n' "$(date '+%%Y-%%m-%%d %%H:%%M:%%S')" "$1"
+  printf '[%%s] %%s\n' "$(date '+%%Y-%%m-%%dT%%H:%%M:%%S%%z')" "$1"
 }
 
 finish() {
