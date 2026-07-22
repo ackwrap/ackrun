@@ -172,6 +172,10 @@ async function save() {
 
 async function saveDashboardSelection() {
   const previous = savedDashboardID.value;
+  if (selectedDashboard.value && !selectedDashboard.value.installed) {
+    emit("notify", "请下载并安装所选控制面板后再启用", "info");
+    return;
+  }
   if (dashboardID.value && !clashApiSecret.value) generateSecret();
   if (!(await persistSettings("控制面板选择已保存，正在应用配置"))) {
     dashboardID.value = previous;
@@ -193,15 +197,19 @@ async function checkUpdates() {
 async function installSelected() {
   const dashboard = selectedDashboard.value;
   if (!dashboard) return;
+  const wasInstalled = dashboard.installed;
   installingID.value = dashboard.id;
   try {
-    await api.installDashboard(dashboard.id);
-    emit(
-      "notify",
-      dashboard.installed ? `${dashboard.name} 已更新` : `${dashboard.name} 已安装`,
-      "success",
+    const installedDashboard = await api.installDashboard(dashboard.id);
+    dashboards.value = dashboards.value.map((item) =>
+      item.id === installedDashboard.id ? installedDashboard : item,
     );
-    dashboards.value = await api.checkDashboardUpdates();
+    if (wasInstalled) {
+      emit("notify", `${dashboard.name} 已更新`, "success");
+    } else if (dashboardID.value === dashboard.id) {
+      if (!clashApiSecret.value) generateSecret();
+      await persistSettings(`${dashboard.name} 已下载、安装并启用`);
+    }
   } catch (cause: any) {
     emit("notify", `控制面板安装失败: ${cause.message}`, "error");
   } finally {
@@ -298,7 +306,7 @@ onMounted(load);
           <select
             v-model="dashboardID"
             :class="input"
-            :disabled="saving"
+            :disabled="saving || !!installingID"
             @change="saveDashboardSelection"
           >
             <option value="">不启用外部控制面板</option>
@@ -347,7 +355,7 @@ onMounted(load);
               @click="installSelected"
             >
               <template #icon><Download :size="14" /></template>
-              {{ selectedDashboard.installed ? "更新面板" : "安装面板" }}
+              {{ selectedDashboard.installed ? "更新面板" : "下载并安装" }}
             </Button>
             <Button
               v-if="selectedDashboard?.installed"
