@@ -274,7 +274,13 @@ export interface NTPSettingsResponse {
 
 export interface GeneralSettings {
   auto_start_core: boolean;
+  dnsmasq_takeover_enabled: boolean;
+  dnsmasq_takeover_supported: boolean;
 }
+
+export type GeneralSettingsUpdate = Partial<
+  Pick<GeneralSettings, "auto_start_core" | "dnsmasq_takeover_enabled">
+>;
 
 export interface MixedInboundSettings {
   username: string;

@@ -312,26 +312,54 @@ func (s *Store) SetNTPSettings(req *model.NTPSettings) error {
 }
 
 func (s *Store) GetGeneralSettings() (*model.GeneralSettings, error) {
-	settings := &model.GeneralSettings{AutoStartCore: true}
-	var value string
-	err := s.db.QueryRow(`SELECT value FROM app_settings WHERE key = 'general.auto_start_core'`).Scan(&value)
-	if err == sql.ErrNoRows {
-		return settings, nil
-	}
+	settings := &model.GeneralSettings{AutoStartCore: true, DNSMasqTakeoverEnabled: true}
+	rows, err := s.db.Query(`SELECT key, value FROM app_settings WHERE key IN ('general.auto_start_core', 'general.dnsmasq_takeover_enabled')`)
 	if err != nil {
 		return nil, err
 	}
-	settings.AutoStartCore = value != "false"
+	defer rows.Close()
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			return nil, err
+		}
+		switch key {
+		case "general.auto_start_core":
+			settings.AutoStartCore = value != "false"
+		case "general.dnsmasq_takeover_enabled":
+			settings.DNSMasqTakeoverEnabled = value != "false"
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return settings, nil
 }
 
 func (s *Store) SetGeneralSettings(settings *model.GeneralSettings) error {
-	_, err := s.db.Exec(`
-		INSERT INTO app_settings (key, value, updated_at)
-		VALUES ('general.auto_start_core', ?, ?)
-		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-	`, strconv.FormatBool(settings.AutoStartCore), time.Now().Unix())
-	return err
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().Unix()
+	values := []struct {
+		key   string
+		value bool
+	}{
+		{key: "general.auto_start_core", value: settings.AutoStartCore},
+		{key: "general.dnsmasq_takeover_enabled", value: settings.DNSMasqTakeoverEnabled},
+	}
+	for _, item := range values {
+		if _, err := tx.Exec(`
+			INSERT INTO app_settings (key, value, updated_at)
+			VALUES (?, ?, ?)
+			ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+		`, item.key, strconv.FormatBool(item.value), now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) GetMixedInboundSettings() (*model.MixedInboundSettings, error) {

@@ -1311,6 +1311,89 @@ func TestGenerateInboundsUsesPublicMixedDefaults(t *testing.T) {
 	}
 }
 
+func TestGenerateOpenWrtTUNAddsLocalDNSInboundAndHijack(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	service := NewConfigGeneratorService(db, nil)
+	service.dnsmasqSupported = func() bool { return true }
+	inbounds, err := service.generateInbounds("127.0.0.1", 7890, defaultTUNIPv4Address, defaultTUNIPv6Address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dnsInbound map[string]interface{}
+	for _, raw := range inbounds {
+		inbound, _ := raw.(map[string]interface{})
+		if inbound["tag"] == dnsInboundTag {
+			dnsInbound = inbound
+		}
+	}
+	if dnsInbound == nil || dnsInbound["type"] != "direct" || dnsInbound["listen"] != "127.0.0.1" || dnsInbound["listen_port"] != defaultDNSInboundPort {
+		t.Fatalf("local DNS inbound = %+v", dnsInbound)
+	}
+	if _, exists := dnsInbound["override_address"]; exists {
+		t.Fatalf("local DNS inbound should route by tag without overriding destination: %+v", dnsInbound)
+	}
+	if _, exists := dnsInbound["override_port"]; exists {
+		t.Fatalf("local DNS inbound should route by tag without overriding destination: %+v", dnsInbound)
+	}
+	route, err := service.generateRoute("direct")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules := route["rules"].([]map[string]interface{})
+	if len(rules) == 0 || rules[0]["inbound"] != dnsInboundTag || rules[0]["action"] != "hijack-dns" {
+		t.Fatalf("first route rule does not hijack local DNS inbound: %+v", rules)
+	}
+}
+
+func TestGenerateDNSMasqTakeoverRespectsModeAndSwitch(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	service := NewConfigGeneratorService(db, nil)
+	service.dnsmasqSupported = func() bool { return true }
+
+	if err := db.SetInboundMode("mixed"); err != nil {
+		t.Fatal(err)
+	}
+	inbounds, err := service.generateInbounds("127.0.0.1", 7890, defaultTUNIPv4Address, defaultTUNIPv6Address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasInboundTag(inbounds, dnsInboundTag) {
+		t.Fatal("mixed-only config contains Ackwrap DNS inbound")
+	}
+	if err := db.SetInboundMode("tun"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetGeneralSettings(&model.GeneralSettings{AutoStartCore: true, DNSMasqTakeoverEnabled: false}); err != nil {
+		t.Fatal(err)
+	}
+	inbounds, err = service.generateInbounds("127.0.0.1", 7890, defaultTUNIPv4Address, defaultTUNIPv6Address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasInboundTag(inbounds, dnsInboundTag) {
+		t.Fatal("disabled takeover generated Ackwrap DNS inbound")
+	}
+}
+
+func hasInboundTag(inbounds []interface{}, tag string) bool {
+	for _, raw := range inbounds {
+		inbound, _ := raw.(map[string]interface{})
+		if inbound["tag"] == tag {
+			return true
+		}
+	}
+	return false
+}
+
 func TestGenerateInboundsIncludesMixedAuthentication(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {

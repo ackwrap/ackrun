@@ -174,3 +174,7 @@ func (p *Paths) AppUpdateLogPath() string {
 func (p *Paths) CacheFilePath() string {
 	return filepath.Join(p.DataDir, "cache.db")
 }
+
+func (p *Paths) DNSMasqTakeoverStatePath() string {
+	return filepath.Join(p.DataDir, ".dnsmasq-takeover.json")
+}

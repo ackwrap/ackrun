@@ -46,6 +46,7 @@ type ConfigGeneratorService struct {
 	paths                 *paths.Paths
 	singbox               configGeneratorCore
 	readCoreVersion       func() string
+	dnsmasqSupported      func() bool
 	configMu              sync.Mutex
 	coreRestartGeneration atomic.Uint64
 }
@@ -1866,6 +1867,16 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 	// 标准 TCP/UDP DNS 必须在进程和节点直连白名单之前劫持，避免 DNS
 	// 目标与白名单地址重合时被 bypass 终止匹配。
 	if dnsEnabled {
+		generalSettings, settingsErr := s.store.GetGeneralSettings()
+		if settingsErr != nil {
+			return nil, fmt.Errorf("读取通用设置失败: %w", settingsErr)
+		}
+		if generalSettings.DNSMasqTakeoverEnabled && s.supportsDNSMasqTakeover() && (inboundMode == "tun" || inboundMode == "tun_mixed") {
+			routeRules = append(routeRules, map[string]interface{}{
+				"inbound": dnsInboundTag,
+				"action":  "hijack-dns",
+			})
+		}
 		routeRules = append(routeRules, map[string]interface{}{
 			"port":   53,
 			"action": "hijack-dns",
@@ -2978,8 +2989,38 @@ func (s *ConfigGeneratorService) generateInbounds(listen string, port int, tunIP
 	if autoRedirect && (mode == "tun" || mode == "tun_mixed") {
 		logging.Info("config_generator.inbound", "Linux TUN 已启用 auto_redirect，由 sing-box 管理 nftables/OpenWrt fw4 兼容规则")
 	}
+	generalSettings, err := s.store.GetGeneralSettings()
+	if err != nil {
+		return nil, fmt.Errorf("加载通用设置失败: %w", err)
+	}
+	dnsSettings, err := s.store.GetDNSGlobalSettings()
+	if err != nil {
+		return nil, fmt.Errorf("加载 DNS 全局设置失败: %w", err)
+	}
+	if (mode == "tun" || mode == "tun_mixed") && generalSettings.DNSMasqTakeoverEnabled && dnsSettings.Enabled && s.supportsDNSMasqTakeover() {
+		if mode != "tun" && port == defaultDNSInboundPort {
+			return nil, fmt.Errorf("Mixed 入站端口不能与 Ackwrap DNS 端口 %d 冲突", defaultDNSInboundPort)
+		}
+		inbounds = append(inbounds, generatedDNSInbound())
+	}
 
 	return inbounds, nil
+}
+
+func (s *ConfigGeneratorService) supportsDNSMasqTakeover() bool {
+	if s.dnsmasqSupported != nil {
+		return s.dnsmasqSupported()
+	}
+	return platformSupportsDNSMasqTakeover()
+}
+
+func generatedDNSInbound() map[string]interface{} {
+	return map[string]interface{}{
+		"type":        "direct",
+		"tag":         dnsInboundTag,
+		"listen":      "127.0.0.1",
+		"listen_port": defaultDNSInboundPort,
+	}
 }
 
 func generatedTUNInbound(autoRedirect bool, tunIPv4Address, tunIPv6Address string, excludedInterfaces, excludedCIDRs []string) map[string]interface{} {

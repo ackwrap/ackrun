@@ -74,7 +74,7 @@ func TestGeneralSettingsAPIControlsCoreAutoStart(t *testing.T) {
 
 	getRecorder := httptest.NewRecorder()
 	app.Handler().ServeHTTP(getRecorder, httptest.NewRequest(http.MethodGet, "/api/v1/settings/general", nil))
-	if getRecorder.Code != http.StatusOK || !strings.Contains(getRecorder.Body.String(), `"auto_start_core":true`) {
+	if getRecorder.Code != http.StatusOK || !strings.Contains(getRecorder.Body.String(), `"auto_start_core":true`) || !strings.Contains(getRecorder.Body.String(), `"dnsmasq_takeover_enabled":true`) {
 		t.Fatalf("default general settings response = %d %s", getRecorder.Code, getRecorder.Body.String())
 	}
 
@@ -89,6 +89,9 @@ func TestGeneralSettingsAPIControlsCoreAutoStart(t *testing.T) {
 	}
 	if settings.AutoStartCore {
 		t.Fatal("core auto-start was not disabled through the API")
+	}
+	if !settings.DNSMasqTakeoverEnabled {
+		t.Fatal("partial general settings update disabled dnsmasq takeover")
 	}
 	if err := app.StartCoreIfConfigured(); err != nil {
 		t.Fatalf("disabled core auto-start returned error: %v", err)

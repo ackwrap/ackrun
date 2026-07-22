@@ -7,6 +7,8 @@ const emit = defineEmits<{
   notify: [message: string, type?: "success" | "error" | "info"];
 }>();
 const autoStartCore = ref(true);
+const dnsmasqTakeoverEnabled = ref(true);
+const dnsmasqTakeoverSupported = ref(false);
 const loading = ref(true);
 const saving = ref(false);
 const available = ref(false);
@@ -17,6 +19,8 @@ async function load() {
   try {
     const settings = await api.getGeneralSettings();
     autoStartCore.value = settings.auto_start_core !== false;
+    dnsmasqTakeoverEnabled.value = settings.dnsmasq_takeover_enabled !== false;
+    dnsmasqTakeoverSupported.value = settings.dnsmasq_takeover_supported === true;
     available.value = true;
   } catch (cause: any) {
     emit("notify", `其他开关加载失败: ${cause.message}`, "error");
@@ -25,21 +29,30 @@ async function load() {
   }
 }
 
-async function saveAutoStart() {
+async function saveSetting(kind: "autoStart" | "dnsmasq") {
   if (saving.value) return;
   saving.value = true;
-  const next = autoStartCore.value;
+  const next = kind === "autoStart" ? autoStartCore.value : dnsmasqTakeoverEnabled.value;
   try {
-    await api.setGeneralSettings({ auto_start_core: next });
+    await api.setGeneralSettings(
+      kind === "autoStart"
+        ? { auto_start_core: autoStartCore.value }
+        : { dnsmasq_takeover_enabled: dnsmasqTakeoverEnabled.value },
+    );
     emit(
       "notify",
-      next
-        ? "已开启 Ackwrap 启动后自动启动核心"
-        : "已关闭 Ackwrap 启动后自动启动核心",
+      kind === "autoStart"
+        ? next
+          ? "已开启 Ackwrap 启动后自动启动核心"
+          : "已关闭 Ackwrap 启动后自动启动核心"
+        : next
+          ? "已开启 OpenWrt dnsmasq DNS 接管"
+          : "已关闭 OpenWrt dnsmasq DNS 接管",
       "success",
     );
   } catch (cause: any) {
-    autoStartCore.value = !next;
+    if (kind === "autoStart") autoStartCore.value = !next;
+    else dnsmasqTakeoverEnabled.value = !next;
     emit("notify", `其他开关保存失败: ${cause.message}`, "error");
   } finally {
     saving.value = false;
@@ -76,7 +89,25 @@ onMounted(load);
         type="checkbox"
         class="h-4 w-4 shrink-0"
         :disabled="loading || saving || !available"
-        @change="saveAutoStart"
+        @change="saveSetting('autoStart')"
+      />
+    </label>
+    <label
+      class="mt-3 flex cursor-pointer items-center justify-between gap-4 rounded-[var(--radius-lg)] border border-[var(--border-light)] bg-[var(--bg-base)] px-4 py-3"
+      :class="(loading || saving || !available || !dnsmasqTakeoverSupported) && 'cursor-wait opacity-70'"
+    >
+      <span class="min-w-0">
+        <span class="block text-sm font-medium">接管 OpenWrt dnsmasq 上游</span>
+        <span class="mt-1 block text-xs leading-5 text-[var(--text-secondary)]">
+          TUN 模式下将 dnsmasq 转发到本机 sing-box DNS 端口；停止核心时自动恢复。切换前请先停止核心。
+        </span>
+      </span>
+      <input
+        v-model="dnsmasqTakeoverEnabled"
+        type="checkbox"
+        class="h-4 w-4 shrink-0"
+        :disabled="loading || saving || !available || !dnsmasqTakeoverSupported"
+        @change="saveSetting('dnsmasq')"
       />
     </label>
   </section>

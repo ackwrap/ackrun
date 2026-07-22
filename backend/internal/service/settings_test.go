@@ -443,3 +443,65 @@ func TestSetProxyModeRejectsRunningCore(t *testing.T) {
 		t.Fatalf("proxy mode changed while running: %q", got)
 	}
 }
+
+func TestSetGeneralSettingsRejectsDNSMasqChangeWhileCoreRuns(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	runningCore := &SingboxService{pid: 1, cmd: &exec.Cmd{Process: &os.Process{}}}
+	svc := NewSettingsService(db)
+	svc.SetModeDependencies(runningCore, nil)
+	disabled := false
+	err = svc.SetGeneralSettings(&model.GeneralSettingsRequest{DNSMasqTakeoverEnabled: &disabled})
+	if err == nil || !strings.Contains(err.Error(), "请先停止核心") {
+		t.Fatalf("error = %v, want running-core rejection", err)
+	}
+	settings, err := db.GetGeneralSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !settings.DNSMasqTakeoverEnabled {
+		t.Fatal("dnsmasq takeover changed while core was running")
+	}
+}
+
+func TestSetGeneralSettingsSerializesPartialUpdates(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	svc := NewSettingsService(db)
+	disabled := false
+	requests := []*model.GeneralSettingsRequest{
+		{AutoStartCore: &disabled},
+		{DNSMasqTakeoverEnabled: &disabled},
+	}
+	errorsCh := make(chan error, len(requests))
+	var wait sync.WaitGroup
+	for _, request := range requests {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			errorsCh <- svc.SetGeneralSettings(request)
+		}()
+	}
+	wait.Wait()
+	close(errorsCh)
+	for err := range errorsCh {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	settings, err := db.GetGeneralSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.AutoStartCore || settings.DNSMasqTakeoverEnabled {
+		t.Fatalf("partial updates overwrote each other: %+v", settings)
+	}
+}

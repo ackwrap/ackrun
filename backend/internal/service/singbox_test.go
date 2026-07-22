@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ackwrap/ackrun/internal/model"
+	"github.com/ackwrap/ackrun/internal/store"
 )
 
 func TestCoreExitStateReportsUnexpectedTUNFailure(t *testing.T) {
@@ -82,6 +83,89 @@ func TestReadActiveTUNStateDetectsManagedRoutes(t *testing.T) {
 	}
 	if !state.Enabled || !state.ManagesRoutes {
 		t.Fatalf("active TUN state = %+v", state)
+	}
+}
+
+func TestReadActiveTUNStateDetectsDNSMasqTakeover(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	data := []byte(`{"dns":{"servers":[]},"inbounds":[{"type":"tun","tag":"tun-in"},{"type":"direct","tag":"ackwrap-dns-in","listen":"127.0.0.1","listen_port":1053}],"route":{"rules":[{"inbound":"ackwrap-dns-in","action":"hijack-dns"}]}}`)
+	if err := os.WriteFile(configPath, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	state, err := readActiveTUNState(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.Enabled || !state.DNSMasqTakeover {
+		t.Fatalf("active TUN state = %+v", state)
+	}
+}
+
+func TestReadActiveTUNStateRequiresExactDNSMasqHijack(t *testing.T) {
+	tests := map[string]string{
+		"missing DNS":  `{"inbounds":[{"type":"tun"},{"type":"direct","tag":"ackwrap-dns-in","listen":"127.0.0.1","listen_port":1053}],"route":{"rules":[{"inbound":"ackwrap-dns-in","action":"hijack-dns"}]}}`,
+		"missing rule": `{"dns":{},"inbounds":[{"type":"tun"},{"type":"direct","tag":"ackwrap-dns-in","listen":"127.0.0.1","listen_port":1053}]}`,
+		"rule not first": `{"dns":{},"inbounds":[{"type":"tun"},{"type":"direct","tag":"ackwrap-dns-in","listen":"127.0.0.1","listen_port":1053}],"route":{"rules":[
+			{"port":53,"action":"hijack-dns"},{"inbound":"ackwrap-dns-in","action":"hijack-dns"}]}}`,
+		"extra condition": `{"dns":{},"inbounds":[{"type":"tun"},{"type":"direct","tag":"ackwrap-dns-in","listen":"127.0.0.1","listen_port":1053}],"route":{"rules":[
+			{"inbound":"ackwrap-dns-in","network":"udp","action":"hijack-dns"}]}}`,
+	}
+	for name, data := range tests {
+		t.Run(name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(configPath, []byte(data), 0600); err != nil {
+				t.Fatal(err)
+			}
+			state, err := readActiveTUNState(configPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state.DNSMasqTakeover {
+				t.Fatalf("incomplete config enabled dnsmasq takeover: %+v", state)
+			}
+		})
+	}
+}
+
+func TestShouldActivateDNSMasqTakeoverUsesCurrentSettingsAndPlatform(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	svc := &SingboxService{store: db, dnsmasqSupported: func() bool { return false }}
+	tunState := activeTUNState{DNSMasqTakeover: true}
+
+	enabled, err := svc.shouldActivateDNSMasqTakeover(tunState)
+	if err != nil || enabled {
+		t.Fatalf("unsupported platform takeover = %t, %v", enabled, err)
+	}
+	svc.dnsmasqSupported = func() bool { return true }
+	enabled, err = svc.shouldActivateDNSMasqTakeover(tunState)
+	if err != nil || !enabled {
+		t.Fatalf("default takeover = %t, %v", enabled, err)
+	}
+	if err := db.SetGeneralSettings(&model.GeneralSettings{AutoStartCore: true, DNSMasqTakeoverEnabled: false}); err != nil {
+		t.Fatal(err)
+	}
+	enabled, err = svc.shouldActivateDNSMasqTakeover(tunState)
+	if err != nil || enabled {
+		t.Fatalf("disabled setting takeover = %t, %v", enabled, err)
+	}
+	if err := db.SetGeneralSettings(&model.GeneralSettings{AutoStartCore: true, DNSMasqTakeoverEnabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	dnsSettings, err := db.GetDNSGlobalSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dnsSettings.Enabled = false
+	if err := db.SetDNSGlobalSettings(dnsSettings); err != nil {
+		t.Fatal(err)
+	}
+	enabled, err = svc.shouldActivateDNSMasqTakeover(tunState)
+	if err != nil || enabled {
+		t.Fatalf("disabled DNS takeover = %t, %v", enabled, err)
 	}
 }
 

@@ -26,6 +26,7 @@ type SettingsService struct {
 	connectivitySettingsHook func()
 	dashboardsDir            string
 	mixedInboundMu           sync.Mutex
+	generalSettingsMu        sync.Mutex
 }
 
 type modeConfigGenerator interface {
@@ -200,18 +201,57 @@ func (svc *SettingsService) SetNTPSettings(req *model.NTPSettings) error {
 }
 
 func (svc *SettingsService) GetGeneralSettings() (*model.GeneralSettings, error) {
-	return svc.store.GetGeneralSettings()
+	settings, err := svc.store.GetGeneralSettings()
+	if err != nil {
+		return nil, err
+	}
+	settings.DNSMasqTakeoverSupported = platformSupportsDNSMasqTakeover()
+	return settings, nil
 }
 
-func (svc *SettingsService) SetGeneralSettings(req *model.GeneralSettings) error {
+func (svc *SettingsService) SetGeneralSettings(req *model.GeneralSettingsRequest) error {
+	svc.generalSettingsMu.Lock()
+	defer svc.generalSettingsMu.Unlock()
 	if req == nil {
 		return errors.New("通用设置不能为空")
 	}
-	if err := svc.store.SetGeneralSettings(req); err != nil {
+	if svc.singbox != nil {
+		svc.singbox.networkLifecycleMu.Lock()
+		defer svc.singbox.networkLifecycleMu.Unlock()
+	}
+	previous, err := svc.store.GetGeneralSettings()
+	if err != nil {
 		return err
 	}
-	logging.Info("settings.update", "核心自动启动设置已更新，启用: %t", req.AutoStartCore)
-	return nil
+	next := *previous
+	if req.AutoStartCore != nil {
+		next.AutoStartCore = *req.AutoStartCore
+	}
+	if req.DNSMasqTakeoverEnabled != nil {
+		next.DNSMasqTakeoverEnabled = *req.DNSMasqTakeoverEnabled
+	}
+	takeoverChanged := previous.DNSMasqTakeoverEnabled != next.DNSMasqTakeoverEnabled
+	if takeoverChanged && svc.singbox != nil && svc.singbox.IsRunning() {
+		return errors.New("核心运行时不能切换 dnsmasq 接管，请先停止核心")
+	}
+	if err := svc.store.SetGeneralSettings(&next); err != nil {
+		return err
+	}
+	logging.Info("settings.update", "通用设置已更新，核心自动启动: %t，dnsmasq 接管: %t", next.AutoStartCore, next.DNSMasqTakeoverEnabled)
+	if !takeoverChanged || svc.configGenerator == nil || svc.singbox == nil || !svc.singbox.IsInstalledAndConfigured() {
+		return nil
+	}
+	result, err := svc.configGenerator.ReconcileCurrent()
+	if err == nil && result != nil && !result.Valid {
+		err = fmt.Errorf("配置校验失败: %s", result.Error)
+	}
+	if err == nil {
+		return nil
+	}
+	if rollbackErr := svc.store.SetGeneralSettings(previous); rollbackErr != nil {
+		return fmt.Errorf("应用 dnsmasq 接管设置失败: %v；回滚设置也失败: %w", err, rollbackErr)
+	}
+	return fmt.Errorf("应用 dnsmasq 接管设置失败，已回滚: %w", err)
 }
 
 func (svc *SettingsService) GetMixedInboundSettings() (*model.MixedInboundSettings, error) {

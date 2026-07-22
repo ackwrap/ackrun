@@ -4,3 +4,7 @@ A: 修改 Chrome Flags 配置（推荐首选）,在 Chrome 地址栏中输入以
 ```
 chrome://flags/#local-network-access-check
 ```
+
+## Q: 开启后 OpenWrt 本机上的 Docker 等服务无法被代理？
+
+A: 请到设置 -> 其他设置开启 OpenWrt dnsmasq DNS 接管。该设置默认开启，仅在 OpenWrt 的 TUN 或 TUN + Mixed 模式下生效。

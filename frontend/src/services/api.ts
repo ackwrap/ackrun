@@ -22,6 +22,7 @@ import type {
   NTPSettings,
   NTPSettingsResponse,
   GeneralSettings,
+  GeneralSettingsUpdate,
   MixedInboundSettings,
   DNSSettings,
   DNSSettingsResponse,
@@ -231,7 +232,7 @@ export const api = {
       body: JSON.stringify(body),
     }),
   getGeneralSettings: () => request<GeneralSettings>("/settings/general"),
-  setGeneralSettings: (body: GeneralSettings) =>
+  setGeneralSettings: (body: GeneralSettingsUpdate) =>
     request<ActionResponse>("/settings/general", {
       method: "PUT",
       body: JSON.stringify(body),

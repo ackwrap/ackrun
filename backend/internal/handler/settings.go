@@ -181,7 +181,7 @@ func (h *SettingsHandler) GetGeneralSettings(c *gin.Context) {
 }
 
 func (h *SettingsHandler) SetGeneralSettings(c *gin.Context) {
-	var req model.GeneralSettings
+	var req model.GeneralSettingsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse{
 			Error: model.APIError{Code: "SETTINGS_INVALID", Message: err.Error()},

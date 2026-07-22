@@ -67,18 +67,18 @@ func TestGeneralSettingsDefaultEnabledAndPersist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !settings.AutoStartCore {
-		t.Fatal("core auto-start should default to enabled")
+	if !settings.AutoStartCore || !settings.DNSMasqTakeoverEnabled {
+		t.Fatalf("general settings should default to enabled: %+v", settings)
 	}
-	if err := s.SetGeneralSettings(&model.GeneralSettings{AutoStartCore: false}); err != nil {
+	if err := s.SetGeneralSettings(&model.GeneralSettings{AutoStartCore: false, DNSMasqTakeoverEnabled: false}); err != nil {
 		t.Fatal(err)
 	}
 	settings, err = s.GetGeneralSettings()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.AutoStartCore {
-		t.Fatal("disabled core auto-start was not persisted")
+	if settings.AutoStartCore || settings.DNSMasqTakeoverEnabled {
+		t.Fatalf("disabled general settings were not persisted: %+v", settings)
 	}
 }
 

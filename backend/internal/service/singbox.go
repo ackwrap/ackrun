@@ -31,6 +31,8 @@ type SingboxService struct {
 	realtime           *RealtimeService
 	coreLogs           *CoreLogService
 	store              *store.Store
+	dnsmasq            dnsmasqLifecycle
+	dnsmasqSupported   func() bool
 	cmd                *exec.Cmd
 	pid                int
 	mu                 sync.Mutex
@@ -48,7 +50,7 @@ var (
 )
 
 func NewSingboxService(p *paths.Paths, rt *RealtimeService, logs *CoreLogService, s *store.Store) *SingboxService {
-	return &SingboxService{paths: p, realtime: rt, coreLogs: logs, store: s}
+	return &SingboxService{paths: p, realtime: rt, coreLogs: logs, store: s, dnsmasq: newDNSMasqLifecycle(p), dnsmasqSupported: platformSupportsDNSMasqTakeover}
 }
 
 func (svc *SingboxService) Start() (*model.ActionResponse, error) {
@@ -165,6 +167,10 @@ func (svc *SingboxService) start() (*model.ActionResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read active TUN state: %w", err)
 	}
+	dnsmasqTakeover, err := svc.shouldActivateDNSMasqTakeover(tunState)
+	if err != nil {
+		return nil, fmt.Errorf("check OpenWrt DNS takeover settings: %w", err)
+	}
 	routeTableBaseline, err := snapshotPlatformPriorityOneTables(tunState)
 	if err != nil {
 		logging.Error("core.start", "network ownership preflight failed: %v", err)
@@ -203,13 +209,6 @@ func (svc *SingboxService) start() (*model.ActionResponse, error) {
 	svc.stopping = false
 	done := svc.done
 	processExited := make(chan struct{})
-
-	logging.Info("core.start", "sing-box started, pid=%d", svc.pid)
-	svc.realtime.Broadcast("core.status", map[string]any{
-		"status": "running",
-		"pid":    svc.pid,
-	})
-	svc.broadcastRuntimeStatus(model.RuntimeRunning, svc.pid)
 
 	var logWG sync.WaitGroup
 	logWG.Add(2)
@@ -282,8 +281,54 @@ func (svc *SingboxService) start() (*model.ActionResponse, error) {
 		done <- cleanupErr
 		close(done)
 	}()
+	if dnsmasqTakeover {
+		if err := waitForDNSInbound(processExited, 10*time.Second); err == nil && svc.dnsmasq != nil {
+			err = svc.dnsmasq.Activate()
+		} else if err == nil {
+			err = fmt.Errorf("dnsmasq 生命周期服务不可用")
+		}
+		if err != nil {
+			svc.lastError = "OpenWrt DNS 接管失败: " + err.Error()
+			logging.Error("dnsmasq.takeover", "%s", svc.lastError)
+			if shutdownErr := requestProcessShutdown(cmd.Process); shutdownErr != nil {
+				_ = cmd.Process.Kill()
+			}
+			return nil, errors.New(svc.lastError)
+		}
+	}
+
+	logging.Info("core.start", "sing-box started, pid=%d", svc.pid)
+	svc.realtime.Broadcast("core.status", map[string]any{
+		"status": "running",
+		"pid":    svc.pid,
+	})
+	svc.broadcastRuntimeStatus(model.RuntimeRunning, svc.pid)
 
 	return &model.ActionResponse{Success: true, Message: "service started"}, nil
+}
+
+func (svc *SingboxService) shouldActivateDNSMasqTakeover(tunState activeTUNState) (bool, error) {
+	if !tunState.DNSMasqTakeover {
+		return false, nil
+	}
+	if svc.dnsmasqSupported == nil || !svc.dnsmasqSupported() {
+		return false, nil
+	}
+	if svc.store == nil {
+		return false, errors.New("设置存储不可用")
+	}
+	generalSettings, err := svc.store.GetGeneralSettings()
+	if err != nil {
+		return false, err
+	}
+	if !generalSettings.DNSMasqTakeoverEnabled {
+		return false, nil
+	}
+	dnsSettings, err := svc.store.GetDNSGlobalSettings()
+	if err != nil {
+		return false, err
+	}
+	return dnsSettings.Enabled, nil
 }
 
 func (svc *SingboxService) Stop() (*model.ActionResponse, error) {
@@ -386,7 +431,15 @@ func (svc *SingboxService) recoverStoppedState(forceDNS, rejectRunning bool) err
 	if cleanupErr != nil {
 		failures = append(failures, fmt.Errorf("cleanup sing-box network state: %w", cleanupErr))
 	}
-	if forceDNS || result.Cleaned {
+	dnsmasqRestored := false
+	if svc.dnsmasq != nil {
+		var restoreErr error
+		dnsmasqRestored, restoreErr = svc.dnsmasq.Restore()
+		if restoreErr != nil {
+			failures = append(failures, fmt.Errorf("restore OpenWrt dnsmasq: %w", restoreErr))
+		}
+	}
+	if forceDNS || result.Cleaned || dnsmasqRestored {
 		if err := flushSystemDNS(false); err != nil {
 			failures = append(failures, err)
 		}
@@ -515,6 +568,14 @@ func (svc *SingboxService) IsRunning() bool {
 	svc.mu.Lock()
 	defer svc.mu.Unlock()
 	return svc.isRunning()
+}
+
+func (svc *SingboxService) IsInstalledAndConfigured() bool {
+	if _, err := os.Stat(svc.paths.BinaryPath); err != nil {
+		return false
+	}
+	_, configured, err := svc.paths.ActiveConfigPath()
+	return err == nil && configured
 }
 
 func (svc *SingboxService) GetPID() int {
@@ -719,6 +780,7 @@ type activeTUNState struct {
 	ExpectedIPv6             bool
 	AutoRouteWithoutRedirect bool
 	CleanupIdentityError     string
+	DNSMasqTakeover          bool
 }
 
 func readActiveTUNState(configPath string) (activeTUNState, error) {
@@ -727,8 +789,12 @@ func readActiveTUNState(configPath string) (activeTUNState, error) {
 		return activeTUNState{}, err
 	}
 	var config struct {
+		DNS      *struct{} `json:"dns"`
 		Inbounds []struct {
+			Tag                           string          `json:"tag"`
 			Type                          string          `json:"type"`
+			Listen                        string          `json:"listen"`
+			ListenPort                    int             `json:"listen_port"`
 			Address                       []string        `json:"address"`
 			AutoRoute                     bool            `json:"auto_route"`
 			AutoRedirect                  bool            `json:"auto_redirect"`
@@ -738,12 +804,22 @@ func readActiveTUNState(configPath string) (activeTUNState, error) {
 			AutoRedirectInputMark         json.RawMessage `json:"auto_redirect_input_mark"`
 			AutoRedirectOutputMark        json.RawMessage `json:"auto_redirect_output_mark"`
 		} `json:"inbounds"`
+		Route struct {
+			Rules []map[string]json.RawMessage `json:"rules"`
+		} `json:"route"`
 	}
 	if err := json.Unmarshal(data, &config); err != nil {
 		return activeTUNState{}, err
 	}
 	state := activeTUNState{}
+	dnsInboundPresent := false
 	for index, inbound := range config.Inbounds {
+		if inbound.Tag == dnsInboundTag {
+			if inbound.Type != "direct" || inbound.Listen != "127.0.0.1" || inbound.ListenPort != defaultDNSInboundPort {
+				return activeTUNState{}, fmt.Errorf("Ackwrap DNS 入站配置无效")
+			}
+			dnsInboundPresent = true
+		}
 		if inbound.Type != "tun" {
 			continue
 		}
@@ -789,6 +865,14 @@ func readActiveTUNState(configPath string) (activeTUNState, error) {
 			}
 		}
 	}
+	dnsHijackRulePresent := false
+	if len(config.Route.Rules) > 0 && len(config.Route.Rules[0]) == 2 {
+		var inboundTag, action string
+		inboundErr := json.Unmarshal(config.Route.Rules[0]["inbound"], &inboundTag)
+		actionErr := json.Unmarshal(config.Route.Rules[0]["action"], &action)
+		dnsHijackRulePresent = inboundErr == nil && actionErr == nil && inboundTag == dnsInboundTag && action == "hijack-dns"
+	}
+	state.DNSMasqTakeover = state.Enabled && config.DNS != nil && dnsInboundPresent && dnsHijackRulePresent
 	return state, nil
 }
 
