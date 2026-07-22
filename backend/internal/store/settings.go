@@ -308,6 +308,29 @@ func (s *Store) SetNTPSettings(req *model.NTPSettings) error {
 	return nil
 }
 
+func (s *Store) GetGeneralSettings() (*model.GeneralSettings, error) {
+	settings := &model.GeneralSettings{AutoStartCore: true}
+	var value string
+	err := s.db.QueryRow(`SELECT value FROM app_settings WHERE key = 'general.auto_start_core'`).Scan(&value)
+	if err == sql.ErrNoRows {
+		return settings, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	settings.AutoStartCore = value != "false"
+	return settings, nil
+}
+
+func (s *Store) SetGeneralSettings(settings *model.GeneralSettings) error {
+	_, err := s.db.Exec(`
+		INSERT INTO app_settings (key, value, updated_at)
+		VALUES ('general.auto_start_core', ?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+	`, strconv.FormatBool(settings.AutoStartCore), time.Now().Unix())
+	return err
+}
+
 func (s *Store) GetMixedInboundSettings() (*model.MixedInboundSettings, error) {
 	settings := &model.MixedInboundSettings{}
 	rows, err := s.db.Query(`SELECT key, value FROM app_settings WHERE key IN ('mixed.username', 'mixed.password')`)

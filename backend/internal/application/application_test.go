@@ -68,6 +68,33 @@ func TestApplicationServesEmbeddedSPAAndAssets(t *testing.T) {
 	}
 }
 
+func TestGeneralSettingsAPIControlsCoreAutoStart(t *testing.T) {
+	app := testApplication(t)
+	defer app.Close()
+
+	getRecorder := httptest.NewRecorder()
+	app.Handler().ServeHTTP(getRecorder, httptest.NewRequest(http.MethodGet, "/api/v1/settings/general", nil))
+	if getRecorder.Code != http.StatusOK || !strings.Contains(getRecorder.Body.String(), `"auto_start_core":true`) {
+		t.Fatalf("default general settings response = %d %s", getRecorder.Code, getRecorder.Body.String())
+	}
+
+	putRecorder := httptest.NewRecorder()
+	app.Handler().ServeHTTP(putRecorder, httptest.NewRequest(http.MethodPut, "/api/v1/settings/general", strings.NewReader(`{"auto_start_core":false}`)))
+	if putRecorder.Code != http.StatusOK {
+		t.Fatalf("update general settings response = %d %s", putRecorder.Code, putRecorder.Body.String())
+	}
+	settings, err := app.store.GetGeneralSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.AutoStartCore {
+		t.Fatal("core auto-start was not disabled through the API")
+	}
+	if err := app.StartCoreIfConfigured(); err != nil {
+		t.Fatalf("disabled core auto-start returned error: %v", err)
+	}
+}
+
 func TestAccessTokenRedactingWriter(t *testing.T) {
 	var output bytes.Buffer
 	writer := accessTokenRedactingWriter{Writer: &output}

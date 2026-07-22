@@ -36,6 +36,11 @@ type ConnectivitySettings struct {
 	IntervalSeconds int    `json:"interval_seconds"`
 }
 
+// GeneralSettings contains application-level behavior switches.
+type GeneralSettings struct {
+	AutoStartCore bool `json:"auto_start_core"`
+}
+
 // NTPSettings NTP 时间同步设置
 type NTPSettings struct {
 	Enabled    bool   `json:"enabled"`

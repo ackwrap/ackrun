@@ -193,6 +193,14 @@ func (app *Application) StartCoreIfConfigured() error {
 	if app.closed {
 		return ErrClosed
 	}
+	settings, err := app.store.GetGeneralSettings()
+	if err != nil {
+		return fmt.Errorf("load general settings: %w", err)
+	}
+	if !settings.AutoStartCore {
+		logging.Info("core.autostart", "核心自动启动已关闭，跳过启动")
+		return nil
+	}
 	return app.singbox.StartIfConfigured()
 }
 

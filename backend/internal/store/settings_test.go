@@ -56,6 +56,32 @@ func TestLogSettingsPersistLevelAndTimestamp(t *testing.T) {
 	}
 }
 
+func TestGeneralSettingsDefaultEnabledAndPersist(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	settings, err := s.GetGeneralSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !settings.AutoStartCore {
+		t.Fatal("core auto-start should default to enabled")
+	}
+	if err := s.SetGeneralSettings(&model.GeneralSettings{AutoStartCore: false}); err != nil {
+		t.Fatal(err)
+	}
+	settings, err = s.GetGeneralSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.AutoStartCore {
+		t.Fatal("disabled core auto-start was not persisted")
+	}
+}
+
 func TestMixedInboundSettingsRoundTripAndClear(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {

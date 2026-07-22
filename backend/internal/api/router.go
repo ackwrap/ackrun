@@ -105,6 +105,8 @@ func RegisterRoutes(
 		v1.DELETE("/settings/geoip-providers/:id", settingsH.DeleteGeoIPProvider)
 		v1.GET("/settings/ntp", settingsH.GetNTPSettings)
 		v1.PUT("/settings/ntp", settingsH.SetNTPSettings)
+		v1.GET("/settings/general", settingsH.GetGeneralSettings)
+		v1.PUT("/settings/general", settingsH.SetGeneralSettings)
 		v1.GET("/settings/mixed-inbound", settingsH.GetMixedInboundSettings)
 		v1.PUT("/settings/mixed-inbound", settingsH.SetMixedInboundSettings)
 		v1.GET("/settings/dns", settingsH.GetDNSSettings)

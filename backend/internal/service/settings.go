@@ -199,6 +199,21 @@ func (svc *SettingsService) SetNTPSettings(req *model.NTPSettings) error {
 	return svc.store.SetNTPSettings(req)
 }
 
+func (svc *SettingsService) GetGeneralSettings() (*model.GeneralSettings, error) {
+	return svc.store.GetGeneralSettings()
+}
+
+func (svc *SettingsService) SetGeneralSettings(req *model.GeneralSettings) error {
+	if req == nil {
+		return errors.New("通用设置不能为空")
+	}
+	if err := svc.store.SetGeneralSettings(req); err != nil {
+		return err
+	}
+	logging.Info("settings.update", "核心自动启动设置已更新，启用: %t", req.AutoStartCore)
+	return nil
+}
+
 func (svc *SettingsService) GetMixedInboundSettings() (*model.MixedInboundSettings, error) {
 	svc.mixedInboundMu.Lock()
 	defer svc.mixedInboundMu.Unlock()

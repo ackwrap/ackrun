@@ -7,6 +7,7 @@ import Toast from "@/components/ui/Toast.vue";
 import { useHashTab } from "@/composables/useHashTab";
 import ConnectivityResourcesPanel from "./settings/ConnectivityResourcesPanel.vue";
 import GeoIPProvidersPanel from "./settings/GeoIPProvidersPanel.vue";
+import OtherSettingsPanel from "./settings/OtherSettingsPanel.vue";
 import TrafficBypassPanel from "./settings/TrafficBypassPanel.vue";
 import AppUpdatePanel from "./settings/AppUpdatePanel.vue";
 import ExperimentalSettingsPanel from "./settings/ExperimentalSettingsPanel.vue";
@@ -186,6 +187,8 @@ const input =
           >
         </div>
       </section>
+
+      <OtherSettingsPanel @notify="notify" />
 
     </div>
 

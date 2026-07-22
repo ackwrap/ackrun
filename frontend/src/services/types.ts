@@ -263,6 +263,10 @@ export interface NTPSettingsResponse {
   detour: string;
 }
 
+export interface GeneralSettings {
+  auto_start_core: boolean;
+}
+
 export interface MixedInboundSettings {
   username: string;
   password: string;

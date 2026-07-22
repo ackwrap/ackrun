@@ -169,6 +169,34 @@ func (h *SettingsHandler) SetNTPSettings(c *gin.Context) {
 	c.JSON(http.StatusOK, model.ActionResponse{Success: true, Message: "ntp settings updated"})
 }
 
+func (h *SettingsHandler) GetGeneralSettings(c *gin.Context) {
+	resp, err := h.svc.GetGeneralSettings()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
+			Error: model.APIError{Code: "SETTINGS_ERROR", Message: err.Error()},
+		})
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+func (h *SettingsHandler) SetGeneralSettings(c *gin.Context) {
+	var req model.GeneralSettings
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{
+			Error: model.APIError{Code: "SETTINGS_INVALID", Message: err.Error()},
+		})
+		return
+	}
+	if err := h.svc.SetGeneralSettings(&req); err != nil {
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
+			Error: model.APIError{Code: "SETTINGS_SAVE_FAILED", Message: err.Error()},
+		})
+		return
+	}
+	c.JSON(http.StatusOK, model.ActionResponse{Success: true, Message: "general settings updated"})
+}
+
 func (h *SettingsHandler) GetMixedInboundSettings(c *gin.Context) {
 	resp, err := h.svc.GetMixedInboundSettings()
 	if err != nil {
