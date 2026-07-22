@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import {
   CheckCircle2,
   Download,
@@ -8,7 +8,10 @@ import {
   Rocket,
 } from "lucide-vue-next";
 import { api } from "@/services/api";
-import type { AppUpdateStatus } from "@/services/types";
+import type {
+  AppUpdateInstallStatus,
+  AppUpdateStatus,
+} from "@/services/types";
 import Button from "@/components/ui/Button.vue";
 import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
 
@@ -23,6 +26,8 @@ const checking = ref(false);
 const installing = ref(false);
 const confirmOpen = ref(false);
 const checkError = ref("");
+let installPollTimer: number | undefined;
+let installPollGeneration = 0;
 
 const panel =
   "rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-card)]";
@@ -32,7 +37,7 @@ const input =
 const statusTone = computed(() => {
   if (checkError.value || status.value?.update_error) return "error";
   if (!status.value) return "neutral";
-  if (status.value.updating) return "warning";
+  if (installing.value || status.value.updating) return "warning";
   return status.value.update_available ? "warning" : "success";
 });
 
@@ -40,7 +45,7 @@ const statusLabel = computed(() => {
   if (checking.value) return "正在检查";
   if (checkError.value || status.value?.update_error) return "安装失败";
   if (!status.value) return "尚未检查";
-  if (status.value.updating) return "正在安装";
+  if (installing.value || status.value.updating) return "正在安装";
   return status.value.update_available ? "发现新版本" : "已是最新版本";
 });
 
@@ -88,23 +93,91 @@ async function checkUpdate() {
 async function installUpdate() {
   confirmOpen.value = false;
   installing.value = true;
+  checkError.value = "";
+  if (status.value) {
+    status.value = {
+      ...status.value,
+      message: "正在准备更新",
+      update_error: undefined,
+      install_log: undefined,
+    };
+  }
+  const generation = ++installPollGeneration;
+  startInstallPolling(generation);
   try {
     const result = await api.installAppUpdate();
+    if (generation !== installPollGeneration) return;
+    stopInstallPolling();
     emit("notify", result.message, "success");
-    await waitForInstalledVersion(result.version);
+    await waitForInstalledVersion(result.version, generation);
   } catch (cause: any) {
+    if (generation !== installPollGeneration) return;
+    stopInstallPolling();
+    try {
+      const current = await api.getAppUpdateInstallStatus();
+      if (generation !== installPollGeneration) return;
+      applyInstallStatus(current);
+    } catch {
+      // Keep the original install error when the API is unavailable.
+    }
     emit("notify", `安装更新失败: ${cause.message}`, "error");
     installing.value = false;
   }
 }
 
-async function waitForInstalledVersion(version: string) {
+function startInstallPolling(generation: number) {
+  stopInstallPolling();
+  installPollTimer = window.setInterval(async () => {
+    if (generation !== installPollGeneration) {
+      stopInstallPolling();
+      return;
+    }
+    try {
+      const current = await api.getAppUpdateInstallStatus();
+      if (generation === installPollGeneration) applyInstallStatus(current);
+    } catch {
+      // Dependency installation and service restart may briefly interrupt the API.
+    }
+  }, 3000);
+}
+
+function applyInstallStatus(current: AppUpdateInstallStatus) {
+  if (status.value) {
+    status.value = {
+      ...status.value,
+      current_version: current.current_version,
+      message: current.message,
+      updating: current.updating,
+      update_error: current.update_error,
+      install_log: current.install_log,
+    };
+    return;
+  }
+  status.value = {
+    ...current,
+    latest_version: "",
+    update_available: false,
+    can_install: false,
+    platform: "",
+    architecture: "",
+  };
+}
+
+function stopInstallPolling() {
+  if (installPollTimer === undefined) return;
+  window.clearInterval(installPollTimer);
+  installPollTimer = undefined;
+}
+
+async function waitForInstalledVersion(version: string, generation: number) {
   const deadline = Date.now() + 90000;
   while (Date.now() < deadline) {
     await new Promise((resolve) => window.setTimeout(resolve, 3000));
+    if (generation !== installPollGeneration) return;
     try {
-      const current = await api.checkAppUpdate();
-      status.value = current;
+      const current = await api.getAppUpdateInstallStatus();
+      if (generation !== installPollGeneration) return;
+      applyInstallStatus(current);
       if (current.update_error) {
         installing.value = false;
         emit("notify", `安装更新失败: ${current.update_error}`, "error");
@@ -129,6 +202,10 @@ async function waitForInstalledVersion(version: string) {
 onMounted(async () => {
   await loadSettings();
   await checkUpdate();
+});
+onUnmounted(() => {
+  installPollGeneration++;
+  stopInstallPolling();
 });
 </script>
 
@@ -205,6 +282,21 @@ onMounted(async () => {
           "
         >
           {{ checkError || status?.update_error || status?.message }}
+        </div>
+
+        <div
+          v-if="status?.install_log"
+          class="mt-4 overflow-hidden rounded-[var(--radius-md)] border border-[var(--border-default)] bg-[var(--bg-page)]"
+        >
+          <div
+            class="border-b border-[var(--border-default)] px-3 py-2 text-xs font-medium text-[var(--text-secondary)]"
+          >
+            安装日志
+          </div>
+          <pre
+            class="max-h-52 overflow-auto whitespace-pre-wrap break-all p-3 font-mono text-xs leading-5 text-[var(--text-secondary)]"
+            >{{ status.install_log }}</pre
+          >
         </div>
 
         <div class="mt-5 flex flex-wrap items-center gap-2">

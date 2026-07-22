@@ -27,6 +27,10 @@ func (handler *AppUpdateHandler) Check(c *gin.Context) {
 	c.JSON(http.StatusOK, status)
 }
 
+func (handler *AppUpdateHandler) Status(c *gin.Context) {
+	c.JSON(http.StatusOK, handler.service.InstallStatus())
+}
+
 func (handler *AppUpdateHandler) Install(c *gin.Context) {
 	response, err := handler.service.Install(c.Request.Context())
 	if err != nil {

@@ -26,6 +26,7 @@ import (
 const (
 	ackwrapLatestReleaseURL = "https://api.github.com/repos/ackwrap/ackrun/releases/latest"
 	appUpdateMaxSize        = 128 << 20
+	appUpdateLogMaxSize     = 64 << 10
 )
 
 var (
@@ -67,6 +68,7 @@ type AppUpdateService struct {
 	goarch             string
 	openWrtReleasePath string
 	lookPath           func(string) (string, error)
+	runCommand         func(context.Context, string, ...string) error
 	launchInstaller    func(string) error
 }
 
@@ -82,6 +84,7 @@ func NewAppUpdateService(db *store.Store, p *paths.Paths, core appUpdateCore, re
 		openWrtReleasePath: "/etc/openwrt_release",
 		lookPath:           exec.LookPath,
 	}
+	service.runCommand = service.runLoggedCommand
 	service.launchInstaller = service.launchOpenWrtInstaller
 	return service
 }
@@ -98,10 +101,29 @@ func (svc *AppUpdateService) Check(ctx context.Context) (*model.AppUpdateStatus,
 	return status, nil
 }
 
-func (svc *AppUpdateService) Install(ctx context.Context) (*model.AppUpdateInstallResponse, error) {
+func (svc *AppUpdateService) InstallStatus() *model.AppUpdateInstallStatus {
+	status := &model.AppUpdateInstallStatus{
+		CurrentVersion: strings.TrimPrefix(strings.TrimSpace(buildinfo.Version), "v"),
+		InstallLog:     svc.readInstallLog(),
+	}
+	if svc.installInProgress() {
+		status.Updating = true
+		status.Message = "更新正在安装，请稍候"
+		return status
+	}
+	result, err := os.ReadFile(svc.paths.AppUpdateResultPath())
+	if err == nil && strings.TrimSpace(string(result)) != "" {
+		status.UpdateError = strings.TrimSpace(string(result))
+		status.Message = "上次更新安装失败"
+	}
+	return status
+}
+
+func (svc *AppUpdateService) Install(ctx context.Context) (response *model.AppUpdateInstallResponse, returnErr error) {
 	if err := svc.beginUpdate(); err != nil {
 		return nil, err
 	}
+	svc.appendInstallLog("开始检查更新版本")
 	launched := false
 	defer func() {
 		svc.mu.Lock()
@@ -109,6 +131,13 @@ func (svc *AppUpdateService) Install(ctx context.Context) (*model.AppUpdateInsta
 		svc.mu.Unlock()
 		if !launched {
 			os.Remove(svc.paths.AppUpdateLockPath())
+		}
+		if returnErr != nil && !launched {
+			svc.appendInstallLog("更新准备失败: " + returnErr.Error())
+			if err := os.WriteFile(svc.paths.AppUpdateResultPath(), []byte(returnErr.Error()+"\n"), 0600); err != nil {
+				logging.Error("app_update.install", "write update failure result failed: %v", err)
+			}
+			svc.broadcast("failed", 0, returnErr.Error())
 		}
 	}()
 
@@ -125,6 +154,10 @@ func (svc *AppUpdateService) Install(ctx context.Context) (*model.AppUpdateInsta
 	asset := findAppUpdateAsset(release, status.AssetName)
 	if asset == nil {
 		return nil, fmt.Errorf("%w: release asset %s not found", ErrAppUpdateUnsupported, status.AssetName)
+	}
+	svc.appendInstallLog(fmt.Sprintf("准备更新到 v%s", release.Version))
+	if err := svc.ensureNohup(ctx); err != nil {
+		return nil, err
 	}
 
 	settings, err := svc.store.GetUpdateSettings()
@@ -151,11 +184,12 @@ func (svc *AppUpdateService) Install(ctx context.Context) (*model.AppUpdateInsta
 	}()
 
 	svc.broadcast("downloading", 0, "")
+	svc.appendInstallLog("开始下载 " + asset.Name)
 	logging.Info("app_update.download", "downloading %s through configured update proxy", asset.Name)
 	if err := downloadAppUpdateAsset(ctx, attempts, stagedPath, *asset); err != nil {
-		svc.broadcast("failed", 0, err.Error())
 		return nil, err
 	}
+	svc.appendInstallLog("更新包下载完成，大小与 SHA-256 校验通过")
 
 	restoreMarker := svc.paths.AppUpdateRestoreMarkerPath()
 	if svc.core != nil && svc.core.IsRunning() {
@@ -177,6 +211,7 @@ func (svc *AppUpdateService) Install(ctx context.Context) (*model.AppUpdateInsta
 		return nil, fmt.Errorf("启动 OpenWrt 更新安装失败: %w", err)
 	}
 	launched = true
+	svc.appendInstallLog("后台安装进程已启动")
 	svc.broadcast("installing", 100, "")
 	logging.Info("app_update.install", "OpenWrt update scheduled: version=%s", release.Version)
 	return &model.AppUpdateInstallResponse{
@@ -209,6 +244,7 @@ func (svc *AppUpdateService) beginUpdate() error {
 		return fmt.Errorf("关闭更新锁失败: %w", err)
 	}
 	os.Remove(svc.paths.AppUpdateResultPath())
+	os.Remove(svc.paths.AppUpdateLogPath())
 	svc.updating = true
 	return nil
 }
@@ -226,16 +262,17 @@ func (svc *AppUpdateService) installInProgress() bool {
 }
 
 func (svc *AppUpdateService) applyInstallState(status *model.AppUpdateStatus) {
-	if svc.installInProgress() {
-		status.Updating = true
+	installStatus := svc.InstallStatus()
+	status.InstallLog = installStatus.InstallLog
+	status.Updating = installStatus.Updating
+	status.UpdateError = installStatus.UpdateError
+	if installStatus.Updating {
 		status.CanInstall = false
-		status.Message = "更新正在安装，请稍候"
+		status.Message = installStatus.Message
 		return
 	}
-	result, err := os.ReadFile(svc.paths.AppUpdateResultPath())
-	if err == nil && strings.TrimSpace(string(result)) != "" {
-		status.UpdateError = strings.TrimSpace(string(result))
-		status.Message = "上次更新安装失败"
+	if installStatus.UpdateError != "" {
+		status.Message = installStatus.Message
 	}
 }
 
@@ -475,6 +512,90 @@ func downloadAppUpdateAssetOnce(ctx context.Context, client *http.Client, rawURL
 	return nil
 }
 
+func (svc *AppUpdateService) ensureNohup(ctx context.Context) error {
+	if svc.lookPath == nil {
+		return fmt.Errorf("无法检查 nohup")
+	}
+	if _, err := svc.lookPath("nohup"); err == nil {
+		svc.appendInstallLog("已检测到 nohup")
+		return nil
+	}
+	opkgPath, err := svc.lookPath("opkg")
+	if err != nil {
+		return fmt.Errorf("未检测到 nohup，且无法找到 opkg: %w", err)
+	}
+	runner := svc.runCommand
+	if runner == nil {
+		runner = svc.runLoggedCommand
+	}
+	svc.appendInstallLog("未检测到 nohup，开始执行 opkg update")
+	if err := runner(ctx, opkgPath, "update"); err != nil {
+		return fmt.Errorf("刷新 OpenWrt 软件索引失败: %w", err)
+	}
+	svc.appendInstallLog("软件索引刷新完成，开始安装 coreutils-nohup")
+	if err := runner(ctx, opkgPath, "install", "coreutils-nohup"); err != nil {
+		return fmt.Errorf("安装 coreutils-nohup 失败: %w", err)
+	}
+	if _, err := svc.lookPath("nohup"); err != nil {
+		return fmt.Errorf("coreutils-nohup 安装完成后仍未找到 nohup: %w", err)
+	}
+	svc.appendInstallLog("coreutils-nohup 安装完成")
+	return nil
+}
+
+func (svc *AppUpdateService) runLoggedCommand(ctx context.Context, name string, args ...string) error {
+	command := exec.CommandContext(ctx, name, args...)
+	command.Stdout = io.Discard
+	command.Stderr = io.Discard
+	return command.Run()
+}
+
+func (svc *AppUpdateService) appendInstallLog(message string) {
+	if svc.paths == nil {
+		return
+	}
+	file, err := os.OpenFile(svc.paths.AppUpdateLogPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		logging.Error("app_update.install", "open install log failed: %v", err)
+		return
+	}
+	defer file.Close()
+	if _, err := fmt.Fprintf(file, "[%s] %s\n", time.Now().Format("2006-01-02 15:04:05"), message); err != nil {
+		logging.Error("app_update.install", "write install log failed: %v", err)
+	}
+}
+
+func (svc *AppUpdateService) readInstallLog() string {
+	if svc.paths == nil {
+		return ""
+	}
+	file, err := os.Open(svc.paths.AppUpdateLogPath())
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return ""
+	}
+	offset := int64(0)
+	if info.Size() > appUpdateLogMaxSize {
+		offset = info.Size() - appUpdateLogMaxSize
+		if _, err := file.Seek(offset, io.SeekStart); err != nil {
+			return ""
+		}
+	}
+	content, err := io.ReadAll(io.LimitReader(file, appUpdateLogMaxSize))
+	if err != nil {
+		return ""
+	}
+	text := strings.TrimSpace(strings.ToValidUTF8(string(content), ""))
+	if offset > 0 && text != "" {
+		return "[较早日志已截断]\n" + text
+	}
+	return text
+}
+
 func (svc *AppUpdateService) writeOpenWrtInstallerScript(stagedPath string) (string, error) {
 	opkgPath, err := svc.lookPath("opkg")
 	if err != nil {
@@ -485,7 +606,55 @@ func (svc *AppUpdateService) writeOpenWrtInstallerScript(stagedPath string) (str
 		return "", fmt.Errorf("创建更新安装脚本失败: %w", err)
 	}
 	scriptPath := script.Name()
-	content := fmt.Sprintf("#!/bin/sh\nsleep 1\nrm -f %s\n%s install --force-reinstall %s >/tmp/ackwrap-update.log 2>&1\nstatus=$?\nif [ \"$status\" -ne 0 ]; then\n  printf 'opkg install failed (exit %%s)\\n' \"$status\" > %s\nfi\nrm -f %s %s \"$0\"\nexit $status\n", shellQuote(svc.paths.AppUpdateResultPath()), shellQuote(opkgPath), shellQuote(stagedPath), shellQuote(svc.paths.AppUpdateResultPath()), shellQuote(stagedPath), shellQuote(svc.paths.AppUpdateLockPath()))
+	content := fmt.Sprintf(`#!/bin/sh
+log=%s
+result=%s
+package=%s
+lock=%s
+opkg_pid=""
+
+log_line() {
+  printf '[%%s] %%s\n' "$(date '+%%Y-%%m-%%d %%H:%%M:%%S')" "$1"
+}
+
+finish() {
+  status=$?
+  trap - 0 1 2 15
+  if [ -n "$opkg_pid" ] && kill -0 "$opkg_pid" 2>/dev/null; then
+    kill "$opkg_pid" 2>/dev/null
+    wait "$opkg_pid" 2>/dev/null
+  fi
+  if [ "$status" -eq 0 ]; then
+    log_line "安装完成"
+    rm -f "$result"
+  else
+    log_line "安装失败，退出码: $status"
+    printf 'update install failed (exit %%s)\n' "$status" > "$result"
+  fi
+  rm -f "$package" "$lock" "$0"
+  exit "$status"
+}
+
+trap finish 0
+trap 'exit 129' 1
+trap 'exit 130' 2
+trap 'exit 143' 15
+exec >>"$log" 2>&1
+rm -f "$result"
+log_line "安装脚本已启动"
+sleep 1
+log_line "开始执行 opkg install"
+%s install --force-reinstall "$package" >/dev/null 2>&1 &
+opkg_pid=$!
+while kill -0 "$opkg_pid" 2>/dev/null; do
+  touch "$lock"
+  sleep 10
+done
+wait "$opkg_pid"
+opkg_status=$?
+opkg_pid=""
+exit "$opkg_status"
+`, shellQuote(svc.paths.AppUpdateLogPath()), shellQuote(svc.paths.AppUpdateResultPath()), shellQuote(stagedPath), shellQuote(svc.paths.AppUpdateLockPath()), shellQuote(opkgPath))
 	if _, err := script.WriteString(content); err != nil {
 		script.Close()
 		os.Remove(scriptPath)
@@ -503,7 +672,7 @@ func (svc *AppUpdateService) writeOpenWrtInstallerScript(stagedPath string) (str
 }
 
 func (svc *AppUpdateService) launchOpenWrtInstaller(scriptPath string) error {
-	command := exec.Command("/bin/sh", "-c", "nohup "+shellQuote(scriptPath)+" >/dev/null 2>&1 &")
+	command := exec.Command("/bin/sh", "-c", "nohup "+shellQuote(scriptPath)+" >>"+shellQuote(svc.paths.AppUpdateLogPath())+" 2>&1 &")
 	return command.Run()
 }
 

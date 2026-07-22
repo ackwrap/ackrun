@@ -180,6 +180,17 @@ function hasLegacyOutboundCondition(rule: Rule) {
     return false;
   }
 }
+function isLegacyFakeIPServer(server: Server) {
+  return server.server_type === "fakeip";
+}
+function isLegacyFakeIPRule(rule: Rule) {
+  return (
+    rule.server === "fakeip" ||
+    servers.value.some(
+      (server) => isLegacyFakeIPServer(server) && server.tag === rule.server,
+    )
+  );
+}
 async function saveGlobal() {
   try {
     await request("/api/v1/dns/global", {
@@ -276,6 +287,14 @@ function swapped<T>(items: T[], index: number, direction: -1 | 1) {
   return next;
 }
 async function moveServer(index: number, direction: -1 | 1) {
+  const target = index + direction;
+  if (
+    target < 0 ||
+    target >= servers.value.length ||
+    isLegacyFakeIPServer(servers.value[index]) ||
+    isLegacyFakeIPServer(servers.value[target])
+  )
+    return;
   const next = swapped(servers.value, index, direction);
   if (!next) return;
   servers.value = next;
@@ -292,6 +311,14 @@ async function moveServer(index: number, direction: -1 | 1) {
 }
 async function moveRule(index: number, direction: -1 | 1) {
   if (ruleOrderPending.value) return;
+  const target = index + direction;
+  if (
+    target < 0 ||
+    target >= matchingRules.value.length ||
+    isLegacyFakeIPRule(matchingRules.value[index]) ||
+    isLegacyFakeIPRule(matchingRules.value[target])
+  )
+    return;
   const reordered = swapped(matchingRules.value, index, direction);
   if (!reordered) return;
   let nextRuleIndex = 0;
@@ -488,8 +515,8 @@ onMounted(load);
         </div>
         <p class="mt-2 text-xs text-[var(--text-tertiary)]">
           FakeIP 由运行模式自动管理：TUN / TUN + Mixed 启用，Mixed 停用。
-          显式 DNS 规则用于国内和局域网等真实 IP 例外；TUN 未命中的 A/AAAA
-          查询使用 FakeIP，其余真实查询统一经过安全 DNS final。
+          显式 DNS 规则用于国内和局域网等真实 IP 例外；启用时，所有未命中显式规则的
+          A/AAAA 查询使用 FakeIP，其余查询统一经过安全 DNS final。
         </p>
         <div class="mt-3 grid gap-3 md:grid-cols-3">
           <input v-model="global.fakeip_inet4_range" /><input
@@ -537,20 +564,33 @@ onMounted(load);
               </tr>
             </thead>
             <tbody>
-              <tr v-if="!servers.length">
+              <tr v-if="!servers.length && !global.fakeip_enabled">
                 <td colspan="7" class="py-10 text-center">暂无 DNS 服务器</td>
               </tr>
               <tr v-for="(s, i) in servers" :key="s.id">
                 <td>
                   <OrderButtons
-                    :up-disabled="i === 0"
-                    :down-disabled="i === servers.length - 1"
+                    :up-disabled="
+                      i === 0 ||
+                      isLegacyFakeIPServer(s) ||
+                      isLegacyFakeIPServer(servers[i - 1])
+                    "
+                    :down-disabled="
+                      i === servers.length - 1 ||
+                      isLegacyFakeIPServer(s) ||
+                      isLegacyFakeIPServer(servers[i + 1])
+                    "
                     @up="moveServer(i, -1)"
                     @down="moveServer(i, 1)"
                   />
                 </td>
                 <td class="font-medium text-[var(--text-primary)]">
                   {{ s.tag }}
+                  <small
+                    v-if="isLegacyFakeIPServer(s)"
+                    class="ml-2 rounded-full bg-[var(--button-secondary-bg)] px-2 py-0.5 text-[10px] text-[var(--text-secondary)]"
+                    >旧版</small
+                  >
                 </td>
                 <td>{{ s.server_type }}</td>
                 <td class="max-w-[420px] truncate" :title="s.address">
@@ -558,7 +598,13 @@ onMounted(load);
                 </td>
                 <td>{{ s.detour || "-" }}</td>
                 <td>
+                  <span
+                    v-if="isLegacyFakeIPServer(s)"
+                    class="text-xs text-[var(--color-warning)]"
+                    >不参与生成</span
+                  >
                   <button
+                    v-else
                     class="aw-action-button"
                     :class="
                       s.enabled ? 'aw-action-success' : 'aw-action-neutral'
@@ -571,6 +617,7 @@ onMounted(load);
                 <td>
                   <div class="flex gap-2">
                     <button
+                      v-if="!isLegacyFakeIPServer(s)"
                       class="aw-action-button aw-action-neutral"
                       @click="serverForm = { ...s }"
                     >
@@ -584,6 +631,30 @@ onMounted(load);
                   </div>
                 </td>
               </tr>
+              <tr v-if="global.fakeip_enabled">
+                <td>
+                  <span
+                    class="rounded-full bg-[var(--button-primary-bg)] px-2 py-0.5 text-[10px] text-[var(--button-primary-text)]"
+                    >系统</span
+                  >
+                </td>
+                <td class="font-medium text-[var(--text-primary)]">fakeip</td>
+                <td>fakeip</td>
+                <td
+                  class="max-w-[420px] truncate"
+                  :title="`${global.fakeip_inet4_range} / ${global.fakeip_inet6_range}`"
+                >
+                  {{ global.fakeip_inet4_range }} /
+                  {{ global.fakeip_inet6_range }}
+                </td>
+                <td>-</td>
+                <td>
+                  <span class="text-xs text-[var(--color-success)]"
+                    >强制启用</span
+                  >
+                </td>
+                <td class="text-xs text-[var(--text-tertiary)]">只读</td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -595,8 +666,8 @@ onMounted(load);
           <div>
             <h3 class="font-semibold">DNS 规则</h3>
             <p class="mt-1 text-xs text-[var(--text-tertiary)]">
-              从上到下匹配，适合配置国内、局域网等需要真实 IP 的例外；TUN
-              模式下 FakeIP 位于这些显式规则之后。
+              从上到下匹配，适合配置国内、局域网等需要真实 IP 的例外；FakeIP
+              系统兜底规则始终位于这些显式规则之后。
             </p>
           </div>
           <button class="aw-action-button aw-action-neutral" @click="newRule">
@@ -616,25 +687,46 @@ onMounted(load);
               </tr>
             </thead>
             <tbody>
-              <tr v-if="!matchingRules.length">
+              <tr v-if="!matchingRules.length && !global.fakeip_enabled">
                 <td colspan="6" class="py-10 text-center">暂无 DNS 规则</td>
               </tr>
               <tr v-for="(r, i) in matchingRules" :key="r.id">
                 <td>
                   <OrderButtons
-                    :up-disabled="ruleOrderPending || i === 0"
-                    :down-disabled="ruleOrderPending || i === matchingRules.length - 1"
+                    :up-disabled="
+                      ruleOrderPending ||
+                      i === 0 ||
+                      isLegacyFakeIPRule(r) ||
+                      isLegacyFakeIPRule(matchingRules[i - 1])
+                    "
+                    :down-disabled="
+                      ruleOrderPending ||
+                      i === matchingRules.length - 1 ||
+                      isLegacyFakeIPRule(r) ||
+                      isLegacyFakeIPRule(matchingRules[i + 1])
+                    "
                     @up="moveRule(i, -1)"
                     @down="moveRule(i, 1)"
                   />
                 </td>
                 <td class="max-w-[520px] truncate" :title="conditionText(r)">
                   {{ conditionText(r) }}
+                  <small
+                    v-if="isLegacyFakeIPRule(r)"
+                    class="ml-2 rounded-full bg-[var(--button-secondary-bg)] px-2 py-0.5 text-[10px] text-[var(--text-secondary)]"
+                    >旧版</small
+                  >
                 </td>
                 <td>{{ r.server }}</td>
                 <td>{{ r.disable_cache ? "是" : "否" }}</td>
                 <td>
+                  <span
+                    v-if="isLegacyFakeIPRule(r)"
+                    class="text-xs text-[var(--color-warning)]"
+                    >不参与生成</span
+                  >
                   <button
+                    v-else
                     class="aw-action-button"
                     :class="
                       r.enabled ? 'aw-action-success' : 'aw-action-neutral'
@@ -647,6 +739,7 @@ onMounted(load);
                 <td>
                   <div class="flex gap-2">
                     <button
+                      v-if="!isLegacyFakeIPRule(r)"
                       class="aw-action-button aw-action-neutral"
                       @click="editRule(r)"
                     >
@@ -659,6 +752,25 @@ onMounted(load);
                     </button>
                   </div>
                 </td>
+              </tr>
+              <tr v-if="global.fakeip_enabled">
+                <td>
+                  <span
+                    class="rounded-full bg-[var(--button-primary-bg)] px-2 py-0.5 text-[10px] text-[var(--button-primary-text)]"
+                    >系统</span
+                  >
+                </td>
+                <td class="max-w-[520px] truncate">
+                  query_type: ["A", "AAAA"]
+                </td>
+                <td>fakeip</td>
+                <td>否</td>
+                <td>
+                  <span class="text-xs text-[var(--color-success)]"
+                    >强制启用</span
+                  >
+                </td>
+                <td class="text-xs text-[var(--text-tertiary)]">只读</td>
               </tr>
             </tbody>
           </table>

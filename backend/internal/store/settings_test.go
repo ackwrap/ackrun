@@ -194,4 +194,14 @@ func TestUpdateSettingsDefaultsToGHProxyAndPreservesCustomMirror(t *testing.T) {
 	if settings.Acceleration != "custom" || settings.CustomMirrorURL != customMirrorURL {
 		t.Fatalf("custom update settings = %+v", settings)
 	}
+	if err := s.SetUpdateSettings(&model.UpdateSettings{}); err != nil {
+		t.Fatal(err)
+	}
+	settings, err = s.GetUpdateSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Acceleration != "" || settings.CustomMirrorURL != "" {
+		t.Fatalf("direct update settings = %+v, want persisted empty acceleration", settings)
+	}
 }

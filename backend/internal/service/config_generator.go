@@ -2353,7 +2353,6 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase(routeFinal ...string) (
 	}
 	if globalSettings.FakeIPEnabled {
 		rules = append(rules, map[string]interface{}{
-			"inbound":    []string{"tun-in"},
 			"query_type": []string{"A", "AAAA"},
 			"server":     "fakeip",
 		})

@@ -134,12 +134,21 @@ export interface AppUpdateStatus {
   message?: string;
   updating: boolean;
   update_error?: string;
+  install_log?: string;
 }
 
 export interface AppUpdateInstallResponse {
   success: boolean;
   message: string;
   version: string;
+}
+
+export interface AppUpdateInstallStatus {
+  current_version: string;
+  message?: string;
+  updating: boolean;
+  update_error?: string;
+  install_log?: string;
 }
 
 export type TrafficBypassRuleType =

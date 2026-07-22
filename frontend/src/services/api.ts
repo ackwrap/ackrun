@@ -9,6 +9,7 @@ import type {
   UpdateSettingsResponse,
   AppUpdateStatus,
   AppUpdateInstallResponse,
+  AppUpdateInstallStatus,
   TrafficBypassSettings,
   LogSettings,
   LogSettingsResponse,
@@ -167,6 +168,8 @@ export const api = {
       body: JSON.stringify(body),
     }),
   checkAppUpdate: () => request<AppUpdateStatus>("/app/update"),
+  getAppUpdateInstallStatus: () =>
+    request<AppUpdateInstallStatus>("/app/update/status"),
   installAppUpdate: () =>
     request<AppUpdateInstallResponse>("/app/update", { method: "POST" }),
   getTrafficBypassSettings: () =>

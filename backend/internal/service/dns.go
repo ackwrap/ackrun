@@ -132,7 +132,7 @@ func (svc *DNSService) validateDNSRuleRequest(req *model.DNSRuleRequest) error {
 
 func (svc *DNSService) rejectFakeIPServerReference(tag string) error {
 	if tag == "fakeip" {
-		return fmt.Errorf("显式 DNS 配置不能引用 FakeIP Server，FakeIP 由 TUN A/AAAA 规则自动管理")
+		return fmt.Errorf("显式 DNS 配置不能引用 FakeIP Server，FakeIP 由 TUN 模式下的 A/AAAA 兜底规则自动管理")
 	}
 	servers, err := svc.store.ListDNSServers()
 	if err != nil {
@@ -140,7 +140,7 @@ func (svc *DNSService) rejectFakeIPServerReference(tag string) error {
 	}
 	for _, server := range servers {
 		if server.Tag == tag && server.ServerType == "fakeip" {
-			return fmt.Errorf("显式 DNS 配置不能引用 FakeIP Server，FakeIP 由 TUN A/AAAA 规则自动管理")
+			return fmt.Errorf("显式 DNS 配置不能引用 FakeIP Server，FakeIP 由 TUN 模式下的 A/AAAA 兜底规则自动管理")
 		}
 	}
 	return nil

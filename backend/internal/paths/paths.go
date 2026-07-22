@@ -167,6 +167,10 @@ func (p *Paths) AppUpdateResultPath() string {
 	return filepath.Join(p.DataDir, ".app-update-result")
 }
 
+func (p *Paths) AppUpdateLogPath() string {
+	return filepath.Join(p.DataDir, ".app-update.log")
+}
+
 func (p *Paths) CacheFilePath() string {
 	return filepath.Join(p.DataDir, "cache.db")
 }

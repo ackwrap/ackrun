@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ackwrap/ackrun/internal/buildinfo"
@@ -154,10 +155,178 @@ func TestAppUpdateStatusReportsInstallerFailure(t *testing.T) {
 	if err := os.WriteFile(p.AppUpdateResultPath(), []byte("opkg install failed (exit 1)\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(p.AppUpdateLogPath(), []byte("[test] install failed\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	status := &model.AppUpdateStatus{CanInstall: true}
 	service := &AppUpdateService{paths: p}
 	service.applyInstallState(status)
-	if status.UpdateError == "" || status.Message != "上次更新安装失败" {
+	if status.UpdateError == "" || status.Message != "上次更新安装失败" || !strings.Contains(status.InstallLog, "install failed") {
 		t.Fatalf("status = %+v", status)
+	}
+}
+
+func TestAppUpdateInstallStatusUsesOnlyLocalState(t *testing.T) {
+	originalVersion := buildinfo.Version
+	buildinfo.Version = "v1.2.3"
+	t.Cleanup(func() { buildinfo.Version = originalVersion })
+
+	p := &paths.Paths{DataDir: t.TempDir()}
+	if err := os.WriteFile(p.AppUpdateLockPath(), []byte("1\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.AppUpdateLogPath(), []byte("installing locally\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	status := (&AppUpdateService{paths: p}).InstallStatus()
+	if status.CurrentVersion != "1.2.3" || !status.Updating || !strings.Contains(status.InstallLog, "installing locally") {
+		t.Fatalf("install status = %+v", status)
+	}
+}
+
+func TestEnsureNohupInstallsMissingDependency(t *testing.T) {
+	p := &paths.Paths{DataDir: t.TempDir()}
+	installed := false
+	commands := make([]string, 0, 2)
+	service := &AppUpdateService{
+		paths: p,
+		lookPath: func(name string) (string, error) {
+			switch name {
+			case "opkg":
+				return "/bin/opkg", nil
+			case "nohup":
+				if installed {
+					return "/usr/bin/nohup", nil
+				}
+			}
+			return "", errors.New("not found")
+		},
+	}
+	service.runCommand = func(_ context.Context, name string, args ...string) error {
+		commands = append(commands, strings.Join(append([]string{name}, args...), " "))
+		if len(args) == 2 && args[0] == "install" && args[1] == "coreutils-nohup" {
+			installed = true
+		}
+		return nil
+	}
+
+	if err := service.ensureNohup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"/bin/opkg update", "/bin/opkg install coreutils-nohup"}
+	if fmt.Sprint(commands) != fmt.Sprint(want) {
+		t.Fatalf("commands = %v, want %v", commands, want)
+	}
+	logContent, err := os.ReadFile(p.AppUpdateLogPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logContent), "coreutils-nohup 安装完成") {
+		t.Fatalf("install log = %q", logContent)
+	}
+}
+
+func TestEnsureNohupSkipsPackageManagerWhenAvailable(t *testing.T) {
+	p := &paths.Paths{DataDir: t.TempDir()}
+	service := &AppUpdateService{
+		paths: p,
+		lookPath: func(name string) (string, error) {
+			if name == "nohup" {
+				return "/usr/bin/nohup", nil
+			}
+			return "", errors.New("unexpected lookup")
+		},
+		runCommand: func(context.Context, string, ...string) error {
+			t.Fatal("package manager must not run when nohup is available")
+			return nil
+		},
+	}
+	if err := service.ensureNohup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEnsureNohupStopsWhenPackageIndexRefreshFails(t *testing.T) {
+	p := &paths.Paths{DataDir: t.TempDir()}
+	installCalled := false
+	service := &AppUpdateService{
+		paths: p,
+		lookPath: func(name string) (string, error) {
+			if name == "opkg" {
+				return "/bin/opkg", nil
+			}
+			return "", errors.New("not found")
+		},
+		runCommand: func(_ context.Context, _ string, args ...string) error {
+			if len(args) > 0 && args[0] == "install" {
+				installCalled = true
+			}
+			return errors.New("refresh failed")
+		},
+	}
+	err := service.ensureNohup(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "刷新 OpenWrt 软件索引失败") {
+		t.Fatalf("ensureNohup error = %v", err)
+	}
+	if installCalled {
+		t.Fatal("coreutils-nohup install must not run after opkg update fails")
+	}
+}
+
+func TestReadInstallLogReturnsBoundedTail(t *testing.T) {
+	p := &paths.Paths{DataDir: t.TempDir()}
+	content := strings.Repeat("old\n", appUpdateLogMaxSize/4) + "latest entry\n"
+	if err := os.WriteFile(p.AppUpdateLogPath(), []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	logContent := (&AppUpdateService{paths: p}).readInstallLog()
+	if !strings.HasPrefix(logContent, "[较早日志已截断]\n") || !strings.Contains(logContent, "latest entry") {
+		t.Fatalf("bounded install log = %q", logContent)
+	}
+}
+
+func TestOpenWrtInstallerScriptRecordsLifecycleAndCleansLock(t *testing.T) {
+	p := &paths.Paths{DataDir: t.TempDir()}
+	service := &AppUpdateService{
+		paths: p,
+		lookPath: func(name string) (string, error) {
+			if name == "opkg" {
+				return "/bin/opkg", nil
+			}
+			return "", errors.New("not found")
+		},
+	}
+	scriptPath, err := service.writeOpenWrtInstallerScript(filepath.Join(t.TempDir(), "update.ipk"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(scriptPath)
+	content, err := os.ReadFile(scriptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(content)
+	for _, expected := range []string{
+		p.AppUpdateLogPath(),
+		p.AppUpdateResultPath(),
+		p.AppUpdateLockPath(),
+		"trap finish 0",
+		"开始执行 opkg install",
+		"安装完成",
+		`opkg_pid=""`,
+		`opkg_pid=$!`,
+		`kill "$opkg_pid"`,
+		`touch "$lock"`,
+		`wait "$opkg_pid"`,
+		`opkg_status=$?`,
+		`exit "$opkg_status"`,
+		`rm -f "$package" "$lock" "$0"`,
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("installer script does not contain %q:\n%s", expected, script)
+		}
+	}
+	if strings.Contains(script, `: > "$log"`) {
+		t.Fatal("installer script must preserve preflight and download log entries")
 	}
 }

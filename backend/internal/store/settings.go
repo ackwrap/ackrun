@@ -93,8 +93,7 @@ func (s *Store) SetUpdateSettings(req *model.UpdateSettings) error {
 		"update.custom_mirror_url": req.CustomMirrorURL,
 	}
 	for key, value := range settings {
-		if value == "" {
-			// 允许空值删除设置
+		if key == "update.custom_mirror_url" && value == "" {
 			_, err := s.db.Exec(`DELETE FROM app_settings WHERE key = ?`, key)
 			if err != nil {
 				return err

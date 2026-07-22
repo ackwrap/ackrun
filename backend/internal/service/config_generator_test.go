@@ -1552,8 +1552,11 @@ func TestGenerateDNSFakeIPFollowsTUNMode(t *testing.T) {
 	if len(rules) < 4 || rules[len(rules)-1]["server"] != "fakeip" {
 		t.Fatalf("DNS rule order = %+v, want user rules before FakeIP fallback", rules)
 	}
-	if !stringListContains(rules[len(rules)-1]["inbound"], "tun-in") {
-		t.Fatalf("FakeIP rule is not limited to TUN client queries: %+v", rules[len(rules)-1])
+	if _, exists := rules[len(rules)-1]["inbound"]; exists {
+		t.Fatalf("FakeIP fallback must apply to A/AAAA queries from every inbound: %+v", rules[len(rules)-1])
+	}
+	if !stringListContains(rules[len(rules)-1]["query_type"], "A") || !stringListContains(rules[len(rules)-1]["query_type"], "AAAA") {
+		t.Fatalf("FakeIP fallback does not cover A/AAAA: %+v", rules[len(rules)-1])
 	}
 	if err := db.ReorderDNSRules(ruleIDs); err != nil {
 		t.Fatal(err)
@@ -1686,9 +1689,12 @@ func TestGenerateDNSSimplifiesProxyPoliciesToFakeIPAndOneFinal(t *testing.T) {
 	if !stringListContains(rules[0]["rule_set"], "geosite-cn") || rules[0]["server"] != "dns_direct" {
 		t.Fatalf("domestic real-IP DNS rule = %+v", rules[0])
 	}
-	if rules[1]["server"] != "fakeip" || !stringListContains(rules[1]["inbound"], "tun-in") ||
+	if rules[1]["server"] != "fakeip" ||
 		!stringListContains(rules[1]["query_type"], "A") || !stringListContains(rules[1]["query_type"], "AAAA") {
-		t.Fatalf("TUN FakeIP rule = %+v", rules[1])
+		t.Fatalf("FakeIP fallback rule = %+v", rules[1])
+	}
+	if _, exists := rules[1]["inbound"]; exists {
+		t.Fatalf("FakeIP fallback unexpectedly limits inbound: %+v", rules[1])
 	}
 	finalServer, _ := dns["final"].(string)
 	if finalServer == "" || finalServer == "dns_proxy" {
@@ -1763,13 +1769,22 @@ func TestGenerateDNSLeakProtectionModeMatrix(t *testing.T) {
 						continue
 					}
 					hasFakeIP = true
-					if !stringListContains(rule["inbound"], "tun-in") || !stringListContains(rule["query_type"], "A") || !stringListContains(rule["query_type"], "AAAA") {
-						t.Fatalf("FakeIP rule is not scoped to TUN A/AAAA: %+v", rule)
+					if _, exists := rule["inbound"]; exists {
+						t.Fatalf("FakeIP fallback unexpectedly limits inbound: %+v", rule)
+					}
+					if !stringListContains(rule["query_type"], "A") || !stringListContains(rule["query_type"], "AAAA") {
+						t.Fatalf("FakeIP fallback does not cover A/AAAA: %+v", rule)
 					}
 				}
 				wantFakeIP := inboundMode == "tun" || inboundMode == "tun_mixed"
 				if hasFakeIP != wantFakeIP {
 					t.Fatalf("FakeIP rule present = %t, want %t; rules = %+v", hasFakeIP, wantFakeIP, rules)
+				}
+				if hasServer := generatedDNSHasServerType(dns, "fakeip"); hasServer != wantFakeIP {
+					t.Fatalf("FakeIP server present = %t, want %t; DNS = %+v", hasServer, wantFakeIP, dns)
+				}
+				if wantFakeIP && (len(rules) == 0 || rules[len(rules)-1]["server"] != "fakeip") {
+					t.Fatalf("FakeIP fallback is not the final DNS rule: %+v", rules)
 				}
 
 				finalServer, _ := dns["final"].(string)

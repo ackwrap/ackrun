@@ -13,10 +13,19 @@ type AppUpdateStatus struct {
 	Message         string `json:"message,omitempty"`
 	Updating        bool   `json:"updating"`
 	UpdateError     string `json:"update_error,omitempty"`
+	InstallLog      string `json:"install_log,omitempty"`
 }
 
 type AppUpdateInstallResponse struct {
 	Success bool   `json:"success"`
 	Message string `json:"message"`
 	Version string `json:"version"`
+}
+
+type AppUpdateInstallStatus struct {
+	CurrentVersion string `json:"current_version"`
+	Message        string `json:"message,omitempty"`
+	Updating       bool   `json:"updating"`
+	UpdateError    string `json:"update_error,omitempty"`
+	InstallLog     string `json:"install_log,omitempty"`
 }
