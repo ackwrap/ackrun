@@ -317,6 +317,14 @@ func (s *Store) GetDNSGlobalSettings() (*model.DNSGlobalSettings, error) {
 }
 
 func (s *Store) SetDNSGlobalSettings(req *model.DNSGlobalSettings) error {
+	return s.setDNSGlobalSettings(req, true)
+}
+
+func (s *Store) SetDNSGlobalSettingsForCore(req *model.DNSGlobalSettings, independentCacheSupported bool) error {
+	return s.setDNSGlobalSettings(req, independentCacheSupported)
+}
+
+func (s *Store) setDNSGlobalSettings(req *model.DNSGlobalSettings, independentCacheSupported bool) error {
 	now := time.Now().Unix()
 	settings := map[string]string{
 		"dns.enabled":                   fmt.Sprintf("%t", req.Enabled),
@@ -343,6 +351,13 @@ func (s *Store) SetDNSGlobalSettings(req *model.DNSGlobalSettings) error {
 		"dns.fakeip_inet6_range":        req.FakeIPInet6Range,
 		"dns_global.fakeip_inet6_range": req.FakeIPInet6Range,
 	}
+	if !independentCacheSupported {
+		settings["dns.independent_cache"] = ""
+		settings["dns_global.independent_cache"] = ""
+	} else {
+		settings["dns.independent_cache_initialized"] = "true"
+		settings["dns.independent_cache_preference"] = fmt.Sprintf("%t", req.IndependentCache)
+	}
 
 	for key, value := range settings {
 		if value == "" {
@@ -358,4 +373,89 @@ func (s *Store) SetDNSGlobalSettings(req *model.DNSGlobalSettings) error {
 		}
 	}
 	return nil
+}
+
+func (s *Store) MigrateDNSIndependentCache(supported bool) (bool, error) {
+	const initializedKey = "dns.independent_cache_initialized"
+	const preferenceKey = "dns.independent_cache_preference"
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+
+	readSetting := func(key string) (string, bool, error) {
+		var value string
+		err := tx.QueryRow(`SELECT value FROM app_settings WHERE key = ?`, key).Scan(&value)
+		if err == sql.ErrNoRows {
+			return "", false, nil
+		}
+		return value, err == nil, err
+	}
+
+	initializedValue, initialized, err := readSetting(initializedKey)
+	if err != nil {
+		return false, err
+	}
+	initialized = initialized && initializedValue == "true"
+	preferenceValue, hasPreference, err := readSetting(preferenceKey)
+	if err != nil {
+		return false, err
+	}
+	preference := preferenceValue == "true"
+	changed := false
+	now := time.Now().Unix()
+	if !initialized || !hasPreference {
+		preference = true
+		if !supported {
+			if value, exists, readErr := readSetting("dns_global.independent_cache"); readErr != nil {
+				return false, readErr
+			} else if exists {
+				preference = value == "true"
+			} else if value, exists, readErr = readSetting("dns.independent_cache"); readErr != nil {
+				return false, readErr
+			} else if exists {
+				preference = value == "true"
+			}
+		}
+		for key, value := range map[string]string{
+			initializedKey: "true",
+			preferenceKey:  fmt.Sprintf("%t", preference),
+		} {
+			if _, err := tx.Exec(`INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`, key, value, now); err != nil {
+				return false, err
+			}
+		}
+		changed = true
+	}
+	if supported {
+		value := fmt.Sprintf("%t", preference)
+		for _, key := range []string{"dns.independent_cache", "dns_global.independent_cache"} {
+			currentValue, exists, err := readSetting(key)
+			if err != nil {
+				return false, err
+			}
+			if !exists || currentValue != value {
+				changed = true
+			}
+			if _, err := tx.Exec(`INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`, key, value, now); err != nil {
+				return false, err
+			}
+		}
+	} else {
+		result, err := tx.Exec(`DELETE FROM app_settings WHERE key IN ('dns.independent_cache', 'dns_global.independent_cache')`)
+		if err != nil {
+			return false, err
+		}
+		if affected, err := result.RowsAffected(); err != nil {
+			return false, err
+		} else if affected > 0 {
+			changed = true
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return changed, nil
 }

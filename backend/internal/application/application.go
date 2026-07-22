@@ -77,17 +77,22 @@ func New(options Options) (*Application, error) {
 	runtimeSvc := service.NewRuntimeService(options.Paths, db, singboxSvc)
 	installerSvc := service.NewInstallerService(db, options.Paths, realtimeSvc)
 	configSvc := service.NewConfigService(options.Paths, db, realtimeSvc)
+	dnsSvc := service.NewDNSService(db, options.Paths)
 	if migrated, migrateErr := configSvc.MigrateCompatibility(""); migrateErr != nil {
 		logging.Error("config.migrate", "启动时配置兼容迁移失败: %v", migrateErr)
 	} else if migrated {
 		logging.Info("config.migrate", "启动时配置兼容迁移完成")
 	}
+	if _, migrateErr := dnsSvc.MigrateIndependentCache(""); migrateErr != nil {
+		logging.Error("dns.global.migrate", "启动时 DNS 缓存配置迁移失败: %v", migrateErr)
+	}
 	if _, backupErr := configSvc.ListBackups(); backupErr != nil {
 		logging.Error("config.backup", "启动时整理配置备份失败: %v", backupErr)
 	}
 	installerSvc.SetPostInstallHook(func(version string) error {
-		_, hookErr := configSvc.MigrateCompatibility(version)
-		return hookErr
+		_, configErr := configSvc.MigrateCompatibility(version)
+		_, dnsErr := dnsSvc.MigrateIndependentCache(version)
+		return errors.Join(configErr, dnsErr)
 	})
 
 	settingsSvc := service.NewSettingsService(db)
@@ -118,7 +123,6 @@ func New(options Options) (*Application, error) {
 	coreRestartSvc := service.NewCoreRestartScheduler(db, singboxSvc, configGenSvc, realtimeSvc)
 	appUpdateSvc := service.NewAppUpdateService(db, options.Paths, singboxSvc, realtimeSvc)
 	dashboardSvc := service.NewDashboardService(db, options.Paths)
-	dnsSvc := service.NewDNSService(db)
 	nodeGroupSvc := service.NewNodeGroupService(db)
 	subscriptionSvc.SetConfigReconciler(reconcileSvc)
 

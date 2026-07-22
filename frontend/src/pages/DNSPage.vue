@@ -41,6 +41,7 @@ const defaults = {
     disable_cache: false,
     disable_expire: false,
     independent_cache: false,
+    independent_cache_supported: true,
     reverse_mapping: false,
     cache_capacity: 4096,
     client_subnet: "",
@@ -492,7 +493,7 @@ onMounted(load);
             v-for="x in [
               'disable_cache',
               'disable_expire',
-              'independent_cache',
+              ...(global.independent_cache_supported ? ['independent_cache'] : []),
               'reverse_mapping',
             ]"
             ><input
@@ -502,6 +503,12 @@ onMounted(load);
             {{ x }}</label
           >
         </div>
+        <p
+          v-if="!global.independent_cache_supported"
+          class="mt-2 text-xs text-[var(--text-tertiary)]"
+        >
+          当前核心已按 DNS transport 隔离缓存，无需 independent_cache。
+        </p>
         </section>
         <section
         class="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"

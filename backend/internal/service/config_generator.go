@@ -45,6 +45,7 @@ type ConfigGeneratorService struct {
 	store                 *store.Store
 	paths                 *paths.Paths
 	singbox               configGeneratorCore
+	readCoreVersion       func() string
 	configMu              sync.Mutex
 	coreRestartGeneration atomic.Uint64
 }
@@ -2369,15 +2370,15 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase(routeFinal ...string) (
 		logging.Info("config_generator.dns", "DNS final 引用无效，回退到: %s", finalServer)
 	}
 	dns := map[string]interface{}{
-		"servers":           servers,
-		"rules":             rules,
-		"final":             finalServer,
-		"strategy":          globalSettings.Strategy,
-		"disable_cache":     globalSettings.DisableCache,
-		"disable_expire":    globalSettings.DisableExpire,
-		"independent_cache": globalSettings.IndependentCache,
-		"reverse_mapping":   globalSettings.ReverseMapping,
+		"servers":         servers,
+		"rules":           rules,
+		"final":           finalServer,
+		"strategy":        globalSettings.Strategy,
+		"disable_cache":   globalSettings.DisableCache,
+		"disable_expire":  globalSettings.DisableExpire,
+		"reverse_mapping": globalSettings.ReverseMapping,
 	}
+	setDNSIndependentCache(dns, globalSettings.IndependentCache, s.coreVersion())
 	if globalSettings.CacheCapacity > 0 {
 		dns["cache_capacity"] = globalSettings.CacheCapacity
 	}
@@ -2387,6 +2388,22 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase(routeFinal ...string) (
 
 	logging.Info("config_generator.dns", "生成 DNS 配置: %d servers, %d rules", len(servers), len(rules))
 	return dns, nil
+}
+
+func setDNSIndependentCache(dns map[string]interface{}, enabled bool, version string) {
+	if singboxSupportsDNSIndependentCache(version) {
+		dns["independent_cache"] = enabled
+	}
+}
+
+func (s *ConfigGeneratorService) coreVersion() string {
+	if s.readCoreVersion != nil {
+		return s.readCoreVersion()
+	}
+	if s.paths != nil {
+		return readSingboxVersion(s.paths.BinaryPath)
+	}
+	return ""
 }
 
 func dnsRuleMap(conditions map[string]interface{}, settings *model.DNSRule) map[string]interface{} {

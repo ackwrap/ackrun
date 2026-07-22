@@ -61,16 +61,17 @@ type DNSRuleRequest struct {
 
 // DNSGlobalSettings DNS 全局设置（复用现有 settings 表）
 type DNSGlobalSettings struct {
-	Enabled          bool   `json:"enabled"`
-	Final            string `json:"final"`
-	Strategy         string `json:"strategy"`
-	DisableCache     bool   `json:"disable_cache"`
-	DisableExpire    bool   `json:"disable_expire"`
-	IndependentCache bool   `json:"independent_cache"`
-	ReverseMapping   bool   `json:"reverse_mapping"`
-	CacheCapacity    int    `json:"cache_capacity"`
-	ClientSubnet     string `json:"client_subnet"`
-	FakeIPEnabled    bool   `json:"fakeip_enabled"`
-	FakeIPInet4Range string `json:"fakeip_inet4_range"`
-	FakeIPInet6Range string `json:"fakeip_inet6_range"`
+	Enabled                   bool   `json:"enabled"`
+	Final                     string `json:"final"`
+	Strategy                  string `json:"strategy"`
+	DisableCache              bool   `json:"disable_cache"`
+	DisableExpire             bool   `json:"disable_expire"`
+	IndependentCache          bool   `json:"independent_cache"`
+	IndependentCacheSupported bool   `json:"independent_cache_supported"`
+	ReverseMapping            bool   `json:"reverse_mapping"`
+	CacheCapacity             int    `json:"cache_capacity"`
+	ClientSubnet              string `json:"client_subnet"`
+	FakeIPEnabled             bool   `json:"fakeip_enabled"`
+	FakeIPInet4Range          string `json:"fakeip_inet4_range"`
+	FakeIPInet6Range          string `json:"fakeip_inet6_range"`
 }

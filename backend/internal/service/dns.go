@@ -3,18 +3,23 @@ package service
 import (
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/ackwrap/ackrun/internal/logging"
 	"github.com/ackwrap/ackrun/internal/model"
+	"github.com/ackwrap/ackrun/internal/paths"
 	"github.com/ackwrap/ackrun/internal/store"
 )
 
 type DNSService struct {
-	store *store.Store
+	store           *store.Store
+	paths           *paths.Paths
+	readCoreVersion func() string
+	cacheMu         sync.Mutex
 }
 
-func NewDNSService(s *store.Store) *DNSService {
-	return &DNSService{store: s}
+func NewDNSService(s *store.Store, p *paths.Paths) *DNSService {
+	return &DNSService{store: s, paths: p}
 }
 
 func validateDNSServerRequest(req *model.DNSServerRequest) error {
@@ -172,6 +177,10 @@ func (svc *DNSService) GetDNSGlobalSettings() (*model.DNSGlobalSettings, error) 
 	if err != nil {
 		return nil, err
 	}
+	settings.IndependentCacheSupported = svc.independentCacheSupported()
+	if !settings.IndependentCacheSupported {
+		settings.IndependentCache = false
+	}
 	applyTUNManagedFakeIP(settings, svc.store.GetInboundMode())
 	return settings, nil
 }
@@ -183,9 +192,50 @@ func (svc *DNSService) SetDNSGlobalSettings(req *model.DNSGlobalSettings) error 
 	if err := svc.rejectFakeIPServerReference(req.Final); err != nil {
 		return err
 	}
+	svc.cacheMu.Lock()
+	defer svc.cacheMu.Unlock()
+	supported := svc.independentCacheSupported()
+	req.IndependentCacheSupported = supported
+	if !supported {
+		req.IndependentCache = false
+	}
 	applyTUNManagedFakeIP(req, svc.store.GetInboundMode())
 	logging.Info("dns.global.update", "FakeIP 跟随 TUN 模式，当前状态: %t", req.FakeIPEnabled)
-	return svc.store.SetDNSGlobalSettings(req)
+	return svc.store.SetDNSGlobalSettingsForCore(req, supported)
+}
+
+func (svc *DNSService) MigrateIndependentCache(version string) (bool, error) {
+	svc.cacheMu.Lock()
+	defer svc.cacheMu.Unlock()
+	if strings.TrimSpace(version) == "" {
+		version = svc.coreVersion()
+	}
+	if strings.TrimSpace(version) == "" {
+		return false, nil
+	}
+	supported := singboxSupportsDNSIndependentCache(version)
+	migrated, err := svc.store.MigrateDNSIndependentCache(supported)
+	if err != nil {
+		return false, err
+	}
+	if migrated {
+		logging.Info("dns.global.migrate", "DNS 缓存配置已适配当前核心")
+	}
+	return migrated, nil
+}
+
+func (svc *DNSService) independentCacheSupported() bool {
+	return singboxSupportsDNSIndependentCache(svc.coreVersion())
+}
+
+func (svc *DNSService) coreVersion() string {
+	if svc.readCoreVersion != nil {
+		return svc.readCoreVersion()
+	}
+	if svc.paths != nil {
+		return readSingboxVersion(svc.paths.BinaryPath)
+	}
+	return ""
 }
 
 func applyTUNManagedFakeIP(settings *model.DNSGlobalSettings, inboundMode string) {

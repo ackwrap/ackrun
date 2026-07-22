@@ -2091,6 +2091,60 @@ func mustGenerateDNS(t *testing.T, service *ConfigGeneratorService, routeFinal .
 	return dns
 }
 
+func TestSetDNSIndependentCacheOmitsRemovedOption(t *testing.T) {
+	tests := []struct {
+		version string
+		want    bool
+	}{
+		{version: "", want: true},
+		{version: "1.13.14", want: true},
+		{version: "1.14.0-alpha.45", want: false},
+		{version: "1.14.0", want: false},
+	}
+	for _, test := range tests {
+		dns := make(map[string]interface{})
+		setDNSIndependentCache(dns, true, test.version)
+		_, exists := dns["independent_cache"]
+		if exists != test.want {
+			t.Errorf("version %q independent_cache present = %t, want %t", test.version, exists, test.want)
+		}
+	}
+}
+
+func TestGenerateDNSOmitsIndependentCacheForNewCore(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.CreateDNSServer(&model.DNSServerRequest{
+		Tag: "dns_direct", Enabled: true, ServerType: "udp", Address: "1.1.1.1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := db.GetDNSGlobalSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.Final = "dns_direct"
+	settings.IndependentCache = true
+	if err := db.SetDNSGlobalSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+
+	service := NewConfigGeneratorService(db, nil)
+	service.readCoreVersion = func() string { return "1.14.0-alpha.45" }
+	dns := mustGenerateDNS(t, service)
+	if _, exists := dns["independent_cache"]; exists {
+		t.Fatal("1.14 alpha DNS config contains removed independent_cache option")
+	}
+	service.readCoreVersion = func() string { return "1.13.14" }
+	dns = mustGenerateDNS(t, service)
+	if enabled, exists := dns["independent_cache"]; !exists || enabled != true {
+		t.Fatalf("legacy DNS config independent_cache = %v, present = %t", enabled, exists)
+	}
+}
+
 func generatedDNSHasServerType(dns map[string]interface{}, serverType string) bool {
 	servers, _ := dns["servers"].([]map[string]interface{})
 	for _, server := range servers {

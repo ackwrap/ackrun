@@ -119,6 +119,15 @@ func compareSingboxVersions(left, right string) int {
 	return 0
 }
 
+func singboxSupportsDNSIndependentCache(version string) bool {
+	version = strings.TrimPrefix(strings.TrimSpace(version), "v")
+	if !isSingboxVersion(version) {
+		return true
+	}
+	parsed, _ := parseSingboxVersion(version)
+	return parsed[0] < 1 || parsed[0] == 1 && parsed[1] < 14
+}
+
 func parseSingboxVersion(version string) ([3]int, string) {
 	version = strings.TrimPrefix(strings.TrimSpace(version), "v")
 	version = strings.SplitN(version, "+", 2)[0]

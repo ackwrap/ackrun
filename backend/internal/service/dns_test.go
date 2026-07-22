@@ -3,7 +3,9 @@ package service
 import (
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ackwrap/ackrun/internal/model"
 	"github.com/ackwrap/ackrun/internal/store"
@@ -16,7 +18,7 @@ func TestDNSGlobalSettingsFakeIPFollowsTUNMode(t *testing.T) {
 	}
 	defer db.Close()
 
-	svc := NewDNSService(db)
+	svc := NewDNSService(db, nil)
 	settings, err := svc.GetDNSGlobalSettings()
 	if err != nil {
 		t.Fatal(err)
@@ -56,13 +58,103 @@ func TestDNSGlobalSettingsFakeIPFollowsTUNMode(t *testing.T) {
 	}
 }
 
+func TestDNSGlobalSettingsOmitsIndependentCacheForNewCore(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	svc := NewDNSService(db, nil)
+	svc.readCoreVersion = func() string { return "1.14.0-alpha.45" }
+	settings, err := svc.GetDNSGlobalSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.IndependentCacheSupported {
+		t.Fatal("1.14 alpha must report independent_cache as unsupported")
+	}
+	settings.IndependentCache = true
+	if err := svc.SetDNSGlobalSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+
+	svc.readCoreVersion = func() string { return "1.13.14" }
+	settings, err = svc.GetDNSGlobalSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.IndependentCache {
+		t.Fatal("new-core save persisted the unsupported independent_cache setting")
+	}
+}
+
+func TestDNSIndependentCacheMigrationSerializesWithSave(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	svc := NewDNSService(db, nil)
+	settings, err := svc.GetDNSGlobalSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.IndependentCache = true
+	firstRead := make(chan struct{})
+	releaseFirstRead := make(chan struct{})
+	secondRead := make(chan struct{})
+	var reads atomic.Int32
+	svc.readCoreVersion = func() string {
+		if reads.Add(1) == 1 {
+			close(firstRead)
+			<-releaseFirstRead
+			return "1.13.14"
+		}
+		close(secondRead)
+		return "1.14.0-alpha.45"
+	}
+
+	saveDone := make(chan error, 1)
+	go func() { saveDone <- svc.SetDNSGlobalSettings(settings) }()
+	<-firstRead
+	migrateDone := make(chan error, 1)
+	go func() {
+		_, err := svc.MigrateIndependentCache("")
+		migrateDone <- err
+	}()
+	select {
+	case <-secondRead:
+		close(releaseFirstRead)
+		t.Fatal("migration read the new version before the in-flight save completed")
+	case <-time.After(50 * time.Millisecond):
+		close(releaseFirstRead)
+	}
+	if err := <-saveDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-migrateDone; err != nil {
+		t.Fatal(err)
+	}
+
+	svc.readCoreVersion = func() string { return "1.13.14" }
+	settings, err = svc.GetDNSGlobalSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.IndependentCache {
+		t.Fatal("new-core migration left independent_cache persisted after a concurrent save")
+	}
+}
+
 func TestDNSServerRejectsControlledOptionsAndInvalidDetours(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	svc := NewDNSService(db)
+	svc := NewDNSService(db, nil)
 	for name, request := range map[string]*model.DNSServerRequest{
 		"options detour": {Tag: "dns-options-detour", Enabled: true, ServerType: "udp", Address: "1.1.1.1", Options: map[string]interface{}{"detour": "direct"}},
 		"options type":   {Tag: "dns-options-type", Enabled: true, ServerType: "udp", Address: "1.1.1.1", Options: map[string]interface{}{"type": "local"}},
@@ -92,7 +184,7 @@ func TestDNSRulesRejectOutboundConditionsAndFakeIPServers(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	svc := NewDNSService(db)
+	svc := NewDNSService(db, nil)
 	if _, err := svc.CreateDNSServer(&model.DNSServerRequest{Tag: "dns_proxy", Enabled: true, ServerType: "udp", Address: "1.1.1.1"}); err != nil {
 		t.Fatal(err)
 	}

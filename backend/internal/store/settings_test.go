@@ -169,6 +169,66 @@ func TestDNSGlobalSettingsPreservesPersistedFakeIPRange(t *testing.T) {
 	}
 }
 
+func TestMigrateDNSIndependentCacheAcrossCoreModes(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	migrated, err := s.MigrateDNSIndependentCache(true)
+	if err != nil || !migrated {
+		t.Fatalf("initial legacy-core migration = %t, %v", migrated, err)
+	}
+	settings, err := s.GetDNSGlobalSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !settings.IndependentCache {
+		t.Fatal("legacy core migration must enable independent_cache")
+	}
+
+	settings.IndependentCache = false
+	if err := s.SetDNSGlobalSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+	migrated, err = s.MigrateDNSIndependentCache(true)
+	if err != nil || migrated {
+		t.Fatalf("repeated legacy-core migration = %t, %v", migrated, err)
+	}
+	settings, err = s.GetDNSGlobalSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.IndependentCache {
+		t.Fatal("repeated migration overwrote the user's legacy-core setting")
+	}
+
+	migrated, err = s.MigrateDNSIndependentCache(false)
+	if err != nil || !migrated {
+		t.Fatalf("transport-cache migration = %t, %v", migrated, err)
+	}
+	var count int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM app_settings WHERE key IN ('dns.independent_cache', 'dns_global.independent_cache')`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("transport-cache migration retained %d independent_cache settings", count)
+	}
+
+	migrated, err = s.MigrateDNSIndependentCache(true)
+	if err != nil || !migrated {
+		t.Fatalf("downgrade migration = %t, %v", migrated, err)
+	}
+	settings, err = s.GetDNSGlobalSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.IndependentCache {
+		t.Fatal("downgrade migration overwrote the user's saved preference")
+	}
+}
+
 func TestUpdateSettingsDefaultsToGHProxyAndPreservesCustomMirror(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {

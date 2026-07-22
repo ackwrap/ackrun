@@ -129,3 +129,21 @@ func TestCompareSingboxVersions(t *testing.T) {
 		}
 	}
 }
+
+func TestSingboxSupportsDNSIndependentCacheByMajorMinor(t *testing.T) {
+	tests := []struct {
+		version string
+		want    bool
+	}{
+		{version: "1.13.14", want: true},
+		{version: "1.14.0-alpha.45", want: false},
+		{version: "1.14.0", want: false},
+		{version: "2.0.0-beta.1", want: false},
+		{version: "", want: true},
+	}
+	for _, test := range tests {
+		if got := singboxSupportsDNSIndependentCache(test.version); got != test.want {
+			t.Errorf("singboxSupportsDNSIndependentCache(%q) = %t, want %t", test.version, got, test.want)
+		}
+	}
+}
