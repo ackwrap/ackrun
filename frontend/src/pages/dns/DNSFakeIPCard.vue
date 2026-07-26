@@ -418,12 +418,18 @@ function conditionLabel(type: ExceptionItem["conditionType"]) {
       查询使用 FakeIP，其余查询统一经过安全 DNS final。
     </p>
     <div
-      class="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto]"
+      class="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]"
     >
       <input v-model="settings.fakeip_inet4_range" class="aw-input" />
       <input v-model="settings.fakeip_inet6_range" class="aw-input" />
       <Button @click="$emit('save')">保存范围</Button>
-      <Button variant="primary" @click="openManager">
+    </div>
+    <div class="mt-5 border-t border-[var(--border-light)] pt-4">
+      <h4 class="text-sm font-medium text-[var(--text-primary)]">其他功能</h4>
+      <p class="mt-1 text-xs text-[var(--text-tertiary)]">
+        管理不使用 FakeIP、需要返回真实地址的域名规则。
+      </p>
+      <Button class="mt-4" variant="primary" @click="openManager">
         <template #icon><ShieldCheck :size="14" /></template>
         真实 IP 例外<span
           v-if="exceptionValueCount"
