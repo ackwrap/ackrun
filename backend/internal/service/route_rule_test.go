@@ -330,8 +330,60 @@ func TestRouteRuleSubscriptionContentConvertsClashYAML(t *testing.T) {
 	if !strings.Contains(contentType, "application/json") || !json.Valid(body) {
 		t.Fatalf("expected json content, got type=%s body=%s", contentType, string(body))
 	}
-	if !strings.Contains(string(body), "cerebras.ai") || !strings.Contains(string(body), "LM Studio") {
-		t.Fatalf("converted content missing expected values: %s", string(body))
+	var converted model.SingboxRuleSetSource
+	if err := json.Unmarshal(body, &converted); err != nil {
+		t.Fatalf("decode converted content: %v", err)
+	}
+	if len(converted.Rules) != 2 {
+		t.Fatalf("converted rule count = %d, want 2: %s", len(converted.Rules), string(body))
+	}
+	if domains, ok := converted.Rules[0]["domain_suffix"].([]any); !ok || len(domains) != 1 || domains[0] != "cerebras.ai" {
+		t.Fatalf("unexpected converted domain rule: %#v", converted.Rules[0])
+	}
+	if processes, ok := converted.Rules[1]["process_name"].([]any); !ok || len(processes) != 1 || processes[0] != "LM Studio" {
+		t.Fatalf("unexpected converted process rule: %#v", converted.Rules[1])
+	}
+}
+
+func TestRouteRuleSubscriptionContentRejectsUnsupportedClashRules(t *testing.T) {
+	testCases := []struct {
+		name    string
+		entry   string
+		message string
+	}{
+		{name: "unsupported type", entry: "GEOIP,CN", message: `entry 2: unsupported clash rule type "GEOIP"`},
+		{name: "malformed logical rule", entry: "OR,((DOMAIN,example.com),(NETWORK,TCP),)", message: "entry 2: invalid OR rule: operand 3 is empty"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/yaml")
+				_, _ = fmt.Fprintf(w, "payload:\n  - DOMAIN-SUFFIX,example.com\n  - '%s'\n", testCase.entry)
+			}))
+			defer server.Close()
+
+			db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+			if err != nil {
+				t.Fatalf("open store: %v", err)
+			}
+			defer db.Close()
+
+			svc := newTestRouteRuleService(t, db)
+			created, err := db.CreateRouteRuleSubscription(&model.RouteRuleSubscriptionRequest{Name: "Unsupported", Enabled: true, Tag: "unsupported", URL: server.URL + "/unsupported.yml", Format: "clash", SyncMode: "off"})
+			if err != nil {
+				t.Fatalf("create rule subscription: %v", err)
+			}
+			if _, _, err := svc.SubscriptionContent(created.ID); err == nil || !strings.Contains(err.Error(), testCase.message) {
+				t.Fatalf("conversion error = %v, want message containing %q", err, testCase.message)
+			}
+			stored, err := db.GetRouteRuleSubscription(created.ID)
+			if err != nil {
+				t.Fatalf("get rule subscription: %v", err)
+			}
+			if stored == nil || stored.CachedPath != "" {
+				t.Fatalf("failed conversion wrote cache state: %+v", stored)
+			}
+		})
 	}
 }
 
