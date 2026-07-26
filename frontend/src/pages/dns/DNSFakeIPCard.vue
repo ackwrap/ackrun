@@ -54,7 +54,7 @@ const emit = defineEmits<{
   notify: [message: string, type: "success" | "error"];
 }>();
 
-const localDomainSuffixPreset = [
+const commonRealIPDomainSuffixPreset = [
   "localhost",
   "lan",
   "local",
@@ -196,7 +196,7 @@ function openPreset() {
   if (!server) return;
   form.value = {
     conditionType: "domain_suffix",
-    values: localDomainSuffixPreset.join("\n"),
+    values: commonRealIPDomainSuffixPreset.join("\n"),
     server,
     enabled: true,
     preset: true,
@@ -324,7 +324,7 @@ async function saveException() {
         body: JSON.stringify(payload),
       });
       localRules.value.push(created);
-      emit("notify", current.preset ? "局域网域名预设已加入" : "真实 IP 例外已添加", "success");
+      emit("notify", current.preset ? "常见真实 IP 例外预设已加入" : "真实 IP 例外已添加", "success");
     }
     view.value = "list";
     form.value = null;
@@ -442,7 +442,7 @@ function conditionLabel(type: ExceptionItem["conditionType"]) {
 
   <Modal
     :open="managerOpen"
-    :title="view === 'form' ? (form?.id ? '编辑真实 IP 例外' : form?.preset ? '加入局域网预设' : '新增真实 IP 例外') : '真实 IP 例外'"
+    :title="view === 'form' ? (form?.id ? '编辑真实 IP 例外' : form?.preset ? '加入常见例外预设' : '新增真实 IP 例外') : '真实 IP 例外'"
     size="xl"
     :closable="managerClosable"
     @close="closeManager"
@@ -455,7 +455,7 @@ function conditionLabel(type: ExceptionItem["conditionType"]) {
         </p>
         <div class="flex flex-wrap gap-2">
           <Button :disabled="!enabledServers.length" @click="openPreset">
-            加入局域网预设
+            加入常见例外预设
           </Button>
           <Button variant="primary" :disabled="!enabledServers.length" @click="openNew">
             <template #icon><Plus :size="14" /></template>新增例外
@@ -563,6 +563,11 @@ function conditionLabel(type: ExceptionItem["conditionType"]) {
               {{ server.tag }} · {{ server.server_type }}{{ server.enabled ? "" : " · 已停用" }}
             </option>
           </select>
+          <span v-if="form.preset" class="mt-1 block text-xs text-[var(--color-warning)]">
+            此预设只让这些域名绕过 FakeIP，默认使用普通 DNS 获取真实结果；它不负责
+            LAN 主机名解析。TUN/DNS 劫持模式下不要选择回指 Ackwrap 的 local 或
+            127.0.0.1 DNS，否则可能形成查询回环。
+          </span>
         </label>
         <label class="text-sm text-[var(--text-secondary)] md:col-span-2">
           域名列表
