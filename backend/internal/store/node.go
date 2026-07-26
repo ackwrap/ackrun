@@ -77,6 +77,17 @@ func (s *Store) ReplaceSubscriptionNodes(subscriptionID int64, nodes []model.Par
 			return err
 		}
 	}
+	if _, err := tx.Exec(`
+		UPDATE node_exposures
+		SET enabled = 0, updated_at = ?
+		WHERE subscription_id = ?
+			AND NOT EXISTS (
+				SELECT 1 FROM nodes n
+				WHERE n.subscription_id = node_exposures.subscription_id AND n.uid = node_exposures.node_uid
+			)
+	`, now, subscriptionID); err != nil {
+		return err
+	}
 
 	return tx.Commit()
 }
@@ -325,6 +336,9 @@ func (s *Store) DeleteNode(uid string) error {
 	if affected == 0 {
 		return fmt.Errorf("node not found: %s", uid)
 	}
+	if _, err := tx.Exec(`UPDATE node_exposures SET enabled = 0, updated_at = ? WHERE node_uid = ?`, time.Now().UnixMilli(), uid); err != nil {
+		return err
+	}
 	if _, err := s.cleanInvalidNodeUIDsTx(tx, []string{uid}); err != nil {
 		return err
 	}
@@ -398,7 +412,12 @@ func (s *Store) setNodeBool(uid string, column string, value bool) error {
 	if value {
 		boolValue = 1
 	}
-	res, err := s.db.Exec(`UPDATE nodes SET `+column+` = ?, updated_at = ? WHERE uid = ?`, boolValue, now, uid)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`UPDATE nodes SET `+column+` = ?, updated_at = ? WHERE uid = ?`, boolValue, now, uid)
 	if err != nil {
 		return err
 	}
@@ -409,7 +428,12 @@ func (s *Store) setNodeBool(uid string, column string, value bool) error {
 	if rows == 0 {
 		return fmt.Errorf("node not found")
 	}
-	return nil
+	if column == "enabled" && !value {
+		if _, err := tx.Exec(`UPDATE node_exposures SET enabled = 0, updated_at = ? WHERE node_uid = ?`, now, uid); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 type nodeScanner interface {

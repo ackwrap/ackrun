@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { ref, watch } from "vue";
+import { useRoute } from "vue-router";
 import {
   LayoutDashboard,
   Settings,
@@ -12,11 +14,22 @@ import {
   ChevronLeft,
   ChevronRight,
   Gauge,
+  Wrench,
+  Share2,
+  Route,
+  KeyRound,
+  HeartPulse,
+  ScrollText,
+  SlidersHorizontal,
+  ChevronDown,
 } from "lucide-vue-next";
-withDefaults(defineProps<{ collapsed: boolean; mobileOpen?: boolean }>(), {
-  mobileOpen: false,
-});
-defineEmits<{ toggle: []; close: [] }>();
+const props = withDefaults(
+  defineProps<{ collapsed: boolean; mobileOpen?: boolean }>(),
+  { mobileOpen: false },
+);
+const emit = defineEmits<{ toggle: []; close: [] }>();
+const route = useRoute();
+const advancedOpen = ref(route.path.startsWith("/advanced/"));
 const items = [
   ["控制面板", LayoutDashboard, "/"],
   ["仪表盘", Gauge, "/dashboard"],
@@ -29,6 +42,30 @@ const items = [
   ["日志", Activity, "/logs"],
   ["设置", Settings, "/settings"],
 ] as const;
+const advancedItems = [
+  ["节点暴露", Share2, "/advanced/node-exposures"],
+  ["平台路由", Route, "/advanced/platform-routing"],
+  ["会话租约", KeyRound, "/advanced/session-leases"],
+  ["健康调度", HeartPulse, "/advanced/health-scheduling"],
+  ["访问日志", ScrollText, "/advanced/access-logs"],
+  ["高级设置", SlidersHorizontal, "/advanced/settings"],
+] as const;
+
+watch(
+  () => route.path,
+  (path) => {
+    if (path.startsWith("/advanced/")) advancedOpen.value = true;
+  },
+);
+
+function toggleAdvanced() {
+  if (props.collapsed && !props.mobileOpen) {
+    emit("toggle");
+    advancedOpen.value = true;
+    return;
+  }
+  advancedOpen.value = !advancedOpen.value;
+}
 </script>
 <template>
   <aside
@@ -67,6 +104,50 @@ const items = [
           >{{ label }}</span
         ></RouterLink
       >
+      <div>
+        <button
+          class="flex h-11 w-full items-center gap-3 rounded-[var(--radius-lg)] border border-transparent px-4 text-left"
+          :class="[
+            $route.path.startsWith('/advanced/')
+              ? 'border-[var(--button-primary-border)] bg-[var(--button-primary-bg)] text-[var(--button-primary-text)]'
+              : 'hover:bg-[var(--bg-sidebar-hover)]',
+            collapsed && 'lg:justify-center lg:px-0',
+          ]"
+          :aria-expanded="advancedOpen"
+          @click="toggleAdvanced"
+        >
+          <Wrench :size="18" />
+          <span :class="collapsed ? 'lg:hidden' : ''" class="min-w-0 flex-1"
+            >高级功能</span
+          >
+          <ChevronDown
+            v-if="!collapsed || mobileOpen"
+            :size="15"
+            class="transition-transform"
+            :class="advancedOpen && 'rotate-180'"
+          />
+        </button>
+        <div
+          v-if="advancedOpen && (!collapsed || mobileOpen)"
+          class="mt-1 space-y-1 border-l border-[var(--border-light)] pl-3"
+        >
+          <RouterLink
+            v-for="[label, icon, path] in advancedItems"
+            :key="path"
+            :to="path"
+            class="flex h-9 items-center gap-2.5 rounded-[var(--radius-md)] px-3 text-xs text-[var(--text-secondary)]"
+            :class="
+              $route.path === path
+                ? 'bg-[var(--bg-sidebar-hover)] text-[var(--color-primary-hover)]'
+                : 'hover:bg-[var(--bg-sidebar-hover)] hover:text-[var(--text-primary)]'
+            "
+            @click="$emit('close')"
+          >
+            <component :is="icon" :size="15" />
+            <span>{{ label }}</span>
+          </RouterLink>
+        </div>
+      </div>
     </nav>
     <button
       class="m-3 hidden h-8 items-center justify-center lg:flex"

@@ -48,6 +48,8 @@ func TestShouldReconcileRequest(t *testing.T) {
 		{http.MethodPost, "/api/v1/rules", false},
 		{http.MethodPut, "/api/v1/rules/1", true},
 		{http.MethodPut, "/api/v1/settings/traffic-bypass", true},
+		{http.MethodPost, "/api/v1/advanced/node-exposures", true},
+		{http.MethodDelete, "/api/v1/advanced/node-exposures/1", true},
 		{http.MethodGet, "/api/v1/rules", false},
 	}
 

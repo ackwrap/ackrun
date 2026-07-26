@@ -117,6 +117,8 @@ func New(options Options) (*Application, error) {
 	routeRuleSvc := service.NewRouteRuleService(db, options.Paths, realtimeSvc)
 	proxyCollectionSvc := service.NewProxyCollectionService(db, realtimeSvc)
 	configGenSvc := service.NewConfigGeneratorService(db, options.Paths, singboxSvc)
+	nodeExposureSvc := service.NewNodeExposureService(db)
+	nodeExposureSvc.SetRuntimeDependencies(configGenSvc, singboxSvc)
 	settingsSvc.SetModeDependencies(singboxSvc, configGenSvc)
 	settingsSvc.SetConnectivitySettingsHook(proxyCollectionSvc.RefreshHealthCheckJobs)
 	reconcileSvc := service.NewConfigReconcileService(configGenSvc, realtimeSvc)
@@ -133,7 +135,7 @@ func New(options Options) (*Application, error) {
 		gin.RecoveryWithWriter(accessTokenRedactingWriter{Writer: gin.DefaultErrorWriter}),
 	)
 	router.Use(api.SecurityMiddleware(options.APIToken))
-	api.RegisterRoutes(router, runtimeSvc, installerSvc, singboxSvc, configSvc, settingsSvc, subscriptionSvc, nodeSvc, routeRuleSvc, proxyCollectionSvc, configGenSvc, realtimeSvc, coreLogSvc, dnsSvc, nodeGroupSvc, reconcileSvc, coreRestartSvc, appUpdateSvc, dashboardSvc)
+	api.RegisterRoutes(router, runtimeSvc, installerSvc, singboxSvc, configSvc, settingsSvc, subscriptionSvc, nodeSvc, nodeExposureSvc, routeRuleSvc, proxyCollectionSvc, configGenSvc, realtimeSvc, coreLogSvc, dnsSvc, nodeGroupSvc, reconcileSvc, coreRestartSvc, appUpdateSvc, dashboardSvc)
 	if err := registerWebUI(router); err != nil {
 		reconcileSvc.Close()
 		stopToolLogEvents()

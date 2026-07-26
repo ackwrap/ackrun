@@ -76,6 +76,7 @@ func shouldReconcileRequest(method, path string) bool {
 		"/api/v1/rules",
 		"/api/v1/dns/",
 		"/api/v1/node-groups",
+		"/api/v1/advanced/node-exposures",
 	}
 	for _, prefix := range configPrefixes {
 		if strings.HasPrefix(path, prefix) {

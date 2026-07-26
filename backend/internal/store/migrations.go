@@ -272,6 +272,23 @@ func (s *Store) migrate() error {
 			created_at INTEGER NOT NULL,
 			UNIQUE(config_name, backup_date)
 		)`,
+		`CREATE TABLE IF NOT EXISTS node_exposures (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL,
+			subscription_id INTEGER NOT NULL,
+			node_uid TEXT NOT NULL,
+			inbound_type TEXT NOT NULL,
+			listen TEXT NOT NULL DEFAULT '127.0.0.1',
+			listen_port INTEGER NOT NULL,
+			username TEXT NOT NULL DEFAULT '',
+			password TEXT NOT NULL DEFAULT '',
+			enabled INTEGER NOT NULL DEFAULT 1,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			FOREIGN KEY(subscription_id) REFERENCES subscriptions(id) ON DELETE CASCADE
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_node_exposures_name ON node_exposures(name)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_node_exposures_active_listener ON node_exposures(listen, listen_port) WHERE enabled = 1`,
 		`DELETE FROM app_settings WHERE key IN ('update.github_token', 'update.proxy_url')`,
 		`DELETE FROM app_settings WHERE key = 'update.acceleration' AND value = 'proxy'`,
 		`UPDATE app_settings

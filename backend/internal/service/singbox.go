@@ -602,6 +602,24 @@ func (svc *SingboxService) ReloadConfig() (*model.ActionResponse, error) {
 	return svc.restart("config reload")
 }
 
+// ApplyConfigRuntime atomically observes the core lifecycle and loads the
+// current active configuration. Rollback callers can request restoring a core
+// that was running before a failed reload.
+func (svc *SingboxService) ApplyConfigRuntime(startIfStopped bool) (bool, error) {
+	svc.lifecycleMu.Lock()
+	defer svc.lifecycleMu.Unlock()
+	wasRunning := svc.IsRunning()
+	if wasRunning {
+		_, err := svc.restart("config reload")
+		return true, err
+	}
+	if startIfStopped {
+		_, err := svc.start()
+		return false, err
+	}
+	return false, nil
+}
+
 func (svc *SingboxService) isRunning() bool {
 	return svc.pid > 0 && svc.cmd != nil && svc.cmd.Process != nil
 }

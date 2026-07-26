@@ -111,6 +111,12 @@ func (s *ConfigGeneratorService) GetGenerateRequest() (*model.ConfigGenerateRequ
 
 // ReconcileCurrent 在同一临界区内生成并应用配置，避免临时文件被并发请求替换。
 func (s *ConfigGeneratorService) ReconcileCurrent() (*model.ConfigGenerateResponse, error) {
+	return s.ReconcileCurrentWithCallback(nil)
+}
+
+// ReconcileCurrentWithCallback keeps configuration-visible updates blocked until
+// the caller has loaded the applied configuration into the running core.
+func (s *ConfigGeneratorService) ReconcileCurrentWithCallback(afterApply func() error) (*model.ConfigGenerateResponse, error) {
 	releaseConfigSnapshot := s.store.HoldConfigSnapshot()
 	defer releaseConfigSnapshot()
 	s.configMu.Lock()
@@ -129,10 +135,20 @@ func (s *ConfigGeneratorService) ReconcileCurrent() (*model.ConfigGenerateRespon
 	}
 	if unchanged {
 		logging.Info("config_generator.reconcile", "生成配置与活动配置一致，跳过应用")
+		if afterApply != nil {
+			if err := afterApply(); err != nil {
+				return result, fmt.Errorf("配置已应用，但运行时加载失败: %w", err)
+			}
+		}
 		return result, nil
 	}
 	if err := s.applyLocked(""); err != nil {
 		return result, err
+	}
+	if afterApply != nil {
+		if err := afterApply(); err != nil {
+			return result, fmt.Errorf("配置已应用，但运行时加载失败: %w", err)
+		}
 	}
 	return result, nil
 }
@@ -273,11 +289,23 @@ func (s *ConfigGeneratorService) generateLockedTo(req *model.ConfigGenerateReque
 	if err != nil {
 		return nil, fmt.Errorf("生成 outbounds 失败: %w", err)
 	}
+	exposureInbounds, exposureRules, err := s.generateNodeExposureConfig(req, outbounds, endpoints)
+	if err != nil {
+		return nil, fmt.Errorf("生成节点暴露失败: %w", err)
+	}
+	inbounds = append(inbounds, exposureInbounds...)
 
 	// 3. 生成 route
 	route, err := s.generateRoute(req.DefaultOutbound)
 	if err != nil {
 		return nil, fmt.Errorf("生成 route 失败: %w", err)
+	}
+	if len(exposureRules) > 0 {
+		routeRules, ok := route["rules"].([]map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("生成节点暴露失败: route.rules 格式无效")
+		}
+		route["rules"] = append(exposureRules, routeRules...)
 	}
 
 	logLevel := req.LogLevel
@@ -397,7 +425,7 @@ func (s *ConfigGeneratorService) generateLockedTo(req *model.ConfigGenerateReque
 	return &model.ConfigGenerateResponse{
 		Config:   redactConfigAccessTokens(config).(map[string]interface{}),
 		Valid:    valid,
-		Error:    redactAccessToken(errMsg),
+		Error:    redactAccessToken(s.redactNodeExposurePasswords(errMsg)),
 		FilePath: tmpPath,
 	}, nil
 }
@@ -414,6 +442,12 @@ func redactConfigAccessTokens(value interface{}) interface{} {
 	case map[string]interface{}:
 		redacted := make(map[string]interface{}, len(typed))
 		for key, item := range typed {
+			if strings.EqualFold(key, "password") {
+				if password, ok := item.(string); ok && password != "" {
+					redacted[key] = "[REDACTED]"
+					continue
+				}
+			}
 			redacted[key] = redactConfigAccessTokens(item)
 		}
 		return redacted
@@ -427,6 +461,22 @@ func redactConfigAccessTokens(value interface{}) interface{} {
 		redacted := make([]map[string]interface{}, len(typed))
 		for index, item := range typed {
 			redacted[index] = redactConfigAccessTokens(item).(map[string]interface{})
+		}
+		return redacted
+	case map[string]string:
+		redacted := make(map[string]string, len(typed))
+		for key, item := range typed {
+			if strings.EqualFold(key, "password") && item != "" {
+				redacted[key] = "[REDACTED]"
+			} else {
+				redacted[key] = redactAccessToken(item)
+			}
+		}
+		return redacted
+	case []map[string]string:
+		redacted := make([]map[string]string, len(typed))
+		for index, item := range typed {
+			redacted[index] = redactConfigAccessTokens(item).(map[string]string)
 		}
 		return redacted
 	case string:

@@ -229,6 +229,64 @@ func TestScheduledRestartWaitsForNodeUpdateAndUsesAddedAndRemovedNodes(t *testin
 	}
 }
 
+func TestReconcileCurrentCallbackBlocksConfigUpdatesUntilRuntimeLoad(t *testing.T) {
+	core := &configGeneratorCoreStub{}
+	svc, db, _, _ := newScheduledRestartConfigGenerator(t, core)
+	if err := db.SetLogSettings(&model.LogSettings{Level: "debug", Timestamp: true}); err != nil {
+		t.Fatal(err)
+	}
+	callbackStarted := make(chan struct{})
+	releaseCallback := make(chan struct{})
+	reconcileDone := make(chan error, 1)
+	go func() {
+		_, err := svc.ReconcileCurrentWithCallback(func() error {
+			close(callbackStarted)
+			<-releaseCallback
+			return nil
+		})
+		reconcileDone <- err
+	}()
+	select {
+	case <-callbackStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for runtime callback")
+	}
+
+	updateAcquired := make(chan func(), 1)
+	go func() {
+		updateAcquired <- db.HoldConfigUpdate()
+	}()
+	select {
+	case release := <-updateAcquired:
+		release()
+		t.Fatal("config update entered between apply and runtime load")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(releaseCallback)
+	if err := <-reconcileDone; err != nil {
+		t.Fatal(err)
+	}
+	release := <-updateAcquired
+	release()
+}
+
+func TestReconcileCurrentCallbackRunsWhenActiveConfigIsUnchanged(t *testing.T) {
+	core := &configGeneratorCoreStub{}
+	svc, _, _, _ := newScheduledRestartConfigGenerator(t, core)
+	callbackCalls := 0
+	result, err := svc.ReconcileCurrentWithCallback(func() error {
+		callbackCalls++
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Valid || callbackCalls != 1 {
+		t.Fatalf("valid = %t, callback calls = %d", result.Valid, callbackCalls)
+	}
+}
+
 func TestSubscriptionSyncAndScheduledRestartShareOneCoreLifecycle(t *testing.T) {
 	core := &configGeneratorCoreStub{}
 	configGenerator, db, p, _ := newScheduledRestartConfigGenerator(t, core)

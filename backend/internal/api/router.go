@@ -16,6 +16,7 @@ func RegisterRoutes(
 	settingsSvc *service.SettingsService,
 	subscriptionSvc *service.SubscriptionService,
 	nodeSvc *service.NodeService,
+	nodeExposureSvc *service.NodeExposureService,
 	routeRuleSvc *service.RouteRuleService,
 	proxyCollectionSvc *service.ProxyCollectionService,
 	configGenSvc *service.ConfigGeneratorService,
@@ -35,6 +36,7 @@ func RegisterRoutes(
 	settingsH := handler.NewSettingsHandler(settingsSvc)
 	subscriptionH := handler.NewSubscriptionHandler(subscriptionSvc)
 	nodeH := handler.NewNodeHandler(nodeSvc)
+	nodeExposureH := handler.NewNodeExposureHandler(nodeExposureSvc)
 	routeRuleH := handler.NewRouteRuleHandler(routeRuleSvc)
 	proxyCollectionH := handler.NewProxyCollectionHandler(proxyCollectionSvc)
 	configGenH := handler.NewConfigGeneratorHandler(configGenSvc)
@@ -150,6 +152,11 @@ func RegisterRoutes(
 		v1.POST("/nodes/batch-delete", nodeH.BatchDelete)
 		v1.PUT("/nodes/:uid/enabled", nodeH.SetEnabled)
 		v1.PUT("/nodes/:uid/preferred", nodeH.SetPreferred)
+
+		v1.GET("/advanced/node-exposures", nodeExposureH.List)
+		v1.POST("/advanced/node-exposures", nodeExposureH.Create)
+		v1.PUT("/advanced/node-exposures/:id", nodeExposureH.Update)
+		v1.DELETE("/advanced/node-exposures/:id", nodeExposureH.Delete)
 
 		v1.GET("/collections", proxyCollectionH.List)
 		v1.POST("/collections", proxyCollectionH.Create)

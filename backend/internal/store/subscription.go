@@ -147,10 +147,16 @@ func (s *Store) deleteSubscriptionNodesAndCleanup(id int64, deleteSubscription b
 		return err
 	}
 	if deleteSubscription {
+		if _, err := tx.Exec(`DELETE FROM node_exposures WHERE subscription_id = ?`, id); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(`DELETE FROM subscriptions WHERE id = ?`, id); err != nil {
 			return err
 		}
 	} else {
+		if _, err := tx.Exec(`UPDATE node_exposures SET enabled = 0, updated_at = ? WHERE subscription_id = ?`, time.Now().UnixMilli(), id); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(`UPDATE subscriptions SET node_count = 0, updated_at = ? WHERE id = ?`, time.Now().UnixMilli(), id); err != nil {
 			return err
 		}
