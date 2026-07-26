@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ackwrap/ackrun/internal/httpclient"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
@@ -251,7 +252,7 @@ func resolveTargetWithAliDoH(ctx context.Context, client *http.Client, endpoint,
 		return nil, err
 	}
 	request.Header.Set("Accept", "application/dns-json")
-	request.Header.Set("User-Agent", "Ackwrap/1")
+	httpclient.SetBrowserUserAgent(request)
 	response, err := client.Do(request)
 	if err != nil {
 		return nil, err

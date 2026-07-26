@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ackwrap/ackrun/internal/geoquery"
+	"github.com/ackwrap/ackrun/internal/httpclient"
 	"github.com/ackwrap/ackrun/internal/logging"
 	"github.com/ackwrap/ackrun/internal/model"
 	"github.com/ackwrap/ackrun/internal/traceroute"
@@ -149,6 +150,7 @@ func (svc *NodeService) resolveActiveNodeOutboundTag(ctx context.Context, node m
 	if err != nil {
 		return "", err
 	}
+	httpclient.SetBrowserUserAgent(request)
 	if secret != "" {
 		request.Header.Set("Authorization", "Bearer "+secret)
 	}
@@ -209,6 +211,7 @@ func (svc *NodeService) lookupNodeExitIP(ctx context.Context, outboundTag string
 	if err != nil {
 		return nil, err
 	}
+	httpclient.SetBrowserUserAgent(request)
 	if secret != "" {
 		request.Header.Set("Authorization", "Bearer "+secret)
 	}

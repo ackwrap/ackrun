@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ackwrap/ackrun/internal/httpclient"
 	"github.com/ackwrap/ackrun/internal/model"
 	"github.com/ackwrap/ackrun/internal/paths"
 	"github.com/ackwrap/ackrun/internal/store"
@@ -638,6 +640,46 @@ func TestRouteRuleSubscriptionContentRejectsOversizedResponse(t *testing.T) {
 	client := &http.Client{Timeout: 5 * time.Second}
 	if _, err := fetchRouteRuleSubscriptionContentWithClient(client, server.URL); err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("expected oversized response error, got %v", err)
+	}
+}
+
+type routeRuleRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn routeRuleRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return fn(request)
+}
+
+type unexpectedEOFBody struct{}
+
+func (unexpectedEOFBody) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+func (unexpectedEOFBody) Close() error             { return nil }
+
+func TestRouteRuleSubscriptionContentRetriesUnexpectedEOFWithBrowserUserAgent(t *testing.T) {
+	attempts := 0
+	client := &http.Client{Transport: routeRuleRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		attempts++
+		if got := request.Header.Get("User-Agent"); got != httpclient.BrowserUserAgent {
+			t.Fatalf("User-Agent = %q, want browser UA", got)
+		}
+		body := io.ReadCloser(io.NopCloser(strings.NewReader("payload")))
+		if attempts == 1 {
+			body = unexpectedEOFBody{}
+		}
+		return &http.Response{
+			StatusCode:    http.StatusOK,
+			Body:          body,
+			ContentLength: -1,
+			Header:        make(http.Header),
+			Request:       request,
+		}, nil
+	})}
+
+	data, err := fetchRouteRuleSubscriptionContentWithClient(client, "https://example.com/rules.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "payload" || attempts != 2 {
+		t.Fatalf("data = %q, attempts = %d; want payload after 2 attempts", data, attempts)
 	}
 }
 

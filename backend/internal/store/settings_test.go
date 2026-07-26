@@ -135,7 +135,7 @@ func TestDNSGlobalSettingsFallBackToLegacySettingsWhenUnmigrated(t *testing.T) {
 	if settings.Enabled || settings.Final != "dns_legacy" || settings.Strategy != "ipv4_only" || !settings.FakeIPEnabled {
 		t.Fatalf("legacy DNS fallback = %+v", settings)
 	}
-	if settings.FakeIPInet4Range != "198.18.0.1/16" || settings.FakeIPInet6Range != "fdfe:dcba:9876::/48" {
+	if settings.FakeIPInet4Range != "198.18.0.1/16" || settings.FakeIPInet6Range != "fc00::/18" {
 		t.Fatalf("default FakeIP ranges = %s, %s", settings.FakeIPInet4Range, settings.FakeIPInet6Range)
 	}
 	if _, err := s.db.Exec(`INSERT INTO app_settings (key, value, updated_at) VALUES ('dns_global.enabled', 'true', 2)`); err != nil {
@@ -159,6 +159,9 @@ func TestDNSGlobalSettingsPreservesPersistedFakeIPRange(t *testing.T) {
 	if _, err := s.db.Exec(`INSERT INTO app_settings (key, value, updated_at) VALUES ('dns_global.fakeip_inet4_range', '198.19.0.0/16', 1)`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := s.db.Exec(`INSERT INTO app_settings (key, value, updated_at) VALUES ('dns_global.fakeip_inet6_range', 'fd00:1234::/32', 1)`); err != nil {
+		t.Fatal(err)
+	}
 
 	settings, err := s.GetDNSGlobalSettings()
 	if err != nil {
@@ -166,6 +169,46 @@ func TestDNSGlobalSettingsPreservesPersistedFakeIPRange(t *testing.T) {
 	}
 	if settings.FakeIPInet4Range != "198.19.0.0/16" {
 		t.Fatalf("persisted FakeIP IPv4 range = %q", settings.FakeIPInet4Range)
+	}
+	if settings.FakeIPInet6Range != "fd00:1234::/32" {
+		t.Fatalf("persisted FakeIP IPv6 range = %q", settings.FakeIPInet6Range)
+	}
+}
+
+func TestMigrateDefaultFakeIPIPv6Range(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "ackwrap.db")
+	s, err := Open(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"dns.fakeip_inet6_range", "dns_global.fakeip_inet6_range"} {
+		if _, err := s.db.Exec(`INSERT INTO app_settings (key, value, updated_at) VALUES (?, 'fdfe:dcba:9876::/48', 1)`, key); err != nil {
+			s.Close()
+			t.Fatal(err)
+		}
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err = Open(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	settings, err := s.GetDNSGlobalSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.FakeIPInet6Range != "fc00::/18" {
+		t.Fatalf("migrated FakeIP IPv6 range = %q", settings.FakeIPInet6Range)
+	}
+	var migratedKeys int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM app_settings WHERE key IN ('dns.fakeip_inet6_range', 'dns_global.fakeip_inet6_range') AND value = 'fc00::/18'`).Scan(&migratedKeys); err != nil {
+		t.Fatal(err)
+	}
+	if migratedKeys != 2 {
+		t.Fatalf("migrated FakeIP IPv6 keys = %d, want 2", migratedKeys)
 	}
 }
 

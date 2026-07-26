@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ackwrap/ackrun/internal/httpclient"
 	"github.com/ackwrap/ackrun/internal/logging"
 	"github.com/ackwrap/ackrun/internal/model"
 	"github.com/ackwrap/ackrun/internal/parser"
@@ -431,6 +432,7 @@ func (svc *NodeService) urlTestNode(node model.Node, outboundTag string) model.N
 	if err != nil {
 		return model.NodeTCPingResult{UID: node.UID, Error: err.Error()}
 	}
+	httpclient.SetBrowserUserAgent(req)
 	if secret != "" {
 		req.Header.Set("Authorization", "Bearer "+secret)
 	}

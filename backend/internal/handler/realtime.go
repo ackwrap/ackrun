@@ -44,8 +44,7 @@ func (h *RealtimeHandler) HandleWS(c *gin.Context) {
 		return
 	}
 
-	initialEvents := h.initialState()
-	if !h.svc.AddClient(conn, initialEvents...) {
+	if !h.svc.AddClientWithInitialState(conn, h.initialState) {
 		return
 	}
 	defer h.svc.RemoveClient(conn)

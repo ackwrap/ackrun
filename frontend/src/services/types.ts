@@ -7,6 +7,8 @@ export interface RuntimeResponse {
   version?: string;
   platform?: string;
   proxy_port?: number;
+  uptime_seconds?: number;
+  core_uptime_seconds?: number;
 }
 
 export type InstallStatusType =

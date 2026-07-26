@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ackwrap/ackrun/internal/httpclient"
 	"github.com/ackwrap/ackrun/internal/logging"
 	"github.com/ackwrap/ackrun/internal/model"
 	"github.com/ackwrap/ackrun/internal/paths"
@@ -35,6 +36,7 @@ type SingboxService struct {
 	dnsmasqSupported   func() bool
 	cmd                *exec.Cmd
 	pid                int
+	coreStartedAt      time.Time
 	mu                 sync.Mutex
 	lifecycleMu        sync.Mutex
 	networkLifecycleMu sync.Mutex
@@ -210,6 +212,7 @@ func (svc *SingboxService) start() (*model.ActionResponse, error) {
 
 	svc.cmd = cmd
 	svc.pid = cmd.Process.Pid
+	svc.coreStartedAt = time.Now()
 	svc.done = make(chan error, 1)
 	svc.stopping = false
 	done := svc.done
@@ -253,6 +256,7 @@ func (svc *SingboxService) start() (*model.ActionResponse, error) {
 			svc.pid = 0
 			svc.cmd = nil
 			svc.done = nil
+			svc.coreStartedAt = time.Time{}
 		}
 		svc.mu.Unlock()
 
@@ -617,12 +621,17 @@ func (svc *SingboxService) IsInstalledAndConfigured() bool {
 }
 
 func (svc *SingboxService) GetPID() int {
+	pid, _ := svc.GetProcessState()
+	return pid
+}
+
+func (svc *SingboxService) GetProcessState() (int, int64) {
 	svc.mu.Lock()
 	defer svc.mu.Unlock()
-	if svc.isRunning() {
-		return svc.pid
+	if svc.isRunning() && !svc.coreStartedAt.IsZero() {
+		return svc.pid, int64(time.Since(svc.coreStartedAt).Seconds())
 	}
-	return 0
+	return 0, 0
 }
 
 func (svc *SingboxService) broadcastRuntimeStatus(status model.RuntimeStatus, pid int) {
@@ -635,7 +644,12 @@ func (svc *SingboxService) broadcastRuntimeStatus(status model.RuntimeStatus, pi
 		version = v
 		svc.cachedVer = v
 	}
-	svc.realtime.Broadcast("runtime.status", model.RuntimeResponse{Status: status, PID: pid, Version: version})
+	resp := model.RuntimeResponse{Status: status, PID: pid, Version: version}
+	if status == model.RuntimeRunning && pid > 0 && !svc.coreStartedAt.IsZero() {
+		coreUptimeSeconds := int64(time.Since(svc.coreStartedAt).Seconds())
+		resp.CoreUptimeSeconds = &coreUptimeSeconds
+	}
+	svc.realtime.Broadcast("runtime.status", resp)
 }
 
 func (svc *SingboxService) getVersion() string {
@@ -783,6 +797,7 @@ func requestClashAPI(method, target, secret string) error {
 	if err != nil {
 		return err
 	}
+	httpclient.SetBrowserUserAgent(req)
 	if secret != "" {
 		req.Header.Set("Authorization", "Bearer "+secret)
 	}

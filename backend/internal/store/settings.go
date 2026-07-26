@@ -433,7 +433,7 @@ func (s *Store) GetDNSSettings() (*model.DNSSettingsResponse, error) {
 		ClientSubnet:     "",
 		FakeIPEnabled:    false,
 		FakeIPInet4Range: "198.18.0.1/16",
-		FakeIPInet6Range: "fdfe:dcba:9876::/48",
+		FakeIPInet6Range: "fc00::/18",
 		RouteCN:          true,
 		RouteNonCN:       true,
 		BlockAds:         true,

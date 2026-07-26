@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ackwrap/ackrun/internal/httpclient"
 	"github.com/ackwrap/ackrun/internal/logging"
 	"github.com/ackwrap/ackrun/internal/model"
 	"github.com/robfig/cron/v3"
@@ -262,6 +263,7 @@ func (s *ProxyCollectionService) testNode(uid, outboundTag, testURL string) mode
 	if err != nil {
 		return model.CollectionTestNodeResult{UID: uid, Error: err.Error()}
 	}
+	httpclient.SetBrowserUserAgent(req)
 	if secret != "" {
 		req.Header.Set("Authorization", "Bearer "+secret)
 	}

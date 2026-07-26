@@ -5,9 +5,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestReadMixedInboundPort(t *testing.T) {
@@ -18,6 +20,22 @@ func TestReadMixedInboundPort(t *testing.T) {
 	}
 	if got := readMixedInboundPort(path); got != 8888 {
 		t.Fatalf("readMixedInboundPort() = %d, want 8888", got)
+	}
+}
+
+func TestSingboxProcessStateIncludesUptime(t *testing.T) {
+	svc := &SingboxService{
+		pid:           42,
+		cmd:           &exec.Cmd{Process: &os.Process{Pid: 42}},
+		coreStartedAt: time.Now().Add(-3 * time.Second),
+	}
+
+	pid, uptimeSeconds := svc.GetProcessState()
+	if pid != 42 {
+		t.Fatalf("GetProcessState() pid = %d, want 42", pid)
+	}
+	if uptimeSeconds < 2 || uptimeSeconds > 5 {
+		t.Fatalf("GetProcessState() uptime = %d, want about 3 seconds", uptimeSeconds)
 	}
 }
 

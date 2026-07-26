@@ -11,11 +11,13 @@ const (
 )
 
 type RuntimeResponse struct {
-	Status    RuntimeStatus `json:"status"`
-	PID       int           `json:"pid,omitempty"`
-	Version   string        `json:"version,omitempty"`
-	Platform  string        `json:"platform,omitempty"`
-	ProxyPort int           `json:"proxy_port,omitempty"`
+	Status            RuntimeStatus `json:"status"`
+	PID               int           `json:"pid,omitempty"`
+	Version           string        `json:"version,omitempty"`
+	Platform          string        `json:"platform,omitempty"`
+	ProxyPort         int           `json:"proxy_port,omitempty"`
+	UptimeSeconds     *int64        `json:"uptime_seconds,omitempty"`
+	CoreUptimeSeconds *int64        `json:"core_uptime_seconds,omitempty"`
 }
 
 type MaintenanceCheck struct {

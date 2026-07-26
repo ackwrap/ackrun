@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ackwrap/ackrun/internal/httpclient"
 	"github.com/ackwrap/ackrun/internal/model"
 	"github.com/ackwrap/ackrun/internal/traceroute"
 )
@@ -91,7 +92,7 @@ func lookupCustomGeo(ctx context.Context, ip net.IP, provider model.GeoIPProvide
 		return traceroute.GeoData{}, errors.New("Geo API request configuration is invalid")
 	}
 	request.Header.Set("Accept", "application/json")
-	request.Header.Set("User-Agent", "Ackwrap/1")
+	httpclient.SetBrowserUserAgent(request)
 	response, err := customGeoHTTPClient.Do(request)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {

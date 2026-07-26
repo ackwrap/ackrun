@@ -209,7 +209,7 @@ func (s *Store) GetDNSGlobalSettings() (*model.DNSGlobalSettings, error) {
 		ClientSubnet:     "",
 		FakeIPEnabled:    false,
 		FakeIPInet4Range: "198.18.0.1/16",
-		FakeIPInet6Range: "fdfe:dcba:9876::/48",
+		FakeIPInet6Range: "fc00::/18",
 	}
 
 	rows, err := s.db.Query(`SELECT key, value FROM app_settings WHERE key LIKE 'dns_global.%'`)

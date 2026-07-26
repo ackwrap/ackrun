@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ackwrap/ackrun/internal/httpclient"
 	"github.com/ackwrap/ackrun/internal/logging"
 	"github.com/ackwrap/ackrun/internal/model"
 	"github.com/ackwrap/ackrun/internal/paths"
@@ -396,7 +397,12 @@ func (svc *InstallerService) download(url, dest string) error {
 }
 
 func (svc *InstallerService) downloadOnce(client *http.Client, downloadURL, dest string) error {
-	resp, err := client.Get(downloadURL)
+	req, err := http.NewRequest(http.MethodGet, downloadURL, nil)
+	if err != nil {
+		return fmt.Errorf("创建下载请求失败: %w", err)
+	}
+	httpclient.SetBrowserUserAgent(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("请求下载地址失败: %w", err)
 	}

@@ -23,6 +23,7 @@ import (
 	"github.com/robfig/cron/v3"
 
 	"github.com/ackwrap/ackrun/internal/geoquery"
+	"github.com/ackwrap/ackrun/internal/httpclient"
 	"github.com/ackwrap/ackrun/internal/logging"
 	"github.com/ackwrap/ackrun/internal/model"
 	"github.com/ackwrap/ackrun/internal/parser"
@@ -37,6 +38,7 @@ const SystemAdBlockRouteRuleName = "广告拦截"
 const SystemGlobalDirectRouteRuleName = "全球直连"
 
 const routeRuleSubscriptionContentMaxSize int64 = 16 * 1024 * 1024
+const routeRuleSubscriptionFetchAttempts = 3
 
 // SystemRuleAdBlockKey 系统默认广告拦截规则内部标识。
 const SystemRuleAdBlockKey = "ad_block"
@@ -983,6 +985,7 @@ func lookupDoHType(endpoint string, host string, qtype string) ([]net.IP, error)
 	if err != nil {
 		return nil, err
 	}
+	httpclient.SetBrowserUserAgent(req)
 	req.Header.Set("Accept", "application/dns-json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -1724,7 +1727,21 @@ func fetchRouteRuleSubscriptionContent(rawURL string, useProxy bool) ([]byte, er
 }
 
 func fetchRouteRuleSubscriptionContentWithClient(client *http.Client, rawURL string) ([]byte, error) {
-	return fetchRouteRuleSubscriptionContentWithClientContext(context.Background(), client, rawURL)
+	ctx := context.Background()
+	var lastErr error
+	for attempt := 1; attempt <= routeRuleSubscriptionFetchAttempts; attempt++ {
+		data, retry, err := fetchRouteRuleSubscriptionContentOnce(ctx, client, rawURL, nil)
+		if err == nil {
+			return data, nil
+		}
+		lastErr = err
+		if !retry || attempt == routeRuleSubscriptionFetchAttempts {
+			return nil, err
+		}
+		client.CloseIdleConnections()
+		logging.Info("route_rule_subscription.sync", "retrying interrupted download, attempt=%d/%d", attempt+1, routeRuleSubscriptionFetchAttempts)
+	}
+	return nil, lastErr
 }
 
 func fetchRouteRuleSubscriptionContentWithClientProgress(client *http.Client, rawURL string, progress func(read, total int64)) ([]byte, error) {
@@ -1736,18 +1753,24 @@ func fetchRouteRuleSubscriptionContentWithClientContext(ctx context.Context, cli
 }
 
 func fetchRouteRuleSubscriptionContentWithClientContextProgress(ctx context.Context, client *http.Client, rawURL string, progress func(read, total int64)) ([]byte, error) {
+	data, _, err := fetchRouteRuleSubscriptionContentOnce(ctx, client, rawURL, progress)
+	return data, err
+}
+
+func fetchRouteRuleSubscriptionContentOnce(ctx context.Context, client *http.Client, rawURL string, progress func(read, total int64)) ([]byte, bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("create rule subscription request: %w", err)
+		return nil, false, fmt.Errorf("create rule subscription request: %w", err)
 	}
-	req.Header.Set("User-Agent", "Ackwrap/0.1")
+	httpclient.SetBrowserUserAgent(req)
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("fetch rule subscription: %w", err)
+		return nil, ctx.Err() == nil, fmt.Errorf("fetch rule subscription: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("fetch rule subscription failed: http %d", resp.StatusCode)
+		retry := resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
+		return nil, retry, fmt.Errorf("fetch rule subscription failed: http %d", resp.StatusCode)
 	}
 	reader := io.Reader(io.LimitReader(resp.Body, routeRuleSubscriptionContentMaxSize+1))
 	if progress != nil {
@@ -1755,15 +1778,15 @@ func fetchRouteRuleSubscriptionContentWithClientContextProgress(ctx context.Cont
 	}
 	data, err := io.ReadAll(reader)
 	if err != nil {
-		return nil, fmt.Errorf("read rule subscription: %w", err)
+		return nil, ctx.Err() == nil, fmt.Errorf("read rule subscription: %w", err)
 	}
 	if len(data) == 0 {
-		return nil, fmt.Errorf("rule subscription response is empty")
+		return nil, true, fmt.Errorf("rule subscription response is empty")
 	}
 	if int64(len(data)) > routeRuleSubscriptionContentMaxSize {
-		return nil, fmt.Errorf("rule subscription response exceeds %d bytes", routeRuleSubscriptionContentMaxSize)
+		return nil, false, fmt.Errorf("rule subscription response exceeds %d bytes", routeRuleSubscriptionContentMaxSize)
 	}
-	return data, nil
+	return data, false, nil
 }
 
 type downloadProgressReader struct {

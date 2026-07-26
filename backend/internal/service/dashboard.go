@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ackwrap/ackrun/internal/httpclient"
 	"github.com/ackwrap/ackrun/internal/logging"
 	"github.com/ackwrap/ackrun/internal/model"
 	"github.com/ackwrap/ackrun/internal/paths"
@@ -246,7 +247,7 @@ func downloadDashboardArchiveOnce(ctx context.Context, client *http.Client, rawU
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", "Ackwrap dashboard manager")
+	httpclient.SetBrowserUserAgent(req)
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("下载控制面板失败: %w", err)
@@ -343,7 +344,7 @@ func fetchLatestDashboardVersion(ctx context.Context, settings *model.UpdateSett
 		}
 		req.Header.Set("Accept", "application/vnd.github+json")
 		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-		req.Header.Set("User-Agent", "Ackwrap dashboard manager")
+		httpclient.SetBrowserUserAgent(req)
 		resp, err := attempt.client.Do(req)
 		if err != nil {
 			lastErr = err

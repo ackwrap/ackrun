@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"runtime"
+	"time"
 
 	"github.com/ackwrap/ackrun/internal/logging"
 	"github.com/ackwrap/ackrun/internal/model"
@@ -12,19 +13,21 @@ import (
 )
 
 type RuntimeService struct {
-	paths   *paths.Paths
-	store   *store.Store
-	singbox *SingboxService
+	paths     *paths.Paths
+	store     *store.Store
+	singbox   *SingboxService
+	startedAt time.Time
 }
 
 func NewRuntimeService(p *paths.Paths, s *store.Store, sb *SingboxService) *RuntimeService {
-	return &RuntimeService{paths: p, store: s, singbox: sb}
+	return &RuntimeService{paths: p, store: s, singbox: sb, startedAt: time.Now()}
 }
 
 func (svc *RuntimeService) GetStatus() (*model.RuntimeResponse, error) {
 	logging.Info("runtime.check", "checking runtime status")
 
-	resp := &model.RuntimeResponse{Platform: runtime.GOOS}
+	uptimeSeconds := int64(time.Since(svc.startedAt).Seconds())
+	resp := &model.RuntimeResponse{Platform: runtime.GOOS, UptimeSeconds: &uptimeSeconds}
 
 	if _, err := os.Stat(svc.paths.BinaryPath); os.IsNotExist(err) {
 		logging.Info("runtime.check", "binary not found: %s", svc.paths.BinaryPath)
@@ -44,10 +47,11 @@ func (svc *RuntimeService) GetStatus() (*model.RuntimeResponse, error) {
 		resp.ProxyPort = readMixedInboundPort(configPath)
 	}
 
-	pid := svc.singbox.GetPID()
+	pid, coreUptimeSeconds := svc.singbox.GetProcessState()
 	if pid > 0 {
 		resp.Status = model.RuntimeRunning
 		resp.PID = pid
+		resp.CoreUptimeSeconds = &coreUptimeSeconds
 		return resp, nil
 	}
 

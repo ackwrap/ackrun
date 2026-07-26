@@ -49,7 +49,7 @@ const defaults = {
     client_subnet: "",
     fakeip_enabled: false,
     fakeip_inet4_range: "198.18.0.1/16",
-    fakeip_inet6_range: "fdfe:dcba:9876::/48",
+    fakeip_inet6_range: "fc00::/18",
   },
   servers = ref<Server[]>([]),
   rules = ref<Rule[]>([]),

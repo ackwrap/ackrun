@@ -10,11 +10,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/ackwrap/ackrun/internal/httpclient"
 	"github.com/gorilla/websocket"
 	"github.com/tsosunchia/powclient"
 )
@@ -85,8 +85,6 @@ func (p *legacyLeoProvider) connect(ctx context.Context) error {
 			}
 		}
 		token = p.token
-	} else {
-		userAgent = "Privileged Client"
 	}
 	dialer := *websocket.DefaultDialer
 	dialer.TLSClientConfig = &tls.Config{ServerName: p.host, MinVersion: tls.VersionTLS12}
@@ -230,5 +228,5 @@ func legacyLeoEndpoint() (string, string) {
 }
 
 func legacyLeoUserAgent() string {
-	return fmt.Sprintf("NextTrace mini/%s/%s", runtime.GOOS, runtime.GOARCH)
+	return httpclient.BrowserUserAgent
 }

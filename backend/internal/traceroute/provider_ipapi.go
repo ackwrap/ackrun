@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ackwrap/ackrun/internal/httpclient"
 )
 
 const (
@@ -175,7 +177,7 @@ func (p *ipAPIISProvider) Lookup(ctx context.Context, ip string) (GeoData, error
 	if err != nil {
 		return GeoData{}, err
 	}
-	request.Header.Set("User-Agent", "Ackwrap/1")
+	httpclient.SetBrowserUserAgent(request)
 	response, err := p.client.Do(request)
 	if err != nil {
 		return GeoData{}, err
@@ -471,7 +473,7 @@ func (p *ipdbOneProvider) Lookup(ctx context.Context, ip string) (GeoData, error
 	}
 	rawURL := appendPath(p.baseURL, "query/"+ip) + "?lang=zh-CN"
 	if err := fetchJSON(ctx, p.client, rawURL, map[string]string{
-		"Authorization": "Bearer " + token, "User-Agent": "Ackwrap/1",
+		"Authorization": "Bearer " + token, "User-Agent": httpclient.BrowserUserAgent,
 	}, &body); err != nil {
 		return GeoData{}, err
 	}
@@ -504,7 +506,7 @@ func (p *ipdbOneProvider) authToken(ctx context.Context) (string, error) {
 		} `json:"data"`
 	}
 	if err := fetchJSON(ctx, p.client, appendPath(p.baseURL, "auth/requestToken/query"), map[string]string{
-		"x-api-id": p.apiID, "x-api-key": p.apiKey, "User-Agent": "Ackwrap/1",
+		"x-api-id": p.apiID, "x-api-key": p.apiKey, "User-Agent": httpclient.BrowserUserAgent,
 	}, &body); err != nil {
 		return "", err
 	}
@@ -527,6 +529,7 @@ func fetchJSON(ctx context.Context, client *http.Client, rawURL string, headers 
 	for key, value := range headers {
 		request.Header.Set(key, value)
 	}
+	httpclient.SetBrowserUserAgent(request)
 	response, err := client.Do(request)
 	if err != nil {
 		return err
@@ -560,7 +563,7 @@ func appendPath(base, value string) string {
 }
 
 func browserHeaders() map[string]string {
-	return map[string]string{"User-Agent": "Mozilla/5.0 (compatible; Ackwrap/1)"}
+	return map[string]string{"User-Agent": httpclient.BrowserUserAgent}
 }
 
 func firstNonEmpty(values ...string) string {

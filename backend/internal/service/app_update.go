@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/ackwrap/ackrun/internal/buildinfo"
+	"github.com/ackwrap/ackrun/internal/httpclient"
 	"github.com/ackwrap/ackrun/internal/logging"
 	"github.com/ackwrap/ackrun/internal/model"
 	"github.com/ackwrap/ackrun/internal/paths"
@@ -445,7 +446,7 @@ func fetchAppRelease(ctx context.Context, client *http.Client, rawURL string) (*
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	req.Header.Set("User-Agent", "Ackwrap/"+buildinfo.Version)
+	httpclient.SetBrowserUserAgent(req)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("请求 Ackwrap Release 失败: %w", err)
@@ -492,7 +493,7 @@ func downloadAppUpdateAssetOnce(ctx context.Context, client *http.Client, rawURL
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", "Ackwrap/"+buildinfo.Version)
+	httpclient.SetBrowserUserAgent(req)
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("下载更新包失败: %w", err)

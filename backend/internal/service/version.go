@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/ackwrap/ackrun/internal/httpclient"
 )
 
 var singboxVersionPattern = regexp.MustCompile(`v?(\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?)`)
@@ -54,7 +56,7 @@ func fetchLatestSingboxRelease(client *http.Client, apiURL string) (*singboxRele
 	if err != nil {
 		return nil, fmt.Errorf("create release request: %w", err)
 	}
-	req.Header.Set("User-Agent", "Ackwrap/1.0")
+	httpclient.SetBrowserUserAgent(req)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	resp, err := client.Do(req)
 	if err != nil {

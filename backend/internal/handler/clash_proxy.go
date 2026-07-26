@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ackwrap/ackrun/internal/httpclient"
 	"github.com/ackwrap/ackrun/internal/model"
 	"github.com/ackwrap/ackrun/internal/service"
 	"github.com/gin-gonic/gin"
@@ -78,6 +79,7 @@ func (h *ClashProxyHandler) Proxy(c *gin.Context) {
 			proxyReq.Header.Add(key, value)
 		}
 	}
+	httpclient.SetBrowserUserAgent(proxyReq)
 
 	// 添加 Clash API 认证
 	if secret != "" {
@@ -135,6 +137,7 @@ func (h *ClashProxyHandler) ProxyWebSocket(c *gin.Context) {
 	if secret != "" {
 		c.Request.Header.Set("Authorization", "Bearer "+secret)
 	}
+	httpclient.SetBrowserUserAgent(c.Request)
 
 	proxy.ServeHTTP(c.Writer, c.Request)
 }
@@ -144,6 +147,7 @@ func (h *ClashProxyHandler) GetClashStatus(c *gin.Context) {
 	client := &http.Client{Timeout: 5 * time.Second}
 	clashURL, secret := h.targetBase()
 	req, _ := http.NewRequest("GET", clashURL+"/version", nil)
+	httpclient.SetBrowserUserAgent(req)
 	if secret != "" {
 		req.Header.Set("Authorization", "Bearer "+secret)
 	}

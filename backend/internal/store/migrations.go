@@ -274,6 +274,10 @@ func (s *Store) migrate() error {
 		)`,
 		`DELETE FROM app_settings WHERE key IN ('update.github_token', 'update.proxy_url')`,
 		`DELETE FROM app_settings WHERE key = 'update.acceleration' AND value = 'proxy'`,
+		`UPDATE app_settings
+			SET value = 'fc00::/18', updated_at = unixepoch()
+			WHERE key IN ('dns.fakeip_inet6_range', 'dns_global.fakeip_inet6_range')
+			AND value = 'fdfe:dcba:9876::/48'`,
 	}
 
 	for _, m := range migrations {

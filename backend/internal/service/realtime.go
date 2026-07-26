@@ -24,11 +24,13 @@ type outboundMessage struct {
 }
 
 type realtimeClient struct {
-	conn      *websocket.Conn
-	send      chan outboundMessage
-	done      chan struct{}
-	stopOnce  sync.Once
-	closeOnce sync.Once
+	conn         *websocket.Conn
+	send         chan outboundMessage
+	done         chan struct{}
+	initializing bool
+	pending      []outboundMessage
+	stopOnce     sync.Once
+	closeOnce    sync.Once
 }
 
 func newRealtimeClient(conn *websocket.Conn) *realtimeClient {
@@ -65,14 +67,22 @@ func NewRealtimeService() *RealtimeService {
 }
 
 func (svc *RealtimeService) AddClient(conn *websocket.Conn, initialEvents ...model.WSEvent) bool {
-	if conn == nil || len(initialEvents) > realtimeQueueSize {
+	if len(initialEvents) > realtimeQueueSize {
 		if conn != nil {
 			_ = conn.Close()
 		}
 		return false
 	}
+	return svc.AddClientWithInitialState(conn, func() []model.WSEvent { return initialEvents })
+}
+
+func (svc *RealtimeService) AddClientWithInitialState(conn *websocket.Conn, initialState func() []model.WSEvent) bool {
+	if conn == nil {
+		return false
+	}
 
 	client := newRealtimeClient(conn)
+	client.initializing = true
 	if err := conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
 		client.closeConnection()
 		return false
@@ -92,17 +102,59 @@ func (svc *RealtimeService) AddClient(conn *websocket.Conn, initialEvents ...mod
 		client.closeConnection()
 		return false
 	}
-	for i := range initialEvents {
-		event := initialEvents[i]
-		client.send <- outboundMessage{event: &event}
-	}
 	svc.clients[conn] = client
-	total := len(svc.clients)
 	svc.mu.Unlock()
+
+	initialEvents := svc.buildClientInitialState(client, initialState)
+	ok, total := svc.completeClientInitialization(client, initialEvents)
+	if !ok {
+		client.closeConnection()
+		return false
+	}
 
 	logging.Info("websocket.connect", "client connected, total=%d", total)
 	go svc.writePump(client)
 	return true
+}
+
+func (svc *RealtimeService) buildClientInitialState(client *realtimeClient, initialState func() []model.WSEvent) (initialEvents []model.WSEvent) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			svc.detachClient(client)
+			client.closeConnection()
+			panic(recovered)
+		}
+	}()
+	if initialState != nil {
+		return initialState()
+	}
+	return nil
+}
+
+func (svc *RealtimeService) completeClientInitialization(client *realtimeClient, initialEvents []model.WSEvent) (bool, int) {
+	svc.mu.Lock()
+	current, exists := svc.clients[client.conn]
+	if !exists || current != client || len(initialEvents)+len(client.pending) > realtimeQueueSize {
+		if exists && current == client {
+			delete(svc.clients, client.conn)
+			client.signalStop()
+		}
+		total := len(svc.clients)
+		svc.mu.Unlock()
+		return false, total
+	}
+	for i := range initialEvents {
+		event := initialEvents[i]
+		client.send <- outboundMessage{event: &event}
+	}
+	for _, message := range client.pending {
+		client.send <- message
+	}
+	client.pending = nil
+	client.initializing = false
+	total := len(svc.clients)
+	svc.mu.Unlock()
+	return true, total
 }
 
 func (svc *RealtimeService) RemoveClient(conn *websocket.Conn) {
@@ -194,14 +246,22 @@ func (svc *RealtimeService) enqueueControl(client *realtimeClient, messageType i
 		svc.mu.Unlock()
 		return
 	}
-	select {
-	case client.send <- outboundMessage{messageType: messageType, data: data}:
+	message := outboundMessage{messageType: messageType, data: data}
+	if client.initializing && len(client.pending) < realtimeQueueSize {
+		client.pending = append(client.pending, message)
 		svc.mu.Unlock()
 		return
-	default:
-		delete(svc.clients, client.conn)
-		client.signalStop()
 	}
+	if !client.initializing {
+		select {
+		case client.send <- message:
+			svc.mu.Unlock()
+			return
+		default:
+		}
+	}
+	delete(svc.clients, client.conn)
+	client.signalStop()
 	total := len(svc.clients)
 	svc.mu.Unlock()
 	go svc.finishSlowClients([]*realtimeClient{client}, total)
@@ -217,8 +277,19 @@ func (svc *RealtimeService) Broadcast(eventType string, data any) {
 	var slowClients []*realtimeClient
 	svc.mu.Lock()
 	for conn, client := range svc.clients {
+		message := outboundMessage{event: &event}
+		if client.initializing && len(client.pending) < realtimeQueueSize {
+			client.pending = append(client.pending, message)
+			continue
+		}
+		if client.initializing {
+			delete(svc.clients, conn)
+			client.signalStop()
+			slowClients = append(slowClients, client)
+			continue
+		}
 		select {
-		case client.send <- outboundMessage{event: &event}:
+		case client.send <- message:
 		default:
 			delete(svc.clients, conn)
 			client.signalStop()
