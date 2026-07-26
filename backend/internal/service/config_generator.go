@@ -609,7 +609,7 @@ func (s *ConfigGeneratorService) generateOutbounds(requireUsableProxy ...bool) (
 				return nil, nil, fmt.Errorf("策略组 %s 生成失败: %w", col.Name, err)
 			}
 			if strictProxy {
-				return nil, nil, fmt.Errorf("DNS 依赖 proxy 策略组，但该策略组没有可用代理节点: %w", err)
+				return nil, nil, fmt.Errorf("当前 DNS 或路由策略需要可用 proxy 路径，但该策略组没有可用代理节点: %w", err)
 			}
 			logging.Info("config_generator.outbound", "proxy 策略组没有可用节点，降级为 direct: %v", err)
 			outbound = map[string]interface{}{
@@ -627,13 +627,13 @@ func (s *ConfigGeneratorService) generateOutbounds(requireUsableProxy ...bool) (
 		outbounds = append(outbounds, outbound)
 	}
 	if hasProxyCollection && strictProxy && !hasUsableNonDirectOutboundPath(outbounds, endpoints, []string{"proxy"}) {
-		return nil, nil, fmt.Errorf("DNS 依赖 proxy 策略组，但该策略组没有可用非直连代理路径")
+		return nil, nil, fmt.Errorf("当前 DNS 或路由策略需要可用 proxy 路径，但该策略组没有可用非直连代理路径")
 	}
 
 	// 8. 规则管理中的“策略”动作固定引用 proxy。若用户没有显式创建 proxy 策略组，自动生成一个代理入口承接已启用策略组。
 	if !hasProxyCollection {
 		if strictProxy && !hasUsableNonDirectOutboundPath(outbounds, endpoints, collectionTags) {
-			return nil, nil, fmt.Errorf("DNS 依赖 proxy 策略组，但当前没有可用代理策略组")
+			return nil, nil, fmt.Errorf("当前 DNS 或路由策略需要可用 proxy 路径，但当前没有可用代理策略组")
 		}
 		if len(collectionTags) == 0 {
 			collectionTags = []string{"direct"}
@@ -726,16 +726,17 @@ func (s *ConfigGeneratorService) appendDirectStrategyOutbounds(outbounds, endpoi
 }
 
 func (s *ConfigGeneratorService) dnsRequiresUsableProxy(defaultOutbound string) (bool, error) {
-	settings, err := s.effectiveDNSGlobalSettings()
-	if err != nil || settings == nil || !settings.Enabled {
-		return false, err
-	}
 	required, err := s.dnsNeedsProxyFinal(defaultOutbound)
 	if err != nil {
 		return false, err
 	}
 	if required {
 		return true, nil
+	}
+
+	settings, err := s.effectiveDNSGlobalSettings()
+	if err != nil || settings == nil || !settings.Enabled {
+		return false, err
 	}
 	servers, err := s.store.ListDNSServers()
 	if err != nil {
@@ -1863,6 +1864,7 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 	var routeRules []map[string]interface{}
 	var ruleSets []map[string]interface{}
 	ruleSetTags := make(map[string]bool)
+	ruleModeFinalOutbound := SystemGlobalDirectRouteRuleName
 
 	// 标准 TCP/UDP DNS 必须在进程和节点直连白名单之前劫持，避免 DNS
 	// 目标与白名单地址重合时被 bypass 终止匹配。
@@ -1938,6 +1940,14 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 				continue
 			}
 			if rule.RuleType == "fallback" || rule.SystemKey == SystemRuleGlobalDirectKey {
+				switch rule.Outbound {
+				case "direct":
+					ruleModeFinalOutbound = SystemGlobalDirectRouteRuleName
+				case "proxy":
+					ruleModeFinalOutbound = "proxy"
+				default:
+					return nil, fmt.Errorf("最终策略包含不支持的出站 %q", rule.Outbound)
+				}
 				continue
 			}
 			if rule.Outbound == "proxy" {
@@ -2018,8 +2028,8 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 		// 直连模式：所有流量直连
 		finalOutbound = "direct"
 	case "rule":
-		// 规则模式的最终策略由受保护的全球直连系统规则和 selector 承接。
-		finalOutbound = SystemGlobalDirectRouteRuleName
+		// 规则模式的最终策略由受保护、可编辑的系统规则决定。
+		finalOutbound = ruleModeFinalOutbound
 	default:
 		finalOutbound = "direct"
 	}

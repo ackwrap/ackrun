@@ -290,7 +290,7 @@ func TestRuleModeGeneratesDirectSelectorRejectAndFallbackFinal(t *testing.T) {
 	}
 }
 
-func TestGlobalDirectRuleCannotBeChanged(t *testing.T) {
+func TestFinalStrategyOnlyAllowsOutboundChanges(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -301,12 +301,43 @@ func TestGlobalDirectRuleCannotBeChanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	global := rules[len(rules)-1]
-	if _, err := svc.Update(global.ID, &model.RouteRuleRequest{Name: global.Name, Enabled: false}); !errors.Is(err, ErrSystemRouteRuleProtected) {
-		t.Fatalf("expected global direct update protection, got %v", err)
+	finalStrategy := rules[len(rules)-1]
+	updated, err := svc.Update(finalStrategy.ID, &model.RouteRuleRequest{
+		Name: "Changed", Enabled: false, Priority: 1, RuleType: "domain", Values: []string{"example.com"}, Outbound: "proxy", Invert: true,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := svc.Delete(global.ID); !errors.Is(err, ErrSystemRouteRuleProtected) {
-		t.Fatalf("expected global direct delete protection, got %v", err)
+	if updated.Name != SystemFinalStrategyDisplayName || updated.Outbound != "proxy" || !updated.Enabled || updated.RuleType != "fallback" || len(updated.Values) != 0 || updated.Invert {
+		t.Fatalf("updated final strategy = %+v", updated)
+	}
+	if _, err := svc.Update(finalStrategy.ID, &model.RouteRuleRequest{Name: finalStrategy.Name, Outbound: "block"}); err == nil {
+		t.Fatal("expected unsupported final strategy outbound to fail")
+	}
+	if _, err := svc.Delete(finalStrategy.ID); !errors.Is(err, ErrSystemRouteRuleProtected) {
+		t.Fatalf("expected final strategy delete protection, got %v", err)
+	}
+	generator := NewConfigGeneratorService(db, nil)
+	route, err := generator.generateRoute("direct")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route["final"] != "proxy" {
+		t.Fatalf("route final = %v, want proxy", route["final"])
+	}
+	requiresProxyDNS, err := generator.dnsNeedsProxyFinal("direct")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !requiresProxyDNS {
+		t.Fatal("proxy final strategy must require proxy DNS")
+	}
+	preview, err := svc.Preview()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.Final != "proxy" {
+		t.Fatalf("preview final = %v, want proxy", preview.Final)
 	}
 }
 

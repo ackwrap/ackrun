@@ -655,6 +655,7 @@ export interface RouteRuleRequest {
 export interface RouteRulePreviewResponse {
   rules: Array<Record<string, unknown>>;
   rule_sets: Array<Record<string, unknown>>;
+  final: string;
 }
 
 export interface RouteRuleSubscription {

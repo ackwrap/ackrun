@@ -37,6 +37,8 @@ const SystemAdBlockRouteRuleName = "广告拦截"
 
 const SystemGlobalDirectRouteRuleName = "全球直连"
 
+const SystemFinalStrategyDisplayName = "最终策略"
+
 const routeRuleSubscriptionContentMaxSize int64 = 16 * 1024 * 1024
 const routeRuleSubscriptionFetchAttempts = 3
 
@@ -65,7 +67,7 @@ func IsSystemRouteRuleKey(systemKey string) bool {
 // IsSystemRouteRuleName 仅用于阻止用户创建占用系统默认显示名的普通规则。
 func IsSystemRouteRuleName(name string) bool {
 	switch strings.TrimSpace(name) {
-	case SystemAdBlockRouteRuleName, SystemGlobalDirectRouteRuleName:
+	case SystemAdBlockRouteRuleName, SystemGlobalDirectRouteRuleName, SystemFinalStrategyDisplayName:
 		return true
 	default:
 		return false
@@ -234,7 +236,16 @@ func syncScheduleSpec(mode string, syncTime string, weekday int) (string, bool) 
 
 func (svc *RouteRuleService) List() ([]model.RouteRule, error) {
 	logging.Info("route_rule.list", "listing route rules")
-	return svc.store.ListRouteRules()
+	items, err := svc.store.ListRouteRules()
+	if err != nil {
+		return nil, err
+	}
+	for index := range items {
+		if items[index].SystemKey == SystemRuleGlobalDirectKey || items[index].RuleType == "fallback" {
+			items[index].Name = SystemFinalStrategyDisplayName
+		}
+	}
+	return items, nil
 }
 
 func (svc *RouteRuleService) Strategies() ([]model.RouteStrategyItem, error) {
@@ -263,10 +274,15 @@ func (svc *RouteRuleService) Strategies() ([]model.RouteStrategyItem, error) {
 		}
 		switch {
 		case rule.SystemKey == SystemRuleGlobalDirectKey || rule.RuleType == "fallback":
+			item.Name = SystemFinalStrategyDisplayName
 			item.Kind = "final"
 			item.ReadOnly = true
 			item.Collection = byRuleID[rule.ID]
-			item.OutboundTag = SystemGlobalDirectRouteRuleName
+			if rule.Outbound == "proxy" {
+				item.OutboundTag = "proxy"
+			} else {
+				item.OutboundTag = SystemGlobalDirectRouteRuleName
+			}
 		case rule.Outbound == "block" || rule.Outbound == "reject":
 			item.Kind = "reject"
 			item.ReadOnly = true
@@ -314,6 +330,22 @@ func (svc *RouteRuleService) Update(id int64, req *model.RouteRuleRequest) (*mod
 	}
 	if existing == nil {
 		return nil, ErrRouteRuleNotFound
+	}
+	if existing.SystemKey == SystemRuleGlobalDirectKey {
+		outbound := strings.TrimSpace(req.Outbound)
+		if outbound != "direct" && outbound != "proxy" {
+			return nil, fmt.Errorf("最终策略只支持直连 direct 或策略 proxy")
+		}
+		logging.Info("route_rule.update", "updating final strategy outbound: %s", outbound)
+		item, err := svc.store.UpdateFinalStrategy(id, outbound)
+		if err != nil {
+			return nil, err
+		}
+		if item == nil {
+			return nil, ErrRouteRuleNotFound
+		}
+		item.Name = SystemFinalStrategyDisplayName
+		return item, nil
 	}
 	if IsSystemRouteRuleKey(existing.SystemKey) {
 		return nil, ErrSystemRouteRuleProtected
@@ -408,6 +440,7 @@ func (svc *RouteRuleService) PreviewWithBaseURL(baseURL string) (*model.RouteRul
 		ruleSets = append(ruleSets, ruleSet)
 	}
 	rules := make([]map[string]any, 0)
+	finalOutbound := SystemGlobalDirectRouteRuleName
 	ruleOutboundOverrides, err := svc.routeRuleOutboundOverrides(items)
 	if err != nil {
 		return nil, err
@@ -417,6 +450,9 @@ func (svc *RouteRuleService) PreviewWithBaseURL(baseURL string) (*model.RouteRul
 			continue
 		}
 		if item.RuleType == "fallback" || item.SystemKey == SystemRuleGlobalDirectKey {
+			if item.Outbound == "proxy" {
+				finalOutbound = "proxy"
+			}
 			continue
 		}
 		outbound := item.Outbound
@@ -439,7 +475,7 @@ func (svc *RouteRuleService) PreviewWithBaseURL(baseURL string) (*model.RouteRul
 		}
 		rules = append(rules, singboxRouteRule(item.RuleType, item.Values, outbound, item.Invert))
 	}
-	return &model.RouteRulePreviewResponse{Rules: rules, RuleSets: ruleSets}, nil
+	return &model.RouteRulePreviewResponse{Rules: rules, RuleSets: ruleSets, Final: finalOutbound}, nil
 }
 
 func (svc *RouteRuleService) routeRuleOutboundOverrides(rules []model.RouteRule) (map[int64]string, error) {

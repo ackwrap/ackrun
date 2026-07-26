@@ -81,7 +81,11 @@ const show = (s: string, t: "success" | "error" = "success") => {
     () =>
       content.value?.content ||
       JSON.stringify(
-        { rule_set: preview.value?.rule_sets, rules: preview.value?.rules },
+        {
+          final: preview.value?.final,
+          rule_set: preview.value?.rule_sets,
+          rules: preview.value?.rules,
+        },
         null,
         2,
       ),
@@ -121,9 +125,19 @@ function addRule(type = "domain_suffix") {
   }
   formOpen.value = true;
 }
+function isFinalStrategyRule(rule: RouteRule | null) {
+  return (
+    !!rule &&
+    (rule.system_key === "global_direct" ||
+      ["fallback", "final"].includes(rule.rule_type))
+  );
+}
+function ruleDisplayName(rule: RouteRule) {
+  return isFinalStrategyRule(rule) ? "最终策略" : rule.name;
+}
 function editRule(r: RouteRule) {
   editing.value = r;
-  name.value = r.name;
+  name.value = ruleDisplayName(r);
   enabled.value = r.enabled;
   ruleType.value = r.rule_type;
   valuesText.value = r.values.join("\n");
@@ -132,7 +146,8 @@ function editRule(r: RouteRule) {
   formOpen.value = true;
 }
 async function saveRule() {
-  if (!values.value.length) return show("请填写匹配值", "error");
+  if (!isFinalStrategyRule(editing.value) && !values.value.length)
+    return show("请填写匹配值", "error");
   try {
     const body = {
       name: name.value,
@@ -146,7 +161,13 @@ async function saveRule() {
     editing.value
       ? await api.updateRouteRule(editing.value.id, body)
       : await api.createRouteRule(body);
-    show(editing.value ? "规则已更新" : "规则已添加");
+    show(
+      isFinalStrategyRule(editing.value)
+        ? "最终策略已更新"
+        : editing.value
+          ? "规则已更新"
+          : "规则已添加",
+    );
     formOpen.value = false;
     resetRule();
     await load();
@@ -353,6 +374,13 @@ async function previewSub(x: RouteRuleSubscription) {
     show(`规则订阅预览失败: ${e.message}`, "error");
   }
 }
+async function openRulePreview() {
+  try {
+    preview.value = await api.previewRouteRules();
+  } catch (e: any) {
+    show(`规则预览失败: ${e.message}`, "error");
+  }
+}
 async function syncGeo(x?: GeoAsset) {
   geoSyncing.value = true;
   const targets = x ? [x] : geoAssets.value;
@@ -438,7 +466,7 @@ onBeforeUnmount(() => clearInterval(poll));
         @refresh="load"
         @add-geo="addRule('geosite')"
         @add="addRule()"
-        @preview="async () => (preview = await api.previewRouteRules())"
+        @preview="openRulePreview"
         @move="move"
         @toggle="toggleRule"
         @edit="editRule"
@@ -488,14 +516,16 @@ onBeforeUnmount(() => clearInterval(poll));
     />
     <Modal
       :open="!!detailRule"
-      :title="detailRule ? `规则详情：${detailRule.name}` : '规则详情'"
+      :title="detailRule ? `规则详情：${ruleDisplayName(detailRule)}` : '规则详情'"
       size="lg"
       @close="detailRule = null"
     >
       <div v-if="detailRule" class="grid gap-4 text-sm md:grid-cols-2">
         <div class="rounded-lg bg-[var(--bg-base)] p-3">
           <span class="text-[var(--text-tertiary)]">类型</span>
-          <p class="mt-1 font-mono">{{ detailRule.rule_type }}</p>
+          <p class="mt-1 font-mono">
+            {{ isFinalStrategyRule(detailRule) ? "最终规则" : detailRule.rule_type }}
+          </p>
         </div>
         <div class="rounded-lg bg-[var(--bg-base)] p-3">
           <span class="text-[var(--text-tertiary)]">出站</span>
@@ -514,12 +544,10 @@ onBeforeUnmount(() => clearInterval(poll));
         <div
           class="rounded-lg border border-[var(--border-default)] bg-[var(--bg-base)] p-3 md:col-span-2"
         >
-          <span class="text-[var(--text-tertiary)]"
-            >匹配值（{{ detailRule.values.length }}）</span
-          >
+          <span class="text-[var(--text-tertiary)]">匹配值</span>
           <pre
             class="mt-2 max-h-[50vh] overflow-auto whitespace-pre-wrap break-all font-mono text-xs leading-5 text-[var(--text-primary)]"
-          >{{ detailRule.values.join("\n") || "-" }}</pre>
+          >{{ isFinalStrategyRule(detailRule) ? "未匹配流量" : detailRule.values.join("\n") || "-" }}</pre>
         </div>
       </div>
     </Modal>

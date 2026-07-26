@@ -25,11 +25,11 @@ function isAdBlock(rule: RouteRule) {
   );
 }
 
-function isGlobalDirect(rule: RouteRule) {
+function isFinalStrategy(rule: RouteRule) {
   return (
     rule.system_key === "global_direct" ||
     ["fallback", "final"].includes(rule.rule_type) ||
-    (rule.is_system && rule.name === "全球直连")
+    (rule.is_system && ["全球直连", "最终策略"].includes(rule.name))
   );
 }
 
@@ -42,23 +42,23 @@ function moveDisabled(index: number, direction: -1 | 1) {
     !targetRule ||
     isAdBlock(currentRule) ||
     isAdBlock(targetRule) ||
-    isGlobalDirect(currentRule) ||
-    isGlobalDirect(targetRule)
+    isFinalStrategy(currentRule) ||
+    isFinalStrategy(targetRule)
   );
 }
 
 function typeLabel(rule: RouteRule) {
-  return isGlobalDirect(rule) ? "最终规则" : rule.rule_type;
+  return isFinalStrategy(rule) ? "最终规则" : rule.rule_type;
 }
 
 function valueLabel(rule: RouteRule) {
-  if (isGlobalDirect(rule)) return "默认兜底";
+  if (isFinalStrategy(rule)) return "未匹配流量";
   return rule.values.join(", ") || "无匹配值";
 }
 
 function statusToggleTitle(rule: RouteRule) {
   if (isAdBlock(rule)) return "系统广告拦截规则为只读，不能切换状态";
-  if (isGlobalDirect(rule)) return "默认兜底规则为只读且必须保持启用";
+  if (isFinalStrategy(rule)) return "最终策略必须保持启用，仅允许编辑出站";
   return "";
 }
 </script>
@@ -133,7 +133,7 @@ function statusToggleTitle(rule: RouteRule) {
             </td>
             <td>
               <span class="font-medium text-[var(--text-primary)]">{{
-                r.name
+                isFinalStrategy(r) ? "最终策略" : r.name
               }}</span
               ><small
                 v-if="r.is_system"
@@ -155,7 +155,7 @@ function statusToggleTitle(rule: RouteRule) {
               <button
                 class="aw-action-button"
                 :class="r.enabled ? 'aw-action-success' : 'aw-action-neutral'"
-                :disabled="isAdBlock(r) || isGlobalDirect(r)"
+                :disabled="isAdBlock(r) || isFinalStrategy(r)"
                 :title="statusToggleTitle(r)"
                 @click="$emit('toggle', r)"
               >
@@ -165,14 +165,14 @@ function statusToggleTitle(rule: RouteRule) {
             <td>
               <div class="flex gap-2">
                 <button
-                  v-if="!r.is_system"
+                  v-if="!r.is_system || isFinalStrategy(r)"
                   class="aw-action-button aw-action-neutral"
                   @click="$emit('edit', r)"
                 >
                   编辑</button
                 ><button
+                  v-if="!r.is_system"
                   class="aw-action-button aw-action-danger"
-                  :disabled="r.is_system"
                   @click="$emit('remove', r)"
                 >
                   <Trash2 :size="13" />删除

@@ -178,6 +178,9 @@ func TestRouteRuleServiceProtectsSystemRule(t *testing.T) {
 	if _, err := svc.Create(&model.RouteRuleRequest{Name: SystemAdBlockRouteRuleName, Enabled: true, RuleType: "geosite", Values: []string{"category-ads-all"}, Outbound: "block"}); !errors.Is(err, ErrSystemRouteRuleProtected) {
 		t.Fatalf("expected create protection, got %v", err)
 	}
+	if _, err := svc.Create(&model.RouteRuleRequest{Name: SystemFinalStrategyDisplayName, Enabled: true, RuleType: "domain", Values: []string{"example.com"}, Outbound: "direct"}); !errors.Is(err, ErrSystemRouteRuleProtected) {
+		t.Fatalf("expected final strategy name protection, got %v", err)
+	}
 
 	rules, err := db.ListRouteRules()
 	if err != nil {

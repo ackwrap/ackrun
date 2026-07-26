@@ -34,6 +34,7 @@ type RouteRuleReorderRequest struct {
 type RouteRulePreviewResponse struct {
 	Rules    []map[string]any `json:"rules"`
 	RuleSets []map[string]any `json:"rule_sets"`
+	Final    string           `json:"final"`
 }
 
 type RouteStrategyItem struct {

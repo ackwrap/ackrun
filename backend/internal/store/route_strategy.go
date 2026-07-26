@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/ackwrap/ackrun/internal/model"
 )
 
 const (
@@ -25,7 +27,7 @@ func (s *Store) migrateRouteStrategies() error {
 	if err != nil {
 		return err
 	}
-	globalDirectID, err := ensureSystemRouteRuleTx(tx, systemRuleGlobalDirectKey, systemGlobalDirectName, "fallback", []string{}, "direct", true)
+	globalDirectID, err := ensureFinalStrategyRouteRuleTx(tx)
 	if err != nil {
 		return err
 	}
@@ -36,6 +38,40 @@ func (s *Store) migrateRouteStrategies() error {
 		return err
 	}
 	return tx.Commit()
+}
+
+func ensureFinalStrategyRouteRuleTx(tx *sql.Tx) (int64, error) {
+	var id int64
+	var outbound string
+	err := tx.QueryRow(`SELECT id, outbound FROM route_rules WHERE system_key = ?`, systemRuleGlobalDirectKey).Scan(&id, &outbound)
+	if err == sql.ErrNoRows {
+		err = tx.QueryRow(`SELECT id, outbound FROM route_rules WHERE name = ? AND COALESCE(system_key, '') = '' ORDER BY priority ASC, id ASC LIMIT 1`, systemGlobalDirectName).Scan(&id, &outbound)
+		if err == nil {
+			_, err = tx.Exec(`UPDATE route_rules SET system_key = ?, updated_at = ? WHERE id = ?`, systemRuleGlobalDirectKey, time.Now().UnixMilli(), id)
+		}
+	}
+	if err == sql.ErrNoRows {
+		now := time.Now().UnixMilli()
+		result, insertErr := tx.Exec(`INSERT INTO route_rules (name, enabled, priority, rule_type, values_json, outbound, invert, system_key, created_at, updated_at) VALUES (?, 1, 0, 'fallback', '[]', 'direct', 0, ?, ?, ?)`, systemGlobalDirectName, systemRuleGlobalDirectKey, now, now)
+		if insertErr != nil {
+			return 0, insertErr
+		}
+		return result.LastInsertId()
+	}
+	if err != nil {
+		return 0, err
+	}
+	if outbound != "direct" && outbound != "proxy" {
+		outbound = "direct"
+	}
+	now := time.Now().UnixMilli()
+	_, err = tx.Exec(`UPDATE route_rules SET name = ?, enabled = 1, rule_type = 'fallback', values_json = '[]', outbound = ?, invert = 0, updated_at = ?
+		WHERE id = ? AND (name <> ? OR enabled <> 1 OR rule_type <> 'fallback' OR values_json <> '[]' OR outbound <> ? OR invert <> 0)`,
+		systemGlobalDirectName, outbound, now, id, systemGlobalDirectName, outbound)
+	if err != nil {
+		return 0, err
+	}
+	return id, nil
 }
 
 func ensureSystemRouteRuleTx(tx *sql.Tx, systemKey, name, ruleType string, values []string, outbound string, forceEnabled bool) (int64, error) {
@@ -148,6 +184,37 @@ func (s *Store) NormalizeSystemRouteRuleOrder() error {
 		return err
 	}
 	return tx.Commit()
+}
+
+func (s *Store) UpdateFinalStrategy(id int64, outbound string) (*model.RouteRule, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	now := time.Now().UnixMilli()
+	result, err := tx.Exec(`UPDATE route_rules SET name = ?, enabled = 1, rule_type = 'fallback', values_json = '[]', outbound = ?, invert = 0, updated_at = ? WHERE id = ? AND system_key = ?`, systemGlobalDirectName, outbound, now, id, systemRuleGlobalDirectKey)
+	if err != nil {
+		return nil, err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if rowsAffected == 0 {
+		return nil, nil
+	}
+	if err := normalizeSystemRouteRuleOrderInTx(tx); err != nil {
+		return nil, err
+	}
+	item, err := scanRouteRule(tx.QueryRow(`SELECT id, name, enabled, priority, rule_type, values_json, outbound, invert, system_key, created_at, updated_at FROM route_rules WHERE id = ?`, id))
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return item, nil
 }
 
 func normalizeSystemRouteRuleOrderInTx(tx *sql.Tx) error {

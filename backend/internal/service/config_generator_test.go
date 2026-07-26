@@ -1080,10 +1080,83 @@ func TestGenerateRejectsDirectProxyFallbackWhenDNSDependsOnProxy(t *testing.T) {
 				DefaultOutbound: testCase.defaultOutbound, InboundListen: "127.0.0.1", InboundPort: model.DefaultMixedInboundPort,
 				TUNIPv4Address: defaultTUNIPv4Address, TUNIPv6Address: defaultTUNIPv6Address, LogLevel: "warn",
 			}, filepath.Join(dataDir, "config.json"))
-			if err == nil || !strings.Contains(err.Error(), "DNS 依赖 proxy 策略组") {
+			if err == nil || !strings.Contains(err.Error(), "需要可用 proxy 路径") {
 				t.Fatalf("direct proxy fallback error = %v", err)
 			}
 		})
+	}
+}
+
+func TestGenerateRequiresRealProxyPathForProxyFinalWhenDNSDisabled(t *testing.T) {
+	dataDir := t.TempDir()
+	db, err := store.Open(filepath.Join(dataDir, "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.SetProxyMode("rule"); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := db.GetDNSGlobalSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.Enabled = false
+	if err := db.SetDNSGlobalSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+	rules, err := db.ListRouteRules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rule := range rules {
+		if rule.SystemKey == SystemRuleGlobalDirectKey {
+			if _, err := db.UpdateFinalStrategy(rule.ID, "proxy"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	generator := NewConfigGeneratorService(db, &paths.Paths{DataDir: dataDir})
+	request := &model.ConfigGenerateRequest{
+		DefaultOutbound: "direct", InboundListen: "127.0.0.1", InboundPort: model.DefaultMixedInboundPort,
+		TUNIPv4Address: defaultTUNIPv4Address, TUNIPv6Address: defaultTUNIPv6Address, LogLevel: "warn",
+	}
+	if _, err := generator.generateLockedTo(request, filepath.Join(dataDir, "without-proxy.json")); err == nil || !strings.Contains(err.Error(), "路由策略需要可用 proxy 路径") {
+		t.Fatalf("proxy final without a real proxy path error = %v", err)
+	}
+
+	subscription, err := db.CreateSubscription(&model.SubscriptionRequest{Name: "test", URL: "https://example.com/subscription"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReplaceSubscriptionNodes(subscription.ID, []model.ParsedNode{{
+		UID: "proxy-node", Name: "Proxy Node", Type: "socks", Server: "proxy.example.com", ServerPort: 1080,
+		RawJSON: `{"type":"socks","server":"proxy.example.com","server_port":1080}`,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	proxyRule, err := db.CreateRouteRule(&model.RouteRuleRequest{Name: "Proxy Strategy", Enabled: true, RuleType: "domain", Values: []string{"proxy.example"}, Outbound: "proxy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CreateProxyCollection(&model.ProxyCollection{
+		Name: proxyRule.Name, Type: "selector", SourceType: "manual", NodeUIDs: `["proxy-node"]`, ReferencedGroupIDs: "[]",
+		RouteRuleID: proxyRule.ID, RouteRuleIDs: "[" + fmt.Sprint(proxyRule.ID) + "]", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := generator.generateLockedTo(request, filepath.Join(dataDir, "with-proxy.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final := result.Config["route"].(map[string]interface{})["final"]; final != "proxy" {
+		t.Fatalf("route final = %v, want proxy", final)
+	}
+	outbounds := result.Config["outbounds"].([]interface{})
+	if !hasUsableNonDirectOutboundPath(outbounds, nil, []string{"proxy"}) {
+		t.Fatal("proxy final was generated without a usable non-direct path")
 	}
 }
 
@@ -1109,7 +1182,7 @@ func TestGenerateRejectsAutomaticProxyWithOnlyDirectMembersWhenDNSDependsOnProxy
 		DefaultOutbound: "proxy", InboundListen: "127.0.0.1", InboundPort: model.DefaultMixedInboundPort,
 		TUNIPv4Address: defaultTUNIPv4Address, TUNIPv6Address: defaultTUNIPv6Address, LogLevel: "warn",
 	}, filepath.Join(dataDir, "config.json"))
-	if err == nil || !strings.Contains(err.Error(), "DNS 依赖 proxy 策略组") {
+	if err == nil || !strings.Contains(err.Error(), "需要可用 proxy 路径") {
 		t.Fatalf("automatic direct-only proxy fallback error = %v", err)
 	}
 }
@@ -1179,7 +1252,7 @@ func TestGenerateRejectsDNSDetourWithoutNonDirectPath(t *testing.T) {
 				DefaultOutbound: testCase.defaultOutbound, InboundListen: "127.0.0.1", InboundPort: model.DefaultMixedInboundPort,
 				TUNIPv4Address: defaultTUNIPv4Address, TUNIPv6Address: defaultTUNIPv6Address, LogLevel: "warn",
 			}, filepath.Join(dataDir, "config.json"))
-			if err == nil || (!strings.Contains(err.Error(), "没有可用非直连代理路径") && !strings.Contains(err.Error(), "DNS 依赖 proxy 策略组")) {
+			if err == nil || (!strings.Contains(err.Error(), "没有可用非直连代理路径") && !strings.Contains(err.Error(), "需要可用 proxy 路径")) {
 				t.Fatalf("direct-only DNS detour error = %v", err)
 			}
 		})

@@ -308,15 +308,35 @@ function updatePlainName(event: Event) {
   );
 }
 
-const title = computed(() =>
-  props.editing?.is_system
-    ? "查看路由规则"
-    : props.editing
-      ? "编辑路由规则"
-      : "添加路由规则",
+const isFinalStrategy = computed(
+  () =>
+    props.editing?.system_key === "global_direct" ||
+    ["fallback", "final"].includes(props.editing?.rule_type || ""),
 );
 
-const preview = computed(() => JSON.stringify(previewRules(), null, 2));
+const title = computed(() =>
+  isFinalStrategy.value
+    ? "编辑最终策略"
+    : props.editing?.is_system
+      ? "查看路由规则"
+      : props.editing
+        ? "编辑路由规则"
+        : "添加路由规则",
+);
+
+const preview = computed(() =>
+  JSON.stringify(
+    isFinalStrategy.value
+      ? {
+          route: {
+            final: props.outbound === "proxy" ? "proxy" : "全球直连",
+          },
+        }
+      : previewRules(),
+    null,
+    2,
+  ),
+);
 
 function update(event: Event, field: "valuesText" | "outbound") {
   const value = (
@@ -388,8 +408,16 @@ onBeforeUnmount(() => {
           </div>
         </label>
 
+        <p
+          v-if="isFinalStrategy"
+          class="rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--bg-base)] px-3 py-2.5 text-xs text-[var(--text-secondary)]"
+        >
+          控制所有未命中前置规则的流量。选择“策略
+          proxy”可避免未知域名回落直连；该系统规则固定启用且不可删除或排序。
+        </p>
+
         <div class="grid gap-3 sm:grid-cols-2">
-          <label class="block text-xs font-medium">
+          <label v-if="!isFinalStrategy" class="block text-xs font-medium">
             匹配类型
             <select
               :value="ruleType"
@@ -405,18 +433,18 @@ onBeforeUnmount(() => {
             命中后出站
             <select
               :value="outbound"
-              :disabled="editing?.is_system"
+              :disabled="editing?.is_system && !isFinalStrategy"
               @change="update($event, 'outbound')"
             >
               <option value="direct">直连 direct</option>
               <option value="proxy">策略 proxy</option>
-              <option value="block">阻断 block</option>
+              <option v-if="!isFinalStrategy" value="block">阻断 block</option>
             </select>
           </label>
         </div>
 
         <div
-          v-if="ruleType === 'mixed'"
+          v-if="!isFinalStrategy && ruleType === 'mixed'"
           class="space-y-3 rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--bg-base)] p-3"
         >
           <div class="flex items-center justify-between gap-3">
@@ -517,7 +545,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <label v-else class="block text-xs font-medium">
+        <label v-else-if="!isFinalStrategy" class="block text-xs font-medium">
           匹配值
           <textarea
             :value="valuesText"
@@ -612,6 +640,7 @@ onBeforeUnmount(() => {
         </div>
 
         <div
+          v-if="!isFinalStrategy"
           class="flex flex-wrap gap-5 rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--bg-base)] px-3 py-2.5 text-xs"
         >
           <label class="flex items-center gap-2">
@@ -659,14 +688,14 @@ onBeforeUnmount(() => {
 
     <template #footer>
       <button class="aw-action-button aw-action-neutral" @click="emit('close')">
-        {{ editing?.is_system ? "关闭" : "取消" }}
+        {{ editing?.is_system && !isFinalStrategy ? "关闭" : "取消" }}
       </button>
       <button
-        v-if="!editing?.is_system"
+        v-if="!editing?.is_system || isFinalStrategy"
         class="aw-action-button aw-action-success"
         @click="emit('save')"
       >
-        <Save :size="14" />保存规则
+        <Save :size="14" />{{ isFinalStrategy ? "保存最终策略" : "保存规则" }}
       </button>
     </template>
   </Modal>

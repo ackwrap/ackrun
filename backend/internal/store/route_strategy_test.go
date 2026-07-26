@@ -70,6 +70,41 @@ func TestRouteStrategyMigrationIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestFinalStrategyMigrationPreservesProxySelection(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ackwrap.db")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var finalID int64
+	if err := db.db.QueryRow(`SELECT id FROM route_rules WHERE system_key = ?`, systemRuleGlobalDirectKey).Scan(&finalID); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := db.UpdateFinalStrategy(finalID, "proxy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated == nil || updated.Outbound != "proxy" {
+		t.Fatalf("updated final strategy = %+v", updated)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	stored, err := db.GetRouteRule(finalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored == nil || stored.Outbound != "proxy" || !stored.Enabled || stored.RuleType != "fallback" || len(stored.Values) != 0 || stored.Invert {
+		t.Fatalf("migrated final strategy = %+v", stored)
+	}
+}
+
 func TestSystemRouteRuleOrderingAndReorderProtection(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {
