@@ -7,6 +7,7 @@ import OrderButtons from "@/components/ui/OrderButtons.vue";
 import { authenticatedFetch } from "@/services/apiAuth";
 import DNSRuleFormModal from "./dns/DNSRuleFormModal.vue";
 import DNSServerFormModal from "./dns/DNSServerFormModal.vue";
+import DNSFakeIPCard from "./dns/DNSFakeIPCard.vue";
 import DNSGlobalSettingsCard from "./dns/DNSGlobalSettingsCard.vue";
 interface Server {
   id: number;
@@ -25,6 +26,7 @@ interface Rule {
   id: number;
   enabled: boolean;
   priority: number;
+  rule_type?: string;
   conditions_json: string;
   server: string;
   disable_cache: boolean;
@@ -62,6 +64,7 @@ const defaults = {
   ruleForm = ref<any | null>(null),
   ruleSaving = ref(false),
   ruleOrderPending = ref(false);
+let loadRevision = 0;
 const types = [
     "udp",
     "tcp",
@@ -139,6 +142,7 @@ const show = (s: string, t: "success" | "error" = "success") => {
   messageType.value = t;
 };
 async function load() {
+  const revision = ++loadRevision;
   try {
     const [a, b, c, d] = await Promise.all([
       request("/api/v1/dns/servers"),
@@ -146,14 +150,15 @@ async function load() {
       request("/api/v1/dns/global"),
       request("/api/v1/collections").catch(() => []),
     ]);
+    if (revision !== loadRevision) return;
     servers.value = Array.isArray(a) ? a : [];
     rules.value = Array.isArray(b) ? b : [];
     collections.value = Array.isArray(d) ? d : [];
     Object.assign(global.value, c || {});
   } catch (e: any) {
-    show(`加载失败: ${e.message}`, "error");
+    if (revision === loadRevision) show(`加载失败: ${e.message}`, "error");
   } finally {
-    loading.value = false;
+    if (revision === loadRevision) loading.value = false;
   }
 }
 const detours = computed(() => [
@@ -459,31 +464,14 @@ onMounted(load);
           :strategies="strategies"
           @save="saveGlobal"
         />
-        <section
-          class="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
-        >
-          <div class="flex justify-between">
-            <h3>FakeIP</h3>
-            <label class="text-sm text-[var(--text-secondary)]">
-              <input
-                :checked="global.fakeip_enabled"
-                type="checkbox"
-                disabled
-              />
-              {{ global.fakeip_enabled ? "已随 TUN 启用" : "已随 TUN 停用" }}
-            </label>
-          </div>
-          <p class="mt-2 text-xs text-[var(--text-tertiary)]">
-            FakeIP 由运行模式自动管理：TUN / TUN + Mixed 启用，Mixed 停用。 显式
-            DNS 规则用于国内和局域网等真实 IP 例外；启用时，所有未命中显式规则的
-            A/AAAA 查询使用 FakeIP，其余查询统一经过安全 DNS final。
-          </p>
-          <div class="mt-3 grid gap-3 md:grid-cols-3">
-            <input v-model="global.fakeip_inet4_range" /><input
-              v-model="global.fakeip_inet6_range"
-            /><button @click="saveGlobal">保存 FakeIP</button>
-          </div>
-        </section>
+        <DNSFakeIPCard
+          v-model="global"
+          :rules="rules"
+          :servers="servers"
+          @save="saveGlobal"
+          @changed="load"
+          @notify="show"
+        />
       </div>
       <section
         class="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
