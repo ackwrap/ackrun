@@ -228,7 +228,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--arch", choices=("amd64", "arm64"), default="amd64")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "dist")
-    parser.add_argument("--version", default="0.1.2")
+    parser.add_argument("--version", default="0.1.3")
     parser.add_argument("--skip-checks", action="store_true")
     return parser.parse_args()
 
