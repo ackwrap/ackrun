@@ -312,6 +312,9 @@ func (s *Store) migrate() error {
 	if err := s.migrateRouteStrategies(); err != nil {
 		return err
 	}
+	if err := s.EnsureDefaultLocalDNSRule(); err != nil {
+		return err
+	}
 	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_proxy_collections_route_rule_id ON proxy_collections(route_rule_id) WHERE route_rule_id > 0`); err != nil {
 		return err
 	}

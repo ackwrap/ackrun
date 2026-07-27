@@ -13,6 +13,7 @@ import (
 type Store struct {
 	db             *sql.DB
 	nodeRefsMu     sync.Mutex
+	dnsDefaultsMu  sync.Mutex
 	configUpdateMu sync.RWMutex
 }
 

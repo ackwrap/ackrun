@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -10,6 +11,127 @@ import (
 	"github.com/ackwrap/ackrun/internal/model"
 	"github.com/ackwrap/ackrun/internal/store"
 )
+
+func TestCreateFirstDNSServerSeedsDefaultLocalRealIPRule(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	svc := NewDNSService(db, nil)
+	if _, err := svc.CreateDNSServer(&model.DNSServerRequest{
+		Tag: "dns_direct", Enabled: true, ServerType: "udp", Address: "223.5.5.5",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rules, err := svc.ListDNSRules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rules) != 1 || rules[0].Server != "dns_direct" || !rules[0].Enabled {
+		t.Fatalf("default DNS rules = %+v", rules)
+	}
+	var conditions struct {
+		DomainSuffix []string `json:"domain_suffix"`
+	}
+	if err := json.Unmarshal([]byte(rules[0].ConditionsJSON), &conditions); err != nil {
+		t.Fatal(err)
+	}
+	values := make(map[string]bool, len(conditions.DomainSuffix))
+	for _, suffix := range conditions.DomainSuffix {
+		values[suffix] = true
+	}
+	if len(values) != 14 || !values["lan"] || !values["local"] || !values["localhost"] {
+		t.Fatalf("default local suffixes = %v", conditions.DomainSuffix)
+	}
+
+	if _, err := svc.CreateDNSServer(&model.DNSServerRequest{
+		Tag: "dns_backup", Enabled: true, ServerType: "udp", Address: "114.114.114.114",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rules, err = svc.ListDNSRules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rules) != 1 {
+		t.Fatalf("adding another server duplicated default DNS rule: %+v", rules)
+	}
+	dns := mustGenerateDNS(t, NewConfigGeneratorService(db, nil))
+	generatedRules, _ := dns["rules"].([]map[string]interface{})
+	if len(generatedRules) < 2 || generatedRules[0]["server"] != "dns_direct" || !stringListContains(generatedRules[0]["domain_suffix"], "lan") {
+		t.Fatalf("generated default local DNS rule = %+v", generatedRules)
+	}
+	if generatedRules[len(generatedRules)-1]["server"] != "fakeip" {
+		t.Fatalf("FakeIP fallback is not last: %+v", generatedRules)
+	}
+}
+
+func TestDNSServerDefaultRuleCreationIsAtomic(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.DB().Exec(`CREATE TRIGGER fail_default_dns_rule BEFORE INSERT ON dns_rules BEGIN SELECT RAISE(FAIL, 'default rule failed'); END`); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewDNSService(db, nil)
+	if _, err := svc.CreateDNSServer(&model.DNSServerRequest{
+		Tag: "dns_direct", Enabled: true, ServerType: "udp", Address: "223.5.5.5",
+	}); err == nil {
+		t.Fatal("DNS Server creation succeeded after default rule failure")
+	}
+	var serverCount, ruleCount, markerCount int
+	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM dns_servers`).Scan(&serverCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM dns_rules`).Scan(&ruleCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM app_settings WHERE key = 'dns.defaults.local_real_ip_v1'`).Scan(&markerCount); err != nil {
+		t.Fatal(err)
+	}
+	if serverCount != 0 || ruleCount != 0 || markerCount != 0 {
+		t.Fatalf("failed atomic create left server=%d rules=%d marker=%d", serverCount, ruleCount, markerCount)
+	}
+}
+
+func TestEnablingFirstDNSServerSeedsDefaultLocalRealIPRule(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	svc := NewDNSService(db, nil)
+	server, err := svc.CreateDNSServer(&model.DNSServerRequest{
+		Tag: "dns_direct", Enabled: false, ServerType: "udp", Address: "223.5.5.5",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules, err := svc.ListDNSRules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rules) != 0 {
+		t.Fatalf("disabled DNS Server created default rules: %+v", rules)
+	}
+	if err := svc.UpdateDNSServer(server.ID, &model.DNSServerRequest{
+		Tag: "dns_direct", Enabled: true, ServerType: "udp", Address: "223.5.5.5",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rules, err = svc.ListDNSRules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rules) != 1 || !strings.Contains(rules[0].ConditionsJSON, `"lan"`) {
+		t.Fatalf("enabling first DNS Server did not create default rule: %+v", rules)
+	}
+}
 
 func TestDNSGlobalSettingsFakeIPFollowsTUNMode(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
@@ -226,11 +348,14 @@ func TestDNSServerRejectsControlledOptionsAndInvalidDetours(t *testing.T) {
 	defer db.Close()
 	svc := NewDNSService(db, nil)
 	for name, request := range map[string]*model.DNSServerRequest{
-		"options detour": {Tag: "dns-options-detour", Enabled: true, ServerType: "udp", Address: "1.1.1.1", Options: map[string]interface{}{"detour": "direct"}},
-		"options type":   {Tag: "dns-options-type", Enabled: true, ServerType: "udp", Address: "1.1.1.1", Options: map[string]interface{}{"type": "local"}},
-		"block detour":   {Tag: "dns-block", Enabled: true, ServerType: "udp", Address: "1.1.1.1", Detour: "block"},
-		"reject detour":  {Tag: "dns-reject", Enabled: true, ServerType: "udp", Address: "1.1.1.1", Detour: "reject"},
-		"space detour":   {Tag: "dns-space", Enabled: true, ServerType: "udp", Address: "1.1.1.1", Detour: " proxy"},
+		"options detour":  {Tag: "dns-options-detour", Enabled: true, ServerType: "udp", Address: "1.1.1.1", Options: map[string]interface{}{"detour": "direct"}},
+		"options type":    {Tag: "dns-options-type", Enabled: true, ServerType: "udp", Address: "1.1.1.1", Options: map[string]interface{}{"type": "local"}},
+		"block detour":    {Tag: "dns-block", Enabled: true, ServerType: "udp", Address: "1.1.1.1", Detour: "block"},
+		"reject detour":   {Tag: "dns-reject", Enabled: true, ServerType: "udp", Address: "1.1.1.1", Detour: "reject"},
+		"space detour":    {Tag: "dns-space", Enabled: true, ServerType: "udp", Address: "1.1.1.1", Detour: " proxy"},
+		"unknown type":    {Tag: "dns-unknown", Enabled: true, ServerType: "unknown"},
+		"missing address": {Tag: "dns-missing-address", Enabled: true, ServerType: "udp"},
+		"invalid address": {Tag: "dns-invalid-address", Enabled: true, ServerType: "https", Address: "https://"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := svc.CreateDNSServer(request); err == nil {

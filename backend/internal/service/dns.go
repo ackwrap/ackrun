@@ -29,6 +29,12 @@ func validateDNSServerRequest(req *model.DNSServerRequest) error {
 	if req.ServerType == "fakeip" {
 		return fmt.Errorf("FakeIP Server 由 TUN 模式自动管理，不能手动创建或更新")
 	}
+	if !store.SupportedDNSServerType(req.ServerType) {
+		return fmt.Errorf("不支持的 DNS Server 类型: %s", req.ServerType)
+	}
+	if store.RemoteDNSServerType(req.ServerType) && !store.UsableRealDNSServer(req.ServerType, req.Address) {
+		return fmt.Errorf("DNS Server %s 地址无效", req.Tag)
+	}
 	if err := validateDNSServerDetour(req.Detour); err != nil {
 		return err
 	}
@@ -71,7 +77,12 @@ func (svc *DNSService) CreateDNSServer(req *model.DNSServerRequest) (*model.DNSS
 	}
 	releaseConfigUpdate := svc.store.HoldConfigUpdate()
 	defer releaseConfigUpdate()
-	return svc.store.CreateDNSServer(req)
+	server, err := svc.store.CreateDNSServerWithDefaultLocalRule(req)
+	if err != nil {
+		logging.Error("dns.server.create", "创建 DNS Server 或默认真实 IP 例外失败: %v", err)
+		return nil, err
+	}
+	return server, nil
 }
 
 func (svc *DNSService) UpdateDNSServer(id int64, req *model.DNSServerRequest) error {
@@ -96,7 +107,7 @@ func (svc *DNSService) UpdateDNSServer(id int64, req *model.DNSServerRequest) er
 	if settings.ProxyFinal == current.Tag && (req.Tag != current.Tag || !req.Enabled || !isStrategyDNSRemoteType(req.ServerType)) {
 		return fmt.Errorf("DNS Server %s 正在作为代理 DNS Final，请先更换代理 DNS Final", current.Tag)
 	}
-	return svc.store.UpdateDNSServer(id, req)
+	return svc.store.UpdateDNSServerWithDefaultLocalRule(id, req)
 }
 
 func (svc *DNSService) DeleteDNSServer(id int64) error {
