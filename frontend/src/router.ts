@@ -16,15 +16,15 @@ const pages = {
   "/advanced/node-exposures": () =>
     import("@/pages/AdvancedNodeExposurePage.vue"),
   "/advanced/platform-routing": () =>
-    import("@/pages/AdvancedPlaceholderPage.vue"),
+    import("@/pages/advanced/PlatformRoutingPage.vue"),
   "/advanced/session-leases": () =>
-    import("@/pages/AdvancedPlaceholderPage.vue"),
+    import("@/pages/advanced/SessionLeasesPage.vue"),
   "/advanced/health-scheduling": () =>
-    import("@/pages/AdvancedPlaceholderPage.vue"),
+    import("@/pages/advanced/HealthSchedulingPage.vue"),
   "/advanced/access-logs": () =>
-    import("@/pages/AdvancedPlaceholderPage.vue"),
+    import("@/pages/advanced/AccessLogsPage.vue"),
   "/advanced/settings": () =>
-    import("@/pages/AdvancedPlaceholderPage.vue"),
+    import("@/pages/advanced/AdvancedSettingsPage.vue"),
 };
 
 const advancedMeta: Record<string, { title: string; description: string }> = {

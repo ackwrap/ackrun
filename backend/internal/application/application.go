@@ -35,6 +35,7 @@ type Application struct {
 	subscription           *service.SubscriptionService
 	routeRule              *service.RouteRuleService
 	proxyCollection        *service.ProxyCollectionService
+	advanced               *service.AdvancedRoutingService
 	stopToolLogEvents      func()
 	toolLogEventsCompleted chan struct{}
 
@@ -125,7 +126,8 @@ func New(options Options) (*Application, error) {
 	nodeExposureSvc := service.NewNodeExposureService(db)
 	nodeExposureRuntime := service.NewNodeExposureRuntimeClient(coreAPIToken)
 	nodeExposureSvc.SetRuntimeDependencies(nodeExposureRuntime, singboxSvc)
-	singboxSvc.SetStartHooks(configGenSvc.EnsureRuntimeAPIConfig, nodeExposureSvc.SyncRuntime)
+	advancedSvc := service.NewAdvancedRoutingService(db, nodeExposureRuntime, singboxSvc, realtimeSvc, coreAPIToken)
+	singboxSvc.SetStartHooks(configGenSvc.EnsureRuntimeAPIConfig, combineStartHooks(nodeExposureSvc.SyncRuntime, advancedSvc.SyncRuntime))
 	settingsSvc.SetModeDependencies(singboxSvc, configGenSvc)
 	settingsSvc.SetConnectivitySettingsHook(proxyCollectionSvc.RefreshHealthCheckJobs)
 	reconcileSvc := service.NewConfigReconcileService(configGenSvc, realtimeSvc)
@@ -142,7 +144,7 @@ func New(options Options) (*Application, error) {
 		gin.RecoveryWithWriter(accessTokenRedactingWriter{Writer: gin.DefaultErrorWriter}),
 	)
 	router.Use(api.SecurityMiddleware(options.APIToken))
-	api.RegisterRoutes(router, runtimeSvc, installerSvc, singboxSvc, configSvc, settingsSvc, subscriptionSvc, nodeSvc, nodeExposureSvc, routeRuleSvc, proxyCollectionSvc, configGenSvc, realtimeSvc, coreLogSvc, dnsSvc, nodeGroupSvc, reconcileSvc, coreRestartSvc, appUpdateSvc, dashboardSvc)
+	api.RegisterRoutes(router, runtimeSvc, installerSvc, singboxSvc, configSvc, settingsSvc, subscriptionSvc, nodeSvc, nodeExposureSvc, routeRuleSvc, proxyCollectionSvc, configGenSvc, realtimeSvc, coreLogSvc, dnsSvc, nodeGroupSvc, reconcileSvc, coreRestartSvc, appUpdateSvc, dashboardSvc, advancedSvc)
 	if err := registerWebUI(router); err != nil {
 		reconcileSvc.Close()
 		stopToolLogEvents()
@@ -162,9 +164,24 @@ func New(options Options) (*Application, error) {
 		subscription:           subscriptionSvc,
 		routeRule:              routeRuleSvc,
 		proxyCollection:        proxyCollectionSvc,
+		advanced:               advancedSvc,
 		stopToolLogEvents:      stopToolLogEvents,
 		toolLogEventsCompleted: toolLogEventsCompleted,
 	}, nil
+}
+
+func combineStartHooks(hooks ...func() error) func() error {
+	return func() error {
+		for _, hook := range hooks {
+			if hook == nil {
+				continue
+			}
+			if err := hook(); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 }
 
 func (app *Application) Handler() http.Handler {
@@ -186,6 +203,7 @@ func (app *Application) Start() error {
 	app.subscription.StartScheduler()
 	app.routeRule.StartScheduler()
 	app.proxyCollection.StartScheduler()
+	app.advanced.Start()
 	app.started = true
 	logging.Info("application.start", "backend schedulers started")
 	return nil
@@ -227,6 +245,7 @@ func (app *Application) PrepareShutdown() {
 	}
 	app.closed = true
 	if app.started {
+		app.advanced.Stop()
 		app.coreRestart.StopScheduler()
 		app.proxyCollection.StopScheduler()
 		app.routeRule.StopScheduler()

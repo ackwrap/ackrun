@@ -18,7 +18,7 @@ type Store struct {
 }
 
 func Open(dbPath string) (*Store, error) {
-	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)")
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}

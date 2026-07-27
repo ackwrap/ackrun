@@ -122,6 +122,60 @@ func TestNodeExposureRuntimeClientRedactsSecretFromErrors(t *testing.T) {
 	}
 }
 
+func TestRuntimeRoutingHTTPContract(t *testing.T) {
+	const secret = "runtime-routing-secret"
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Authorization") != "Bearer "+secret {
+			t.Fatalf("authorization = %q", request.Header.Get("Authorization"))
+		}
+		switch request.URL.Path {
+		case "/api/v1/runtime-routing":
+			if request.Method == http.MethodGet {
+				_ = json.NewEncoder(writer).Encode(RuntimeRoutingConfig{
+					Routes: []RuntimeRoute{}, Leases: []RuntimeLease{}, UnhealthyOutbounds: []string{},
+					AccessEventsPrivacyMode: model.AdvancedPrivacyStrict,
+				})
+				return
+			}
+			var payload RuntimeRoutingConfig
+			if request.Method != http.MethodPut || request.Header.Get("Content-Type") != "application/json" {
+				t.Fatalf("runtime routing request = %s content-type=%q", request.Method, request.Header.Get("Content-Type"))
+			}
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			if len(payload.Routes) != 1 || payload.Routes[0].ID != "route-7" {
+				t.Fatalf("runtime routing payload = %+v", payload)
+			}
+			_ = json.NewEncoder(writer).Encode(payload)
+		case "/api/v1/access-events":
+			if request.Method != http.MethodGet || request.URL.Query().Get("after") != "42" || request.URL.Query().Get("limit") != "100" {
+				t.Fatalf("access event request = %s %s", request.Method, request.URL.String())
+			}
+			_ = json.NewEncoder(writer).Encode(RuntimeAccessEventList{LatestID: 43, Items: []RuntimeAccessEvent{{ID: 43, RouteID: "route-7"}}})
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+	client := NewNodeExposureRuntimeClient(secret)
+	client.baseURL = server.URL + "/api/v1"
+	config := RuntimeRoutingConfig{
+		Routes: []RuntimeRoute{{ID: "route-7", OutboundTag: "direct"}}, Leases: []RuntimeLease{}, UnhealthyOutbounds: []string{},
+		AccessEventsEnabled: true, AccessEventsPrivacyMode: model.AdvancedPrivacyBalanced,
+	}
+	if err := client.PutRuntimeRouting(config); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.GetRuntimeRouting(); err != nil {
+		t.Fatal(err)
+	}
+	events, err := client.GetAccessEvents(42, 100)
+	if err != nil || events.LatestID != 43 || len(events.Items) != 1 {
+		t.Fatalf("events = %+v, err = %v", events, err)
+	}
+}
+
 func TestRuntimeAPIServiceConfigAndRedaction(t *testing.T) {
 	const secret = "runtime-test-secret"
 	serviceConfig := singboxRuntimeAPIServiceConfig(secret)

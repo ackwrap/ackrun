@@ -22,6 +22,8 @@ func validateCompleteReorderIDs[T reorderID](tx *sql.Tx, table string, ids []T) 
 		label = "节点组"
 	case "route_rules":
 		label = "路由规则"
+	case "platform_routes":
+		label = "平台路由"
 	default:
 		return fmt.Errorf("不支持排序表: %s", table)
 	}

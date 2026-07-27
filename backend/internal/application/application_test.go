@@ -131,3 +131,37 @@ func TestGinAccessLogRedactsQueryToken(t *testing.T) {
 		})
 	}
 }
+
+func TestAdvancedApplicationIntegrationAndSafeDefaults(t *testing.T) {
+	app := testApplication(t)
+	defer app.Close()
+	if app.advanced == nil {
+		t.Fatal("advanced service was not injected")
+	}
+	recorder := httptest.NewRecorder()
+	app.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/advanced/settings", nil))
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"routing_enabled":false`) ||
+		!strings.Contains(recorder.Body.String(), `"leases_enabled":false`) || !strings.Contains(recorder.Body.String(), `"health_enabled":false`) ||
+		!strings.Contains(recorder.Body.String(), `"access_logs_enabled":false`) {
+		t.Fatalf("advanced defaults response = %d %s", recorder.Code, recorder.Body.String())
+	}
+	if err := app.Start(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCombinedRuntimeStartHooksPreserveOrderAndStopOnFailure(t *testing.T) {
+	order := make([]string, 0, 3)
+	wantErr := errors.New("advanced sync failed")
+	hook := combineStartHooks(
+		func() error { order = append(order, "node-exposure"); return nil },
+		func() error { order = append(order, "advanced"); return wantErr },
+		func() error { order = append(order, "unexpected"); return nil },
+	)
+	if err := hook(); !errors.Is(err, wantErr) {
+		t.Fatalf("combined hook error = %v", err)
+	}
+	if strings.Join(order, ",") != "node-exposure,advanced" {
+		t.Fatalf("combined hook order = %v", order)
+	}
+}

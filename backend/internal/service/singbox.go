@@ -98,14 +98,14 @@ func (svc *SingboxService) startAndSync() (*model.ActionResponse, error) {
 		return svc.markStarted(response)
 	}
 	if err := afterStart(); err != nil {
-		startErr := fmt.Errorf("节点暴露运行时同步失败: %w", err)
+		startErr := fmt.Errorf("核心运行时同步失败: %w", err)
 		svc.mu.Lock()
 		svc.lastError = startErr.Error()
 		svc.mu.Unlock()
 		logging.Error("core.start", "%v", startErr)
 		var stopErr error
 		if svc.IsRunning() {
-			_, stopErr = svc.stop("runtime node exposure sync failed")
+			_, stopErr = svc.stop("runtime synchronization failed")
 		}
 		settleErr := svc.waitUntilStopped(12 * time.Second)
 		if stopErr != nil {

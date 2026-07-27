@@ -28,6 +28,7 @@ func RegisterRoutes(
 	coreRestartSvc *service.CoreRestartScheduler,
 	appUpdateSvc *service.AppUpdateService,
 	dashboardSvc *service.DashboardService,
+	advancedSvc *service.AdvancedRoutingService,
 ) {
 	runtimeH := handler.NewRuntimeHandler(runtimeSvc)
 	installerH := handler.NewInstallerHandler(installerSvc)
@@ -47,6 +48,7 @@ func RegisterRoutes(
 	coreRestartH := handler.NewCoreRestartHandler(coreRestartSvc)
 	appUpdateH := handler.NewAppUpdateHandler(appUpdateSvc)
 	dashboardH := handler.NewDashboardHandler(dashboardSvc)
+	advancedH := handler.NewAdvancedHandler(advancedSvc)
 
 	clashProxyH := handler.NewClashProxyHandler(settingsSvc)
 
@@ -157,6 +159,7 @@ func RegisterRoutes(
 		v1.POST("/advanced/node-exposures", nodeExposureH.Create)
 		v1.PUT("/advanced/node-exposures/:id", nodeExposureH.Update)
 		v1.DELETE("/advanced/node-exposures/:id", nodeExposureH.Delete)
+		registerAdvancedRoutes(v1, advancedH)
 
 		v1.GET("/collections", proxyCollectionH.List)
 		v1.POST("/collections", proxyCollectionH.Create)
@@ -228,4 +231,23 @@ func RegisterRoutes(
 		v1.GET("/clash-status", clashProxyH.GetClashStatus)
 		v1.Any("/clash/*path", clashProxyH.Proxy)
 	}
+}
+
+func registerAdvancedRoutes(group *gin.RouterGroup, handler *handler.AdvancedHandler) {
+	group.GET("/advanced/platform-routes", handler.ListPlatformRoutes)
+	group.POST("/advanced/platform-routes", handler.CreatePlatformRoute)
+	group.POST("/advanced/platform-routes/reorder", handler.ReorderPlatformRoutes)
+	group.PUT("/advanced/platform-routes/:id", handler.UpdatePlatformRoute)
+	group.DELETE("/advanced/platform-routes/:id", handler.DeletePlatformRoute)
+	group.GET("/advanced/session-leases", handler.ListSessionLeases)
+	group.POST("/advanced/session-leases", handler.CreateSessionLease)
+	group.PUT("/advanced/session-leases/:id", handler.UpdateSessionLease)
+	group.DELETE("/advanced/session-leases/:id", handler.DeleteSessionLease)
+	group.POST("/advanced/session-leases/:id/renew", handler.RenewSessionLease)
+	group.GET("/advanced/health-scheduling", handler.HealthScheduling)
+	group.POST("/advanced/health-scheduling/run", handler.RunHealth)
+	group.GET("/advanced/access-logs", handler.ListAccessLogs)
+	group.DELETE("/advanced/access-logs", handler.ClearAccessLogs)
+	group.GET("/advanced/settings", handler.GetSettings)
+	group.PUT("/advanced/settings", handler.UpdateSettings)
 }
