@@ -528,7 +528,7 @@ onBeforeUnmount(() => clearInterval(poll));
           </p>
         </div>
         <div class="rounded-lg bg-[var(--bg-base)] p-3">
-          <span class="text-[var(--text-tertiary)]">出站</span>
+          <span class="text-[var(--text-tertiary)]">命中后动作</span>
           <p class="mt-1 font-mono">{{ detailRule.outbound }}</p>
         </div>
         <div class="rounded-lg bg-[var(--bg-base)] p-3">

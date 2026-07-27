@@ -19,6 +19,7 @@ const emit = defineEmits<{
 
 const kindLabels: Record<StrategyItem["kind"], string> = {
   reject: "拒绝",
+  bypass: "内核绕过",
   direct: "直连",
   proxy: "代理",
   final: "最终规则",
@@ -30,6 +31,7 @@ function details(collection: ProxyCollectionWithNodes) {
 
 function selectorLabel(strategy: StrategyItem) {
   if (strategy.kind === "reject") return "Reject（只读）";
+  if (strategy.kind === "bypass") return "Bypass（只读）";
   if (strategy.kind === "direct") return "Direct（固定）";
   if (strategy.kind === "final") return "Direct（默认兜底）";
   if (!strategy.collection) return "待配置";
@@ -38,6 +40,7 @@ function selectorLabel(strategy: StrategyItem) {
 
 function sourceLabel(strategy: StrategyItem) {
   if (strategy.kind === "reject") return "固定拒绝";
+  if (strategy.kind === "bypass") return "内核预匹配绕过";
   if (strategy.kind === "direct") return "固定直连";
   if (strategy.kind === "final") return "默认兜底";
   if (!strategy.collection) return "尚未配置节点来源";

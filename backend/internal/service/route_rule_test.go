@@ -96,6 +96,40 @@ func TestRouteRuleServicePreview(t *testing.T) {
 	}
 }
 
+func TestRouteRuleServicePreviewHoistsBypassAction(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	svc := newTestRouteRuleService(t, db)
+	if _, err := svc.Create(&model.RouteRuleRequest{Name: "Direct First", Enabled: true, RuleType: "domain", Values: []string{"direct.example"}, Outbound: "direct"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Create(&model.RouteRuleRequest{Name: "Bypass Second", Enabled: true, RuleType: "geosite", Values: []string{"cn"}, Outbound: "bypass"}); err != nil {
+		t.Fatal(err)
+	}
+
+	preview, err := svc.Preview()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stripSystemAdBlockPreview(preview)
+	if len(preview.Rules) != 2 || preview.Rules[0]["action"] != "bypass" {
+		t.Fatalf("bypass preview was not hoisted: %+v", preview.Rules)
+	}
+	if _, exists := preview.Rules[0]["outbound"]; exists {
+		t.Fatalf("bypass preview must not emit outbound: %+v", preview.Rules[0])
+	}
+	if !stringListContains(preview.Rules[0]["rule_set"], "geosite-cn") {
+		t.Fatalf("GeoSite bypass must keep its generated rule set: %+v", preview.Rules[0])
+	}
+	if preview.Rules[1]["action"] != "route" || preview.Rules[1]["outbound"] != "Direct First" {
+		t.Fatalf("direct preview changed unexpectedly: %+v", preview.Rules[1])
+	}
+}
+
 func TestProcessNameRouteRuleGeneration(t *testing.T) {
 	req := &model.RouteRuleRequest{
 		Name:     "Browser Proxy",

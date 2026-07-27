@@ -140,7 +140,7 @@ func TestRouteRuleOutboundNameValidation(t *testing.T) {
 	defer db.Close()
 	svc := newTestRouteRuleService(t, db)
 
-	for _, name := range []string{"direct", "proxy", "block", "reject", "DIRECT"} {
+	for _, name := range []string{"direct", "proxy", "block", "reject", "bypass", "DIRECT"} {
 		if _, err := svc.Create(&model.RouteRuleRequest{Name: name, Enabled: true, RuleType: "domain", Values: []string{"reserved.example"}, Outbound: "direct"}); err == nil || !strings.Contains(err.Error(), "保留") {
 			t.Fatalf("reserved name %q was accepted: %v", name, err)
 		}
@@ -202,6 +202,10 @@ func TestRouteRuleStrategyViewUsesCanonicalOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	bypassRule, err := routeSvc.Create(&model.RouteRuleRequest{Name: "Bypass Strategy", Enabled: true, RuleType: "ip_cidr", Values: []string{"203.0.113.0/24"}, Outbound: "bypass"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	collection, err := NewProxyCollectionService(db, nil).Create(model.ProxyCollectionRequest{RouteRuleID: proxyRule.ID, Type: "selector", SourceType: "manual", NodeUIDs: []string{"direct"}, Enabled: true})
 	if err != nil {
 		t.Fatal(err)
@@ -210,7 +214,7 @@ func TestRouteRuleStrategyViewUsesCanonicalOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 4 || items[0].Kind != "reject" || items[len(items)-1].Kind != "final" {
+	if len(items) != 5 || items[0].Kind != "reject" || items[len(items)-1].Kind != "final" {
 		t.Fatalf("unexpected strategy rows: %+v", items)
 	}
 	if items[len(items)-1].Collection == nil || items[len(items)-1].Collection.Name != SystemGlobalDirectRouteRuleName || !items[len(items)-1].ReadOnly {
@@ -225,6 +229,9 @@ func TestRouteRuleStrategyViewUsesCanonicalOrder(t *testing.T) {
 	}
 	if got := byID[directRule.ID]; got.Kind != "direct" || got.OutboundTag != directRule.Name || !got.ReadOnly {
 		t.Fatalf("unexpected direct strategy: %+v", got)
+	}
+	if got := byID[bypassRule.ID]; got.Kind != "bypass" || got.OutboundTag != "" || !got.ReadOnly {
+		t.Fatalf("unexpected bypass strategy: %+v", got)
 	}
 }
 

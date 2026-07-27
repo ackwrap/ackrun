@@ -45,10 +45,24 @@ npm run build
 - 审核未通过、验证失败或仍有明确阻塞时禁止提交；修复后重新审核和验证，再创建新提交。
 - 禁止提交 `backend/internal/webui/dist/` 中由 Vite 生成的 hashed JS/CSS 等构建产物；发布包必须通过 `npm run build` 或根目录 `build.py` 在本地重新生成并嵌入。
 
+## main 分支保护规则
+
+- **主仓库和 `sing-box-wrap` 子模块的 `main` 都是保护分支，禁止直接在 `main` 上修改任何文件或创建功能提交。**
+- 开始任何编辑前必须先运行 `git branch --show-current`；如果当前位于 `main`，必须停止编辑并切换到对应的 `plus`、`devel` 或独立功能分支。
+- 所有源码、测试、配置、工作流修改以及合并冲突解决，都必须在非 `main` 分支完成，并在该分支完成审核和验证。
+- `main` 只接受已经审核、验证通过的其他分支合并；禁止在 `main` 上直接 commit、cherry-pick、amend 或处理冲突。
+
 ## devel 与子模块保护规则
 
+- **修改 `sing-box-wrap` 子模块中的任何源码（包括测试）前，必须先获得用户明确同意。主仓库功能需求不构成修改核心源码的隐式授权。**
+- 如果分析认为必须修改 `sing-box-wrap`，必须先停止实施，向用户说明修改原因、目标文件、行为影响和不修改核心的替代方案；只有用户明确批准后才能继续。
+- 未获得明确同意时，对 `sing-box-wrap` 只能进行只读调查；禁止编辑、格式化、暂存、提交或推送其中的文件。
 - 主仓库 `devel` 是功能开发与分支合并交界，`sing-box-wrap/devel` 同时承接 `sync -> devel -> main`。合并、拉取、rebase、切换分支或更新子模块都可能移动子模块工作树并覆盖未提交文件。
 - 执行上述操作前必须先运行 `git -C sing-box-wrap status --short` 和 `git diff --submodule=log -- sing-box-wrap`；子模块非干净状态时禁止直接执行更新。
+- `sync -> devel` 合并冲突中，`*_test.go`、测试目录和 `*.md` 文档允许直接采用 `sync` 版本；不得因此对其他源码批量使用 `ours` 或 `theirs`。
+- Ackwrap 已提交源码与 `sync` 冲突时，必须核对 merge base、`devel`、`sync` 三方内容及两侧提交记录，逐段判断双方实现意图、行为变化和回归风险，禁止整文件盲选任一侧。
+- 如果 `sync` 的实现更新或更合理，必须把其中有效逻辑提取、适配并融合进 Ackwrap 现有实现，同时保留仍需支持的定制功能；禁止直接接受整份 `sync` 文件而覆盖 Ackwrap 代码。
+- 每个源码冲突都必须记录采用 Ackwrap、采用 `sync` 或手工融合的理由，并执行受影响包测试及核心构建后才能视为解决。
 - 子模块存在功能修改时，必须先在 `sing-box-wrap` 内完成验证、提交并推送，再回主仓库提交新的子模块指针；禁止只提交主仓库映射而不提交对应核心实现。
 - 禁止对脏子模块执行 `git submodule update --force`、reset、clean 或会隐式切换子模块提交的脚本。确需更新时先提交，或在获得用户明确同意后建立可恢复的 stash。
 - 合并或更新完成后必须再次核对 `git -C sing-box-wrap rev-parse HEAD`、子模块状态和关键新增文件，确认工作树没有被远端 `devel` 覆盖。

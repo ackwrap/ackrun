@@ -286,6 +286,9 @@ func (svc *RouteRuleService) Strategies() ([]model.RouteStrategyItem, error) {
 		case rule.Outbound == "block" || rule.Outbound == "reject":
 			item.Kind = "reject"
 			item.ReadOnly = true
+		case rule.Outbound == "bypass":
+			item.Kind = "bypass"
+			item.ReadOnly = true
 		case rule.Outbound == "direct":
 			item.Kind = "direct"
 			item.ReadOnly = true
@@ -440,6 +443,7 @@ func (svc *RouteRuleService) PreviewWithBaseURL(baseURL string) (*model.RouteRul
 		ruleSets = append(ruleSets, ruleSet)
 	}
 	rules := make([]map[string]any, 0)
+	bypassRules := make([]map[string]any, 0)
 	finalOutbound := SystemGlobalDirectRouteRuleName
 	ruleOutboundOverrides, err := svc.routeRuleOutboundOverrides(items)
 	if err != nil {
@@ -466,15 +470,25 @@ func (svc *RouteRuleService) PreviewWithBaseURL(baseURL string) (*model.RouteRul
 			if err != nil {
 				return nil, err
 			}
-			rules = append(rules, mixedRules...)
+			if item.Outbound == "bypass" {
+				bypassRules = append(bypassRules, mixedRules...)
+			} else {
+				rules = append(rules, mixedRules...)
+			}
 			ruleSets = addMixedGeneratedRuleSets(ruleSets, ruleSetTags, item.Values, baseURL)
 			continue
 		}
 		if item.RuleType == "geoip" || item.RuleType == "geosite" {
 			ruleSets = appendGeneratedGeoRuleSets(ruleSets, ruleSetTags, item.RuleType, item.Values, baseURL)
 		}
-		rules = append(rules, singboxRouteRule(item.RuleType, item.Values, outbound, item.Invert))
+		generatedRule := singboxRouteRule(item.RuleType, item.Values, outbound, item.Invert)
+		if item.Outbound == "bypass" {
+			bypassRules = append(bypassRules, generatedRule)
+		} else {
+			rules = append(rules, generatedRule)
+		}
 	}
+	rules = append(bypassRules, rules...)
 	return &model.RouteRulePreviewResponse{Rules: rules, RuleSets: ruleSets, Final: finalOutbound}, nil
 }
 
@@ -1521,7 +1535,7 @@ func (svc *RouteRuleService) validateRouteRule(req *model.RouteRuleRequest) erro
 func (svc *RouteRuleService) validateRouteRuleOutboundName(req *model.RouteRuleRequest, currentRuleID int64) error {
 	name := strings.TrimSpace(req.Name)
 	switch strings.ToLower(name) {
-	case "direct", "proxy", "block", "reject":
+	case "direct", "proxy", "block", "reject", "bypass":
 		return fmt.Errorf("路由规则名称 %q 占用保留 outbound tag", name)
 	}
 
@@ -1585,9 +1599,9 @@ func validateRouteRule(req *model.RouteRuleRequest) error {
 		return fmt.Errorf("route rule values are required")
 	}
 	switch req.Outbound {
-	case "proxy", "direct", "block":
+	case "proxy", "direct", "block", "bypass":
 	default:
-		return fmt.Errorf("outbound must be proxy, direct, or block")
+		return fmt.Errorf("outbound must be proxy, direct, bypass, or block")
 	}
 	if req.RuleType == "mixed" {
 		if _, err := parseMixedRouteRuleValues(req.Values); err != nil {

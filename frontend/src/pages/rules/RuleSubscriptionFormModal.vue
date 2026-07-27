@@ -81,9 +81,12 @@ defineEmits<{
         <input v-model="generate" type="checkbox" />同时生成引用规则
       </label>
       <label v-if="!editing" class="flex items-center gap-2">
-        引用出站
+        引用动作
         <select v-model="referenceOutbound" class="!mt-0 !w-28">
-          <option v-for="item in ['proxy', 'direct', 'block']" :key="item">
+          <option
+            v-for="item in ['proxy', 'direct', 'bypass', 'block']"
+            :key="item"
+          >
             {{ item }}
           </option>
         </select>

@@ -180,9 +180,9 @@ function generatedGeoRuleSetTag(ruleType: string, value: string) {
 }
 
 function previewAction() {
-  return props.outbound === "block"
-    ? { action: "reject" }
-    : { action: "route", outbound: props.outbound };
+  if (props.outbound === "block") return { action: "reject" };
+  if (props.outbound === "bypass") return { action: "bypass" };
+  return { action: "route", outbound: props.outbound };
 }
 
 function previewRules() {
@@ -430,7 +430,7 @@ onBeforeUnmount(() => {
             </select>
           </label>
           <label class="block text-xs font-medium">
-            命中后出站
+            命中后动作
             <select
               :value="outbound"
               :disabled="editing?.is_system && !isFinalStrategy"
@@ -438,8 +438,19 @@ onBeforeUnmount(() => {
             >
               <option value="direct">直连 direct</option>
               <option value="proxy">策略 proxy</option>
+              <option v-if="!isFinalStrategy" value="bypass">
+                内核绕过 bypass
+              </option>
               <option v-if="!isFinalStrategy" value="block">阻断 block</option>
             </select>
+            <span
+              v-if="!isFinalStrategy && outbound === 'bypass'"
+              class="mt-1.5 block text-[11px] font-normal text-[var(--text-tertiary)]"
+            >
+              Linux TUN auto_redirect
+              下仅在目标仍为 IP 且条件已可判定时优先绕过代理；GeoSite/域名依赖已有 DNS
+              映射，其他模式不提供同等保证。
+            </span>
           </label>
         </div>
 

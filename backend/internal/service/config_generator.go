@@ -890,7 +890,7 @@ func (s *ConfigGeneratorService) dnsNeedsProxyFinal(_ string) (bool, error) {
 			return false, err
 		}
 		for _, rule := range rules {
-			if !rule.Enabled || rule.Outbound == "block" || rule.Outbound == "reject" {
+			if !rule.Enabled || rule.Outbound == "block" || rule.Outbound == "reject" || rule.Outbound == "bypass" {
 				continue
 			}
 			outbound := rule.Outbound
@@ -2016,6 +2016,7 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 	}
 	routeRules = append(routeRules, bypassRules...)
 	route["find_process"] = true
+	preSniffRuleCount := len(routeRules)
 
 	// sing-box 1.13 已移除 inbound sniff 字段，嗅探和 DNS 劫持必须使用 rule action。
 	routeRules = append(routeRules, map[string]interface{}{
@@ -2059,6 +2060,7 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 			return nil, err
 		}
 
+		var userBypassRules []map[string]interface{}
 		for _, rule := range rules {
 			if !rule.Enabled {
 				continue
@@ -2090,7 +2092,11 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 				continue
 			}
 			for _, ruleMap := range ruleMaps {
-				routeRules = append(routeRules, ruleMap)
+				if rule.Outbound == "bypass" {
+					userBypassRules = append(userBypassRules, ruleMap)
+				} else {
+					routeRules = append(routeRules, ruleMap)
+				}
 			}
 			if rule.RuleType == "geoip" || rule.RuleType == "geosite" {
 				ruleSets = appendGeneratedGeoRuleSets(ruleSets, ruleSetTags, rule.RuleType, rule.Values, apiBaseURL, apiToken)
@@ -2098,6 +2104,13 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 			if rule.RuleType == "mixed" {
 				ruleSets = addMixedGeneratedRuleSets(ruleSets, ruleSetTags, rule.Values, apiBaseURL, apiToken)
 			}
+		}
+		if len(userBypassRules) > 0 {
+			orderedRules := make([]map[string]interface{}, 0, len(routeRules)+len(userBypassRules))
+			orderedRules = append(orderedRules, routeRules[:preSniffRuleCount]...)
+			orderedRules = append(orderedRules, userBypassRules...)
+			orderedRules = append(orderedRules, routeRules[preSniffRuleCount:]...)
+			routeRules = orderedRules
 		}
 
 		for _, sub := range subscriptions {

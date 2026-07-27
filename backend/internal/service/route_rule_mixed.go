@@ -93,8 +93,11 @@ func singboxRouteRule(ruleType string, values []string, outbound string, invert 
 }
 
 func routeRuleAction(outbound string) map[string]interface{} {
-	if outbound == "block" {
+	switch outbound {
+	case "block":
 		return map[string]interface{}{"action": "reject"}
+	case "bypass":
+		return map[string]interface{}{"action": "bypass"}
 	}
 	return map[string]interface{}{"action": "route", "outbound": outbound}
 }

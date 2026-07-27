@@ -61,6 +61,18 @@ function statusToggleTitle(rule: RouteRule) {
   if (isFinalStrategy(rule)) return "最终策略必须保持启用，仅允许编辑出站";
   return "";
 }
+
+const actionLabels: Record<string, string> = {
+  direct: "直连 direct",
+  proxy: "策略 proxy",
+  bypass: "内核绕过 bypass",
+  block: "阻断 block",
+};
+
+function actionLabel(rule: RouteRule) {
+  if (isFinalStrategy(rule)) return rule.outbound;
+  return actionLabels[rule.outbound] || rule.outbound;
+}
 </script>
 <template>
   <section
@@ -108,7 +120,7 @@ function statusToggleTitle(rule: RouteRule) {
             <th>名称</th>
             <th>类型</th>
             <th>匹配值</th>
-            <th>出站</th>
+            <th>命中后动作</th>
             <th>状态</th>
             <th>操作</th>
           </tr>
@@ -150,7 +162,7 @@ function statusToggleTitle(rule: RouteRule) {
             <td class="max-w-[320px] truncate" :title="valueLabel(r)">
               {{ valueLabel(r) }}
             </td>
-            <td>{{ r.outbound }}</td>
+            <td>{{ actionLabel(r) }}</td>
             <td>
               <button
                 class="aw-action-button"

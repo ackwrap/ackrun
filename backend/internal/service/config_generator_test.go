@@ -305,6 +305,16 @@ func TestRouteRuleDirectUsesRouteAction(t *testing.T) {
 	}
 }
 
+func TestRouteRuleBypassUsesBypassAction(t *testing.T) {
+	rule := singboxRouteRule("domain_suffix", []string{"example.com"}, "bypass", false)
+	if rule["action"] != "bypass" {
+		t.Fatalf("action = %v, want bypass: %+v", rule["action"], rule)
+	}
+	if _, exists := rule["outbound"]; exists {
+		t.Fatalf("kernel bypass action must not emit outbound: %+v", rule)
+	}
+}
+
 func TestDefaultBypassProcessNamesIncludesAckwrapAndCore(t *testing.T) {
 	names := defaultBypassProcessNames(
 		filepath.Join("custom", "ackwrap-windows-amd64.exe"),
@@ -413,6 +423,59 @@ func TestGenerateRouteIncludesDefaultLoopBypassRules(t *testing.T) {
 	}
 	if standardDNSHijackIndex == -1 || firstBypassIndex == -1 || standardDNSHijackIndex >= firstBypassIndex {
 		t.Fatalf("standard DNS hijack must precede every bypass rule: %+v", rules)
+	}
+}
+
+func TestGenerateRoutePlacesUserBypassBeforeSniff(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.SetProxyMode("rule"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newTestRouteRuleService(t, db).Create(&model.RouteRuleRequest{
+		Name: "Kernel Bypass", Enabled: true, RuleType: "ip_cidr",
+		Values: []string{"203.0.113.0/24"}, Outbound: "bypass",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	generator := NewConfigGeneratorService(db, nil)
+	requiresProxy, err := generator.dnsNeedsProxyFinal("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requiresProxy {
+		t.Fatal("bypass rule must not require a proxy path")
+	}
+	route, err := generator.generateRoute("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules, ok := route["rules"].([]map[string]interface{})
+	if !ok {
+		t.Fatalf("route rules type = %T", route["rules"])
+	}
+	bypassIndex, sniffIndex := -1, -1
+	for index, rule := range rules {
+		if rule["action"] == "sniff" && sniffIndex == -1 {
+			sniffIndex = index
+		}
+		if !stringListContains(rule["ip_cidr"], "203.0.113.0/24") {
+			continue
+		}
+		bypassIndex = index
+		if rule["action"] != "bypass" {
+			t.Fatalf("user bypass action = %+v", rule)
+		}
+		if _, exists := rule["outbound"]; exists {
+			t.Fatalf("user bypass must not emit outbound: %+v", rule)
+		}
+	}
+	if bypassIndex == -1 || sniffIndex == -1 || bypassIndex >= sniffIndex {
+		t.Fatalf("user bypass must precede sniff: %+v", rules)
 	}
 }
 

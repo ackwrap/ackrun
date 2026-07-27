@@ -840,7 +840,7 @@ export interface StrategyItem {
   rule_id: number;
   name: string;
   priority: number;
-  kind: "reject" | "direct" | "proxy" | "final";
+  kind: "reject" | "bypass" | "direct" | "proxy" | "final";
   enabled: boolean;
   read_only: boolean;
   outbound_tag: string;

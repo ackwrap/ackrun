@@ -64,7 +64,7 @@ defineEmits<{
         </h4>
         <div class="grid gap-2">
           <button
-            v-for="outbound in ['proxy', 'direct', 'block']"
+            v-for="outbound in ['proxy', 'direct', 'bypass', 'block']"
             :key="outbound"
             class="aw-action-button aw-action-neutral w-full"
             @click="$emit('createRule', item, outbound)"
