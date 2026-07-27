@@ -595,7 +595,19 @@ onMounted(async () => {
       />
     </section>
     <Modal :open="!!detail" title="节点详情" size="lg" @close="detail = null"
-      ><template v-if="detail"
+      ><template #actions>
+        <button
+          v-if="detail"
+          class="aw-action-button aw-action-neutral"
+          :disabled="sharingNode === detail.id"
+          @click="shareNode(detail)"
+        >
+          <Share2 :size="13" />{{
+            sharingNode === detail.id ? "生成中..." : "分享链接"
+          }}
+        </button>
+      </template>
+      <template v-if="detail"
         ><div class="grid gap-3 md:grid-cols-2">
           <div class="md:col-span-2">
             名称：<NodeFlagName :name="detail.name" :flag="flags[detail.uid]" />
@@ -606,17 +618,6 @@ onMounted(async () => {
           <div>
             订阅：{{ detail.subscription_name || detail.subscription_id }}
           </div>
-        </div>
-        <div class="mt-4 flex justify-end">
-          <button
-            class="aw-action-button aw-action-neutral"
-            :disabled="sharingNode === detail.id"
-            @click="shareNode(detail)"
-          >
-            <Share2 :size="13" />{{
-              sharingNode === detail.id ? "生成中..." : "分享链接"
-            }}
-          </button>
         </div>
         <pre
           class="mt-4 max-h-[50vh] overflow-auto rounded-md bg-[var(--bg-base)] p-4 text-xs"

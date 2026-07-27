@@ -116,14 +116,17 @@ onBeforeUnmount(() => {
           <h3 class="text-base font-semibold">
             <slot name="title">{{ title }}</slot>
           </h3>
-          <button
-            v-if="closable"
-            class="aw-modal-close inline-flex h-8 w-8 items-center justify-center p-0"
-            aria-label="关闭"
-            @click="$emit('close')"
-          >
-            <X :size="16" />
-          </button>
+          <div class="flex items-center gap-2">
+            <slot name="actions" />
+            <button
+              v-if="closable"
+              class="aw-modal-close inline-flex h-8 w-8 items-center justify-center p-0"
+              aria-label="关闭"
+              @click="$emit('close')"
+            >
+              <X :size="16" />
+            </button>
+          </div>
         </header>
         <div class="min-h-0 overflow-y-auto px-6 py-4"><slot /></div>
         <footer
