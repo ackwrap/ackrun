@@ -10,6 +10,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ackwrap/ackrun/internal/model"
+	"github.com/ackwrap/ackrun/internal/store"
 )
 
 func TestReadMixedInboundPort(t *testing.T) {
@@ -20,6 +23,33 @@ func TestReadMixedInboundPort(t *testing.T) {
 	}
 	if got := readMixedInboundPort(path); got != 8888 {
 		t.Fatalf("readMixedInboundPort() = %d, want 8888", got)
+	}
+}
+
+func TestRuntimeVersionRefreshesAfterInstallStateUpdate(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	cachedVersion = ""
+	t.Cleanup(func() { cachedVersion = "" })
+
+	state := &model.InstallStateResponse{Status: model.InstallDone, Version: "1.14.0-alpha.46"}
+	if err := db.SetInstallState(state); err != nil {
+		t.Fatal(err)
+	}
+	svc := &RuntimeService{store: db}
+	if got := svc.getVersion(); got != state.Version {
+		t.Fatalf("getVersion() = %q, want %q", got, state.Version)
+	}
+
+	state.Version = "1.14.0-alpha.47"
+	if err := db.SetInstallState(state); err != nil {
+		t.Fatal(err)
+	}
+	if got := svc.getVersion(); got != state.Version {
+		t.Fatalf("getVersion() after install = %q, want %q", got, state.Version)
 	}
 }
 

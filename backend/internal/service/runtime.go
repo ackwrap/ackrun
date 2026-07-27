@@ -84,13 +84,11 @@ func readMixedInboundPort(configPath string) int {
 var cachedVersion string
 
 func (svc *RuntimeService) getVersion() string {
-	if cachedVersion != "" {
-		return cachedVersion
-	}
-
 	installState, err := svc.store.GetInstallState()
 	if err == nil && isSingboxVersion(installState.Version) {
-		cachedVersion = installState.Version
+		return installState.Version
+	}
+	if cachedVersion != "" {
 		return cachedVersion
 	}
 
