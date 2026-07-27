@@ -47,8 +47,64 @@ type ConfigGeneratorService struct {
 	singbox               configGeneratorCore
 	readCoreVersion       func() string
 	dnsmasqSupported      func() bool
+	runtimeAPISecret      string
 	configMu              sync.Mutex
 	coreRestartGeneration atomic.Uint64
+}
+
+func (s *ConfigGeneratorService) SetRuntimeAPISecret(secret string) {
+	s.runtimeAPISecret = strings.TrimSpace(secret)
+}
+
+func (s *ConfigGeneratorService) EnsureRuntimeAPIConfig() error {
+	if s.runtimeAPISecret == "" {
+		return errors.New("核心运行时 API 密钥未初始化")
+	}
+	configPath, exists, err := s.paths.ActiveConfigPath()
+	if err != nil {
+		return fmt.Errorf("读取活动配置路径: %w", err)
+	}
+	if !exists {
+		return errors.New("活动配置不存在")
+	}
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("读取活动配置: %w", err)
+	}
+	var config map[string]interface{}
+	if err := json.Unmarshal(content, &config); err != nil {
+		return fmt.Errorf("解析活动配置: %w", err)
+	}
+	if runtimeAPIServiceMatches(config["services"], s.runtimeAPISecret) {
+		return nil
+	}
+	logging.Info("config_generator.reconcile", "活动配置缺少核心运行时 API，重新生成配置")
+	result, err := s.ReconcileCurrent()
+	if err != nil {
+		return err
+	}
+	if result != nil && !result.Valid {
+		return fmt.Errorf("配置校验失败: %s", result.Error)
+	}
+	return nil
+}
+
+func runtimeAPIServiceMatches(rawServices interface{}, secret string) bool {
+	services, ok := rawServices.([]interface{})
+	if !ok {
+		return false
+	}
+	for _, rawService := range services {
+		serviceConfig, ok := rawService.(map[string]interface{})
+		if !ok || serviceConfig["type"] != "api" || serviceConfig["listen"] != singboxRuntimeAPIHost || serviceConfig["secret"] != secret {
+			continue
+		}
+		port, ok := serviceConfig["listen_port"].(float64)
+		if ok && port == singboxRuntimeAPIPort {
+			return true
+		}
+	}
+	return false
 }
 
 type configGeneratorCore interface {
@@ -289,25 +345,11 @@ func (s *ConfigGeneratorService) generateLockedTo(req *model.ConfigGenerateReque
 	if err != nil {
 		return nil, fmt.Errorf("生成 outbounds 失败: %w", err)
 	}
-	exposureInbounds, exposureRules, err := s.generateNodeExposureConfig(req, outbounds, endpoints)
-	if err != nil {
-		return nil, fmt.Errorf("生成节点暴露失败: %w", err)
-	}
-	inbounds = append(inbounds, exposureInbounds...)
-
 	// 3. 生成 route
 	route, err := s.generateRoute(req.DefaultOutbound)
 	if err != nil {
 		return nil, fmt.Errorf("生成 route 失败: %w", err)
 	}
-	if len(exposureRules) > 0 {
-		routeRules, ok := route["rules"].([]map[string]interface{})
-		if !ok {
-			return nil, fmt.Errorf("生成节点暴露失败: route.rules 格式无效")
-		}
-		route["rules"] = append(exposureRules, routeRules...)
-	}
-
 	logLevel := req.LogLevel
 
 	// 4. 获取实验性功能设置
@@ -336,6 +378,12 @@ func (s *ConfigGeneratorService) generateLockedTo(req *model.ConfigGenerateReque
 	if len(endpoints) > 0 {
 		config["endpoints"] = endpoints
 	}
+	if s.runtimeAPISecret != "" {
+		if req.InboundPort == singboxRuntimeAPIPort {
+			return nil, fmt.Errorf("Mixed 入站端口 %d 与核心运行时 API 冲突", singboxRuntimeAPIPort)
+		}
+		config["services"] = []map[string]interface{}{singboxRuntimeAPIServiceConfig(s.runtimeAPISecret)}
+	}
 
 	dnsGlobalSettings, err := s.effectiveDNSGlobalSettings()
 	if err != nil {
@@ -362,6 +410,11 @@ func (s *ConfigGeneratorService) generateLockedTo(req *model.ConfigGenerateReque
 	port := expSettings.ClashAPIPort
 	if port == "" {
 		port = "9090"
+	}
+	if s.runtimeAPISecret != "" {
+		if isSingboxRuntimeAPIPort(port) {
+			return nil, fmt.Errorf("Clash API 端口 %d 与核心运行时 API 冲突", singboxRuntimeAPIPort)
+		}
 	}
 	// 使用 proxy.mode 作为 Clash API 的默认模式，与控制面板保持一致
 	proxyMode := s.store.GetProxyMode()
@@ -425,9 +478,14 @@ func (s *ConfigGeneratorService) generateLockedTo(req *model.ConfigGenerateReque
 	return &model.ConfigGenerateResponse{
 		Config:   redactConfigAccessTokens(config).(map[string]interface{}),
 		Valid:    valid,
-		Error:    redactAccessToken(s.redactNodeExposurePasswords(errMsg)),
+		Error:    redactAccessToken(s.redactConfigSecrets(errMsg)),
 		FilePath: tmpPath,
 	}, nil
+}
+
+func isSingboxRuntimeAPIPort(port string) bool {
+	parsed, err := strconv.Atoi(strings.TrimSpace(port))
+	return err == nil && parsed == singboxRuntimeAPIPort
 }
 
 func clashAPIControllerHost(externalUI, secret string) string {
@@ -442,7 +500,7 @@ func redactConfigAccessTokens(value interface{}) interface{} {
 	case map[string]interface{}:
 		redacted := make(map[string]interface{}, len(typed))
 		for key, item := range typed {
-			if strings.EqualFold(key, "password") {
+			if strings.EqualFold(key, "password") || strings.EqualFold(key, "secret") {
 				if password, ok := item.(string); ok && password != "" {
 					redacted[key] = "[REDACTED]"
 					continue
@@ -466,7 +524,7 @@ func redactConfigAccessTokens(value interface{}) interface{} {
 	case map[string]string:
 		redacted := make(map[string]string, len(typed))
 		for key, item := range typed {
-			if strings.EqualFold(key, "password") && item != "" {
+			if (strings.EqualFold(key, "password") || strings.EqualFold(key, "secret")) && item != "" {
 				redacted[key] = "[REDACTED]"
 			} else {
 				redacted[key] = redactAccessToken(item)
@@ -484,6 +542,22 @@ func redactConfigAccessTokens(value interface{}) interface{} {
 	default:
 		return value
 	}
+}
+
+func (s *ConfigGeneratorService) redactConfigSecrets(message string) string {
+	if s.runtimeAPISecret != "" {
+		message = strings.ReplaceAll(message, s.runtimeAPISecret, "[REDACTED]")
+	}
+	items, err := s.store.ListNodeExposures()
+	if err != nil {
+		return message
+	}
+	for _, item := range items {
+		if item.Password != "" {
+			message = strings.ReplaceAll(message, item.Password, "[REDACTED]")
+		}
+	}
+	return message
 }
 
 // generateOutbounds 生成所有 outbounds 和 endpoints。WireGuard 在 sing-box 1.13 起是 endpoint，
@@ -2918,7 +2992,7 @@ func (s *ConfigGeneratorService) applyConfigFileLocked(fileName string) error {
 		return fmt.Errorf("暂存配置失败: %w", err)
 	}
 	if valid, validationError := s.validateConfig(stagedPath); !valid {
-		return fmt.Errorf("应用配置前验证失败: %s", validationError)
+		return fmt.Errorf("应用配置前验证失败: %s", redactAccessToken(s.redactConfigSecrets(validationError)))
 	}
 
 	// 3. 先复制旧配置作为备份，再原子替换正式配置。

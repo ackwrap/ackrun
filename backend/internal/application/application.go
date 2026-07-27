@@ -52,6 +52,10 @@ func New(options Options) (*Application, error) {
 	if err := options.Paths.EnsureDirs(); err != nil {
 		return nil, fmt.Errorf("ensure dirs: %w", err)
 	}
+	coreAPIToken, err := service.LoadOrCreateCoreAPIToken(options.Paths)
+	if err != nil {
+		return nil, fmt.Errorf("initialize core API token: %w", err)
+	}
 	logging.Info("application.start", "data dir: %s", options.Paths.DataDir)
 
 	db, err := store.Open(options.Paths.DBPath)
@@ -117,8 +121,11 @@ func New(options Options) (*Application, error) {
 	routeRuleSvc := service.NewRouteRuleService(db, options.Paths, realtimeSvc)
 	proxyCollectionSvc := service.NewProxyCollectionService(db, realtimeSvc)
 	configGenSvc := service.NewConfigGeneratorService(db, options.Paths, singboxSvc)
+	configGenSvc.SetRuntimeAPISecret(coreAPIToken)
 	nodeExposureSvc := service.NewNodeExposureService(db)
-	nodeExposureSvc.SetRuntimeDependencies(configGenSvc, singboxSvc)
+	nodeExposureRuntime := service.NewNodeExposureRuntimeClient(coreAPIToken)
+	nodeExposureSvc.SetRuntimeDependencies(nodeExposureRuntime, singboxSvc)
+	singboxSvc.SetStartHooks(configGenSvc.EnsureRuntimeAPIConfig, nodeExposureSvc.SyncRuntime)
 	settingsSvc.SetModeDependencies(singboxSvc, configGenSvc)
 	settingsSvc.SetConnectivitySettingsHook(proxyCollectionSvc.RefreshHealthCheckJobs)
 	reconcileSvc := service.NewConfigReconcileService(configGenSvc, realtimeSvc)

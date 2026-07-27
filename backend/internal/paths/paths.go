@@ -182,3 +182,7 @@ func (p *Paths) DNSMasqTakeoverStatePath() string {
 func (p *Paths) NetworkLifecycleLockPath() string {
 	return filepath.Join(p.DataDir, ".network-lifecycle.lock")
 }
+
+func (p *Paths) CoreAPITokenPath() string {
+	return filepath.Join(p.ConfigDir, "core-api-token")
+}

@@ -24,26 +24,22 @@ var (
 )
 
 type NodeExposureService struct {
-	store     *store.Store
-	generator nodeExposureConfigGenerator
-	core      nodeExposureCore
-	mu        sync.Mutex
-}
-
-type nodeExposureConfigGenerator interface {
-	ReconcileCurrentWithCallback(func() error) (*model.ConfigGenerateResponse, error)
+	store   *store.Store
+	runtime nodeExposureRuntime
+	core    nodeExposureCore
+	mu      sync.Mutex
 }
 
 type nodeExposureCore interface {
-	ApplyConfigRuntime(bool) (bool, error)
+	IsRunning() bool
 }
 
 func NewNodeExposureService(store *store.Store) *NodeExposureService {
 	return &NodeExposureService{store: store}
 }
 
-func (s *NodeExposureService) SetRuntimeDependencies(generator nodeExposureConfigGenerator, core nodeExposureCore) {
-	s.generator = generator
+func (s *NodeExposureService) SetRuntimeDependencies(runtime nodeExposureRuntime, core nodeExposureCore) {
+	s.runtime = runtime
 	s.core = core
 }
 
@@ -66,8 +62,19 @@ func (s *NodeExposureService) Create(req model.NodeExposureRequest) (*model.Node
 	if err := s.mutate(func() error { return s.store.CreateNodeExposure(item) }); err != nil {
 		return nil, normalizeNodeExposureStoreError(err)
 	}
-	if err := s.applyMutation(func() error {
+	created, err := s.store.GetNodeExposure(item.ID)
+	if err != nil {
+		if rollbackErr := s.mutate(func() error { return s.store.DeleteNodeExposure(item.ID) }); rollbackErr != nil {
+			return nil, fmt.Errorf("读取新建节点暴露失败: %v；回滚数据库也失败: %w", err, rollbackErr)
+		}
+		return nil, normalizeNodeExposureStoreError(err)
+	}
+	if err := s.applyRuntimeMutation(func() error {
+		return s.applyRuntimeItem(*created)
+	}, func() error {
 		return s.mutate(func() error { return s.store.DeleteNodeExposure(item.ID) })
+	}, func() error {
+		return s.runtime.Delete(item.ID)
 	}, item.Password); err != nil {
 		return nil, err
 	}
@@ -93,8 +100,19 @@ func (s *NodeExposureService) Update(id int64, req model.NodeExposureRequest) (*
 	if err := s.mutate(func() error { return s.store.UpdateNodeExposure(id, item) }); err != nil {
 		return nil, normalizeNodeExposureStoreError(err)
 	}
-	if err := s.applyMutation(func() error {
+	updated, err := s.store.GetNodeExposure(id)
+	if err != nil {
+		if rollbackErr := s.mutate(func() error { return s.store.RestoreNodeExposure(&existing.NodeExposure) }); rollbackErr != nil {
+			return nil, fmt.Errorf("读取更新后的节点暴露失败: %v；回滚数据库也失败: %w", err, rollbackErr)
+		}
+		return nil, normalizeNodeExposureStoreError(err)
+	}
+	if err := s.applyRuntimeMutation(func() error {
+		return s.applyRuntimeItem(*updated)
+	}, func() error {
 		return s.mutate(func() error { return s.store.RestoreNodeExposure(&existing.NodeExposure) })
+	}, func() error {
+		return s.applyRuntimeItem(*existing)
 	}, item.Password, existing.Password); err != nil {
 		return nil, err
 	}
@@ -113,8 +131,12 @@ func (s *NodeExposureService) Delete(id int64) error {
 	if err := s.mutate(func() error { return s.store.DeleteNodeExposure(id) }); err != nil {
 		return normalizeNodeExposureStoreError(err)
 	}
-	if err := s.applyMutation(func() error {
+	if err := s.applyRuntimeMutation(func() error {
+		return s.runtime.Delete(id)
+	}, func() error {
 		return s.mutate(func() error { return s.store.RestoreNodeExposure(&existing.NodeExposure) })
+	}, func() error {
+		return s.applyRuntimeItem(*existing)
 	}, existing.Password); err != nil {
 		return err
 	}
@@ -200,18 +222,11 @@ func (s *NodeExposureService) normalize(req model.NodeExposureRequest, existing 
 	return item, nil
 }
 
-func (s *NodeExposureService) applyMutation(rollback func() error, secrets ...string) error {
-	runtimeWasRunning := false
-	var runtimeApply func() error
-	if s.core != nil {
-		runtimeApply = func() error {
-			var err error
-			runtimeWasRunning, err = s.core.ApplyConfigRuntime(false)
-			return err
-		}
+func (s *NodeExposureService) applyRuntimeMutation(apply, rollback, restore func() error, secrets ...string) error {
+	if s.runtime == nil || s.core == nil || !s.core.IsRunning() {
+		return nil
 	}
-	result, applyErr := s.reconcileCurrent(runtimeApply)
-	restoreRuntime := result != nil && result.Valid
+	applyErr := apply()
 	if applyErr == nil {
 		return nil
 	}
@@ -220,20 +235,38 @@ func (s *NodeExposureService) applyMutation(rollback func() error, secrets ...st
 	if rollbackErr := rollback(); rollbackErr != nil {
 		return fmt.Errorf("%w: %v；回滚数据库也失败: %w", ErrNodeExposureApply, applyErr, rollbackErr)
 	}
-	if restoreRuntime {
-		var runtimeRestore func() error
-		if s.core != nil {
-			runtimeRestore = func() error {
-				_, err := s.core.ApplyConfigRuntime(runtimeWasRunning)
-				return err
-			}
-		}
-		if _, restoreErr := s.reconcileCurrent(runtimeRestore); restoreErr != nil {
-			restoreErr = s.redactError(restoreErr, secrets...)
-			return fmt.Errorf("%w: %v；数据库已回滚，但恢复配置失败: %w", ErrNodeExposureApply, applyErr, restoreErr)
-		}
+	if restoreErr := restore(); restoreErr != nil {
+		restoreErr = s.redactError(restoreErr, secrets...)
+		return fmt.Errorf("%w: %v；数据库已回滚，但恢复运行时失败: %w", ErrNodeExposureApply, applyErr, restoreErr)
 	}
 	return fmt.Errorf("%w，已回滚: %w", ErrNodeExposureApply, applyErr)
+}
+
+func (s *NodeExposureService) applyRuntimeItem(item model.NodeExposureWithNode) error {
+	if item.Enabled {
+		return s.runtime.Upsert(item)
+	}
+	return s.runtime.Delete(item.ID)
+}
+
+func (s *NodeExposureService) SyncRuntime() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.runtime == nil {
+		return nil
+	}
+	items, err := s.store.ListNodeExposures()
+	if err != nil {
+		return err
+	}
+	logging.Info("node_exposure.sync", "同步 %d 项节点暴露到核心运行时", len(items))
+	if err := s.runtime.Sync(items); err != nil {
+		redactedErr := s.redactError(err)
+		logging.Error("node_exposure.sync", "同步节点暴露失败: %v", redactedErr)
+		return redactedErr
+	}
+	logging.Info("node_exposure.sync", "节点暴露运行时同步完成")
+	return nil
 }
 
 func (s *NodeExposureService) mutate(operation func() error) error {
@@ -261,17 +294,6 @@ func (s *NodeExposureService) redactError(err error, secrets ...string) error {
 		}
 	}
 	return errors.New(message)
-}
-
-func (s *NodeExposureService) reconcileCurrent(afterApply func() error) (*model.ConfigGenerateResponse, error) {
-	if s.generator == nil {
-		return nil, nil
-	}
-	result, err := s.generator.ReconcileCurrentWithCallback(afterApply)
-	if err == nil && result != nil && !result.Valid {
-		err = fmt.Errorf("配置校验失败: %s", result.Error)
-	}
-	return result, err
 }
 
 func (s *NodeExposureService) validateRuntimeConflicts(item *model.NodeExposure, excludeID int64) error {
@@ -309,6 +331,7 @@ func listenersOverlap(left, right string) bool {
 func reservedNodeExposurePorts(db *store.Store) map[int]string {
 	ports := map[int]string{
 		defaultDNSInboundPort: "Ackwrap DNS 入站",
+		singboxRuntimeAPIPort: "核心运行时 API",
 	}
 	if request, err := db.GetConfigGenerateRequest(); err == nil && request != nil && request.InboundPort > 0 {
 		ports[request.InboundPort] = "Mixed 入站"

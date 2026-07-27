@@ -45,6 +45,8 @@ type SingboxService struct {
 	stopReason         string
 	cachedVer          string
 	lastError          string
+	beforeStart        func() error
+	afterStart         func() error
 }
 
 var (
@@ -55,10 +57,103 @@ func NewSingboxService(p *paths.Paths, rt *RealtimeService, logs *CoreLogService
 	return &SingboxService{paths: p, realtime: rt, coreLogs: logs, store: s, dnsmasq: newDNSMasqLifecycle(p), dnsmasqSupported: platformSupportsDNSMasqTakeover}
 }
 
+func (svc *SingboxService) SetStartHooks(beforeStart, afterStart func() error) {
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
+	svc.beforeStart = beforeStart
+	svc.afterStart = afterStart
+}
+
 func (svc *SingboxService) Start() (*model.ActionResponse, error) {
+	if err := svc.prepareStartConfig(); err != nil {
+		return nil, err
+	}
 	svc.lifecycleMu.Lock()
 	defer svc.lifecycleMu.Unlock()
-	return svc.start()
+	return svc.startAndSync()
+}
+
+func (svc *SingboxService) prepareStartConfig() error {
+	svc.mu.Lock()
+	beforeStart := svc.beforeStart
+	svc.mu.Unlock()
+	if beforeStart == nil {
+		return nil
+	}
+	if err := beforeStart(); err != nil {
+		return fmt.Errorf("prepare sing-box configuration: %w", err)
+	}
+	return nil
+}
+
+func (svc *SingboxService) startAndSync() (*model.ActionResponse, error) {
+	response, err := svc.start()
+	if err != nil {
+		return nil, err
+	}
+	svc.mu.Lock()
+	afterStart := svc.afterStart
+	svc.mu.Unlock()
+	if afterStart == nil {
+		return svc.markStarted(response)
+	}
+	if err := afterStart(); err != nil {
+		startErr := fmt.Errorf("节点暴露运行时同步失败: %w", err)
+		svc.mu.Lock()
+		svc.lastError = startErr.Error()
+		svc.mu.Unlock()
+		logging.Error("core.start", "%v", startErr)
+		var stopErr error
+		if svc.IsRunning() {
+			_, stopErr = svc.stop("runtime node exposure sync failed")
+		}
+		settleErr := svc.waitUntilStopped(12 * time.Second)
+		if stopErr != nil {
+			stopErr = fmt.Errorf("stop core after runtime sync failure: %w", stopErr)
+		}
+		svc.realtime.Broadcast("core.status", map[string]any{
+			"status": "error",
+			"pid":    0,
+			"error":  startErr.Error(),
+		})
+		svc.broadcastRuntimeStatus(model.RuntimeError, 0)
+		return nil, errors.Join(startErr, stopErr, settleErr)
+	}
+	return svc.markStarted(response)
+}
+
+func (svc *SingboxService) markStarted(response *model.ActionResponse) (*model.ActionResponse, error) {
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
+	if !svc.isRunning() || svc.stopping {
+		return nil, errors.New("sing-box exited before startup completed")
+	}
+	pid := svc.pid
+	logging.Info("core.start", "sing-box started, pid=%d", pid)
+	svc.realtime.Broadcast("core.status", map[string]any{
+		"status": "running",
+		"pid":    pid,
+	})
+	svc.broadcastRuntimeStatus(model.RuntimeRunning, pid)
+	return response, nil
+}
+
+func (svc *SingboxService) waitUntilStopped(timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		svc.mu.Lock()
+		running := svc.isRunning()
+		stopping := svc.stopping
+		pid := svc.pid
+		svc.mu.Unlock()
+		if !running && !stopping {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("sing-box did not settle after runtime sync failure (pid=%d)", pid)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // StartIfConfigured starts the core after backend startup when both its binary
@@ -309,14 +404,6 @@ func (svc *SingboxService) start() (*model.ActionResponse, error) {
 			return nil, errors.New(svc.lastError)
 		}
 	}
-
-	logging.Info("core.start", "sing-box started, pid=%d", svc.pid)
-	svc.realtime.Broadcast("core.status", map[string]any{
-		"status": "running",
-		"pid":    svc.pid,
-	})
-	svc.broadcastRuntimeStatus(model.RuntimeRunning, svc.pid)
-
 	return &model.ActionResponse{Success: true, Message: "service started"}, nil
 }
 
@@ -502,6 +589,9 @@ func (svc *SingboxService) ScheduledRestart() (*model.ActionResponse, error) {
 }
 
 func (svc *SingboxService) restartWithReason(reason string) (*model.ActionResponse, error) {
+	if err := svc.prepareStartConfig(); err != nil {
+		return nil, err
+	}
 	svc.lifecycleMu.Lock()
 	defer svc.lifecycleMu.Unlock()
 	return svc.restart(reason)
@@ -515,7 +605,7 @@ func (svc *SingboxService) restart(reason string) (*model.ActionResponse, error)
 		return nil, err
 	}
 
-	return svc.start()
+	return svc.startAndSync()
 }
 
 func (svc *SingboxService) validateActiveConfig() (string, error) {
@@ -593,6 +683,9 @@ func (svc *SingboxService) migrateRuleSetAccessToken(configPath string) error {
 }
 
 func (svc *SingboxService) ReloadConfig() (*model.ActionResponse, error) {
+	if err := svc.prepareStartConfig(); err != nil {
+		return nil, err
+	}
 	svc.lifecycleMu.Lock()
 	defer svc.lifecycleMu.Unlock()
 	logging.Info("core.reload_config", "reloading sing-box config")
@@ -606,6 +699,9 @@ func (svc *SingboxService) ReloadConfig() (*model.ActionResponse, error) {
 // current active configuration. Rollback callers can request restoring a core
 // that was running before a failed reload.
 func (svc *SingboxService) ApplyConfigRuntime(startIfStopped bool) (bool, error) {
+	if err := svc.prepareStartConfig(); err != nil {
+		return false, err
+	}
 	svc.lifecycleMu.Lock()
 	defer svc.lifecycleMu.Unlock()
 	wasRunning := svc.IsRunning()
@@ -614,7 +710,7 @@ func (svc *SingboxService) ApplyConfigRuntime(startIfStopped bool) (bool, error)
 		return true, err
 	}
 	if startIfStopped {
-		_, err := svc.start()
+		_, err := svc.startAndSync()
 		return false, err
 	}
 	return false, nil

@@ -44,6 +44,9 @@ Thumbs.db
 
 # Data
 *.tmp
+**/core-api-token
+**/config/*.json
+**/config/**/*.json
 /tmp/
 /docs/
 ackwrap.db

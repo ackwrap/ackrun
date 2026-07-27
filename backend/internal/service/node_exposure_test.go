@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/ackwrap/ackrun/internal/model"
-	"github.com/ackwrap/ackrun/internal/paths"
 	"github.com/ackwrap/ackrun/internal/store"
 )
 
@@ -32,6 +31,13 @@ func TestNodeExposureServiceValidatesAuthenticationAndListenerConflicts(t *testi
 	}
 	if created.HasPassword || created.Password != "" {
 		t.Fatalf("unexpected password state: %+v", created)
+	}
+	encoded, err := json.Marshal(created)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), `"password"`) {
+		t.Fatalf("API response exposed password metadata: %s", encoded)
 	}
 
 	_, err = svc.Create(model.NodeExposureRequest{
@@ -147,8 +153,8 @@ func TestNodeExposureMutationRollsBackWhenRuntimeApplyFails(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	generator := &nodeExposureGeneratorStub{err: errors.New("apply failed")}
-	svc.SetRuntimeDependencies(generator, nil)
+	runtime := &nodeExposureRuntimeStub{upsertErrors: []error{errors.New("apply failed")}}
+	svc.SetRuntimeDependencies(runtime, &nodeExposureCoreStub{running: true})
 	_, err = svc.Update(created.ID, model.NodeExposureRequest{
 		Name: "changed", SubscriptionID: subscriptionID, NodeUID: nodeUID,
 		InboundType: "http", Listen: "127.0.0.1", ListenPort: 18101, Enabled: true,
@@ -163,23 +169,28 @@ func TestNodeExposureMutationRollsBackWhenRuntimeApplyFails(t *testing.T) {
 	if restored.Name != "original" || restored.InboundType != "socks" || restored.ListenPort != 18100 {
 		t.Fatalf("update rollback = %+v", restored)
 	}
+	if len(runtime.upserts) != 2 || runtime.upserts[0].Name != "changed" || runtime.upserts[1].Name != "original" {
+		t.Fatalf("runtime was not restored after update failure: %+v", runtime.upserts)
+	}
 
-	err = svc.Delete(created.ID)
-	if !errors.Is(err, ErrNodeExposureApply) {
+	runtime.deleteErrors = []error{errors.New("delete failed")}
+	if err := svc.Delete(created.ID); !errors.Is(err, ErrNodeExposureApply) {
 		t.Fatalf("delete error = %v", err)
 	}
 	if _, err := db.GetNodeExposure(created.ID); err != nil {
 		t.Fatalf("delete rollback did not restore exposure: %v", err)
 	}
+	if len(runtime.upserts) != 3 || runtime.upserts[2].Name != "original" {
+		t.Fatalf("runtime was not restored after delete failure: %+v", runtime.upserts)
+	}
 }
 
-func TestNodeExposureCreateRestoresRuntimeAfterRestartFailure(t *testing.T) {
+func TestNodeExposureCreateRestoresRuntimeAfterApplyFailure(t *testing.T) {
 	db, subscriptionID, nodeUID := createNodeExposureTestData(t)
 	defer db.Close()
-	generator := &nodeExposureGeneratorStub{}
-	core := &nodeExposureCoreStub{running: true, restartErr: errors.New("restart failed")}
+	runtime := &nodeExposureRuntimeStub{upsertErrors: []error{errors.New("runtime failed")}}
 	svc := NewNodeExposureService(db)
-	svc.SetRuntimeDependencies(generator, core)
+	svc.SetRuntimeDependencies(runtime, &nodeExposureCoreStub{running: true})
 
 	_, err := svc.Create(model.NodeExposureRequest{
 		Name: "restart rollback", SubscriptionID: subscriptionID, NodeUID: nodeUID,
@@ -195,8 +206,8 @@ func TestNodeExposureCreateRestoresRuntimeAfterRestartFailure(t *testing.T) {
 	if len(items) != 0 {
 		t.Fatalf("failed create was not rolled back: %+v", items)
 	}
-	if generator.calls != 2 || core.restartCalls != 1 || core.startCalls != 1 || !core.running {
-		t.Fatalf("runtime restore: generator=%d restart=%d start=%d running=%t", generator.calls, core.restartCalls, core.startCalls, core.running)
+	if len(runtime.deletes) != 1 {
+		t.Fatalf("partial runtime create was not cleaned up: %+v", runtime.deletes)
 	}
 }
 
@@ -205,7 +216,10 @@ func TestNodeExposureApplyErrorRedactsPassword(t *testing.T) {
 	defer db.Close()
 	const password = "test-password-value"
 	svc := NewNodeExposureService(db)
-	svc.SetRuntimeDependencies(&nodeExposureGeneratorStub{err: errors.New("config rejected " + password)}, nil)
+	svc.SetRuntimeDependencies(
+		&nodeExposureRuntimeStub{upsertErrors: []error{errors.New("runtime rejected " + password)}},
+		&nodeExposureCoreStub{running: true},
+	)
 
 	_, err := svc.Create(model.NodeExposureRequest{
 		Name: "redaction", SubscriptionID: subscriptionID, NodeUID: nodeUID,
@@ -220,90 +234,67 @@ func TestNodeExposureApplyErrorRedactsPassword(t *testing.T) {
 	}
 }
 
-func TestNodeExposureReloadsCoreThatStartsDuringConfigApply(t *testing.T) {
+func TestNodeExposureDefersRuntimeApplyWhileCoreIsStopped(t *testing.T) {
 	db, subscriptionID, nodeUID := createNodeExposureTestData(t)
 	defer db.Close()
-	core := &nodeExposureCoreStub{}
-	generator := &nodeExposureGeneratorStub{beforeCallback: func() {
-		core.running = true
-	}}
+	runtime := &nodeExposureRuntimeStub{}
 	svc := NewNodeExposureService(db)
-	svc.SetRuntimeDependencies(generator, core)
+	svc.SetRuntimeDependencies(runtime, &nodeExposureCoreStub{})
 
 	if _, err := svc.Create(model.NodeExposureRequest{
-		Name: "start race", SubscriptionID: subscriptionID, NodeUID: nodeUID,
+		Name: "stopped core", SubscriptionID: subscriptionID, NodeUID: nodeUID,
 		InboundType: "socks", Listen: "127.0.0.1", ListenPort: 18112, Enabled: true,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if core.restartCalls != 1 || !core.running {
-		t.Fatalf("core was not reloaded after concurrent start: restart=%d running=%t", core.restartCalls, core.running)
+	if len(runtime.upserts) != 0 || len(runtime.deletes) != 0 {
+		t.Fatalf("stopped core received runtime mutations: upserts=%d deletes=%d", len(runtime.upserts), len(runtime.deletes))
 	}
 }
 
-func TestGenerateNodeExposureConfigRoutesInboundToSelectedNode(t *testing.T) {
+func TestNodeExposureSyncRuntimeUsesStoredItems(t *testing.T) {
 	db, subscriptionID, nodeUID := createNodeExposureTestData(t)
 	defer db.Close()
 	svc := NewNodeExposureService(db)
-	created, err := svc.Create(model.NodeExposureRequest{
-		Name:           "authenticated mixed",
+	_, err := svc.Create(model.NodeExposureRequest{
+		Name:           "sync item",
 		SubscriptionID: subscriptionID,
 		NodeUID:        nodeUID,
-		InboundType:    "mixed",
+		InboundType:    "socks",
 		Listen:         "127.0.0.1",
 		ListenPort:     18082,
-		Username:       "test-user",
-		Password:       "test-password",
 		Enabled:        true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	runtime := &nodeExposureRuntimeStub{}
+	svc.SetRuntimeDependencies(runtime, &nodeExposureCoreStub{running: true})
+	if err := svc.SyncRuntime(); err != nil {
+		t.Fatal(err)
+	}
+	if len(runtime.synced) != 1 || runtime.synced[0].Name != "sync item" {
+		t.Fatalf("synced items = %+v", runtime.synced)
+	}
+}
 
-	generator := NewConfigGeneratorService(db, &paths.Paths{})
-	outbounds, endpoints, err := generator.generateOutbounds()
-	if err != nil {
+func TestNodeExposureSyncRuntimeRedactsStoredPassword(t *testing.T) {
+	db, subscriptionID, nodeUID := createNodeExposureTestData(t)
+	defer db.Close()
+	const password = "sync-password-value"
+	svc := NewNodeExposureService(db)
+	if _, err := svc.Create(model.NodeExposureRequest{
+		Name: "sync redaction", SubscriptionID: subscriptionID, NodeUID: nodeUID,
+		InboundType: "socks", Listen: "127.0.0.1", ListenPort: 18113,
+		Username: "test-user", Password: password, Enabled: true,
+	}); err != nil {
 		t.Fatal(err)
 	}
-	inbounds, rules, err := generator.generateNodeExposureConfig(&model.ConfigGenerateRequest{InboundPort: model.DefaultMixedInboundPort}, outbounds, endpoints)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(inbounds) != 1 || len(rules) != 1 {
-		t.Fatalf("inbounds = %d, rules = %d", len(inbounds), len(rules))
-	}
-	inbound := inbounds[0].(map[string]interface{})
-	if inbound["tag"] != "node-exposure-in-"+jsonNumber(created.ID) || inbound["type"] != "mixed" {
-		t.Fatalf("generated inbound = %+v", inbound)
-	}
-	users := inbound["users"].([]map[string]string)
-	if len(users) != 1 || users[0]["password"] != "test-password" {
-		t.Fatalf("generated users = %+v", users)
-	}
-	inboundTags := rules[0]["inbound"].([]string)
-	if len(inboundTags) != 1 || inboundTags[0] != inbound["tag"] || rules[0]["action"] != "route" || rules[0]["outbound"] == "" {
-		t.Fatalf("generated route rule = %+v", rules[0])
-	}
-	if !generatedConfigHasTag(outbounds, endpoints, rules[0]["outbound"].(string)) {
-		t.Fatalf("route target is not a generated node tag: %+v", rules[0])
-	}
-
-	config := map[string]interface{}{"inbounds": inbounds}
-	redacted := redactConfigAccessTokens(config).(map[string]interface{})
-	redactedInbound := redacted["inbounds"].([]interface{})[0].(map[string]interface{})
-	redactedUsers := redactedInbound["users"].([]map[string]string)
-	if redactedUsers[0]["password"] != "[REDACTED]" {
-		t.Fatalf("redacted users = %+v", redactedUsers)
-	}
-	if users[0]["password"] != "test-password" {
-		t.Fatal("redaction mutated the generated configuration")
-	}
-	encoded, err := json.Marshal(created)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(encoded), "test-password") || strings.Contains(string(encoded), `"password"`) {
-		t.Fatalf("API response exposed password: %s", encoded)
+	runtime := &nodeExposureRuntimeStub{syncErr: errors.New("runtime rejected " + password)}
+	svc.SetRuntimeDependencies(runtime, &nodeExposureCoreStub{running: true})
+	err := svc.SyncRuntime()
+	if err == nil || strings.Contains(err.Error(), password) || !strings.Contains(err.Error(), "[REDACTED]") {
+		t.Fatalf("sync error was not redacted: %v", err)
 	}
 }
 
@@ -340,56 +331,44 @@ func createNodeExposureTestData(t *testing.T) (*store.Store, int64, string) {
 	return db, subscription.ID, nodes[0].UID
 }
 
-func jsonNumber(value int64) string {
-	data, _ := json.Marshal(value)
-	return string(data)
+type nodeExposureRuntimeStub struct {
+	upserts      []model.NodeExposureWithNode
+	deletes      []int64
+	synced       []model.NodeExposureWithNode
+	upsertErrors []error
+	deleteErrors []error
+	syncErr      error
 }
 
-type nodeExposureGeneratorStub struct {
-	calls          int
-	err            error
-	beforeCallback func()
+func (stub *nodeExposureRuntimeStub) Sync(items []model.NodeExposureWithNode) error {
+	stub.synced = append([]model.NodeExposureWithNode(nil), items...)
+	return stub.syncErr
 }
 
-func (stub *nodeExposureGeneratorStub) ReconcileCurrentWithCallback(afterApply func() error) (*model.ConfigGenerateResponse, error) {
-	stub.calls++
-	if stub.err != nil {
-		return nil, stub.err
+func (stub *nodeExposureRuntimeStub) Upsert(item model.NodeExposureWithNode) error {
+	stub.upserts = append(stub.upserts, item)
+	if len(stub.upsertErrors) > 0 {
+		err := stub.upsertErrors[0]
+		stub.upsertErrors = stub.upsertErrors[1:]
+		return err
 	}
-	result := &model.ConfigGenerateResponse{Valid: true}
-	if afterApply != nil {
-		if stub.beforeCallback != nil {
-			stub.beforeCallback()
-		}
-		if err := afterApply(); err != nil {
-			return result, err
-		}
+	return nil
+}
+
+func (stub *nodeExposureRuntimeStub) Delete(id int64) error {
+	stub.deletes = append(stub.deletes, id)
+	if len(stub.deleteErrors) > 0 {
+		err := stub.deleteErrors[0]
+		stub.deleteErrors = stub.deleteErrors[1:]
+		return err
 	}
-	return result, nil
+	return nil
 }
 
 type nodeExposureCoreStub struct {
-	running      bool
-	restartCalls int
-	startCalls   int
-	restartErr   error
+	running bool
 }
 
-func (stub *nodeExposureCoreStub) ApplyConfigRuntime(startIfStopped bool) (bool, error) {
-	wasRunning := stub.running
-	if stub.running {
-		stub.restartCalls++
-		if stub.restartErr != nil {
-			stub.running = false
-			err := stub.restartErr
-			stub.restartErr = nil
-			return true, err
-		}
-		return true, nil
-	}
-	if startIfStopped {
-		stub.startCalls++
-		stub.running = true
-	}
-	return wasRunning, nil
+func (stub *nodeExposureCoreStub) IsRunning() bool {
+	return stub.running
 }
