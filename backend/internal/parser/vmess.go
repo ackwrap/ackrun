@@ -52,6 +52,9 @@ func parseVmess(raw string) (*model.ParsedNode, error) {
 		"fp":          getString(cfg, "fp"),
 		"serviceName": getString(cfg, "path"),
 	}
+	if boolOrString(cfg["allowInsecure"]) {
+		query["allowInsecure"] = "1"
+	}
 	applyTLSOptions(node, query, "servername")
 	applyTransportOptions(node, query)
 	return parsedNodeFromMap(raw, node)

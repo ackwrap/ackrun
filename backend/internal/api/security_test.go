@@ -15,6 +15,8 @@ func newSecurityTestRouter(token string) *gin.Engine {
 	router.Use(SecurityMiddleware(token))
 	router.GET("/", func(c *gin.Context) { c.String(http.StatusOK, "ui") })
 	router.GET("/api/v1/runtime", func(c *gin.Context) { c.String(http.StatusOK, "api") })
+	router.GET("/api/v1/nodes/:id/share", func(c *gin.Context) { c.String(http.StatusOK, "share") })
+	router.GET("/api/v1/rules/share", func(c *gin.Context) { c.String(http.StatusOK, "share") })
 	router.GET("/api/v1/rules/subscriptions/:id/content", func(c *gin.Context) { c.String(http.StatusOK, "rules") })
 	router.GET("/api/v1/rules/geo/rule-sets/:tag/content", func(c *gin.Context) { c.String(http.StatusOK, "rules") })
 	return router
@@ -37,6 +39,17 @@ func TestSecurityMiddlewareRequiresToken(t *testing.T) {
 
 	if recorder.Code != http.StatusUnauthorized || !strings.Contains(recorder.Body.String(), "UNAUTHORIZED") {
 		t.Fatalf("response = %d %s, want unauthorized error", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestSecurityMiddlewareProtectsShareEndpoints(t *testing.T) {
+	for _, path := range []string{"/api/v1/nodes/1/share", "/api/v1/rules/share"} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		newSecurityTestRouter("secret").ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusUnauthorized {
+			t.Fatalf("%s status = %d, want %d", path, recorder.Code, http.StatusUnauthorized)
+		}
 	}
 }
 

@@ -7,6 +7,7 @@ import Toast from "@/components/ui/Toast.vue";
 import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
 import { useRealtimeSocket } from "@/composables/useRealtimeSocket";
 import { api } from "@/services/api";
+import { writeClipboardText } from "@/utils/clipboard";
 import type {
   GeoAsset,
   RouteRule,
@@ -17,6 +18,7 @@ import type {
 import GeoDatabaseSection from "./rules/GeoDatabaseSection.vue";
 import RuleListSection from "./rules/RuleListSection.vue";
 import RouteRuleFormModal from "./rules/RouteRuleFormModal.vue";
+import RouteRuleImportModal from "./rules/RouteRuleImportModal.vue";
 import RuleSubscriptionActionsModal from "./rules/RuleSubscriptionActionsModal.vue";
 import RuleSubscriptionFormModal from "./rules/RuleSubscriptionFormModal.vue";
 import RuleSubscriptionSection from "./rules/RuleSubscriptionSection.vue";
@@ -54,7 +56,10 @@ const rules = ref<RouteRule[]>([]),
   actions = ref<RouteRuleSubscription | null>(null),
   preview = ref<RouteRulePreviewResponse | null>(null),
   content = ref<{ title: string; content: string } | null>(null),
-  geoSyncing = ref(false);
+  geoSyncing = ref(false),
+  importOpen = ref(false),
+  importCode = ref(""),
+  importing = ref(false);
 let poll: number | undefined;
 let loadVersion = 0;
 const show = (s: string, t: "success" | "error" = "success") => {
@@ -227,6 +232,34 @@ async function move(i: number, d: -1 | 1) {
   } catch (e: any) {
     show(`规则排序失败: ${e.message}`, "error");
     await load();
+  }
+}
+async function shareRules() {
+  try {
+    const result = await api.shareRouteRules();
+    await writeClipboardText(result.code);
+    show(`规则分享码已复制，共 ${result.rule_count} 条自定义规则`);
+  } catch (e: any) {
+    show(`规则分享失败: ${e.message}`, "error");
+  }
+}
+function openImport() {
+  importCode.value = "";
+  importOpen.value = true;
+}
+async function importRules() {
+  if (importing.value || !importCode.value.trim()) return;
+  importing.value = true;
+  try {
+    const result = await api.importRouteRules(importCode.value);
+    show(`规则导入完成：新增 ${result.created}，更新 ${result.updated}`);
+    importOpen.value = false;
+    importCode.value = "";
+    await load();
+  } catch (e: any) {
+    show(`规则导入失败: ${e.message}`, "error");
+  } finally {
+    importing.value = false;
   }
 }
 function resetSub() {
@@ -467,6 +500,8 @@ onBeforeUnmount(() => clearInterval(poll));
         @add-geo="addRule('geosite')"
         @add="addRule()"
         @preview="openRulePreview"
+        @share="shareRules"
+        @import="openImport"
         @move="move"
         @toggle="toggleRule"
         @edit="editRule"
@@ -495,6 +530,13 @@ onBeforeUnmount(() => clearInterval(poll));
         resetRule();
       "
       @save="saveRule"
+    /><RouteRuleImportModal
+      :open="importOpen"
+      :code="importCode"
+      :importing="importing"
+      @close="importOpen = false"
+      @update:code="importCode = $event"
+      @import="importRules"
     /><RuleSubscriptionActionsModal
       v-if="actions"
       :item="actions"

@@ -7,6 +7,7 @@ import {
   Globe2,
   RefreshCw,
   Route as RouteIcon,
+  Share2,
   Smile,
   Star,
   Tags,
@@ -23,6 +24,7 @@ import NodeTracerouteModal from "@/pages/nodes/NodeTracerouteModal.vue";
 import NodeExitIPModal from "@/pages/nodes/NodeExitIPModal.vue";
 import { api } from "@/services/api";
 import type { NodeFacetItem, NodeItem, Subscription } from "@/services/types";
+import { writeClipboardText } from "@/utils/clipboard";
 
 const route = useRoute(),
   router = useRouter(),
@@ -49,6 +51,7 @@ const detail = ref<NodeItem | null>(null),
   selected = ref(new Set<string>()),
   tcping = ref(new Set<string>()),
   tcpingLoading = ref(false),
+  sharingNode = ref<number | null>(null),
   renameOpen = ref(false),
   renameMode = ref<"lines" | "replace" | "prefix" | "suffix">("prefix"),
   renameText = ref(""),
@@ -261,6 +264,19 @@ const address = (n: NodeItem) => `${n.server}:${n.server_port}`,
       return s || "{}";
     }
   };
+async function shareNode(node: NodeItem) {
+  if (sharingNode.value !== null) return;
+  sharingNode.value = node.id;
+  try {
+    const result = await api.getNodeShare(node.id);
+    await writeClipboardText(result.uri);
+    show(`${node.type.toUpperCase()} 节点分享链接已复制`);
+  } catch (e: any) {
+    show(`节点分享失败: ${e.message}`);
+  } finally {
+    sharingNode.value = null;
+  }
+}
 watch(
   [
     keyword,
@@ -590,6 +606,17 @@ onMounted(async () => {
           <div>
             订阅：{{ detail.subscription_name || detail.subscription_id }}
           </div>
+        </div>
+        <div class="mt-4 flex justify-end">
+          <button
+            class="aw-action-button aw-action-neutral"
+            :disabled="sharingNode === detail.id"
+            @click="shareNode(detail)"
+          >
+            <Share2 :size="13" />{{
+              sharingNode === detail.id ? "生成中..." : "分享链接"
+            }}
+          </button>
         </div>
         <pre
           class="mt-4 max-h-[50vh] overflow-auto rounded-md bg-[var(--bg-base)] p-4 text-xs"

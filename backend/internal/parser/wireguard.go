@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"encoding/json"
 	"net/url"
 	"strings"
 
@@ -58,7 +59,13 @@ func parseWireGuard(raw string) (*model.ParsedNode, error) {
 		node["mtu"] = parsePort(mtu)
 	}
 	if peers := query["peers"]; peers != "" {
-		node["peers"] = decodeURLValue(peers)
+		decodedPeers := decodeURLValue(peers)
+		var parsedPeers any
+		if json.Unmarshal([]byte(decodedPeers), &parsedPeers) == nil {
+			node["peers"] = parsedPeers
+		} else {
+			node["peers"] = decodedPeers
+		}
 	}
 	return parsedNodeFromMap(raw, node)
 }

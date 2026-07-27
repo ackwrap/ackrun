@@ -141,6 +141,7 @@ func RegisterRoutes(
 
 		v1.GET("/nodes/facets", nodeH.Facets)
 		v1.GET("/nodes", nodeH.List)
+		v1.GET("/nodes/:id/share", nodeH.Share)
 		v1.POST("/nodes/import/preview", nodeH.ImportPreview)
 		v1.POST("/nodes/import", nodeH.Import)
 		v1.POST("/nodes/tcping", nodeH.TCPing)
@@ -177,6 +178,8 @@ func RegisterRoutes(
 
 		v1.GET("/rules", routeRuleH.List)
 		v1.GET("/rules/strategies", routeRuleH.Strategies)
+		v1.GET("/rules/share", routeRuleH.Share)
+		v1.POST("/rules/import", routeRuleH.Import)
 		v1.POST("/rules", routeRuleH.Create)
 		v1.GET("/rules/subscriptions", routeRuleH.ListSubscriptions)
 		v1.POST("/rules/subscriptions", routeRuleH.CreateSubscription)

@@ -53,6 +53,28 @@ func (h *NodeHandler) Facets(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+func (h *NodeHandler) Share(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "NODE_ID_INVALID", Message: "invalid node id"}})
+		return
+	}
+	resp, err := h.svc.Share(id)
+	if err != nil {
+		status, code := http.StatusInternalServerError, "NODE_SHARE_FAILED"
+		switch {
+		case errors.Is(err, service.ErrNodeNotFound):
+			status, code = http.StatusNotFound, "NODE_NOT_FOUND"
+		case errors.Is(err, service.ErrNodeShareUnsupported):
+			status, code = http.StatusBadRequest, "NODE_SHARE_UNSUPPORTED"
+		}
+		c.JSON(status, model.ErrorResponse{Error: model.APIError{Code: code, Message: err.Error()}})
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, resp)
+}
+
 func (h *NodeHandler) Import(c *gin.Context) {
 	var req model.NodeImportRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

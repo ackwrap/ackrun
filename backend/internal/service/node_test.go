@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -60,6 +61,57 @@ func TestInferNodeEmojiRecognizesDelimitedRegionCode(t *testing.T) {
 	}
 	if got := inferNodeEmoji(model.Node{Name: "SHK-node"}); got != "" {
 		t.Fatalf("embedded region code flag = %q, want empty", got)
+	}
+}
+
+func TestNodeShareUsesImportedURI(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	svc := NewNodeService(db)
+	original := "vless://55555555-5555-4555-8555-555555555555@proxy.example:443?security=tls#Share-Test"
+	imported, err := svc.Import(model.NodeImportRequest{Content: original})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes, err := db.ListNodesBySubscription(imported.SubscriptionID)
+	if err != nil || len(nodes) != 1 {
+		t.Fatalf("unexpected imported nodes: count=%d err=%v", len(nodes), err)
+	}
+	shared, err := svc.Share(nodes[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shared.URI != original {
+		t.Fatal("share response did not preserve the original URI")
+	}
+	secondSubscription, err := db.CreateSubscription(&model.SubscriptionRequest{Name: "Second", URL: "https://subscription.example/second"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondURI := "vless://55555555-5555-4555-8555-555555555555@proxy.example:443?security=tls#Second-Share"
+	if err := db.ReplaceSubscriptionNodes(secondSubscription.ID, []model.ParsedNode{{
+		UID: nodes[0].UID, Name: "Second-Share", Type: "vless", Server: "proxy.example",
+		ServerPort: 443, Raw: secondURI, RawJSON: nodes[0].RawJSON,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	secondNodes, err := db.ListNodesBySubscription(secondSubscription.ID)
+	if err != nil || len(secondNodes) != 1 {
+		t.Fatalf("unexpected second subscription nodes: count=%d err=%v", len(secondNodes), err)
+	}
+	secondShared, err := svc.Share(secondNodes[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondShared.URI != secondURI {
+		t.Fatal("node ID share returned another subscription's URI")
+	}
+	if _, err := svc.Share(nodes[0].ID + 1000); !errors.Is(err, ErrNodeNotFound) {
+		t.Fatalf("missing node error = %v, want ErrNodeNotFound", err)
 	}
 }
 

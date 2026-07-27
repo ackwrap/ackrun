@@ -24,6 +24,7 @@ import (
 )
 
 var ErrNodeNotFound = errors.New("node not found")
+var ErrNodeShareUnsupported = errors.New("node share link unsupported")
 var ErrTracerouteInvalid = errors.New("invalid traceroute request")
 
 var tracerouteIDPattern = regexp.MustCompile(`^[A-Za-z0-9-]{8,64}$`)
@@ -63,6 +64,22 @@ func (svc *NodeService) List(req model.NodeListRequest) (*model.NodeListResponse
 func (svc *NodeService) Facets() (*model.NodeFacetsResponse, error) {
 	logging.Info("node.facets", "loading node facets")
 	return svc.store.NodeFacets()
+}
+
+func (svc *NodeService) Share(id int64) (*model.NodeShareResponse, error) {
+	node, err := svc.store.GetNodeByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if node == nil {
+		return nil, ErrNodeNotFound
+	}
+	shareURI, err := parser.EncodeProxyURI(*node)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrNodeShareUnsupported, err)
+	}
+	logging.Info("node.share", "generated share link for protocol=%s", node.Type)
+	return &model.NodeShareResponse{URI: shareURI}, nil
 }
 
 func (svc *NodeService) Import(req model.NodeImportRequest) (*model.NodeImportResponse, error) {

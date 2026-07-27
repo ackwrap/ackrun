@@ -236,6 +236,23 @@ func (s *Store) ListNodes(req model.NodeListRequest) (*model.NodeListResponse, e
 	return &model.NodeListResponse{Items: items, Total: total}, rows.Err()
 }
 
+func (s *Store) GetNodeByID(id int64) (*model.Node, error) {
+	var item model.Node
+	err := scanNode(s.db.QueryRow(`
+		SELECT n.id, n.uid, n.subscription_id, COALESCE(s.name, '') AS subscription_name,
+			n.name, n.name_overridden, n.type, n.server, n.server_port, n.raw, n.raw_json, n.enabled, n.preferred,
+			n.latency_ms, n.status, n.last_test_at, n.test_latency_ms, n.test_success, n.created_at, n.updated_at
+		FROM nodes n LEFT JOIN subscriptions s ON s.id = n.subscription_id
+		WHERE n.id = ?`, id), &item)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &item, nil
+}
+
 func (s *Store) GetSubscriptionNodeUIDs(subscriptionID int64) ([]string, error) {
 	rows, err := s.db.Query(`SELECT uid FROM nodes WHERE subscription_id = ? AND uid <> ''`, subscriptionID)
 	if err != nil {

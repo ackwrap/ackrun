@@ -447,6 +447,10 @@ export interface NodeItem {
   updated_at: number;
 }
 
+export interface NodeShareResponse {
+  uri: string;
+}
+
 export interface NodeListResponse {
   items: NodeItem[];
   total: number;
@@ -691,6 +695,19 @@ export interface RouteRulePreviewResponse {
   rules: Array<Record<string, unknown>>;
   rule_sets: Array<Record<string, unknown>>;
   final: string;
+}
+
+export interface RouteRuleShareResponse {
+  code: string;
+  rule_count: number;
+}
+
+export interface RouteRuleImportResponse {
+  success: boolean;
+  message: string;
+  created: number;
+  updated: number;
+  rule_count: number;
 }
 
 export interface RouteRuleSubscription {

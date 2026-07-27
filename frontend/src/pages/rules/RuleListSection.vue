@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Eye, Plus, Trash2 } from "lucide-vue-next";
+import { Eye, Plus, Share2, Trash2, Upload } from "lucide-vue-next";
 import OrderButtons from "@/components/ui/OrderButtons.vue";
 import type { RouteRule, RouteRuleSubscription } from "@/services/types";
 const props = defineProps<{
@@ -11,6 +11,8 @@ defineEmits<{
   addGeo: [];
   add: [];
   preview: [];
+  share: [];
+  import: [];
   move: [number, -1 | 1];
   toggle: [RouteRule];
   edit: [RouteRule];
@@ -91,6 +93,18 @@ function actionLabel(rule: RouteRule) {
           @click="$emit('preview')"
         >
           <Eye :size="13" />预览
+        </button>
+        <button
+          class="aw-action-button aw-action-neutral"
+          @click="$emit('share')"
+        >
+          <Share2 :size="13" />分享
+        </button>
+        <button
+          class="aw-action-button aw-action-neutral"
+          @click="$emit('import')"
+        >
+          <Upload :size="13" />导入
         </button>
         <button
           class="aw-action-button aw-action-neutral"

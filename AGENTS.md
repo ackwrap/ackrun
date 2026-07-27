@@ -10,6 +10,9 @@ go test ./...
 go vet ./...
 ```
 
+**命令执行：**
+- 同一阶段连续执行的命令尽量使用 `&&` 合并为一行，不要拆成多个命令调用；只有彼此独立且适合并行执行时才分开。
+
 **前端验证：**
 ```bash
 cd frontend
@@ -356,6 +359,7 @@ Subscriptions:
 Nodes:
   GET  /api/v1/nodes/facets
   GET  /api/v1/nodes
+  GET  /api/v1/nodes/:id/share
   POST /api/v1/nodes/import/preview
   POST /api/v1/nodes/import
   POST /api/v1/nodes/tcping
@@ -367,6 +371,8 @@ Nodes:
 Route Rules:
   GET    /api/v1/rules
   POST   /api/v1/rules
+  GET    /api/v1/rules/share
+  POST   /api/v1/rules/import
   GET    /api/v1/rules/subscriptions
   POST   /api/v1/rules/subscriptions
   POST   /api/v1/rules/subscriptions/sync
@@ -638,6 +644,7 @@ not_installed → no_config → stopped → running
 - `subscription.scheduler`
 - `node.list`
 - `node.facets`
+- `node.share`
 - `node.tcping`
 - `node.enabled`
 - `node.preferred`
@@ -647,6 +654,8 @@ not_installed → no_config → stopped → running
 - `route_rule.delete`
 - `route_rule.reorder`
 - `route_rule.preview`
+- `route_rule.share`
+- `route_rule.import`
 - `route_rule_subscription.list`
 - `route_rule_subscription.create`
 - `route_rule_subscription.update`

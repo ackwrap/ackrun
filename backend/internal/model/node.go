@@ -23,6 +23,10 @@ type Node struct {
 	UpdatedAt        int64  `json:"updated_at"`
 }
 
+type NodeShareResponse struct {
+	URI string `json:"uri"`
+}
+
 type NodeListRequest struct {
 	SubscriptionID int64
 	Keyword        string

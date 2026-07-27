@@ -18,6 +18,8 @@ type RouteRuleHandler struct {
 // ConfigReconcileContextKey carries a handler decision for config reconciliation.
 const ConfigReconcileContextKey = "ackwrap.config_reconcile"
 
+const maxRouteRuleImportRequestBody = model.MaxRouteRuleShareCodeSize + 4096
+
 func NewRouteRuleHandler(svc *service.RouteRuleService) *RouteRuleHandler {
 	return &RouteRuleHandler{svc: svc}
 }
@@ -38,6 +40,37 @@ func (h *RouteRuleHandler) Strategies(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, items)
+}
+
+func (h *RouteRuleHandler) Share(c *gin.Context) {
+	resp, err := h.svc.Share()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Error: model.APIError{Code: "ROUTE_RULE_SHARE_FAILED", Message: err.Error()}})
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, resp)
+}
+
+func (h *RouteRuleHandler) Import(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRouteRuleImportRequestBody)
+	var req model.RouteRuleImportRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		var maxBytesError *http.MaxBytesError
+		if errors.As(err, &maxBytesError) {
+			c.JSON(http.StatusRequestEntityTooLarge, model.ErrorResponse{Error: model.APIError{Code: "ROUTE_RULE_IMPORT_TOO_LARGE", Message: "规则分享码请求体过大"}})
+			return
+		}
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "ROUTE_RULE_IMPORT_INVALID", Message: err.Error()}})
+		return
+	}
+	resp, err := h.svc.ImportShare(&req)
+	if err != nil {
+		writeRouteRuleMutationError(c, http.StatusBadRequest, "ROUTE_RULE_IMPORT_FAILED", err)
+		return
+	}
+	c.Set(ConfigReconcileContextKey, true)
+	c.JSON(http.StatusOK, resp)
 }
 
 func (h *RouteRuleHandler) Create(c *gin.Context) {

@@ -192,6 +192,118 @@ func (s *Store) ReorderRouteRules(ids []int64) error {
 	return tx.Commit()
 }
 
+func (s *Store) MergeRouteRules(requests []model.RouteRuleRequest, finalOutbound string) (created, updated int, err error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, 0, err
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.Query(`SELECT id, name, enabled, priority, rule_type, values_json, outbound, invert, system_key, created_at, updated_at FROM route_rules ORDER BY priority ASC, id ASC`)
+	if err != nil {
+		return 0, 0, err
+	}
+	existing := make([]model.RouteRule, 0)
+	for rows.Next() {
+		item, scanErr := scanRouteRule(rows)
+		if scanErr != nil {
+			rows.Close()
+			return 0, 0, scanErr
+		}
+		existing = append(existing, *item)
+	}
+	if err = rows.Close(); err != nil {
+		return 0, 0, err
+	}
+
+	byName := make(map[string]model.RouteRule, len(existing))
+	var adBlockID, finalID int64
+	for _, item := range existing {
+		byName[item.Name] = item
+		switch item.SystemKey {
+		case systemRuleAdBlockKey:
+			adBlockID = item.ID
+		case systemRuleGlobalDirectKey:
+			finalID = item.ID
+		}
+	}
+	if adBlockID == 0 || finalID == 0 {
+		return 0, 0, fmt.Errorf("system route rules are incomplete")
+	}
+
+	now := time.Now().UnixMilli()
+	importedIDs := make([]int64, 0, len(requests))
+	importedNames := make(map[string]bool, len(requests))
+	for _, req := range requests {
+		valuesJSON, marshalErr := json.Marshal(req.Values)
+		if marshalErr != nil {
+			return 0, 0, marshalErr
+		}
+		item, found := byName[req.Name]
+		if found {
+			if item.SystemKey != "" {
+				return 0, 0, fmt.Errorf("system route rule cannot be imported: %s", req.Name)
+			}
+			if _, err = tx.Exec(`UPDATE route_rules SET enabled = ?, rule_type = ?, values_json = ?, outbound = ?, invert = ?, updated_at = ? WHERE id = ?`, boolToInt(req.Enabled), req.RuleType, string(valuesJSON), req.Outbound, boolToInt(req.Invert), now, item.ID); err != nil {
+				return 0, 0, err
+			}
+			if err = updateRouteRuleCollectionBindingTx(tx, item.ID, req.Outbound, now); err != nil {
+				return 0, 0, err
+			}
+			importedIDs = append(importedIDs, item.ID)
+			updated++
+		} else {
+			result, execErr := tx.Exec(`INSERT INTO route_rules (name, enabled, priority, rule_type, values_json, outbound, invert, system_key, created_at, updated_at) VALUES (?, ?, 0, ?, ?, ?, ?, '', ?, ?)`, req.Name, boolToInt(req.Enabled), req.RuleType, string(valuesJSON), req.Outbound, boolToInt(req.Invert), now, now)
+			if execErr != nil {
+				return 0, 0, execErr
+			}
+			id, idErr := result.LastInsertId()
+			if idErr != nil {
+				return 0, 0, idErr
+			}
+			importedIDs = append(importedIDs, id)
+			created++
+		}
+		importedNames[req.Name] = true
+	}
+
+	if _, err = tx.Exec(`UPDATE route_rules SET enabled = 1, outbound = ?, updated_at = ? WHERE id = ?`, finalOutbound, now, finalID); err != nil {
+		return 0, 0, err
+	}
+	orderedIDs := make([]int64, 0, len(existing)+created)
+	orderedIDs = append(orderedIDs, adBlockID)
+	orderedIDs = append(orderedIDs, importedIDs...)
+	for _, item := range existing {
+		if item.SystemKey == "" && !importedNames[item.Name] {
+			orderedIDs = append(orderedIDs, item.ID)
+		}
+	}
+	orderedIDs = append(orderedIDs, finalID)
+	for index, id := range orderedIDs {
+		if _, err = tx.Exec(`UPDATE route_rules SET priority = ?, updated_at = ? WHERE id = ?`, (index+1)*10, now, id); err != nil {
+			return 0, 0, err
+		}
+	}
+	if err = normalizeSystemRouteRuleOrderInTx(tx); err != nil {
+		return 0, 0, err
+	}
+	if err = tx.Commit(); err != nil {
+		return 0, 0, err
+	}
+	return created, updated, nil
+}
+
+func updateRouteRuleCollectionBindingTx(tx *sql.Tx, ruleID int64, outbound string, now int64) error {
+	if outbound == "proxy" {
+		return nil
+	}
+	if _, err := tx.Exec(`UPDATE proxy_collections SET route_rule_id = 0, updated_at = ? WHERE route_rule_id = ?`, now, ruleID); err != nil {
+		return err
+	}
+	_, err := updateIntJSONRefsTx(tx, "proxy_collections", "route_rule_ids", map[int64]bool{ruleID: true})
+	return err
+}
+
 type routeRuleScanner interface {
 	Scan(dest ...any) error
 }

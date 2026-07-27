@@ -26,7 +26,7 @@ func parseTrojan(raw string) (*model.ParsedNode, error) {
 		return nil, fmt.Errorf("invalid trojan url")
 	}
 	server, port := parseServerPortWithDefault(mainPart[atIdx+1:], 443)
-	node := map[string]any{"name": name, "type": "trojan", "server": server, "port": port, "password": mainPart[:atIdx], "udp": true, "tls": true}
+	node := map[string]any{"name": name, "type": "trojan", "server": server, "port": port, "password": decodeURLValue(mainPart[:atIdx]), "udp": true, "tls": true}
 	applyTLSOptions(node, query, "sni")
 	applyTransportOptions(node, query)
 	return parsedNodeFromMap(raw, node)

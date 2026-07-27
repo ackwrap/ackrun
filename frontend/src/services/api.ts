@@ -36,6 +36,7 @@ import type {
   NodeListParams,
   NodeListResponse,
   NodeFacetsResponse,
+  NodeShareResponse,
   NodeBatchRenameRequest,
   NodeBatchResult,
   NodeTCPingResult,
@@ -52,6 +53,8 @@ import type {
   RouteRule,
   RouteRuleRequest,
   RouteRulePreviewResponse,
+  RouteRuleShareResponse,
+  RouteRuleImportResponse,
   RouteRuleSubscription,
   RouteRuleSubscriptionRequest,
   GeoAsset,
@@ -328,6 +331,7 @@ export const api = {
     return request<NodeListResponse>(`/nodes${query ? `?${query}` : ""}`);
   },
   getNodeFacets: () => request<NodeFacetsResponse>("/nodes/facets"),
+  getNodeShare: (id: number) => request<NodeShareResponse>(`/nodes/${id}/share`),
   previewImportNodes: (body: NodeImportRequest) =>
     request<NodeImportPreviewResponse>("/nodes/import/preview", {
       method: "POST",
@@ -419,6 +423,12 @@ export const api = {
 
   getRouteRules: () => request<RouteRule[]>("/rules"),
   getRouteStrategies: () => request<StrategyItem[]>("/rules/strategies"),
+  shareRouteRules: () => request<RouteRuleShareResponse>("/rules/share"),
+  importRouteRules: (code: string) =>
+    request<RouteRuleImportResponse>("/rules/import", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    }),
   createRouteRule: (body: RouteRuleRequest) =>
     request<RouteRule>("/rules", {
       method: "POST",

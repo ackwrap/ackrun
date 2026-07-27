@@ -1,5 +1,7 @@
 package model
 
+const MaxRouteRuleShareCodeSize = 1024 * 1024
+
 type RouteRule struct {
 	ID        int64    `json:"id"`
 	Name      string   `json:"name"`
@@ -35,6 +37,23 @@ type RouteRulePreviewResponse struct {
 	Rules    []map[string]any `json:"rules"`
 	RuleSets []map[string]any `json:"rule_sets"`
 	Final    string           `json:"final"`
+}
+
+type RouteRuleShareResponse struct {
+	Code      string `json:"code"`
+	RuleCount int    `json:"rule_count"`
+}
+
+type RouteRuleImportRequest struct {
+	Code string `json:"code" binding:"required"`
+}
+
+type RouteRuleImportResponse struct {
+	Success   bool   `json:"success"`
+	Message   string `json:"message"`
+	Created   int    `json:"created"`
+	Updated   int    `json:"updated"`
+	RuleCount int    `json:"rule_count"`
 }
 
 type RouteStrategyItem struct {
