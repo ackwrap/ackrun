@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"compress/gzip"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -106,6 +107,133 @@ func TestExtractArchivesRequireCoreBinary(t *testing.T) {
 	}
 }
 
+func TestWriteExtractedFileReplacesExistingFile(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "sing-box")
+	if err := os.WriteFile(target, []byte("old binary"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeExtractedFile(target, strings.NewReader("new binary"), 0755); err != nil {
+		t.Fatalf("replace extracted file: %v", err)
+	}
+	content, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "new binary" {
+		t.Fatalf("installed content = %q", content)
+	}
+}
+
+func TestCommitRuntimeFilesRollsBackAllFiles(t *testing.T) {
+	dir := t.TempDir()
+	binaryDir := filepath.Join(dir, "bin")
+	stagingDir := filepath.Join(dir, "staging")
+	backupDir := filepath.Join(stagingDir, "backups")
+	for _, path := range []string{binaryDir, stagingDir, backupDir} {
+		if err := os.MkdirAll(path, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := []stagedRuntimeFile{
+		{name: "sing-box", path: filepath.Join(stagingDir, "sing-box")},
+		{name: "libcronet.so", path: filepath.Join(stagingDir, "libcronet.so")},
+	}
+	for _, file := range files {
+		if err := os.WriteFile(filepath.Join(binaryDir, file.name), []byte("old "+file.name), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file.path, []byte("new "+file.name), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	commitErr := errors.New("injected second commit failure")
+	err := commitRuntimeFiles(binaryDir, backupDir, files, func(source, target string) error {
+		if source == files[1].path {
+			return commitErr
+		}
+		return atomicReplaceFile(source, target)
+	})
+	if !errors.Is(err, commitErr) {
+		t.Fatalf("commit error = %v", err)
+	}
+	var unsafeInstall *runtimeInstallRollbackError
+	if errors.As(err, &unsafeInstall) {
+		t.Fatalf("rollback unexpectedly failed: %v", err)
+	}
+	for _, file := range files {
+		content, readErr := os.ReadFile(filepath.Join(binaryDir, file.name))
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if string(content) != "old "+file.name {
+			t.Fatalf("%s content = %q", file.name, content)
+		}
+	}
+}
+
+func TestExtractPreservesBackupsWhenRuntimeRollbackFails(t *testing.T) {
+	dir := t.TempDir()
+	binaryDir := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(binaryDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"sing-box", "libcronet.so"} {
+		if err := os.WriteFile(filepath.Join(binaryDir, name), []byte("old "+name), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	archivePath := filepath.Join(dir, "release.tar.gz")
+	file, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gz := gzip.NewWriter(file)
+	tw := tar.NewWriter(gz)
+	writeTarEntry(t, tw, "release/sing-box", "new sing-box", 0755)
+	writeTarEntry(t, tw, "release/libcronet.so", "new libcronet.so", 0644)
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	commitErr := errors.New("injected library commit failure")
+	rollbackErr := errors.New("injected core rollback failure")
+	svc := &InstallerService{paths: &paths.Paths{BinaryDir: binaryDir}}
+	svc.replaceFile = func(source, target string) error {
+		parent := filepath.Base(filepath.Dir(source))
+		name := filepath.Base(source)
+		if parent == "files" && name == "libcronet.so" {
+			return commitErr
+		}
+		if parent == "backups" && name == "sing-box" {
+			return rollbackErr
+		}
+		return atomicReplaceFile(source, target)
+	}
+
+	err = svc.extractTarGz(archivePath)
+	if !errors.Is(err, commitErr) || !errors.Is(err, rollbackErr) {
+		t.Fatalf("extract error = %v", err)
+	}
+	var unsafeInstall *runtimeInstallRollbackError
+	if !errors.As(err, &unsafeInstall) || unsafeInstall.recoveryDir == "" {
+		t.Fatalf("missing recovery directory in error: %v", err)
+	}
+	backupPath := filepath.Join(unsafeInstall.recoveryDir, "backups", "sing-box")
+	content, readErr := os.ReadFile(backupPath)
+	if readErr != nil {
+		t.Fatalf("read preserved core backup: %v", readErr)
+	}
+	if string(content) != "old sing-box" {
+		t.Fatalf("preserved core backup = %q", content)
+	}
+}
+
 func TestEnsureCachedDownloadReusesMatchingFile(t *testing.T) {
 	dest := filepath.Join(t.TempDir(), "downloads", "release.zip")
 	content := []byte("verified archive")
@@ -181,6 +309,54 @@ func TestEnsureCachedDownloadRejectsMissingDigestBeforeDownload(t *testing.T) {
 	}
 	if called {
 		t.Fatal("download should not start without a trusted digest")
+	}
+}
+
+func TestInstallerCoreUpdateHooksStopAndRestoreRunningCore(t *testing.T) {
+	svc := &InstallerService{}
+	var calls []string
+	svc.SetCoreUpdateHooks(
+		func() bool { return true },
+		func() error {
+			calls = append(calls, "stop")
+			return nil
+		},
+		func() error {
+			calls = append(calls, "start")
+			return nil
+		},
+	)
+
+	wasRunning, err := svc.stopCoreForUpdate()
+	if err != nil || !wasRunning {
+		t.Fatalf("stop running core: wasRunning=%v err=%v", wasRunning, err)
+	}
+	if err := svc.restoreCoreAfterUpdate(wasRunning); err != nil {
+		t.Fatalf("restore running core: %v", err)
+	}
+	if strings.Join(calls, ",") != "stop,start" {
+		t.Fatalf("lifecycle calls = %v", calls)
+	}
+}
+
+func TestInstallerCoreUpdateHooksIgnoreStoppedCore(t *testing.T) {
+	svc := &InstallerService{}
+	called := false
+	svc.SetCoreUpdateHooks(
+		func() bool { return false },
+		func() error { called = true; return nil },
+		func() error { called = true; return nil },
+	)
+
+	wasRunning, err := svc.stopCoreForUpdate()
+	if err != nil || wasRunning {
+		t.Fatalf("stop inactive core: wasRunning=%v err=%v", wasRunning, err)
+	}
+	if err := svc.restoreCoreAfterUpdate(wasRunning); err != nil {
+		t.Fatalf("restore inactive core: %v", err)
+	}
+	if called {
+		t.Fatal("stopped core lifecycle hooks should not run")
 	}
 }
 

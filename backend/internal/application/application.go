@@ -99,6 +99,17 @@ func New(options Options) (*Application, error) {
 		_, dnsErr := dnsSvc.MigrateIndependentCache(version)
 		return errors.Join(configErr, dnsErr)
 	})
+	installerSvc.SetCoreUpdateHooks(
+		singboxSvc.IsRunning,
+		func() error {
+			_, err := singboxSvc.Stop()
+			return err
+		},
+		func() error {
+			_, err := singboxSvc.Start()
+			return err
+		},
+	)
 
 	settingsSvc := service.NewSettingsService(db)
 	settingsSvc.SetDashboardsDir(options.Paths.DashboardsDir)

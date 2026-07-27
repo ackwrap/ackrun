@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -37,6 +38,10 @@ type InstallerService struct {
 	latest      *singboxRelease
 	latestAt    time.Time
 	postInstall func(version string) error
+	coreRunning func() bool
+	stopCore    func() error
+	startCore   func() error
+	replaceFile func(source, target string) error
 }
 
 func NewInstallerService(s *store.Store, p *paths.Paths, rt *RealtimeService) *InstallerService {
@@ -47,6 +52,14 @@ func (svc *InstallerService) SetPostInstallHook(hook func(version string) error)
 	svc.mu.Lock()
 	defer svc.mu.Unlock()
 	svc.postInstall = hook
+}
+
+func (svc *InstallerService) SetCoreUpdateHooks(isRunning func() bool, stop, start func() error) {
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
+	svc.coreRunning = isRunning
+	svc.stopCore = stop
+	svc.startCore = start
 }
 
 func (svc *InstallerService) GetStatus() (*model.InstallStateResponse, error) {
@@ -182,12 +195,28 @@ func (svc *InstallerService) runInstall() {
 		}
 	}
 
+	coreWasRunning, err := svc.stopCoreForUpdate()
+	if err != nil {
+		errMessage := fmt.Sprintf("stop running core before update failed: %v", err)
+		logging.Error("installer.extract", "%s", errMessage)
+		svc.setState(model.InstallFailed, "", 0, "", errMessage)
+		svc.broadcastStatus()
+		return
+	}
+
 	logging.Info("installer.extract", "extracting sing-box")
 	svc.setState(model.InstallExtracting, "extracting", 0, "", "")
 	svc.broadcastStatus()
 
 	if err := svc.extract(archivePath); err != nil {
-		svc.setState(model.InstallFailed, "", 0, "", fmt.Sprintf("extract failed: %v", err))
+		errMessage := fmt.Sprintf("extract failed: %v", err)
+		var unsafeInstall *runtimeInstallRollbackError
+		if errors.As(err, &unsafeInstall) {
+			errMessage += "; core remains stopped because runtime file rollback failed"
+		} else if restartErr := svc.restoreCoreAfterUpdate(coreWasRunning); restartErr != nil {
+			errMessage += fmt.Sprintf("; restore previous core failed: %v", restartErr)
+		}
+		svc.setState(model.InstallFailed, "", 0, "", errMessage)
 		svc.broadcastStatus()
 		return
 	}
@@ -202,16 +231,59 @@ func (svc *InstallerService) runInstall() {
 			logging.Error("installer.migrate", "%s", migrationError)
 		}
 	}
+	if coreWasRunning {
+		// Publish the installed version before Start broadcasts runtime status.
+		svc.setState(model.InstallExtracting, "restarting updated core", 0, latestVersion, "")
+		svc.broadcastStatus()
+	}
+	if err := svc.restoreCoreAfterUpdate(coreWasRunning); err != nil {
+		restartError := fmt.Sprintf("核心已更新，但自动恢复运行失败: %v", err)
+		logging.Error("installer.restart", "%s", restartError)
+		if migrationError != "" {
+			migrationError += "；"
+		}
+		migrationError += restartError
+	}
 
 	svc.setState(model.InstallDone, "installed", 0, latestVersion, migrationError)
 	svc.broadcastStatus()
 
-	runtimeStatus := model.RuntimeNoConfig
-	if _, ok, err := svc.paths.ActiveConfigPath(); err == nil && ok {
-		runtimeStatus = model.RuntimeStopped
+	if !coreWasRunning {
+		runtimeStatus := model.RuntimeNoConfig
+		if _, ok, err := svc.paths.ActiveConfigPath(); err == nil && ok {
+			runtimeStatus = model.RuntimeStopped
+		}
+		svc.realtime.Broadcast("runtime.status", model.RuntimeResponse{Status: runtimeStatus, Version: latestVersion})
 	}
-	svc.realtime.Broadcast("runtime.status", model.RuntimeResponse{Status: runtimeStatus, Version: latestVersion})
 	logging.Info("installer.start", "sing-box installed successfully, version=%s", latestVersion)
+}
+
+func (svc *InstallerService) stopCoreForUpdate() (bool, error) {
+	svc.mu.Lock()
+	isRunning, stopCore := svc.coreRunning, svc.stopCore
+	svc.mu.Unlock()
+	if isRunning == nil || !isRunning() {
+		return false, nil
+	}
+	if stopCore == nil {
+		return true, errors.New("core stop hook is not configured")
+	}
+	logging.Info("installer.stop", "stopping running core before replacing executable")
+	return true, stopCore()
+}
+
+func (svc *InstallerService) restoreCoreAfterUpdate(wasRunning bool) error {
+	if !wasRunning {
+		return nil
+	}
+	svc.mu.Lock()
+	startCore := svc.startCore
+	svc.mu.Unlock()
+	if startCore == nil {
+		return errors.New("core start hook is not configured")
+	}
+	logging.Info("installer.restart", "restoring core after executable replacement")
+	return startCore()
 }
 
 func (svc *InstallerService) fetchLatestRelease() (*singboxRelease, error) {
@@ -461,33 +533,58 @@ func (svc *InstallerService) extractZip(archive string) error {
 		return fmt.Errorf("open zip: %w", err)
 	}
 	defer r.Close()
+	stagingDir, err := svc.createRuntimeStagingDir()
+	if err != nil {
+		return err
+	}
+	preserveStaging := false
+	defer func() {
+		if !preserveStaging {
+			_ = os.RemoveAll(stagingDir)
+		}
+	}()
 
 	foundBinary := false
+	seen := make(map[string]struct{})
+	var stagedFiles []stagedRuntimeFile
 	for _, f := range r.File {
 		if f.FileInfo().IsDir() {
 			continue
 		}
-		name := archiveEntryBase(f.Name)
+		name := strings.ToLower(archiveEntryBase(f.Name))
 		mode, ok := runtimeArchiveFileMode(name)
 		if !ok {
 			continue
 		}
+		if _, duplicate := seen[name]; duplicate {
+			return fmt.Errorf("archive contains duplicate runtime file: %s", name)
+		}
+		seen[name] = struct{}{}
 		foundBinary = foundBinary || name == "sing-box.exe"
 		rc, err := f.Open()
 		if err != nil {
 			return fmt.Errorf("open entry: %w", err)
 		}
-		if err := writeExtractedFile(filepath.Join(svc.paths.BinaryDir, name), rc, mode); err != nil {
+		staged, stageErr := stageRuntimeFile(stagingDir, name, rc, mode)
+		if stageErr != nil {
 			rc.Close()
-			return err
+			return stageErr
 		}
-		rc.Close()
-		logging.Info("installer.extract", "extracted: %s", filepath.Join(svc.paths.BinaryDir, name))
+		if err := rc.Close(); err != nil {
+			return fmt.Errorf("close entry: %w", err)
+		}
+		stagedFiles = append(stagedFiles, staged)
 	}
 	if !foundBinary {
 		return fmt.Errorf("archive does not contain sing-box.exe")
 	}
-	return nil
+	err = svc.commitStagedRuntimeFiles(stagingDir, stagedFiles)
+	var rollbackError *runtimeInstallRollbackError
+	if errors.As(err, &rollbackError) {
+		rollbackError.recoveryDir = stagingDir
+		preserveStaging = true
+	}
+	return err
 }
 
 func (svc *InstallerService) extractTarGz(archive string) error {
@@ -501,8 +598,20 @@ func (svc *InstallerService) extractTarGz(archive string) error {
 		return fmt.Errorf("open gzip: %w", err)
 	}
 	defer gz.Close()
+	stagingDir, err := svc.createRuntimeStagingDir()
+	if err != nil {
+		return err
+	}
+	preserveStaging := false
+	defer func() {
+		if !preserveStaging {
+			_ = os.RemoveAll(stagingDir)
+		}
+	}()
 	tr := tar.NewReader(gz)
 	foundBinary := false
+	seen := make(map[string]struct{})
+	var stagedFiles []stagedRuntimeFile
 	for {
 		header, err := tr.Next()
 		if err == io.EOF {
@@ -514,22 +623,32 @@ func (svc *InstallerService) extractTarGz(archive string) error {
 		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
 			continue
 		}
-		name := archiveEntryBase(header.Name)
+		name := strings.ToLower(archiveEntryBase(header.Name))
 		mode, ok := runtimeArchiveFileMode(name)
 		if !ok {
 			continue
 		}
+		if _, duplicate := seen[name]; duplicate {
+			return fmt.Errorf("archive contains duplicate runtime file: %s", name)
+		}
+		seen[name] = struct{}{}
 		foundBinary = foundBinary || name == "sing-box"
-		outPath := filepath.Join(svc.paths.BinaryDir, name)
-		if err := writeExtractedFile(outPath, tr, mode); err != nil {
+		staged, err := stageRuntimeFile(stagingDir, name, tr, mode)
+		if err != nil {
 			return err
 		}
-		logging.Info("installer.extract", "extracted: %s", outPath)
+		stagedFiles = append(stagedFiles, staged)
 	}
 	if !foundBinary {
 		return fmt.Errorf("archive does not contain sing-box")
 	}
-	return nil
+	err = svc.commitStagedRuntimeFiles(stagingDir, stagedFiles)
+	var rollbackError *runtimeInstallRollbackError
+	if errors.As(err, &rollbackError) {
+		rollbackError.recoveryDir = stagingDir
+		preserveStaging = true
+	}
+	return err
 }
 
 func archiveEntryBase(name string) string {
@@ -559,6 +678,111 @@ func runtimeArchiveFileMode(name string) (os.FileMode, bool) {
 	}
 }
 
+type stagedRuntimeFile struct {
+	name string
+	path string
+}
+
+type runtimeFileCommit struct {
+	target string
+	backup string
+}
+
+type runtimeInstallRollbackError struct {
+	err         error
+	recoveryDir string
+}
+
+func (e *runtimeInstallRollbackError) Error() string {
+	if e.recoveryDir == "" {
+		return e.err.Error()
+	}
+	return fmt.Sprintf("%v; recovery files preserved at %s", e.err, e.recoveryDir)
+}
+func (e *runtimeInstallRollbackError) Unwrap() error { return e.err }
+
+func (svc *InstallerService) createRuntimeStagingDir() (string, error) {
+	if err := os.MkdirAll(svc.paths.BinaryDir, 0755); err != nil {
+		return "", fmt.Errorf("create binary directory: %w", err)
+	}
+	stagingDir, err := os.MkdirTemp(svc.paths.BinaryDir, ".ackwrap-runtime-")
+	if err != nil {
+		return "", fmt.Errorf("create runtime staging directory: %w", err)
+	}
+	return stagingDir, nil
+}
+
+func stageRuntimeFile(stagingDir, name string, src io.Reader, mode os.FileMode) (stagedRuntimeFile, error) {
+	staged := stagedRuntimeFile{name: name, path: filepath.Join(stagingDir, "files", name)}
+	if err := writeExtractedFile(staged.path, src, mode); err != nil {
+		return stagedRuntimeFile{}, err
+	}
+	return staged, nil
+}
+
+func (svc *InstallerService) commitStagedRuntimeFiles(stagingDir string, files []stagedRuntimeFile) error {
+	backupDir := filepath.Join(stagingDir, "backups")
+	if err := os.MkdirAll(backupDir, 0755); err != nil {
+		return fmt.Errorf("create runtime backup directory: %w", err)
+	}
+	svc.mu.Lock()
+	replace := svc.replaceFile
+	svc.mu.Unlock()
+	if replace == nil {
+		replace = atomicReplaceFile
+	}
+	if err := commitRuntimeFiles(svc.paths.BinaryDir, backupDir, files, replace); err != nil {
+		return err
+	}
+	for _, file := range files {
+		logging.Info("installer.extract", "extracted: %s", filepath.Join(svc.paths.BinaryDir, file.name))
+	}
+	return nil
+}
+
+func commitRuntimeFiles(binaryDir, backupDir string, files []stagedRuntimeFile, replace func(string, string) error) error {
+	commits := make([]runtimeFileCommit, 0, len(files))
+	rollback := func(cause error) error {
+		if rollbackErr := rollbackRuntimeFiles(commits, replace); rollbackErr != nil {
+			return &runtimeInstallRollbackError{err: errors.Join(cause, fmt.Errorf("rollback runtime files: %w", rollbackErr))}
+		}
+		return cause
+	}
+	for _, file := range files {
+		commit := runtimeFileCommit{target: filepath.Join(binaryDir, file.name)}
+		if _, err := os.Lstat(commit.target); err == nil {
+			commit.backup = filepath.Join(backupDir, file.name)
+			if err := os.Rename(commit.target, commit.backup); err != nil {
+				return rollback(fmt.Errorf("backup runtime file %s: %w", file.name, err))
+			}
+		} else if !os.IsNotExist(err) {
+			return rollback(fmt.Errorf("inspect runtime file %s: %w", file.name, err))
+		}
+		commits = append(commits, commit)
+		if err := replace(file.path, commit.target); err != nil {
+			return rollback(fmt.Errorf("commit runtime file %s: %w", file.name, err))
+		}
+	}
+	return nil
+}
+
+func rollbackRuntimeFiles(commits []runtimeFileCommit, replace func(string, string) error) error {
+	var rollbackErrors []error
+	for index := len(commits) - 1; index >= 0; index-- {
+		commit := commits[index]
+		if commit.backup != "" {
+			if err := replace(commit.backup, commit.target); err != nil {
+				rollbackErrors = append(rollbackErrors, fmt.Errorf("restore %s: %w", filepath.Base(commit.target), err))
+			}
+			continue
+		}
+		if err := os.Remove(commit.target); err != nil && !os.IsNotExist(err) {
+			rollbackErrors = append(rollbackErrors, fmt.Errorf("remove %s: %w", filepath.Base(commit.target), err))
+		}
+	}
+	return errors.Join(rollbackErrors...)
+}
+
 func writeExtractedFile(outPath string, src io.Reader, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
 		return fmt.Errorf("create binary directory: %w", err)
@@ -580,12 +804,7 @@ func writeExtractedFile(outPath string, src io.Reader, mode os.FileMode) error {
 	if err := os.Chmod(tmpPath, mode); err != nil {
 		return fmt.Errorf("set extracted file permissions: %w", err)
 	}
-	if runtime.GOOS == "windows" {
-		if err := os.Remove(outPath); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("replace extracted file: %w", err)
-		}
-	}
-	if err := os.Rename(tmpPath, outPath); err != nil {
+	if err := atomicReplaceFile(tmpPath, outPath); err != nil {
 		return fmt.Errorf("commit extracted file: %w", err)
 	}
 	return nil

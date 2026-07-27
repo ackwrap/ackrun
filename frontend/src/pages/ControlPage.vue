@@ -23,6 +23,7 @@ import { useRealtimeSocket } from "@/composables/useRealtimeSocket";
 import { api } from "@/services/api";
 import type {
   ConfigFileItem,
+  InstallStateResponse,
   MaintenanceCheckResponse,
   RuntimeResponse,
   WSEvent,
@@ -37,7 +38,7 @@ import ControlNetworkOverview from "./ControlNetworkOverview.vue";
 import ControlRestartSchedule from "./ControlRestartSchedule.vue";
 import ControlMixedProxyCard from "./ControlMixedProxyCard.vue";
 const runtime = ref<RuntimeResponse | null>(null),
-  installStatus = ref<any>(null),
+  installStatus = ref<InstallStateResponse | null>(null),
   configStatus = ref<any>(null),
   configFiles = ref<ConfigFileItem[]>([]),
   selectedConfig = ref(""),
@@ -80,7 +81,7 @@ const rt = computed(() => runtime.value?.status || "not_installed"),
   ),
   noConfig = computed(() => rt.value === "no_config"),
   installing = computed(() =>
-    ["downloading", "extracting"].includes(installStatus.value?.status),
+    ["downloading", "extracting"].includes(installStatus.value?.status || ""),
   ),
   isWindows = computed(() => runtime.value?.platform === "windows"),
   systemDNSUnsupported = computed(
@@ -93,14 +94,64 @@ const rt = computed(() => runtime.value?.status || "not_installed"),
     () => runtime.value?.version || installStatus.value?.version,
   ),
   latestVersion = computed(() => installStatus.value?.latest_version);
-function newer(a?: string, b?: string) {
-  if (!a || !b) return false;
-  const p = (v: string) =>
-    v.replace(/^v/, "").split(/[+-]/, 1)[0].split(".").map(Number);
-  for (let i = 0; i < 3; i++)
-    if ((p(a)[i] || 0) !== (p(b)[i] || 0))
-      return (p(a)[i] || 0) > (p(b)[i] || 0);
-  return false;
+function compareVersions(candidate: string, current: string) {
+  const compareNumeric = (left: string, right: string) => {
+    const normalizedLeft = left.replace(/^0+/, "") || "0";
+    const normalizedRight = right.replace(/^0+/, "") || "0";
+    if (normalizedLeft.length !== normalizedRight.length) {
+      return normalizedLeft.length - normalizedRight.length;
+    }
+    if (normalizedLeft === normalizedRight) return 0;
+    return normalizedLeft < normalizedRight ? -1 : 1;
+  };
+  const parse = (value: string) => {
+    const normalized = value.replace(/^v/, "").split("+", 1)[0];
+    const separator = normalized.indexOf("-");
+    const core = separator < 0 ? normalized : normalized.slice(0, separator);
+    const prerelease =
+      separator < 0 ? [] : normalized.slice(separator + 1).split(".");
+    return {
+      core: core.split("."),
+      prerelease,
+    };
+  };
+  const left = parse(candidate);
+  const right = parse(current);
+  const coreLength = Math.max(left.core.length, right.core.length);
+  for (let index = 0; index < coreLength; index++) {
+    const difference = compareNumeric(
+      left.core[index] || "0",
+      right.core[index] || "0",
+    );
+    if (difference) return difference;
+  }
+  if (!left.prerelease.length || !right.prerelease.length) {
+    if (left.prerelease.length === right.prerelease.length) return 0;
+    return left.prerelease.length ? -1 : 1;
+  }
+  const prereleaseLength = Math.max(
+    left.prerelease.length,
+    right.prerelease.length,
+  );
+  for (let index = 0; index < prereleaseLength; index++) {
+    const leftPart = left.prerelease[index];
+    const rightPart = right.prerelease[index];
+    if (leftPart === undefined || rightPart === undefined) {
+      return leftPart === undefined ? -1 : 1;
+    }
+    if (leftPart === rightPart) continue;
+    const leftNumeric = /^\d+$/.test(leftPart);
+    const rightNumeric = /^\d+$/.test(rightPart);
+    if (leftNumeric && rightNumeric) return compareNumeric(leftPart, rightPart);
+    if (leftNumeric !== rightNumeric) return leftNumeric ? -1 : 1;
+    return leftPart < rightPart ? -1 : 1;
+  }
+  return 0;
+}
+function newer(candidate?: string, current?: string) {
+  return Boolean(
+    candidate && current && compareVersions(candidate, current) > 0,
+  );
 }
 const updateAvailable = computed(() =>
     newer(latestVersion.value, currentVersion.value),
@@ -291,6 +342,7 @@ async function install(label: string) {
       status: "downloading",
       progress: 0,
       message: "preparing download",
+      error: "",
     };
     installProgress.value = null;
     notify(`${label}任务已启动`, "info");
@@ -326,9 +378,18 @@ useRealtimeSocket((e: WSEvent) => {
   else if (e.type === "installer.status") {
     installStatus.value = { ...installStatus.value, ...d };
     if (["done", "failed"].includes(d.status)) installProgress.value = null;
-    if (d.status === "failed")
-      notify(`安装失败: ${d.error || "请查看安装状态详情"}`, "error");
-    if (d.status === "done") void initial();
+    if (d.status === "failed" || d.error) {
+      notify(
+        `${d.status === "done" ? "安装完成但存在问题" : "安装失败"}: ${d.error || "请查看安装状态详情"}`,
+        "error",
+      );
+    }
+    if (d.status === "done") {
+      if (d.version && runtime.value) {
+        runtime.value = { ...runtime.value, version: d.version };
+      }
+      void initial();
+    }
   } else if (e.type === "core.status") {
     runtime.value = {
       ...runtime.value,
@@ -371,7 +432,12 @@ watch(installing, (v) => {
         const s = await api.getInstallerStatus();
         installStatus.value = s;
         if (["done", "failed"].includes(s.status)) installProgress.value = null;
-        if (s.status === "done") void initial();
+        if (s.status === "done") {
+          if (s.version && runtime.value) {
+            runtime.value = { ...runtime.value, version: s.version };
+          }
+          void initial();
+        }
       } catch (e: any) {
         const m = `安装状态查询失败，后端连接已断开: ${e?.message || "连接被重置"}`;
         installStatus.value = {
@@ -764,11 +830,17 @@ onBeforeUnmount(() => {
           <div v-if="installing" class="mt-3">
             {{ progress.percent.toFixed(1) }}%
           </div>
+          <p
+            v-if="installStatus?.error"
+            class="mt-3 break-words text-xs text-[var(--color-error)]"
+          >
+            {{ installStatus.error }}
+          </p>
           <Button
             class="mt-3"
             full-width
             size="sm"
-            :disabled="installing || isRunning"
+            :disabled="installing || (isRunning && !updateAvailable)"
             :loading="installing"
             @click="install(updateAvailable ? '更新' : '安装')"
             ><Download :size="14" />{{

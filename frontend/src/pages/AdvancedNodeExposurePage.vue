@@ -1,14 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
-import {
-  AlertTriangle,
-  KeyRound,
-  Pencil,
-  Plus,
-  Radio,
-  ShieldCheck,
-  Trash2,
-} from "lucide-vue-next";
+import { KeyRound, Pencil, Plus, Radio, Trash2 } from "lucide-vue-next";
 import PageHeader from "@/components/layout/PageHeader.vue";
 import Button from "@/components/ui/Button.vue";
 import Card from "@/components/ui/Card.vue";
@@ -71,10 +63,7 @@ function nodeKey(subscriptionID: number, uid: string) {
   return `${subscriptionID}:${uid}`;
 }
 
-function show(
-  text: string,
-  type: "success" | "error" | "info" = "success",
-) {
+function show(text: string, type: "success" | "error" | "info" = "success") {
   message.value = text;
   messageType.value = type;
 }
@@ -224,7 +213,7 @@ onMounted(load);
     </PageHeader>
     <Toast :message="message" :type="messageType" @dismiss="message = ''" />
 
-    <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
+    <div class="grid gap-4">
       <Card padding="none">
         <div
           class="flex items-center justify-between border-b border-[var(--border-light)] px-5 py-4"
@@ -304,9 +293,7 @@ onMounted(load);
                     }}
                   </p>
                 </td>
-                <td
-                  class="font-mono text-[11px] text-[var(--text-primary)]"
-                >
+                <td class="font-mono text-[11px] text-[var(--text-primary)]">
                   {{ displayAddress(item) }}
                 </td>
                 <td>
@@ -342,23 +329,6 @@ onMounted(load);
           </table>
         </div>
       </Card>
-
-      <div class="space-y-4">
-        <Card>
-          <ShieldCheck :size="20" class="text-[var(--color-success)]" />
-          <h3 class="mt-3 text-sm font-semibold">安全边界</h3>
-          <p class="mt-2 text-xs leading-5 text-[var(--text-secondary)]">
-            默认只监听 127.0.0.1。监听局域网或公网地址时，后端会强制要求用户名和密码。
-          </p>
-        </Card>
-        <Card>
-          <AlertTriangle :size="20" class="text-[var(--color-warning)]" />
-          <h3 class="mt-3 text-sm font-semibold">配置闭环</h3>
-          <p class="mt-2 text-xs leading-5 text-[var(--text-secondary)]">
-            保存后会触发 sing-box 配置校验与协调。节点失效时入口会自动停用，不会回退到默认出口。
-          </p>
-        </Card>
-      </div>
     </div>
 
     <Modal
@@ -405,10 +375,7 @@ onMounted(load);
         </label>
         <label>
           <span class="aw-modal-label text-xs">入口协议</span>
-          <select
-            v-model="form.inbound_type"
-            class="aw-input mt-1 w-full"
-          >
+          <select v-model="form.inbound_type" class="aw-input mt-1 w-full">
             <option value="mixed">Mixed</option>
             <option value="http">HTTP</option>
             <option value="socks">SOCKS</option>
@@ -473,9 +440,7 @@ onMounted(load);
       </form>
       <template #footer>
         <Button @click="formOpen = false">取消</Button>
-        <Button variant="primary" :loading="saving" @click="save"
-          >保存</Button
-        >
+        <Button variant="primary" :loading="saving" @click="save">保存</Button>
       </template>
     </Modal>
 

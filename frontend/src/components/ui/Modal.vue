@@ -14,11 +14,32 @@ const p = withDefaults(
 const emit = defineEmits<{ close: [] }>();
 const panel = ref<HTMLElement | null>(null);
 let previousFocus: HTMLElement | null = null;
+let backdropPointerId: number | null = null;
 const maxWidth = computed(
   () => p.width || { sm: 420, md: 520, lg: 760, xl: 1120 }[p.size],
 );
 const focusableSelector =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+const isPrimaryBackdropEvent = (e: PointerEvent) =>
+  e.isPrimary && e.button === 0 && e.target === e.currentTarget;
+const beginBackdropPress = (e: PointerEvent) => {
+  if (backdropPointerId === null && isPrimaryBackdropEvent(e)) {
+    backdropPointerId = e.pointerId;
+  }
+};
+const endBackdropPress = (e: PointerEvent) => {
+  if (e.pointerId !== backdropPointerId) return;
+  const backdrop = e.currentTarget;
+  const releasedOnBackdrop =
+    backdrop instanceof Element &&
+    document.elementFromPoint(e.clientX, e.clientY) === backdrop;
+  const shouldClose = e.isPrimary && e.button === 0 && releasedOnBackdrop;
+  backdropPointerId = null;
+  if (shouldClose && p.closable) emit("close");
+};
+const cancelBackdropPress = (e: PointerEvent) => {
+  if (e.pointerId === backdropPointerId) backdropPointerId = null;
+};
 const key = (e: KeyboardEvent) => {
   if (e.key === "Escape" && p.closable) {
     emit("close");
@@ -47,11 +68,13 @@ watch(
   () => p.open,
   (v) => {
     document.body.style.overflow = v ? "hidden" : "";
+    backdropPointerId = null;
     if (v) {
       previousFocus = document.activeElement as HTMLElement | null;
       document.addEventListener("keydown", key);
       void nextTick(() => {
-        const first = panel.value?.querySelector<HTMLElement>(focusableSelector);
+        const first =
+          panel.value?.querySelector<HTMLElement>(focusableSelector);
         (first || panel.value)?.focus();
       });
     } else {
@@ -72,13 +95,14 @@ onBeforeUnmount(() => {
   <Teleport to="body"
     ><div
       v-if="open"
-      class="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center p-4"
+      class="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-[var(--bg-overlay)] p-4"
       role="dialog"
       aria-modal="true"
       :aria-label="title"
-      @click.self="closable && $emit('close')"
+      @pointerdown.capture="beginBackdropPress"
+      @pointerup.capture="endBackdropPress"
+      @pointercancel.capture="cancelBackdropPress"
     >
-      <div class="absolute inset-0 bg-[var(--bg-overlay)]" />
       <div
         ref="panel"
         tabindex="-1"
