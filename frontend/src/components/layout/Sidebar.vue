@@ -29,6 +29,7 @@ const props = withDefaults(
 );
 const emit = defineEmits<{ toggle: []; close: [] }>();
 const route = useRoute();
+const showAdvancedFeatures = false;
 const advancedOpen = ref(route.path.startsWith("/advanced/"));
 const items = [
   ["控制面板", LayoutDashboard, "/"],
@@ -104,7 +105,7 @@ function toggleAdvanced() {
           >{{ label }}</span
         ></RouterLink
       >
-      <div>
+      <div v-if="showAdvancedFeatures">
         <button
           class="flex h-11 w-full items-center gap-3 rounded-[var(--radius-lg)] border border-transparent px-4 text-left"
           :class="[
