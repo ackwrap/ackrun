@@ -31,6 +31,9 @@ zashboard-*
 *.out
 go.work
 
+# Python
+__pycache__/
+
 # IDE
 .idea/
 .vscode/
