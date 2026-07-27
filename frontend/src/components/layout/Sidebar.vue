@@ -29,7 +29,7 @@ const props = withDefaults(
 );
 const emit = defineEmits<{ toggle: []; close: [] }>();
 const route = useRoute();
-const showAdvancedFeatures = false;
+const showAdvancedFeatures = true;
 const advancedOpen = ref(route.path.startsWith("/advanced/"));
 const items = [
   ["控制面板", LayoutDashboard, "/"],
