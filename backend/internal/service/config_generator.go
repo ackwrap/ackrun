@@ -35,6 +35,8 @@ const (
 	defaultTUNIPv4Address       = "172.31.255.1/30"
 	defaultTUNIPv6Address       = "fdfe:dcba:9875::1/126"
 	defaultAutoRedirectMark     = 0x2024
+	defaultTUNIPv4LinkLocal     = "169.254.0.0/16"
+	defaultTUNIPv6LinkLocal     = "fe80::/10"
 	legacyDefaultTUNIPv4Address = "172.19.0.1/30"
 	previousDefaultTUNIPv4      = "172.254.0.1/30"
 	previousDefaultTUNIPv6      = "fdfe:dcba:9876::1/126"
@@ -3182,20 +3184,19 @@ func generatedDNSInbound() map[string]interface{} {
 }
 
 func generatedTUNInbound(autoRedirect bool, tunIPv4Address, tunIPv6Address string, excludedInterfaces, excludedCIDRs []string) map[string]interface{} {
+	routeExcludeAddresses := appendUniqueStrings([]string{defaultTUNIPv4LinkLocal, defaultTUNIPv6LinkLocal}, excludedCIDRs...)
 	inbound := map[string]interface{}{
-		"type":           "tun",
-		"tag":            "tun-in",
-		"interface_name": "tun0",
-		"address":        []string{tunIPv4Address, tunIPv6Address},
-		"auto_route":     true,
-		"strict_route":   true,
-		"stack":          "system",
+		"type":                  "tun",
+		"tag":                   "tun-in",
+		"interface_name":        "tun0",
+		"address":               []string{tunIPv4Address, tunIPv6Address},
+		"auto_route":            true,
+		"strict_route":          true,
+		"stack":                 "system",
+		"route_exclude_address": routeExcludeAddresses,
 	}
 	if len(excludedInterfaces) > 0 {
 		inbound["exclude_interface"] = excludedInterfaces
-	}
-	if len(excludedCIDRs) > 0 {
-		inbound["route_exclude_address"] = excludedCIDRs
 	}
 	if autoRedirect {
 		inbound["auto_redirect"] = true
