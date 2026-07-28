@@ -277,6 +277,7 @@ Go 和 TypeScript 都必须尽量按功能或业务拆分源码，便于后期�
 环境变量覆盖：
 - `ACKWRAP_DATA_DIR`
 - `ACKWRAP_BINARY_DIR`
+- `ACKWRAP_TIMEZONE`（定时任务时区；支持 IANA 名称或 `CST-8` 等固定 POSIX 时区）
 
 配置路径规则：
 - 配置目录是 `<data>/config/`
