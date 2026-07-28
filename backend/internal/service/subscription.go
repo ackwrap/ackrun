@@ -61,7 +61,7 @@ func NewSubscriptionService(s *store.Store, rt *RealtimeService) *SubscriptionSe
 	return &SubscriptionService{
 		store:    s,
 		realtime: rt,
-		cron:     cron.New(cron.WithSeconds()),
+		cron:     newSchedulerCron(),
 		entries:  make(map[int64]cron.EntryID),
 		syncing:  make(map[int64]bool),
 	}

@@ -42,7 +42,7 @@ func NewCoreRestartScheduler(db *store.Store, core scheduledCore, config schedul
 		core:     core,
 		config:   config,
 		realtime: realtime,
-		cron:     cron.New(cron.WithSeconds()),
+		cron:     newSchedulerCron(),
 	}
 }
 

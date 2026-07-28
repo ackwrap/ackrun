@@ -92,7 +92,7 @@ func NewRouteRuleService(s *store.Store, p *paths.Paths, rt *RealtimeService) *R
 		store:       s,
 		paths:       p,
 		realtime:    rt,
-		cron:        cron.New(cron.WithSeconds()),
+		cron:        newSchedulerCron(),
 		ruleEntries: make(map[int64]cron.EntryID),
 		geoEntries:  make(map[int64]cron.EntryID),
 		cacheLocks:  make(map[string]*sync.Mutex),

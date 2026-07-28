@@ -49,7 +49,7 @@ func NewProxyCollectionService(store *store.Store, realtime *RealtimeService) *P
 	return &ProxyCollectionService{
 		store:        store,
 		realtime:     realtime,
-		cron:         cron.New(cron.WithSeconds()),
+		cron:         newSchedulerCron(),
 		entries:      make(map[int]cron.EntryID),
 		runningTests: make(map[int]bool),
 		httpClient:   &http.Client{Timeout: 10 * time.Second},
