@@ -493,6 +493,13 @@ func TestGeneratedTUNInboundUsesAutoRedirectOnLinux(t *testing.T) {
 	if !stringListContains(inbound["address"], defaultTUNIPv4Address) || !stringListContains(inbound["address"], defaultTUNIPv6Address) {
 		t.Fatalf("OpenWrt TUN inbound is not dual-stack: %+v", inbound)
 	}
+	if !stringListContains(inbound["route_exclude_address"], defaultTUNIPv4LinkLocal) || !stringListContains(inbound["route_exclude_address"], defaultTUNIPv6LinkLocal) {
+		t.Fatalf("OpenWrt TUN inbound does not exclude link-local routes: %+v", inbound)
+	}
+	customExclusions := generatedTUNInbound(true, defaultTUNIPv4Address, defaultTUNIPv6Address, nil, []string{defaultTUNIPv6LinkLocal, "10.0.0.0/8"})["route_exclude_address"].([]string)
+	if len(customExclusions) != 3 || !stringListContains(customExclusions, "10.0.0.0/8") {
+		t.Fatalf("OpenWrt TUN custom exclusions were not preserved or deduplicated: %v", customExclusions)
+	}
 	withoutRedirect := generatedTUNInbound(false, defaultTUNIPv4Address, defaultTUNIPv6Address, nil, nil)
 	if _, exists := withoutRedirect["auto_redirect"]; exists {
 		t.Fatalf("non-Linux TUN inbound contains auto_redirect: %+v", withoutRedirect)

@@ -371,6 +371,18 @@ func migrateAckwrapTUNInbounds(inbounds []interface{}, linux bool) int {
 			inbound["address"] = appendStringList(inbound["address"], defaultTUNIPv6Address)
 			migrated++
 		}
+		if inbound["auto_route"] == true {
+			if deduplicated, changed := deduplicateStringList(inbound["route_exclude_address"]); changed {
+				inbound["route_exclude_address"] = deduplicated
+				migrated++
+			}
+			for _, address := range []string{defaultTUNIPv4LinkLocal, defaultTUNIPv6LinkLocal} {
+				if !stringListContains(inbound["route_exclude_address"], address) {
+					inbound["route_exclude_address"] = appendStringList(inbound["route_exclude_address"], address)
+					migrated++
+				}
+			}
+		}
 		if linux {
 			if inbound["auto_route"] == true {
 				if _, exists := inbound["auto_redirect"]; !exists {
@@ -456,6 +468,39 @@ func appendStringList(value interface{}, item string) interface{} {
 		return append(values, item)
 	default:
 		return []interface{}{item}
+	}
+}
+
+func deduplicateStringList(value interface{}) (interface{}, bool) {
+	seen := make(map[string]bool)
+	switch items := value.(type) {
+	case []string:
+		result := make([]string, 0, len(items))
+		for _, item := range items {
+			if seen[item] {
+				continue
+			}
+			seen[item] = true
+			result = append(result, item)
+		}
+		return result, len(result) != len(items)
+	case []interface{}:
+		result := make([]interface{}, 0, len(items))
+		changed := false
+		for _, item := range items {
+			text, ok := item.(string)
+			if ok && seen[text] {
+				changed = true
+				continue
+			}
+			if ok {
+				seen[text] = true
+			}
+			result = append(result, item)
+		}
+		return result, changed
+	default:
+		return value, false
 	}
 }
 
