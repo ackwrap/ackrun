@@ -327,6 +327,98 @@ func TestMigrateManagedConfigAddsTUNRoutingSafetyAndRemovesLegacyProxy(t *testin
 	}
 }
 
+func TestMigrateManagedConfigAddsFakeIPICMPResolve(t *testing.T) {
+	input := []byte(`{
+  "http_clients": [{"tag":"ackwrap-rule-set-direct"}],
+  "inbounds": [{"type":"tun","tag":"tun-in","address":["172.19.0.1/30","fdfe:dcba:9875::1/126"],"auto_route":true,"strict_route":true,"route_exclude_address":["169.254.0.0/16","fe80::/10"]}],
+  "outbounds": [{"type":"direct","tag":"direct"},{"type":"selector","tag":"proxy","outbounds":["direct"]}],
+  "dns": {"servers":[{"type":"fakeip","tag":"fakeip"}]},
+  "route": {"auto_detect_interface":true,"rules":[
+    {"action":"sniff"},
+    {"domain_suffix":["example.com"],"action":"route","outbound":"direct"}
+  ]}
+}`)
+	result, migrated, err := migrateManagedConfigData(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if migrated != 1 {
+		t.Fatalf("migrated = %d, want one FakeIP ICMP resolve rule", migrated)
+	}
+	var config map[string]interface{}
+	if err := json.Unmarshal(result, &config); err != nil {
+		t.Fatal(err)
+	}
+	rules := config["route"].(map[string]interface{})["rules"].([]interface{})
+	if len(rules) != 3 {
+		t.Fatalf("route rules = %d, want 3", len(rules))
+	}
+	resolveRule := rules[1].(map[string]interface{})
+	if resolveRule["action"] != "resolve" || !stringListContains(resolveRule["network"], "icmp") || !stringListContains(resolveRule["inbound"], "tun-in") {
+		t.Fatalf("invalid FakeIP ICMP resolve rule: %+v", resolveRule)
+	}
+	secondResult, secondMigrated, err := migrateManagedConfigData(result)
+	if err != nil || secondMigrated != 0 || string(secondResult) != string(result) {
+		t.Fatalf("FakeIP ICMP resolve migration is not idempotent: migrated=%d err=%v", secondMigrated, err)
+	}
+}
+
+func TestMigrateFakeIPICMPResolvePreservesUnmanagedRules(t *testing.T) {
+	tests := []struct {
+		name  string
+		rules []interface{}
+	}{
+		{
+			name: "missing sniff",
+			rules: []interface{}{
+				map[string]interface{}{"domain_suffix": []interface{}{"example.com"}, "action": "route", "outbound": "direct"},
+			},
+		},
+		{
+			name: "custom resolve options",
+			rules: []interface{}{
+				map[string]interface{}{"action": "sniff"},
+				map[string]interface{}{"inbound": []interface{}{"tun-in"}, "network": []interface{}{"icmp"}, "action": "resolve", "strategy": "prefer_ipv6"},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			migratedRules, migrated := migrateFakeIPICMPResolveRule(test.rules)
+			if migrated != 0 || !reflect.DeepEqual(migratedRules, test.rules) {
+				t.Fatalf("unmanaged rules changed: migrated=%d rules=%+v", migrated, migratedRules)
+			}
+		})
+	}
+}
+
+func TestMigrateFakeIPICMPResolveMovesAndDeduplicatesManagedRule(t *testing.T) {
+	resolveRule := func() map[string]interface{} {
+		return map[string]interface{}{
+			"inbound": []interface{}{"tun-in"},
+			"network": []interface{}{"icmp"},
+			"action":  "resolve",
+		}
+	}
+	rules := []interface{}{
+		resolveRule(),
+		map[string]interface{}{"action": "sniff"},
+		map[string]interface{}{"domain_suffix": []interface{}{"example.com"}, "action": "route", "outbound": "direct"},
+		resolveRule(),
+	}
+	migratedRules, migrated := migrateFakeIPICMPResolveRule(rules)
+	if migrated != 1 || len(migratedRules) != 3 {
+		t.Fatalf("managed resolve migration = %d, rules=%+v", migrated, migratedRules)
+	}
+	if migratedRules[0].(map[string]interface{})["action"] != "sniff" || migratedRules[1].(map[string]interface{})["action"] != "resolve" {
+		t.Fatalf("managed resolve is not immediately after sniff: %+v", migratedRules)
+	}
+	secondPass, secondMigrated := migrateFakeIPICMPResolveRule(migratedRules)
+	if secondMigrated != 0 || !reflect.DeepEqual(secondPass, migratedRules) {
+		t.Fatalf("managed resolve migration is not idempotent: migrated=%d rules=%+v", secondMigrated, secondPass)
+	}
+}
+
 func TestMigrateManagedConfigMovesAckwrapKernelBypassBeforeSniff(t *testing.T) {
 	input := []byte(`{
   "http_clients": [{"tag":"ackwrap-rule-set-direct"}],

@@ -275,8 +275,90 @@ func migrateManagedConfig(config map[string]interface{}) (int, error) {
 			route["rules"] = rules
 			migrated += bypassMigrated
 		}
+		if hasFakeIPDNSServer(config) {
+			var resolveMigrated int
+			rules, resolveMigrated = migrateFakeIPICMPResolveRule(rules)
+			if resolveMigrated > 0 {
+				route["rules"] = rules
+				migrated += resolveMigrated
+			}
+		}
 	}
 	return migrated, nil
+}
+
+func hasFakeIPDNSServer(config map[string]interface{}) bool {
+	dnsConfig, ok := config["dns"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+	servers, ok := dnsConfig["servers"].([]interface{})
+	if !ok {
+		return false
+	}
+	for _, rawServer := range servers {
+		server, ok := rawServer.(map[string]interface{})
+		if ok && server["type"] == "fakeip" {
+			return true
+		}
+	}
+	return false
+}
+
+func migrateFakeIPICMPResolveRule(rules []interface{}) ([]interface{}, int) {
+	sniffIndex := -1
+	managedResolveIndexes := make([]int, 0, 1)
+	for index, rawRule := range rules {
+		rule, ok := rawRule.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if sniffIndex == -1 && rule["action"] == "sniff" {
+			sniffIndex = index
+		}
+		if rule["action"] == "resolve" && stringListEquals(rule["network"], "icmp") && stringListEquals(rule["inbound"], "tun-in") {
+			if len(rule) != 3 {
+				return rules, 0
+			}
+			managedResolveIndexes = append(managedResolveIndexes, index)
+		}
+	}
+	if sniffIndex < 0 {
+		return rules, 0
+	}
+	targetIndex := sniffIndex + 1
+	if len(managedResolveIndexes) == 1 && managedResolveIndexes[0] == targetIndex {
+		return rules, 0
+	}
+	managedResolveSet := make(map[int]bool, len(managedResolveIndexes))
+	for _, index := range managedResolveIndexes {
+		managedResolveSet[index] = true
+	}
+	filteredRules := make([]interface{}, 0, len(rules)+1)
+	for index, rawRule := range rules {
+		if managedResolveSet[index] {
+			continue
+		}
+		filteredRules = append(filteredRules, rawRule)
+	}
+	targetIndex = 0
+	for index, rawRule := range filteredRules {
+		rule, ok := rawRule.(map[string]interface{})
+		if ok && rule["action"] == "sniff" {
+			targetIndex = index + 1
+			break
+		}
+	}
+	resolveRule := map[string]interface{}{
+		"inbound": []interface{}{"tun-in"},
+		"network": []interface{}{"icmp"},
+		"action":  "resolve",
+	}
+	result := make([]interface{}, 0, len(filteredRules)+1)
+	result = append(result, filteredRules[:targetIndex]...)
+	result = append(result, resolveRule)
+	result = append(result, filteredRules[targetIndex:]...)
+	return result, 1
 }
 
 func migrateAckwrapProcessBypassRules(rules []interface{}) ([]interface{}, int) {

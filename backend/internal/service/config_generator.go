@@ -2024,6 +2024,15 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 	routeRules = append(routeRules, map[string]interface{}{
 		"action": "sniff",
 	})
+	if (inboundMode == "tun" || inboundMode == "tun_mixed") && dnsEnabled && dnsSettings.FakeIPEnabled {
+		// FakeIP turns the original ICMP destination into a domain during pre-match.
+		// Resolve it before any route action so direct/bridge outbounds receive a real address.
+		routeRules = append(routeRules, map[string]interface{}{
+			"inbound": []string{"tun-in"},
+			"network": []string{"icmp"},
+			"action":  "resolve",
+		})
+	}
 
 	// DNS 查询交给 DNS rule action 处理，放在所有路由规则之前。
 	if dnsEnabled {
