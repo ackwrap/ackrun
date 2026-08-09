@@ -76,10 +76,23 @@ import type {
   CoreDiagnosticsResponse,
   NodeExposure,
   NodeExposureRequest,
+  ApiError,
 } from "./types";
 import { authenticatedFetch } from "./apiAuth";
 
 const API_BASE = "/api/v1";
+
+export class ApiRequestError extends Error {
+  constructor(
+    message: string,
+    readonly code: string,
+    readonly details: unknown,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "ApiRequestError";
+  }
+}
 
 export async function request<T>(
   endpoint: string,
@@ -91,10 +104,17 @@ export async function request<T>(
     ...options,
   });
   if (!res.ok) {
-    const err = await res
+    const payload = (await res
       .json()
-      .catch(() => ({ error: { code: "UNKNOWN", message: res.statusText } }));
-    throw new Error(err.error?.message || `API Error: ${res.status}`);
+      .catch(() => ({
+        error: { code: "UNKNOWN", message: res.statusText },
+      }))) as ApiError;
+    throw new ApiRequestError(
+      payload.error?.message || `API Error: ${res.status}`,
+      payload.error?.code || "UNKNOWN",
+      payload.error?.details,
+      res.status,
+    );
   }
   return res.json();
 }
