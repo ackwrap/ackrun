@@ -10,8 +10,12 @@ import {
 } from "lucide-vue-next";
 import Modal from "@/components/ui/Modal.vue";
 import NodeFlagName from "@/components/NodeFlagName.vue";
-import { api } from "@/services/api";
-import type { NodeExitIPResponse, NodeItem } from "@/services/types";
+import { api, ApiRequestError } from "@/services/api";
+import type {
+  NodeExitIPErrorDetails,
+  NodeExitIPResponse,
+  NodeItem,
+} from "@/services/types";
 import { loadGeoProviderOptions, type GeoProviderOption } from "./geoProviders";
 
 const props = withDefaults(
@@ -21,6 +25,7 @@ const props = withDefaults(
 const emit = defineEmits<{ close: [] }>();
 const loading = ref(false);
 const error = ref("");
+const errorDetails = ref<NodeExitIPErrorDetails | null>(null);
 const result = ref<NodeExitIPResponse | null>(null);
 const geoExpanded = ref(false);
 const geoLoading = ref(false);
@@ -30,6 +35,80 @@ const selectableGeoProviderOptions = ref<GeoProviderOption[]>([]);
 const geoProvider = ref("");
 let requestID = 0;
 let geoRequestID = 0;
+
+const failureStageLabels: Record<string, string> = {
+  node_resolution: "节点地址解析",
+  core_api: "连接 sing-box API",
+  core_response: "读取 sing-box 响应",
+  active_outbound: "匹配活动节点",
+  outbound_connect: "节点连接出口服务",
+  http_status: "出口服务响应",
+  read_response: "读取出口服务响应",
+  response_too_large: "校验出口服务响应",
+  invalid_response: "解析出口服务响应",
+  address_family: "校验 IP 地址族",
+  timeout: "出口 IP 检测",
+  unknown: "出口 IP 检测",
+};
+
+const failureReasonLabels: Record<string, string> = {
+  dns_resolution: "DNS 解析失败",
+  tls_certificate: "TLS 证书校验失败",
+  tls_handshake: "TLS 握手失败",
+  connection_refused: "连接被拒绝",
+  network_unreachable: "网络不可达",
+  connection_reset: "连接被重置",
+  connection_closed: "连接意外关闭",
+  outbound_authentication: "节点认证失败",
+  protocol_handshake: "节点协议握手失败",
+  connection_failed: "节点连接失败",
+  timeout: "请求超时",
+  upstream_http_status: "上游 HTTP 状态异常",
+  read_response: "响应读取失败",
+  response_too_large: "响应超过大小限制",
+  invalid_response: "响应格式无效",
+  address_family: "IP 地址族不匹配",
+  core_authentication: "核心 API 鉴权失败",
+  core_access_denied: "核心 API 拒绝访问",
+  core_http_status: "核心 API 状态异常",
+  core_unavailable: "核心 API 不可用",
+  unsupported_api: "核心不支持此接口",
+  multiple_matches: "活动节点匹配冲突",
+  node_not_loaded: "节点未载入活动配置",
+};
+
+const errorDetailItems = computed(() => {
+  const details = errorDetails.value;
+  if (!details) return [];
+  const items: [string, string][] = [
+    ["失败阶段", failureStageLabels[details.stage] || details.stage],
+    ["具体原因", failureReasonLabels[details.reason] || details.reason],
+  ];
+  if (details.core_status)
+    items.push(["核心状态", `HTTP ${details.core_status}`]);
+  if (details.upstream_status)
+    items.push(["上游状态", `HTTP ${details.upstream_status}`]);
+  return items;
+});
+
+function readExitIPErrorDetails(cause: unknown) {
+  if (!(cause instanceof ApiRequestError)) return null;
+  const details = cause.details;
+  if (!details || typeof details !== "object") return null;
+  const candidate = details as Partial<NodeExitIPErrorDetails>;
+  if (typeof candidate.stage !== "string" || typeof candidate.reason !== "string")
+    return null;
+  return {
+    stage: candidate.stage,
+    reason: candidate.reason,
+    core_status:
+      typeof candidate.core_status === "number" ? candidate.core_status : undefined,
+    upstream_status:
+      typeof candidate.upstream_status === "number"
+        ? candidate.upstream_status
+        : undefined,
+  };
+}
 
 async function loadGeoProviders() {
   try {
@@ -93,6 +172,7 @@ async function check() {
   loading.value = true;
   geoLoading.value = false;
   error.value = "";
+  errorDetails.value = null;
   geoError.value = "";
   result.value = null;
   try {
@@ -102,8 +182,10 @@ async function check() {
       if (geoExpanded.value) void checkGeo();
     }
   } catch (cause: any) {
-    if (currentRequest === requestID)
+    if (currentRequest === requestID) {
       error.value = cause?.message || "出口 IP 检测失败";
+      errorDetails.value = readExitIPErrorDetails(cause);
+    }
   } finally {
     if (currentRequest === requestID) loading.value = false;
   }
@@ -156,6 +238,7 @@ watch(
     loading.value = false;
     geoLoading.value = false;
     error.value = "";
+    errorDetails.value = null;
     geoError.value = "";
     result.value = null;
     geoExpanded.value = false;
@@ -198,6 +281,19 @@ watch(
           <p class="mt-1 break-words text-sm text-[var(--text-secondary)]">
             {{ error }}
           </p>
+          <dl
+            v-if="errorDetailItems.length"
+            class="mt-3 grid gap-1.5 rounded-[var(--radius-md)] border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-3 text-xs"
+          >
+            <div
+              v-for="([label, value], index) in errorDetailItems"
+              :key="index"
+              class="grid grid-cols-[5rem_minmax(0,1fr)] gap-2"
+            >
+              <dt class="text-[var(--text-muted)]">{{ label }}</dt>
+              <dd class="break-words text-[var(--text-secondary)]">{{ value }}</dd>
+            </div>
+          </dl>
         </div>
       </div>
       <button class="aw-action-button aw-action-neutral mt-4" @click="check">

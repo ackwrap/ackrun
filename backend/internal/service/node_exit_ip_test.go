@@ -69,6 +69,49 @@ func TestLookupNodeExitIPReportsDetailedCoreFailure(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.WriteHeader(http.StatusBadGateway)
 		_ = json.NewEncoder(writer).Encode(map[string]string{
+			"message": "sensitive core error must not be exposed",
+			"stage":   "outbound_connect",
+			"reason":  "tls_handshake",
+		})
+	}))
+	defer server.Close()
+	svc := &NodeService{clashBaseURL: server.URL, httpClient: server.Client()}
+	_, err := svc.lookupNodeExitIP(context.Background(), "node", false)
+	if err == nil || !strings.Contains(err.Error(), "TLS 握手失败") || strings.Contains(err.Error(), "sensitive") {
+		t.Fatalf("expected detailed response error, got %v", err)
+	}
+	details := ExitIPFailureDetails(err)
+	if details == nil || details.Stage != "outbound_connect" || details.Reason != "tls_handshake" || details.CoreStatus != http.StatusBadGateway {
+		t.Fatalf("failure details = %+v", details)
+	}
+}
+
+func TestLookupNodeExitIPReportsUpstreamHTTPStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.WriteHeader(http.StatusBadGateway)
+		_ = json.NewEncoder(writer).Encode(map[string]any{
+			"message":         "Exit IP service returned an unsuccessful HTTP status",
+			"stage":           "http_status",
+			"reason":          "upstream_http_status",
+			"upstream_status": http.StatusForbidden,
+		})
+	}))
+	defer server.Close()
+	svc := &NodeService{clashBaseURL: server.URL, httpClient: server.Client()}
+	_, err := svc.lookupNodeExitIP(context.Background(), "node", false)
+	if err == nil || !strings.Contains(err.Error(), "HTTP 403") {
+		t.Fatalf("expected upstream HTTP status, got %v", err)
+	}
+	details := ExitIPFailureDetails(err)
+	if details == nil || details.Reason != "upstream_http_status" || details.UpstreamStatus != http.StatusForbidden {
+		t.Fatalf("failure details = %+v", details)
+	}
+}
+
+func TestLookupNodeExitIPSupportsLegacyStageOnlyFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.WriteHeader(http.StatusBadGateway)
+		_ = json.NewEncoder(writer).Encode(map[string]string{
 			"message": "Exit IP service returned an invalid response",
 			"stage":   "invalid_response",
 		})
@@ -77,7 +120,7 @@ func TestLookupNodeExitIPReportsDetailedCoreFailure(t *testing.T) {
 	svc := &NodeService{clashBaseURL: server.URL, httpClient: server.Client()}
 	_, err := svc.lookupNodeExitIP(context.Background(), "node", false)
 	if err == nil || !strings.Contains(err.Error(), "响应格式无效") {
-		t.Fatalf("expected detailed response error, got %v", err)
+		t.Fatalf("expected legacy stage response error, got %v", err)
 	}
 }
 

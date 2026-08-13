@@ -186,27 +186,34 @@ function notify(v: string, t: "success" | "error" | "info" = "success") {
 }
 async function initial() {
   const run = ++initialRun;
-  const initialResults = await Promise.allSettled([
-    api.getRuntime(),
-    api.getInstallerStatus(),
-  ]);
-  if (cancelled || run !== initialRun) return;
-  if (initialResults[0].status === "fulfilled")
-    runtime.value = initialResults[0].value;
-  if (initialResults[1].status === "fulfilled")
-    installStatus.value = initialResults[1].value;
-  const initialLabels = ["运行状态", "安装状态"];
-  const initialFailures = initialResults
-    .map((result, index) =>
-      result.status === "rejected"
-        ? `${initialLabels[index]}: ${result.reason?.message || "请求失败"}`
-        : "",
-    )
-    .filter(Boolean);
-  if (initialFailures.length)
-    notify(`控制面板部分状态加载失败: ${initialFailures.join("；")}`, "error");
-  if (!runtime.value || runtime.value.status === "not_installed") return;
 
+  // 各数据独立加载、谁先返回谁先渲染，互不阻塞。
+  // 安装状态会触发远端版本检查，耗时不可控，不能卡住本地数据的展示。
+  api
+    .getRuntime()
+    .then((value) => {
+      if (cancelled || run !== initialRun) return;
+      runtime.value = value;
+      if (value.status === "not_installed") return;
+      void loadLocalState(run);
+    })
+    .catch((reason: any) => {
+      if (!cancelled && run === initialRun)
+        notify(`运行状态加载失败: ${reason?.message || "请求失败"}`, "error");
+    });
+
+  api
+    .getInstallerStatus()
+    .then((value) => {
+      if (!cancelled && run === initialRun) installStatus.value = value;
+    })
+    .catch((reason: any) => {
+      if (!cancelled && run === initialRun)
+        notify(`安装状态加载失败: ${reason?.message || "请求失败"}`, "error");
+    });
+}
+
+async function loadLocalState(run: number) {
   const localResults = await Promise.allSettled([
     api.getConfigStatus(false).then((value) => {
       if (!cancelled && run === initialRun) configStatus.value = value;

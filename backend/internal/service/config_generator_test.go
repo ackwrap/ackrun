@@ -389,7 +389,7 @@ func TestGenerateRouteIncludesDefaultLoopBypassRules(t *testing.T) {
 		t.Fatalf("route rules type = %T", route["rules"])
 	}
 	var processRule, processRuleScoped, domainRule, ipRule, reachedSniff bool
-	standardDNSHijackIndex, firstBypassIndex := -1, -1
+	standardDNSHijackIndex, firstBypassIndex, sniffIndex, icmpResolveIndex := -1, -1, -1, -1
 	for index, rule := range rules {
 		if stringListContains(rule["inbound"], legacyUpdateProxyInboundTag) {
 			t.Fatalf("generated route contains legacy update proxy rule: %+v", rule)
@@ -399,7 +399,14 @@ func TestGenerateRouteIncludesDefaultLoopBypassRules(t *testing.T) {
 		}
 		if rule["action"] == "sniff" {
 			reachedSniff = true
+			sniffIndex = index
 			continue
+		}
+		if rule["action"] == "resolve" && stringListContains(rule["network"], "icmp") {
+			icmpResolveIndex = index
+			if !stringListContains(rule["inbound"], "tun-in") {
+				t.Fatalf("FakeIP ICMP resolve rule is not scoped to TUN: %+v", rule)
+			}
 		}
 		if rule["outbound"] != "direct" {
 			continue
@@ -423,6 +430,9 @@ func TestGenerateRouteIncludesDefaultLoopBypassRules(t *testing.T) {
 	}
 	if standardDNSHijackIndex == -1 || firstBypassIndex == -1 || standardDNSHijackIndex >= firstBypassIndex {
 		t.Fatalf("standard DNS hijack must precede every bypass rule: %+v", rules)
+	}
+	if sniffIndex == -1 || icmpResolveIndex != sniffIndex+1 {
+		t.Fatalf("FakeIP ICMP resolve must immediately follow sniff: %+v", rules)
 	}
 }
 
@@ -1992,7 +2002,8 @@ func TestGenerateDNSLeakProtectionModeMatrix(t *testing.T) {
 				if proxyMode == "global" {
 					routeFinal = "proxy"
 				}
-				dns, err := NewConfigGeneratorService(db, nil).generateDNSFromDatabase(routeFinal)
+				generator := NewConfigGeneratorService(db, nil)
+				dns, err := generator.generateDNSFromDatabase(routeFinal)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -2022,6 +2033,29 @@ func TestGenerateDNSLeakProtectionModeMatrix(t *testing.T) {
 				}
 				if wantFakeIP && (len(rules) == 0 || rules[len(rules)-1]["server"] != "fakeip") {
 					t.Fatalf("FakeIP fallback is not the final DNS rule: %+v", rules)
+				}
+				if proxyMode != "rule" {
+					route, err := generator.generateRoute(routeFinal)
+					if err != nil {
+						t.Fatal(err)
+					}
+					routeRules, _ := route["rules"].([]map[string]interface{})
+					sniffIndex, resolveIndex, resolveCount := -1, -1, 0
+					for index, rule := range routeRules {
+						if rule["action"] == "sniff" {
+							sniffIndex = index
+						}
+						if rule["action"] == "resolve" && stringListContains(rule["network"], "icmp") && stringListContains(rule["inbound"], "tun-in") {
+							resolveIndex = index
+							resolveCount++
+						}
+					}
+					if wantFakeIP && (resolveCount != 1 || resolveIndex != sniffIndex+1) {
+						t.Fatalf("FakeIP ICMP resolve count=%d index=%d, sniff=%d; rules=%+v", resolveCount, resolveIndex, sniffIndex, routeRules)
+					}
+					if !wantFakeIP && resolveCount != 0 {
+						t.Fatalf("unexpected FakeIP ICMP resolve rule: %+v", routeRules)
+					}
 				}
 
 				finalServer, _ := dns["final"].(string)

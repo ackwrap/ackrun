@@ -135,14 +135,17 @@ func (h *NodeHandler) ExitIP(c *gin.Context) {
 	if err != nil {
 		status := http.StatusBadGateway
 		code := "NODE_EXIT_IP_FAILED"
+		details := service.ExitIPFailureDetails(err)
 		if errors.Is(err, service.ErrNodeNotFound) {
 			status = http.StatusNotFound
 			code = "NODE_NOT_FOUND"
 		} else if errors.Is(err, service.ErrNodeExitIPInvalid) {
 			status = http.StatusBadRequest
 			code = "NODE_EXIT_IP_INVALID"
+		} else if details != nil && (details.Reason == "timeout" || details.CoreStatus == http.StatusGatewayTimeout) {
+			status = http.StatusGatewayTimeout
 		}
-		c.JSON(status, model.ErrorResponse{Error: model.APIError{Code: code, Message: err.Error()}})
+		c.JSON(status, model.ErrorResponse{Error: model.APIError{Code: code, Message: err.Error(), Details: details}})
 		return
 	}
 	c.JSON(http.StatusOK, response)

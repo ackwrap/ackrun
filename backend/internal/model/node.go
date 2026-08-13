@@ -125,6 +125,13 @@ type NodeExitIPResponse struct {
 	GeoError    string             `json:"geo_error,omitempty"`
 }
 
+type NodeExitIPErrorDetails struct {
+	Stage          string `json:"stage"`
+	Reason         string `json:"reason"`
+	CoreStatus     int    `json:"core_status,omitempty"`
+	UpstreamStatus int    `json:"upstream_status,omitempty"`
+}
+
 type NodeTracerouteStartRequest struct {
 	TraceID     string `json:"trace_id" binding:"required"`
 	GeoProvider string `json:"geo_provider"`

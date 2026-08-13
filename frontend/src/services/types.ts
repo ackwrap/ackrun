@@ -538,6 +538,13 @@ export interface NodeExitIPResponse {
   geo_error?: string;
 }
 
+export interface NodeExitIPErrorDetails {
+  stage: string;
+  reason: string;
+  core_status?: number;
+  upstream_status?: number;
+}
+
 export interface NodeTracerouteAttempt {
   success: boolean;
   ip?: string;
