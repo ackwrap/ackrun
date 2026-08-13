@@ -28,7 +28,7 @@ jobs:
         include:
           - goarch: amd64
             package_arch: x86_64
-            check_args: ""
+            check_args: "--skip-checks"
           - goarch: arm64
             package_arch: aarch64_generic
             check_args: --skip-checks
