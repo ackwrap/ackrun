@@ -5,6 +5,8 @@ import type {
   AdvancedActionResponse,
   AdvancedHealthResponse,
   AdvancedSettings,
+  NodeExposure,
+  NodeExposureRequest,
   PlatformRoute,
   PlatformRouteRequest,
   SessionLease,
@@ -80,6 +82,23 @@ export const advancedApi = {
     ),
   clearAccessLogs: () =>
     request<AdvancedActionResponse>("/advanced/access-logs", {
+      method: "DELETE",
+    }),
+
+  getNodeExposures: () =>
+    request<NodeExposure[]>("/advanced/node-exposures"),
+  createNodeExposure: (body: NodeExposureRequest) =>
+    request<NodeExposure>("/advanced/node-exposures", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  updateNodeExposure: (id: number, body: NodeExposureRequest) =>
+    request<NodeExposure>(`/advanced/node-exposures/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  deleteNodeExposure: (id: number) =>
+    request<AdvancedActionResponse>(`/advanced/node-exposures/${id}`, {
       method: "DELETE",
     }),
 

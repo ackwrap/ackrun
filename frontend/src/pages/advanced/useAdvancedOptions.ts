@@ -1,6 +1,8 @@
 import { ref } from "vue";
 import { api } from "@/services/api";
-import type { NodeExposure, ProxyCollectionWithNodes } from "@/services/types";
+import { advancedApi } from "@/services/advancedApi";
+import type { NodeExposure } from "@/services/advancedTypes";
+import type { ProxyCollectionWithNodes } from "@/services/types";
 
 export interface SafeNodeOption {
   value: string;
@@ -37,7 +39,7 @@ export function useAdvancedOptions() {
     const [, collectionItems, exposureItems] = await Promise.all([
       loadNodes(),
       api.getProxyCollections(),
-      api.getNodeExposures(),
+      advancedApi.getNodeExposures(),
     ]);
     collections.value = collectionItems;
     exposures.value = exposureItems;

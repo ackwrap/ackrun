@@ -8,12 +8,13 @@ import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
 import Modal from "@/components/ui/Modal.vue";
 import Toast from "@/components/ui/Toast.vue";
 import { api } from "@/services/api";
+import { advancedApi } from "@/services/advancedApi";
 import type {
   NodeExposure,
   NodeExposureInboundType,
   NodeExposureRequest,
-  NodeItem,
-} from "@/services/types";
+} from "@/services/advancedTypes";
+import type { NodeItem } from "@/services/types";
 
 interface ExposureForm {
   name: string;
@@ -95,7 +96,7 @@ async function load() {
   loading.value = true;
   try {
     const [exposures] = await Promise.all([
-      api.getNodeExposures(),
+      advancedApi.getNodeExposures(),
       loadNodes(),
     ]);
     items.value = exposures;
@@ -162,9 +163,9 @@ async function save() {
   try {
     const payload = buildRequest();
     if (editing.value) {
-      await api.updateNodeExposure(editing.value.id, payload);
+      await advancedApi.updateNodeExposure(editing.value.id, payload);
     } else {
-      await api.createNodeExposure(payload);
+      await advancedApi.createNodeExposure(payload);
     }
     show(editing.value ? "节点暴露已更新" : "节点暴露已创建");
     formOpen.value = false;
@@ -184,7 +185,7 @@ async function remove() {
   const item = deleting.value;
   deleting.value = null;
   try {
-    await api.deleteNodeExposure(item.id);
+    await advancedApi.deleteNodeExposure(item.id);
     show("节点暴露已删除");
     await load();
   } catch (error) {

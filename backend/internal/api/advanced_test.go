@@ -22,9 +22,17 @@ func TestRegisterAdvancedRoutesContract(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	group := router.Group("/api/v1")
-	registerAdvancedRoutes(group, handler.NewAdvancedHandler(service.NewAdvancedRoutingService(db, nil, nil, nil, "test-secret")))
+	registerAdvancedRoutes(
+		group,
+		handler.NewNodeExposureHandler(service.NewNodeExposureService(db)),
+		handler.NewAdvancedHandler(service.NewAdvancedRoutingService(db, nil, nil, nil, "test-secret")),
+	)
 	want := map[string]bool{
-		"GET /api/v1/advanced/platform-routes":           false,
+		"GET /api/v1/advanced/node-exposures":             false,
+		"POST /api/v1/advanced/node-exposures":            false,
+		"PUT /api/v1/advanced/node-exposures/:id":         false,
+		"DELETE /api/v1/advanced/node-exposures/:id":      false,
+		"GET /api/v1/advanced/platform-routes":            false,
 		"POST /api/v1/advanced/platform-routes":          false,
 		"PUT /api/v1/advanced/platform-routes/:id":       false,
 		"DELETE /api/v1/advanced/platform-routes/:id":    false,

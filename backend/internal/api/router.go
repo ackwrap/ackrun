@@ -156,11 +156,7 @@ func RegisterRoutes(
 		v1.PUT("/nodes/:uid/enabled", nodeH.SetEnabled)
 		v1.PUT("/nodes/:uid/preferred", nodeH.SetPreferred)
 
-		v1.GET("/advanced/node-exposures", nodeExposureH.List)
-		v1.POST("/advanced/node-exposures", nodeExposureH.Create)
-		v1.PUT("/advanced/node-exposures/:id", nodeExposureH.Update)
-		v1.DELETE("/advanced/node-exposures/:id", nodeExposureH.Delete)
-		registerAdvancedRoutes(v1, advancedH)
+		registerAdvancedRoutes(v1, nodeExposureH, advancedH)
 
 		v1.GET("/collections", proxyCollectionH.List)
 		v1.POST("/collections", proxyCollectionH.Create)
@@ -236,7 +232,11 @@ func RegisterRoutes(
 	}
 }
 
-func registerAdvancedRoutes(group *gin.RouterGroup, handler *handler.AdvancedHandler) {
+func registerAdvancedRoutes(group *gin.RouterGroup, nodeExposureH *handler.NodeExposureHandler, handler *handler.AdvancedHandler) {
+	group.GET("/advanced/node-exposures", nodeExposureH.List)
+	group.POST("/advanced/node-exposures", nodeExposureH.Create)
+	group.PUT("/advanced/node-exposures/:id", nodeExposureH.Update)
+	group.DELETE("/advanced/node-exposures/:id", nodeExposureH.Delete)
 	group.GET("/advanced/platform-routes", handler.ListPlatformRoutes)
 	group.POST("/advanced/platform-routes", handler.CreatePlatformRoute)
 	group.POST("/advanced/platform-routes/reorder", handler.ReorderPlatformRoutes)

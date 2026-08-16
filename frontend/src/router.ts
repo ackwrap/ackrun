@@ -14,7 +14,7 @@ const pages = {
   "/logs": () => import("@/pages/LogsPage.vue"),
   "/settings": () => import("@/pages/SettingsPage.vue"),
   "/advanced/node-exposures": () =>
-    import("@/pages/AdvancedNodeExposurePage.vue"),
+    import("@/pages/advanced/AdvancedNodeExposurePage.vue"),
   "/advanced/platform-routing": () =>
     import("@/pages/advanced/PlatformRoutingPage.vue"),
   "/advanced/session-leases": () =>
@@ -28,6 +28,10 @@ const pages = {
 };
 
 const advancedMeta: Record<string, { title: string; description: string }> = {
+  "/advanced/node-exposures": {
+    title: "节点暴露",
+    description: "为单个节点创建独立的固定代理入口。",
+  },
   "/advanced/platform-routing": {
     title: "平台路由",
     description: "按平台、租户和业务入口编排路由策略。",

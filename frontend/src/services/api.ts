@@ -74,8 +74,6 @@ import type {
   ToolLogEntry,
   MaintenanceCheckResponse,
   CoreDiagnosticsResponse,
-  NodeExposure,
-  NodeExposureRequest,
   ApiError,
 } from "./types";
 import { authenticatedFetch } from "./apiAuth";
@@ -422,23 +420,6 @@ export const api = {
     request<ActionResponse>(`/nodes/${encodeURIComponent(uid)}/preferred`, {
       method: "PUT",
       body: JSON.stringify({ value }),
-    }),
-
-  getNodeExposures: () =>
-    request<NodeExposure[]>("/advanced/node-exposures"),
-  createNodeExposure: (body: NodeExposureRequest) =>
-    request<NodeExposure>("/advanced/node-exposures", {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
-  updateNodeExposure: (id: number, body: NodeExposureRequest) =>
-    request<NodeExposure>(`/advanced/node-exposures/${id}`, {
-      method: "PUT",
-      body: JSON.stringify(body),
-    }),
-  deleteNodeExposure: (id: number) =>
-    request<ActionResponse>(`/advanced/node-exposures/${id}`, {
-      method: "DELETE",
     }),
 
   getRouteRules: () => request<RouteRule[]>("/rules"),
