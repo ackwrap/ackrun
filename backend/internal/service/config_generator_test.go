@@ -19,6 +19,18 @@ import (
 func TestRedactConfigAccessTokens(t *testing.T) {
 	originalURL := "http://127.0.0.1:8080/api/v1/rules/content?access_token=secret-value&format=source"
 	config := map[string]interface{}{
+		"outbounds": []interface{}{
+			map[string]interface{}{
+				"password":               "ssh-password-value",
+				"private_key":            []interface{}{"ssh-private-key-value"},
+				"private_key_path":       "/keys/private-key-value",
+				"private_key_passphrase": "ssh-passphrase-value",
+				"client_key":             []interface{}{"tls-client-key-value"},
+				"client_key_path":        "/keys/tls-client-key-value",
+				"pre_shared_key":         "wireguard-preshared-value",
+				"psk":                    "proxy-psk-value",
+			},
+		},
 		"route": map[string]interface{}{
 			"rule_set": []interface{}{
 				map[string]interface{}{"url": originalURL},
@@ -34,6 +46,30 @@ func TestRedactConfigAccessTokens(t *testing.T) {
 	original := config["route"].(map[string]interface{})["rule_set"].([]interface{})[0].(map[string]interface{})["url"]
 	if original != originalURL {
 		t.Fatalf("redaction mutated generated config: %q", original)
+	}
+	outbound := redacted["outbounds"].([]interface{})[0].(map[string]interface{})
+	for _, key := range []string{"password", "private_key", "private_key_path", "private_key_passphrase", "client_key", "client_key_path", "pre_shared_key", "psk"} {
+		if outbound[key] != "[REDACTED]" {
+			t.Fatalf("config response did not redact %s: %+v", key, outbound[key])
+		}
+	}
+	message := "invalid ssh-password-value ssh-private-key-value /keys/private-key-value ssh-passphrase-value tls-client-key-value /keys/tls-client-key-value wireguard-preshared-value proxy-psk-value"
+	redactedMessage := redactConfigValuesFromMessage(message, config)
+	for _, secret := range []string{"ssh-password-value", "ssh-private-key-value", "/keys/private-key-value", "ssh-passphrase-value", "tls-client-key-value", "/keys/tls-client-key-value", "wireguard-preshared-value", "proxy-psk-value"} {
+		if strings.Contains(redactedMessage, secret) {
+			t.Fatalf("validation message leaked a config secret: %q", redactedMessage)
+		}
+	}
+}
+
+func TestRedactConfigFileValuesFromMessage(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"outbounds":[{"type":"ssh","private_key":["file-private-key-value"],"private_key_passphrase":"file-passphrase-value"}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	message := redactConfigFileValuesFromMessage("invalid file-private-key-value file-passphrase-value", configPath)
+	if strings.Contains(message, "file-private-key-value") || strings.Contains(message, "file-passphrase-value") {
+		t.Fatalf("config file validation message leaked SSH secrets: %q", message)
 	}
 }
 
@@ -669,6 +705,7 @@ func TestGenerateNodeOutboundSupportsNewCoreProtocols(t *testing.T) {
 	}{
 		{typ: "anytls", rawJSON: `{"type":"anytls","server":"example.com","server_port":443,"password":"redacted"}`},
 		{typ: "snell", rawJSON: `{"type":"snell","server":"example.com","server_port":443,"version":4,"psk":"redacted"}`},
+		{typ: "ssh", rawJSON: `{"type":"ssh","server":"example.com","server_port":22,"user":"deploy","private_key_path":"/keys/id_ed25519","cipher":["aes128-gcm@openssh.com"],"mac":["hmac-sha2-256-etm@openssh.com"],"kex_algorithm":["curve25519-sha256"]}`},
 	}
 	for _, test := range tests {
 		t.Run(test.typ, func(t *testing.T) {
@@ -684,6 +721,28 @@ func TestGenerateNodeOutboundSupportsNewCoreProtocols(t *testing.T) {
 				if !ok || tlsOptions["enabled"] != true {
 					t.Fatalf("required TLS was not enabled: %+v", outbound["tls"])
 				}
+			}
+			if test.typ == "ssh" {
+				if outbound["user"] != "deploy" || outbound["private_key_path"] != "/keys/id_ed25519" {
+					t.Fatalf("SSH fields were not preserved: %+v", outbound)
+				}
+				if values, ok := outbound["cipher"].([]interface{}); !ok || len(values) != 1 {
+					t.Fatalf("SSH cipher list was not preserved: %+v", outbound["cipher"])
+				}
+			}
+		})
+	}
+}
+
+func TestGenerateNodeOutboundRejectsNonNodeCoreOutbounds(t *testing.T) {
+	svc := &ConfigGeneratorService{}
+	for _, protocol := range []string{"shadowtls", "tor", "bridge", "unknown"} {
+		t.Run(protocol, func(t *testing.T) {
+			_, err := svc.generateNodeOutbound(&model.Node{
+				Type: protocol, RawJSON: fmt.Sprintf(`{"type":%q,"server":"example.com","server_port":443}`, protocol),
+			}, protocol+"-node", nil)
+			if err == nil || !strings.Contains(err.Error(), "unsupported protocol") {
+				t.Fatalf("expected unsupported protocol error, got %v", err)
 			}
 		})
 	}

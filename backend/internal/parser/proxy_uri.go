@@ -11,6 +11,7 @@ import (
 
 func ParseProxyURI(raw string) (*model.ParsedNode, error) {
 	raw = strings.TrimSpace(raw)
+	lowerRaw := strings.ToLower(raw)
 	switch {
 	case strings.HasPrefix(raw, "vmess://"):
 		return parseVmess(raw)
@@ -42,6 +43,8 @@ func ParseProxyURI(raw string) (*model.ParsedNode, error) {
 		return parseMieru(raw)
 	case strings.HasPrefix(raw, "snell://"):
 		return parseSnell(raw)
+	case strings.HasPrefix(lowerRaw, "ssh://"):
+		return parseSSH(raw)
 	}
 
 	u, err := url.Parse(raw)
@@ -61,17 +64,14 @@ func ParseProxyURI(raw string) (*model.ParsedNode, error) {
 	if typ == "" || server == "" {
 		return nil, fmt.Errorf("invalid proxy uri")
 	}
+	unsupportedReason := ""
+	if !IsSupportedNodeProtocol(typ) {
+		unsupportedReason = UnsupportedNodeProtocolReason(typ)
+	}
 	rawJSON, _ := json.Marshal(map[string]any{"name": name, "type": typ, "server": server, "port": port})
-	return &model.ParsedNode{Name: name, Type: typ, Server: server, ServerPort: port, Raw: raw, RawJSON: string(rawJSON)}, nil
+	return &model.ParsedNode{Name: name, Type: typ, Server: server, ServerPort: port, Raw: raw, RawJSON: string(rawJSON), UnsupportedReason: unsupportedReason}, nil
 }
 
 func normalizeProxyType(typ string) string {
-	switch typ {
-	case "hy2":
-		return "hysteria2"
-	case "socks5", "socks4", "socks4a":
-		return "socks"
-	default:
-		return typ
-	}
+	return normalizeProtocolType(typ)
 }

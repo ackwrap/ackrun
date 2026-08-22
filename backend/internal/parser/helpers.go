@@ -61,7 +61,9 @@ func normalizeToSingbox(cfg map[string]any, typ string) (map[string]any, error) 
 		case "shadowsocks", "ssr":
 			result["method"] = cipher
 		}
-		delete(result, "cipher")
+		if typ != "ssh" {
+			delete(result, "cipher")
+		}
 	}
 	if typ == "ssr" {
 		moveKey(result, "obfs-param", "obfs_param")

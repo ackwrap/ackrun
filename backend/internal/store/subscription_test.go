@@ -701,6 +701,38 @@ func TestStableNodeUIDUsesOnlyCoreConnectionFields(t *testing.T) {
 	}
 }
 
+func TestStableNodeUIDIncludesSSHIdentity(t *testing.T) {
+	base := model.ParsedNode{
+		Name:       "SSH-01",
+		Type:       "ssh",
+		Server:     "ssh.example.com",
+		ServerPort: 22,
+		RawJSON:    `{"type":"ssh","server":"ssh.example.com","server_port":22,"user":"deploy","private_key":["test-key"],"host_key":["ssh-ed25519 test-host-key"],"cipher":["aes128-gcm@openssh.com"]}`,
+	}
+	rename := base
+	rename.Name = "SSH-Renamed"
+	if StableNodeUID(base) != StableNodeUID(rename) {
+		t.Fatal("SSH rename changed stable UID")
+	}
+	changedUser := base
+	changedUser.RawJSON = `{"type":"ssh","server":"ssh.example.com","server_port":22,"user":"other","private_key":["test-key"],"host_key":["ssh-ed25519 test-host-key"],"cipher":["aes128-gcm@openssh.com"]}`
+	if StableNodeUID(base) == StableNodeUID(changedUser) {
+		t.Fatal("SSH user change did not change stable UID")
+	}
+	changedKey := base
+	changedKey.RawJSON = `{"type":"ssh","server":"ssh.example.com","server_port":22,"user":"deploy","private_key":["other-key"],"host_key":["ssh-ed25519 test-host-key"],"cipher":["aes128-gcm@openssh.com"]}`
+	if StableNodeUID(base) == StableNodeUID(changedKey) {
+		t.Fatal("SSH private key change did not change stable UID")
+	}
+	defaultUser := base
+	defaultUser.RawJSON = `{"type":"ssh","server":"ssh.example.com","server_port":22,"private_key":["test-key"],"host_key":["ssh-ed25519 test-host-key"],"cipher":["aes128-gcm@openssh.com"]}`
+	explicitRoot := defaultUser
+	explicitRoot.RawJSON = `{"type":"ssh","server":"ssh.example.com","server_port":22,"user":"root","private_key":["test-key"],"host_key":["ssh-ed25519 test-host-key"],"cipher":["aes128-gcm@openssh.com"]}`
+	if StableNodeUID(defaultUser) != StableNodeUID(explicitRoot) {
+		t.Fatal("omitted SSH user and explicit root produced different UIDs")
+	}
+}
+
 func TestNodeFilterStoreCRUD(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {

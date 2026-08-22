@@ -19,9 +19,12 @@ func parseSingboxJSON(body []byte) []model.ParsedNode {
 
 	nodes := make([]model.ParsedNode, 0, len(sub.Outbounds))
 	for _, outbound := range sub.Outbounds {
-		typ := strings.ToLower(getString(outbound, "type"))
+		typ := normalizeProtocolType(strings.ToLower(getString(outbound, "type")))
 		server := getString(outbound, "server")
 		port := getInt(outbound, "server_port")
+		if typ == "ssh" && port == 0 {
+			port = 22
+		}
 		if typ == "" || server == "" || port == 0 || isSingboxLogicalOutbound(typ) {
 			continue
 		}
@@ -38,6 +41,9 @@ func parseSingboxJSON(body []byte) []model.ParsedNode {
 			normalized["server_port"] = port
 		}
 		unsupportedReason := ""
+		if !IsSupportedNodeProtocol(typ) {
+			unsupportedReason = UnsupportedNodeProtocolReason(typ)
+		}
 		if typ == "shadowsocks" {
 			if err := normalizeShadowsocksPlugin(normalized); err != nil {
 				unsupportedReason = err.Error()

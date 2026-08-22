@@ -27,6 +27,10 @@ func parseClashYAML(body []byte) []model.ParsedNode {
 		normalizedType := normalizeProtocolType(typ)
 		server := getString(proxy, "server")
 		port := getInt(proxy, "port")
+		if normalizedType == "ssh" && port == 0 {
+			port = 22
+			proxy["port"] = port
+		}
 		if name == "" || typ == "" || server == "" || port == 0 {
 			continue
 		}
@@ -49,6 +53,12 @@ func normalizeProtocolType(typ string) string {
 	switch strings.ToLower(strings.TrimSpace(typ)) {
 	case "ss":
 		return "shadowsocks"
+	case "shadowsocksr":
+		return "ssr"
+	case "hy2":
+		return "hysteria2"
+	case "wg":
+		return "wireguard"
 	case "socks5", "socks4", "socks4a":
 		return "socks"
 	default:
@@ -64,7 +74,7 @@ func normalizeClashProxy(proxy map[string]any, typ string) (map[string]any, stri
 	}
 	unsupportedReason := ""
 	if !isSupportedClashProtocol(typ) {
-		unsupportedReason = fmt.Sprintf("Clash protocol %s is not supported by AckWrap", typ)
+		unsupportedReason = UnsupportedNodeProtocolReason(typ)
 	}
 
 	copyClashField(result, proxy, "uuid")
@@ -110,7 +120,9 @@ func normalizeClashProxy(proxy map[string]any, typ string) (map[string]any, stri
 
 	copyClashField(result, proxy, "password")
 	copyClashField(result, proxy, "flow")
-	copyClashField(result, proxy, "username")
+	if typ != "ssh" {
+		copyClashField(result, proxy, "username")
+	}
 	if typ == "shadowsocks" {
 		copyClashField(result, proxy, "plugin")
 	}
@@ -119,6 +131,18 @@ func normalizeClashProxy(proxy map[string]any, typ string) (map[string]any, stri
 	}
 	if typ == "snell" {
 		copyClashField(result, proxy, "psk")
+	}
+	if typ == "ssh" {
+		copyFirstClashField(result, proxy, "user", "user", "username")
+		copyFirstClashListField(result, proxy, "private_key", "private-key", "private_key")
+		copyFirstClashField(result, proxy, "private_key_path", "private-key-path", "private_key_path")
+		copyFirstClashField(result, proxy, "private_key_passphrase", "private-key-passphrase", "private_key_passphrase")
+		copyFirstClashListField(result, proxy, "host_key", "host-key", "host_key")
+		copyFirstClashListField(result, proxy, "host_key_algorithms", "host-key-algorithms", "host_key_algorithms")
+		copyFirstClashField(result, proxy, "client_version", "client-version", "client_version")
+		copyFirstClashListField(result, proxy, "cipher", "cipher")
+		copyFirstClashListField(result, proxy, "mac", "mac")
+		copyFirstClashListField(result, proxy, "kex_algorithm", "kex-algorithm", "kex_algorithm")
 	}
 
 	if value, ok := proxy["tfo"]; ok {
@@ -592,6 +616,24 @@ func hasShadowsocksTLSInput(proxy map[string]any) bool {
 func copyClashField(dst, src map[string]any, key string) {
 	if v, ok := src[key]; ok && v != nil {
 		dst[key] = v
+	}
+}
+
+func copyFirstClashField(dst, src map[string]any, target string, keys ...string) {
+	for _, key := range keys {
+		if value, ok := src[key]; ok && value != nil {
+			dst[target] = value
+			return
+		}
+	}
+}
+
+func copyFirstClashListField(dst, src map[string]any, target string, keys ...string) {
+	for _, key := range keys {
+		if values := stringList(src[key]); len(values) > 0 {
+			dst[target] = values
+			return
+		}
 	}
 }
 

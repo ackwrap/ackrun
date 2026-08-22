@@ -19,7 +19,7 @@ var shareableProxySchemes = map[string]bool{
 	"naive+http": true, "naive+https": true, "snell": true, "socks": true,
 	"socks4": true, "socks4a": true, "socks5": true, "ss": true,
 	"ssr": true, "trojan": true, "tuic": true, "vless": true,
-	"vmess": true, "wg": true, "wireguard": true,
+	"vmess": true, "wg": true, "wireguard": true, "ssh": true,
 }
 
 func EncodeProxyURI(node model.Node) (string, error) {
@@ -60,6 +60,8 @@ func EncodeProxyURI(node model.Node) (string, error) {
 		return encodeMieruURI(node, options)
 	case "snell":
 		return encodeSnellURI(node, options)
+	case "ssh":
+		return encodeSSHURI(node, options)
 	default:
 		return "", fmt.Errorf("%s 节点缺少可复用的原始分享链接", node.Type)
 	}
@@ -382,6 +384,25 @@ func encodeSnellURI(node model.Node, options map[string]any) (string, error) {
 	return buildUserShareURI("snell", psk, "", server, port, query, node.Name), nil
 }
 
+func encodeSSHURI(node model.Node, options map[string]any) (string, error) {
+	server, port, err := shareServerAddress(node, options)
+	if err != nil {
+		return "", err
+	}
+	query := url.Values{}
+	setStringQuery(query, "private_key_path", options, "private_key_path")
+	setStringQuery(query, "private_key_passphrase", options, "private_key_passphrase")
+	setStringQuery(query, "client_version", options, "client_version")
+	addRepeatedQueryValues(query, "private_key", options["private_key"])
+	addRepeatedQueryValues(query, "host_key", options["host_key"])
+	addRepeatedQueryValues(query, "host_key_algorithms", options["host_key_algorithms"])
+	addRepeatedQueryValues(query, "cipher", options["cipher"])
+	addRepeatedQueryValues(query, "mac", options["mac"])
+	addRepeatedQueryValues(query, "kex_algorithm", options["kex_algorithm"])
+	user := firstNonEmpty(getString(options, "user"), getString(options, "username"))
+	return buildUserShareURI("ssh", user, getString(options, "password"), server, port, query, node.Name), nil
+}
+
 func shareServerCredentials(node model.Node, options map[string]any) (string, int, string, error) {
 	server, port, err := shareServerAddress(node, options)
 	if err != nil {
@@ -538,6 +559,12 @@ func setListQuery(query url.Values, queryKey string, value any) {
 	values := scalarValues(value)
 	if len(values) > 0 {
 		query.Set(queryKey, strings.Join(values, ","))
+	}
+}
+
+func addRepeatedQueryValues(query url.Values, queryKey string, value any) {
+	for _, item := range scalarValues(value) {
+		query.Add(queryKey, item)
 	}
 }
 

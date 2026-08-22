@@ -93,6 +93,54 @@ func TestEncodeProxyURIReusesOriginalURI(t *testing.T) {
 	}
 }
 
+func TestEncodeProxyURIReusesOriginalSSHURI(t *testing.T) {
+	original := "ssh://deploy:redacted@ssh.example.com:22#SSH"
+	shareURI, err := EncodeProxyURI(model.Node{Type: "ssh", Raw: original})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shareURI != original {
+		t.Fatal("share response did not preserve the original SSH URI")
+	}
+}
+
+func TestEncodeProxyURIGeneratesSSHURI(t *testing.T) {
+	options := map[string]any{
+		"type": "ssh", "server": "ssh.example.com", "server_port": 22,
+		"user": "deploy", "password": "redacted", "private_key": []any{"test-private-key"},
+		"private_key_path": "/keys/id_ed25519", "private_key_passphrase": "redacted-passphrase",
+		"host_key": []any{"ssh-ed25519 test-host-key"}, "host_key_algorithms": []any{"ssh-ed25519"},
+		"client_version": "SSH-2.0-Test", "cipher": []any{"aes128-gcm@openssh.com"},
+		"mac": []any{"hmac-sha2-256-etm@openssh.com"}, "kex_algorithm": []any{"curve25519-sha256"},
+	}
+	rawJSON, err := json.Marshal(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shareURI, err := EncodeProxyURI(model.Node{
+		Name: "SSH JSON", Type: "ssh", Server: "ssh.example.com", ServerPort: 22, RawJSON: string(rawJSON),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := ParseProxyURI(shareURI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var normalized map[string]any
+	if err := json.Unmarshal([]byte(parsed.RawJSON), &normalized); err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Name != "SSH JSON" || normalized["user"] != "deploy" || normalized["private_key_path"] != "/keys/id_ed25519" {
+		t.Fatalf("generated SSH URI lost scalar fields: %+v", normalized)
+	}
+	for _, key := range []string{"private_key", "host_key", "host_key_algorithms", "cipher", "mac", "kex_algorithm"} {
+		if values, ok := normalized[key].([]any); !ok || len(values) != 1 {
+			t.Fatalf("generated SSH URI lost %s: %+v", key, normalized[key])
+		}
+	}
+}
+
 func TestEncodeProxyURIRejectsUnsupportedJSONProtocol(t *testing.T) {
 	_, err := EncodeProxyURI(model.Node{Type: "unknown", RawJSON: `{"type":"unknown"}`})
 	if err == nil {

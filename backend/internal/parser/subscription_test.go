@@ -51,6 +51,177 @@ func TestParseSubscriptionNodesSingboxJSON(t *testing.T) {
 	}
 }
 
+func TestParseSubscriptionNodesSSH(t *testing.T) {
+	t.Run("sing-box JSON", func(t *testing.T) {
+		body := []byte(`{
+  "outbounds": [{
+    "type": "ssh",
+    "tag": "SSH-01",
+    "server": "ssh.example.com",
+    "user": "deploy",
+    "private_key_path": "/keys/id_ed25519",
+    "host_key_algorithms": ["ssh-ed25519"],
+    "cipher": ["aes128-gcm@openssh.com"],
+    "mac": ["hmac-sha2-256-etm@openssh.com"],
+    "kex_algorithm": ["curve25519-sha256"]
+  }]
+}`)
+		nodes, err := ParseSubscriptionNodes(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(nodes) != 1 || nodes[0].Type != "ssh" || nodes[0].ServerPort != 22 || nodes[0].UnsupportedReason != "" {
+			t.Fatalf("unexpected SSH node: %+v", nodes)
+		}
+		var config map[string]any
+		if err := json.Unmarshal([]byte(nodes[0].RawJSON), &config); err != nil {
+			t.Fatal(err)
+		}
+		if config["user"] != "deploy" || config["private_key_path"] != "/keys/id_ed25519" {
+			t.Fatalf("SSH credentials were not preserved: %+v", config)
+		}
+		if values, ok := config["cipher"].([]any); !ok || len(values) != 1 {
+			t.Fatalf("SSH cipher list was not preserved: %+v", config["cipher"])
+		}
+	})
+
+	t.Run("Clash YAML", func(t *testing.T) {
+		body := []byte(`proxies:
+  - name: SSH-02
+    type: ssh
+    server: ssh.example.com
+    username: deploy
+    password: redacted
+    private-key: test-private-key
+    private-key-path: /keys/id_ed25519
+    host-key: "ssh-ed25519 test-key"
+    host-key-algorithms: "ssh-ed25519"
+    cipher: "aes128-gcm@openssh.com"
+    mac: "hmac-sha2-256-etm@openssh.com"
+    kex-algorithm: "curve25519-sha256"
+`)
+		nodes, err := ParseSubscriptionNodes(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(nodes) != 1 || nodes[0].UnsupportedReason != "" {
+			t.Fatalf("unexpected SSH node: %+v", nodes)
+		}
+		if nodes[0].ServerPort != 22 {
+			t.Fatalf("SSH default port = %d, want 22", nodes[0].ServerPort)
+		}
+		var config map[string]any
+		if err := json.Unmarshal([]byte(nodes[0].RawJSON), &config); err != nil {
+			t.Fatal(err)
+		}
+		if config["user"] != "deploy" || config["private_key_path"] != "/keys/id_ed25519" {
+			t.Fatalf("Clash SSH fields were not normalized: %+v", config)
+		}
+		if _, exists := config["username"]; exists {
+			t.Fatalf("legacy SSH username leaked into sing-box config: %+v", config)
+		}
+		for _, key := range []string{"private_key", "host_key", "host_key_algorithms", "cipher", "mac", "kex_algorithm"} {
+			if values, ok := config[key].([]any); !ok || len(values) != 1 {
+				t.Fatalf("SSH %s was not normalized to a list: %+v", key, config[key])
+			}
+		}
+	})
+}
+
+func TestParseSSHURI(t *testing.T) {
+	node, err := ParseProxyURI("SSH://deploy:redacted@ssh.example.com?private_key=test-private-key&private_key_path=%2Fkeys%2Fid_ed25519&host_key=ssh-ed25519%20test-key&host_key_algorithms=ssh-ed25519&cipher=aes128-gcm%40openssh.com&cipher=chacha20-poly1305%40openssh.com&mac=hmac-sha2-256-etm%40openssh.com&kex_algorithm=curve25519-sha256#SSH-URI")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node.Type != "ssh" || node.Name != "SSH-URI" || node.ServerPort != 22 {
+		t.Fatalf("unexpected SSH URI node: %+v", node)
+	}
+	var config map[string]any
+	if err := json.Unmarshal([]byte(node.RawJSON), &config); err != nil {
+		t.Fatal(err)
+	}
+	if config["user"] != "deploy" || config["password"] != "redacted" || config["private_key_path"] != "/keys/id_ed25519" {
+		t.Fatalf("SSH URI credentials were not normalized: %+v", config)
+	}
+	if values, ok := config["cipher"].([]any); !ok || len(values) != 2 {
+		t.Fatalf("SSH URI cipher list was not preserved: %+v", config["cipher"])
+	}
+	for _, key := range []string{"private_key", "host_key", "host_key_algorithms", "mac", "kex_algorithm"} {
+		if values, ok := config[key].([]any); !ok || len(values) != 1 {
+			t.Fatalf("SSH URI %s was not normalized to a list: %+v", key, config[key])
+		}
+	}
+	for _, raw := range []string{"ssh://deploy@ssh.example.com:", "ssh://deploy@ssh.example.com:0", "ssh://deploy@ssh.example.com:65536", "ssh://deploy@ssh.example.com:invalid"} {
+		if _, err := ParseProxyURI(raw); err == nil {
+			t.Fatalf("expected invalid SSH port error for %q", raw)
+		}
+	}
+}
+
+func TestSubscriptionProtocolSupportReasons(t *testing.T) {
+	for _, protocol := range []string{
+		"anytls", "http", "hysteria", "hysteria2", "naive", "shadowsocks", "snell", "socks", "ssh", "ssr",
+		"trojan", "tuic", "vless", "vmess", "wireguard", "ss", "shadowsocksr", "hy2", "wg", "socks5",
+	} {
+		if !IsSupportedNodeProtocol(protocol) {
+			t.Fatalf("expected %s to be supported", protocol)
+		}
+	}
+	for _, protocol := range []string{"shadowtls", "tor", "bridge", "openvpn-client", "mieru", "unknown"} {
+		if IsSupportedNodeProtocol(protocol) || UnsupportedNodeProtocolReason(protocol) == "" {
+			t.Fatalf("expected %s to have an unsupported reason", protocol)
+		}
+	}
+
+	body := []byte(`proxies:
+  - name: ShadowTLS
+    type: shadowtls
+    server: shadow.example.com
+    port: 443
+    version: 3
+    password: redacted
+`)
+	nodes, err := ParseSubscriptionNodes(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 1 || !strings.Contains(nodes[0].UnsupportedReason, "chained node model") {
+		t.Fatalf("unexpected ShadowTLS support result: %+v", nodes)
+	}
+	singboxNodes, err := ParseSubscriptionNodes([]byte(`{"outbounds":[{"type":"shadowtls","tag":"ShadowTLS","server":"shadow.example.com","server_port":443,"version":3,"password":"redacted","tls":{"enabled":true}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(singboxNodes) != 1 || !strings.Contains(singboxNodes[0].UnsupportedReason, "chained node model") {
+		t.Fatalf("unexpected sing-box ShadowTLS support result: %+v", singboxNodes)
+	}
+	for _, raw := range []string{
+		"shadowtls://shadow.example.com:443",
+		"tor://tor.example.com:443",
+		"bridge://bridge.example.com:443",
+		"openvpn-client://vpn.example.com:1194",
+		"unknown://unknown.example.com:443",
+	} {
+		node, err := ParseProxyURI(raw)
+		if err != nil {
+			t.Fatalf("parse unsupported URI %q: %v", raw, err)
+		}
+		if node.UnsupportedReason == "" {
+			t.Fatalf("unsupported URI %q has no reason: %+v", raw, node)
+		}
+	}
+}
+
+func TestParseSingboxShadowsocksRAlias(t *testing.T) {
+	nodes, err := ParseSubscriptionNodes([]byte(`{"outbounds":[{"type":"shadowsocksr","tag":"SSR","server":"ssr.example.com","server_port":443,"method":"aes-128-cfb","password":"redacted","protocol":"auth_sha1_v4","obfs":"plain"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 1 || nodes[0].Type != "ssr" || nodes[0].UnsupportedReason != "" {
+		t.Fatalf("unexpected ShadowsocksR node: %+v", nodes)
+	}
+}
+
 func TestParseSubscriptionNodesBase64URIList(t *testing.T) {
 	plain := "ss://aes-128-gcm:pass@example.com:8388#SS-01\ntrojan://password@trojan.example.com:443#Trojan-01\n"
 	body := []byte(base64.StdEncoding.EncodeToString([]byte(plain)))

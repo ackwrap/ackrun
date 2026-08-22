@@ -250,10 +250,5 @@ func clashSupportsNetworkField(protocol string) bool {
 }
 
 func isSupportedClashProtocol(protocol string) bool {
-	switch protocol {
-	case "shadowsocks", "ssr", "vmess", "vless", "trojan", "hysteria", "hysteria2", "tuic", "wireguard", "socks", "http", "anytls", "snell", "naive", "mieru":
-		return true
-	default:
-		return false
-	}
+	return IsSupportedNodeProtocol(protocol)
 }

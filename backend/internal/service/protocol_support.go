@@ -1,9 +1,7 @@
 package service
 
-var unsupportedNodeTypes = map[string]bool{
-	"mieru": true,
-}
+import "github.com/ackwrap/ackrun/internal/parser"
 
 func isUnsupportedNodeType(nodeType string) bool {
-	return unsupportedNodeTypes[nodeType]
+	return !parser.IsSupportedNodeProtocol(nodeType)
 }

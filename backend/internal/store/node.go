@@ -526,8 +526,9 @@ func StableNodeUID(node model.ParsedNode) string {
 }
 
 func nodeIdentityFields(cfg map[string]any, node model.ParsedNode) map[string]any {
+	nodeType := firstNodeString(node.Type, nodeString(cfg, "type"))
 	identity := map[string]any{
-		"type":   firstNodeString(node.Type, nodeString(cfg, "type")),
+		"type":   nodeType,
 		"server": firstNodeString(node.Server, nodeString(cfg, "server")),
 		"port":   firstNodeInt(node.ServerPort, nodeInt(cfg, "server_port"), nodeInt(cfg, "port")),
 	}
@@ -547,6 +548,22 @@ func nodeIdentityFields(cfg map[string]any, node model.ParsedNode) map[string]an
 	copyNodeIdentityString(identity, cfg, "preshared-key")
 	copyNodeIdentityString(identity, cfg, "local-address", "address")
 	copyNodeIdentityInt(identity, cfg, "mtu")
+	if nodeType == "ssh" {
+		sshUser := firstNodeString(nodeString(cfg, "username"), nodeString(cfg, "user"))
+		if sshUser == "" {
+			sshUser = "root"
+		}
+		identity["username"] = sshUser
+		copyNodeIdentityValue(identity, cfg, "private_key", "private_key", "private-key")
+		copyNodeIdentityString(identity, cfg, "private_key_path", "private-key-path")
+		copyNodeIdentityString(identity, cfg, "private_key_passphrase", "private-key-passphrase")
+		copyNodeIdentityValue(identity, cfg, "host_key", "host-key")
+		copyNodeIdentityValue(identity, cfg, "host_key_algorithms", "host-key-algorithms")
+		copyNodeIdentityString(identity, cfg, "client_version", "client-version")
+		copyNodeIdentityValue(identity, cfg, "ssh_cipher", "cipher")
+		copyNodeIdentityValue(identity, cfg, "mac", "mac")
+		copyNodeIdentityValue(identity, cfg, "kex_algorithm", "kex-algorithm")
+	}
 
 	if tls := nodeTLSIdentity(cfg); len(tls) > 0 {
 		identity["tls"] = tls
@@ -654,6 +671,15 @@ func copyNodeIdentityInt(dst map[string]any, src map[string]any, keys ...string)
 	for _, key := range keys {
 		if value := nodeInt(src, key); value != 0 {
 			dst[keys[0]] = value
+			return
+		}
+	}
+}
+
+func copyNodeIdentityValue(dst map[string]any, src map[string]any, target string, keys ...string) {
+	for _, key := range keys {
+		if value, ok := src[key]; ok && value != nil {
+			dst[target] = value
 			return
 		}
 	}

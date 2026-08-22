@@ -480,7 +480,7 @@ func (s *ConfigGeneratorService) generateLockedTo(req *model.ConfigGenerateReque
 	return &model.ConfigGenerateResponse{
 		Config:   redactConfigAccessTokens(config).(map[string]interface{}),
 		Valid:    valid,
-		Error:    redactAccessToken(s.redactConfigSecrets(errMsg)),
+		Error:    redactAccessToken(s.redactConfigSecrets(redactConfigValuesFromMessage(errMsg, config))),
 		FilePath: tmpPath,
 	}, nil
 }
@@ -502,11 +502,9 @@ func redactConfigAccessTokens(value interface{}) interface{} {
 	case map[string]interface{}:
 		redacted := make(map[string]interface{}, len(typed))
 		for key, item := range typed {
-			if strings.EqualFold(key, "password") || strings.EqualFold(key, "secret") {
-				if password, ok := item.(string); ok && password != "" {
-					redacted[key] = "[REDACTED]"
-					continue
-				}
+			if isSensitiveConfigField(key) && configSecretPresent(item) {
+				redacted[key] = "[REDACTED]"
+				continue
 			}
 			redacted[key] = redactConfigAccessTokens(item)
 		}
@@ -526,7 +524,7 @@ func redactConfigAccessTokens(value interface{}) interface{} {
 	case map[string]string:
 		redacted := make(map[string]string, len(typed))
 		for key, item := range typed {
-			if (strings.EqualFold(key, "password") || strings.EqualFold(key, "secret")) && item != "" {
+			if isSensitiveConfigField(key) && item != "" {
 				redacted[key] = "[REDACTED]"
 			} else {
 				redacted[key] = redactAccessToken(item)
@@ -544,6 +542,83 @@ func redactConfigAccessTokens(value interface{}) interface{} {
 	default:
 		return value
 	}
+}
+
+func isSensitiveConfigField(key string) bool {
+	normalized := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(key), "-", "_"))
+	switch normalized {
+	case "password", "secret", "private_key", "private_key_path", "private_key_passphrase", "client_key", "client_key_path", "pre_shared_key", "preshared_key", "psk":
+		return true
+	default:
+		return false
+	}
+}
+
+func configSecretPresent(value interface{}) bool {
+	switch typed := value.(type) {
+	case nil:
+		return false
+	case string:
+		return typed != ""
+	case []string:
+		return len(typed) > 0
+	case []interface{}:
+		return len(typed) > 0
+	default:
+		return true
+	}
+}
+
+func redactConfigValuesFromMessage(message string, value interface{}) string {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		for key, item := range typed {
+			if isSensitiveConfigField(key) {
+				message = redactConfigSecretValue(message, item)
+				continue
+			}
+			message = redactConfigValuesFromMessage(message, item)
+		}
+	case []interface{}:
+		for _, item := range typed {
+			message = redactConfigValuesFromMessage(message, item)
+		}
+	case []map[string]interface{}:
+		for _, item := range typed {
+			message = redactConfigValuesFromMessage(message, item)
+		}
+	}
+	return message
+}
+
+func redactConfigSecretValue(message string, value interface{}) string {
+	switch typed := value.(type) {
+	case string:
+		if typed != "" {
+			return strings.ReplaceAll(message, typed, "[REDACTED]")
+		}
+	case []string:
+		for _, item := range typed {
+			message = redactConfigSecretValue(message, item)
+		}
+	case []interface{}:
+		for _, item := range typed {
+			message = redactConfigSecretValue(message, item)
+		}
+	}
+	return message
+}
+
+func redactConfigFileValuesFromMessage(message string, configPath string) string {
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		return message
+	}
+	var config map[string]interface{}
+	if err := json.Unmarshal(content, &config); err != nil {
+		return message
+	}
+	return redactConfigValuesFromMessage(message, config)
 }
 
 func (s *ConfigGeneratorService) redactConfigSecrets(message string) string {
@@ -1366,7 +1441,9 @@ func normalizeLegacyOutboundFields(nodeData map[string]interface{}, outboundType
 				nodeData["method"] = cipher
 			}
 		}
-		delete(nodeData, "cipher")
+		if outboundType != "ssh" {
+			delete(nodeData, "cipher")
+		}
 	}
 	switch outboundType {
 	case "hysteria":
@@ -3016,6 +3093,7 @@ func (s *ConfigGeneratorService) applyConfigFileLocked(fileName string) error {
 		return fmt.Errorf("暂存配置失败: %w", err)
 	}
 	if valid, validationError := s.validateConfig(stagedPath); !valid {
+		validationError = redactConfigFileValuesFromMessage(validationError, stagedPath)
 		return fmt.Errorf("应用配置前验证失败: %s", redactAccessToken(s.redactConfigSecrets(validationError)))
 	}
 
