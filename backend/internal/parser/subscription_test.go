@@ -51,6 +51,57 @@ func TestParseSubscriptionNodesSingboxJSON(t *testing.T) {
 	}
 }
 
+func TestParseSubscriptionNodesSingboxWireGuardEndpoint(t *testing.T) {
+	body := []byte(`{
+  "outbounds": [{"type":"direct","tag":"direct"}],
+  "endpoints": [{
+    "type": "wireguard",
+    "tag": "WG-Endpoint",
+    "system": true,
+    "name": "wg0",
+    "address": ["10.0.0.2/32"],
+    "private_key": "test-private-key",
+    "peers": [
+      {"address":"wg.example.com","port":51820,"public_key":"peer-key-a","allowed_ips":["0.0.0.0/0"]},
+      {"public_key":"peer-key-b","allowed_ips":["10.0.0.0/8"]}
+    ]
+  }]
+}`)
+	nodes, err := ParseSubscriptionNodes(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("WireGuard endpoint count = %d, want 1", len(nodes))
+	}
+	if nodes[0].Name != "WG-Endpoint" || nodes[0].Type != "wireguard" || nodes[0].Server != "wg.example.com" || nodes[0].ServerPort != 51820 || nodes[0].UnsupportedReason != "" {
+		t.Fatal("unexpected WireGuard endpoint metadata")
+	}
+	var config map[string]any
+	if err := json.Unmarshal([]byte(nodes[0].RawJSON), &config); err != nil {
+		t.Fatal(err)
+	}
+	if config["name"] != "wg0" || config["system"] != true {
+		t.Fatalf("WireGuard endpoint options were not preserved")
+	}
+	if _, exists := config["server"]; exists {
+		t.Fatal("WireGuard endpoint was flattened into an outbound")
+	}
+	if peers, ok := config["peers"].([]any); !ok || len(peers) != 2 {
+		t.Fatalf("WireGuard endpoint peer count = %d, want 2", len(peers))
+	}
+}
+
+func TestParseSubscriptionNodesReportsInvalidSingboxEndpoint(t *testing.T) {
+	nodes, err := ParseSubscriptionNodes([]byte(`{"endpoints":[{"type":"wireguard","tag":"Broken WG","address":["10.0.0.2/32"],"private_key":"test-private-key","peers":[{"public_key":"test-public-key"}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 1 || nodes[0].UnsupportedReason == "" {
+		t.Fatal("invalid WireGuard endpoint did not report an unsupported reason")
+	}
+}
+
 func TestParseSubscriptionNodesSSH(t *testing.T) {
 	t.Run("sing-box JSON", func(t *testing.T) {
 		body := []byte(`{

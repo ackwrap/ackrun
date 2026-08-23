@@ -984,6 +984,200 @@ func TestGenerateNodeOutboundRejectsNonZeroVMessAlterID(t *testing.T) {
 	}
 }
 
+func TestGenerateWireGuardEndpointMigratesLegacyNode(t *testing.T) {
+	service := &ConfigGeneratorService{}
+	endpoint, err := service.generateWireGuardEndpoint(&model.Node{
+		Name:    "WG Legacy",
+		Type:    "wireguard",
+		RawJSON: `{"type":"wireguard","name":"WG Legacy","server":"wg.example.com","server_port":51820,"address":["10.0.0.2/32"],"private_key":"test-private-key","public_key":"test-public-key","pre_shared_key":"test-psk","reserved":[1,2,3],"mtu":1280,"system_interface":true,"interface_name":"wg-legacy0"}`,
+	}, "wg-legacy", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if endpoint["type"] != "wireguard" || endpoint["tag"] != "wg-legacy" {
+		t.Fatal("legacy WireGuard node was not converted to an endpoint")
+	}
+	if endpoint["system"] != true || endpoint["name"] != "wg-legacy0" {
+		t.Fatal("legacy WireGuard interface options were not migrated")
+	}
+	for _, field := range []string{"server", "server_port", "public_key", "system_interface", "interface_name"} {
+		if _, exists := endpoint[field]; exists {
+			t.Fatalf("legacy field %s leaked into WireGuard endpoint", field)
+		}
+	}
+	peers, ok := endpoint["peers"].([]interface{})
+	if !ok || len(peers) != 1 {
+		t.Fatalf("WireGuard peer count = %d, want 1", len(peers))
+	}
+	peer, ok := peers[0].(map[string]interface{})
+	if !ok || peer["address"] != "wg.example.com" || peer["port"] != 51820 || peer["public_key"] != "test-public-key" {
+		t.Fatal("legacy WireGuard peer fields were not migrated")
+	}
+}
+
+func TestGenerateWireGuardEndpointRejectsInvalidPeers(t *testing.T) {
+	service := &ConfigGeneratorService{}
+	for _, testCase := range []struct {
+		name  string
+		peers string
+	}{
+		{name: "no dialable peer", peers: `[{"public_key":"peer-a"}]`},
+		{name: "missing port", peers: `[{"address":"wg.example.com","public_key":"peer-a"}]`},
+		{name: "port overflow", peers: `[{"address":"wg.example.com","port":65536,"public_key":"peer-a"}]`},
+		{name: "missing public key", peers: `[{"address":"wg.example.com","port":51820}]`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := service.generateWireGuardEndpoint(&model.Node{
+				Name:    "WG Invalid",
+				Type:    "wireguard",
+				RawJSON: `{"type":"wireguard","address":["10.0.0.2/32"],"private_key":"test-private-key","peers":` + testCase.peers + `}`,
+			}, "wg-invalid", nil)
+			if err == nil {
+				t.Fatal("invalid WireGuard peer was accepted")
+			}
+		})
+	}
+}
+
+func TestGenerateWireGuardEndpointPreservesNativePeers(t *testing.T) {
+	service := &ConfigGeneratorService{}
+	endpoint, err := service.generateWireGuardEndpoint(&model.Node{
+		Name:    "WG Native",
+		Type:    "wireguard",
+		RawJSON: `{"type":"wireguard","tag":"upstream-tag","system":true,"name":"wg0","address":["10.0.0.2/32"],"private_key":"test-private-key","listen_port":51821,"peers":[{"address":"wg-a.example.com","port":51820,"public_key":"peer-a","allowed_ips":["0.0.0.0/1"]},{"address":"wg-b.example.com","port":51820,"public_key":"peer-b","allowed_ips":["128.0.0.0/1"]}]}`,
+	}, "wg-native", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if endpoint["tag"] != "wg-native" || endpoint["name"] != "wg0" || endpoint["system"] != true || endpoint["listen_port"] != float64(51821) {
+		t.Fatal("native WireGuard endpoint options were not preserved")
+	}
+	peers, ok := endpoint["peers"].([]interface{})
+	if !ok || len(peers) != 2 {
+		t.Fatalf("WireGuard peer count = %d, want 2", len(peers))
+	}
+}
+
+func TestGenerateOutboundsPlacesWireGuardInEndpoints(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	subscription, err := db.CreateSubscription(&model.SubscriptionRequest{Name: "wireguard-endpoint", URL: "https://example.com/subscription"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReplaceSubscriptionNodes(subscription.ID, []model.ParsedNode{{
+		Name: "WG Endpoint", Type: "wireguard", Server: "wg.example.com", ServerPort: 51820,
+		RawJSON: `{"type":"wireguard","tag":"WG Endpoint","address":["10.0.0.2/32"],"private_key":"test-private-key","peers":[{"address":"wg.example.com","port":51820,"public_key":"test-public-key","allowed_ips":["0.0.0.0/0","::/0"]}]}`,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	outbounds, endpoints, err := NewConfigGeneratorService(db, nil).generateOutbounds()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(endpoints) != 1 {
+		t.Fatalf("endpoint count = %d, want 1", len(endpoints))
+	}
+	for _, value := range outbounds {
+		outbound, ok := value.(map[string]interface{})
+		if ok && outbound["type"] == "wireguard" {
+			t.Fatal("WireGuard endpoint leaked into outbounds")
+		}
+	}
+}
+
+func TestGenerateOutboundsRejectsInvalidWireGuardEndpoint(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	subscription, err := db.CreateSubscription(&model.SubscriptionRequest{Name: "invalid-wireguard", URL: "https://example.com/subscription"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReplaceSubscriptionNodes(subscription.ID, []model.ParsedNode{{
+		Name: "Broken WG", Type: "wireguard", Server: "wg.example.com", ServerPort: 51820,
+		RawJSON: `{"type":"wireguard","server":"wg.example.com","server_port":51820,"private_key":"test-private-key","public_key":"test-public-key"}`,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = NewConfigGeneratorService(db, nil).generateOutbounds()
+	if err == nil || !strings.Contains(err.Error(), "Broken WG") || !strings.Contains(err.Error(), "address") {
+		t.Fatal("invalid WireGuard endpoint did not return an actionable generation error")
+	}
+}
+
+func TestGeneratedWireGuardEndpointPassesAvailableSingBoxCheck(t *testing.T) {
+	binaryPath := strings.TrimSpace(os.Getenv("ACKWRAP_SINGBOX_114_BIN"))
+	explicitBinary := binaryPath != ""
+	if !explicitBinary {
+		if runtime.GOOS != "windows" {
+			t.Skip("set ACKWRAP_SINGBOX_114_BIN to run the sing-box 1.14 integration check")
+		}
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			t.Skipf("cannot locate installed sing-box: %v", err)
+		}
+		binaryPath = filepath.Join(homeDir, "ackwrap", "bin", "sing-box.exe")
+	}
+	if _, err := os.Stat(binaryPath); err != nil {
+		if explicitBinary {
+			t.Fatalf("ACKWRAP_SINGBOX_114_BIN is unavailable: %v", err)
+		}
+		t.Skipf("installed sing-box verification binary unavailable: %v", err)
+	}
+	version, err := exec.Command(binaryPath, "version").CombinedOutput()
+	if err != nil {
+		t.Fatalf("read sing-box verification version: %v", err)
+	}
+	if !strings.Contains(string(version), "sing-box version 1.14.") {
+		t.Fatal("WireGuard integration check requires sing-box 1.14.x")
+	}
+	if !strings.Contains(string(version), "with_wireguard") {
+		t.Fatal("sing-box 1.14 verification binary does not include with_wireguard")
+	}
+
+	dataDir := t.TempDir()
+	db, err := store.Open(filepath.Join(dataDir, "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	subscription, err := db.CreateSubscription(&model.SubscriptionRequest{Name: "wireguard-check", URL: "https://example.com/subscription"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReplaceSubscriptionNodes(subscription.ID, []model.ParsedNode{{
+		Name: "WG Check", Type: "wireguard", Server: "192.0.2.1", ServerPort: 51820,
+		RawJSON: `{"type":"wireguard","address":["10.0.0.2/32"],"private_key":"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=","peers":[{"address":"192.0.2.1","port":51820,"public_key":"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=","allowed_ips":["0.0.0.0/1"]},{"public_key":"AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=","allowed_ips":["128.0.0.0/1"]}]}`,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	nodes, err := db.ListEnabledNodes()
+	if err != nil || len(nodes) != 1 {
+		t.Fatalf("enabled WireGuard node count = %d, error = %v", len(nodes), err)
+	}
+	if err := db.CreateProxyCollection(&model.ProxyCollection{
+		Name: "proxy", Type: "selector", SourceType: "manual", NodeUIDs: fmt.Sprintf("[%q]", nodes[0].UID), ReferencedGroupIDs: "[]", RouteRuleIDs: "[]", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := NewConfigGeneratorService(db, &paths.Paths{DataDir: dataDir, BinaryPath: binaryPath}).generateLockedTo(&model.ConfigGenerateRequest{
+		DefaultOutbound: "proxy", InboundListen: "127.0.0.1", InboundPort: model.DefaultMixedInboundPort,
+		TUNIPv4Address: defaultTUNIPv4Address, TUNIPv6Address: defaultTUNIPv6Address, LogLevel: "warn",
+	}, filepath.Join(dataDir, "wireguard.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Valid {
+		t.Fatalf("sing-box rejected generated WireGuard endpoint: %s", result.Error)
+	}
+}
+
 func TestGenerateOutboundsDoesNotApplyNodeListPageLimit(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {

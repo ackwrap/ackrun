@@ -733,6 +733,45 @@ func TestStableNodeUIDIncludesSSHIdentity(t *testing.T) {
 	}
 }
 
+func TestStableNodeUIDIncludesWireGuardEndpointIdentity(t *testing.T) {
+	legacy := model.ParsedNode{
+		Name:       "WG Legacy",
+		Type:       "wireguard",
+		Server:     "wg.example.com",
+		ServerPort: 51820,
+		RawJSON:    `{"type":"wireguard","server":"wg.example.com","server_port":51820,"address":["10.0.0.2/32"],"private_key":"private-a","public_key":"public-a"}`,
+	}
+	legacyChangedKeys := legacy
+	legacyChangedKeys.RawJSON = `{"type":"wireguard","server":"wg.example.com","server_port":51820,"address":["10.0.0.2/32"],"private_key":"private-b","public_key":"public-a"}`
+	if StableNodeUID(legacy) != StableNodeUID(legacyChangedKeys) {
+		t.Fatal("legacy WireGuard identity changed from the pre-endpoint UID rules")
+	}
+
+	base := model.ParsedNode{
+		Name:       "WG-01",
+		Type:       "wireguard",
+		Server:     "wg.example.com",
+		ServerPort: 51820,
+		RawJSON:    `{"type":"wireguard","tag":"WG-01","address":["10.0.0.2/32"],"private_key":"private-a","peers":[{"address":"wg.example.com","port":51820,"public_key":"public-a","allowed_ips":["0.0.0.0/0"]}]}`,
+	}
+	rename := base
+	rename.Name = "WG-Renamed"
+	rename.RawJSON = `{"type":"wireguard","tag":"WG-Renamed","address":["10.0.0.2/32"],"private_key":"private-a","peers":[{"address":"wg.example.com","port":51820,"public_key":"public-a","allowed_ips":["0.0.0.0/0"]}]}`
+	if StableNodeUID(base) != StableNodeUID(rename) {
+		t.Fatal("WireGuard endpoint rename changed stable UID")
+	}
+	changedPrivateKey := base
+	changedPrivateKey.RawJSON = `{"type":"wireguard","tag":"WG-01","address":["10.0.0.2/32"],"private_key":"private-b","peers":[{"address":"wg.example.com","port":51820,"public_key":"public-a","allowed_ips":["0.0.0.0/0"]}]}`
+	if StableNodeUID(base) == StableNodeUID(changedPrivateKey) {
+		t.Fatal("WireGuard private key change did not change stable UID")
+	}
+	changedPeer := base
+	changedPeer.RawJSON = `{"type":"wireguard","tag":"WG-01","address":["10.0.0.2/32"],"private_key":"private-a","peers":[{"address":"wg.example.com","port":51820,"public_key":"public-b","allowed_ips":["0.0.0.0/0"]}]}`
+	if StableNodeUID(base) == StableNodeUID(changedPeer) {
+		t.Fatal("WireGuard peer change did not change stable UID")
+	}
+}
+
 func TestNodeFilterStoreCRUD(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {

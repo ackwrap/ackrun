@@ -746,8 +746,8 @@ func (s *ConfigGeneratorService) generateOutbounds(requireUsableProxy ...bool) (
 		if node.Type == "wireguard" {
 			endpoint, err := s.generateWireGuardEndpoint(&node, nodeTags[node.UID], nil)
 			if err != nil {
-				logging.Info("config_generator.node", "跳过节点 %s: %v", node.Name, err)
-				continue
+				logging.Error("config_generator.endpoint", "WireGuard 节点 %s 生成失败: %v", node.Name, err)
+				return nil, nil, fmt.Errorf("WireGuard 节点 %s 生成失败: %w", node.Name, err)
 			}
 			endpoints = append(endpoints, endpoint)
 			generatedNodeTags[node.UID] = nodeTags[node.UID]
@@ -1225,12 +1225,42 @@ func (s *ConfigGeneratorService) generateWireGuardEndpoint(node *model.Node, tag
 	}
 	privateKey := firstStringValue(nodeData, "private_key", "private-key")
 	publicKey := firstStringValue(nodeData, "peer_public_key", "public_key", "public-key")
-	if privateKey == "" || publicKey == "" {
-		return nil, fmt.Errorf("缺少 WireGuard private_key 或 public_key")
+	if privateKey == "" {
+		return nil, fmt.Errorf("缺少 WireGuard private_key")
+	}
+	if _, hasPeers := nodeData["peers"]; !hasPeers && publicKey == "" {
+		return nil, fmt.Errorf("缺少 WireGuard public_key")
 	}
 	server := firstStringValue(nodeData, "server")
 	serverPort := intValue(firstExistingValue(nodeData, "server_port", "port"))
-	if server == "" || serverPort == 0 {
+	if rawPeers, hasPeers := nodeData["peers"]; hasPeers {
+		peers, err := normalizeWireGuardEndpointPeers(rawPeers)
+		if err != nil {
+			return nil, err
+		}
+		if server == "" {
+			endpoint := make(map[string]interface{}, len(nodeData)+1)
+			for key, value := range nodeData {
+				endpoint[key] = value
+			}
+			endpoint["type"] = "wireguard"
+			endpoint["tag"] = tag
+			endpoint["peers"] = peers
+			applyDomainResolverBinding(endpoint, domainResolver)
+			return endpoint, nil
+		}
+		endpoint := map[string]interface{}{
+			"type":        "wireguard",
+			"tag":         tag,
+			"address":     address,
+			"private_key": privateKey,
+			"peers":       peers,
+		}
+		copyWireGuardEndpointOptions(endpoint, nodeData)
+		applyDomainResolverBinding(endpoint, domainResolver)
+		return endpoint, nil
+	}
+	if server == "" || serverPort < 1 || serverPort > 65535 {
 		return nil, fmt.Errorf("缺少 WireGuard peer address 或 port")
 	}
 	peer := map[string]interface{}{
@@ -1260,14 +1290,67 @@ func (s *ConfigGeneratorService) generateWireGuardEndpoint(node *model.Node, tag
 		"private_key": privateKey,
 		"peers":       []interface{}{peer},
 	}
-	if mtu := intValue(firstExistingValue(nodeData, "mtu")); mtu > 0 {
-		endpoint["mtu"] = mtu
-	}
-	if workers := intValue(firstExistingValue(nodeData, "workers")); workers > 0 {
-		endpoint["workers"] = workers
-	}
+	copyWireGuardEndpointOptions(endpoint, nodeData)
 	applyDomainResolverBinding(endpoint, domainResolver)
 	return endpoint, nil
+}
+
+func normalizeWireGuardEndpointPeers(raw interface{}) ([]interface{}, error) {
+	values, ok := raw.([]interface{})
+	if !ok || len(values) == 0 {
+		return nil, fmt.Errorf("WireGuard peers 不能为空")
+	}
+	peers := make([]interface{}, 0, len(values))
+	hasDialablePeer := false
+	for index, value := range values {
+		peer, ok := value.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("WireGuard peer %d 格式无效", index+1)
+		}
+		normalized := make(map[string]interface{}, len(peer))
+		for key, peerValue := range peer {
+			normalized[key] = peerValue
+		}
+		address := firstStringValue(peer, "address", "server")
+		port := intValue(firstExistingValue(peer, "port", "server_port"))
+		publicKey := firstStringValue(peer, "public_key", "public-key")
+		if publicKey == "" {
+			return nil, fmt.Errorf("WireGuard peer %d 缺少 public_key", index+1)
+		}
+		if (address == "") != (port == 0) || port < 0 || port > 65535 {
+			return nil, fmt.Errorf("WireGuard peer %d address 或 port 无效", index+1)
+		}
+		if address != "" {
+			normalized["address"] = address
+			normalized["port"] = port
+			hasDialablePeer = true
+		}
+		normalized["public_key"] = publicKey
+		delete(normalized, "server")
+		delete(normalized, "server_port")
+		delete(normalized, "public-key")
+		peers = append(peers, normalized)
+	}
+	if !hasDialablePeer {
+		return nil, fmt.Errorf("WireGuard endpoint 没有可连接的 peer")
+	}
+	return peers, nil
+}
+
+func copyWireGuardEndpointOptions(endpoint, source map[string]interface{}) {
+	for _, key := range []string{"system", "mtu", "listen_port", "udp_timeout", "udp_mapping", "udp_filtering", "udp_nat_max", "workers", "detour", "domain_resolver", "bind_interface", "routing_mark", "reuse_addr", "netns"} {
+		if value, exists := source[key]; exists {
+			endpoint[key] = value
+		}
+	}
+	if _, exists := endpoint["system"]; !exists {
+		if value, legacyExists := source["system_interface"]; legacyExists {
+			endpoint["system"] = configBoolValue(value)
+		}
+	}
+	if interfaceName := firstStringValue(source, "interface_name", "interface-name"); interfaceName != "" {
+		endpoint["name"] = interfaceName
+	}
 }
 
 func firstExistingValue(data map[string]interface{}, keys ...string) interface{} {

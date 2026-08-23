@@ -548,6 +548,13 @@ func nodeIdentityFields(cfg map[string]any, node model.ParsedNode) map[string]an
 	copyNodeIdentityString(identity, cfg, "preshared-key")
 	copyNodeIdentityString(identity, cfg, "local-address", "address")
 	copyNodeIdentityInt(identity, cfg, "mtu")
+	if nodeType == "wireguard" && cfg["peers"] != nil {
+		copyNodeIdentityValue(identity, cfg, "private_key", "private_key", "private-key")
+		copyNodeIdentityValue(identity, cfg, "address", "address", "local_address", "local-address")
+		copyNodeIdentityValue(identity, cfg, "peers", "peers")
+		copyNodeIdentityString(identity, cfg, "public_key", "public_key", "public-key", "peer_public_key")
+		copyNodeIdentityString(identity, cfg, "pre_shared_key", "pre_shared_key", "pre-shared-key", "preshared-key")
+	}
 	if nodeType == "ssh" {
 		sshUser := firstNodeString(nodeString(cfg, "username"), nodeString(cfg, "user"))
 		if sshUser == "" {
