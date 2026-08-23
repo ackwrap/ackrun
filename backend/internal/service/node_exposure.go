@@ -127,6 +127,13 @@ func (s *NodeExposureService) Delete(id int64) error {
 	if err != nil {
 		return normalizeNodeExposureStoreError(err)
 	}
+	sshHostCount, err := s.store.CountSSHHostsByNodeExposure(id)
+	if err != nil {
+		return err
+	}
+	if sshHostCount > 0 {
+		return fmt.Errorf("%w: 节点入口仍被 %d 个 SSH 主机引用", ErrNodeExposureConflict, sshHostCount)
+	}
 	logging.Info("node_exposure.delete", "删除节点暴露: %d", id)
 	if err := s.mutate(func() error { return s.store.DeleteNodeExposure(id) }); err != nil {
 		return normalizeNodeExposureStoreError(err)

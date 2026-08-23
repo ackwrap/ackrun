@@ -186,3 +186,7 @@ func (p *Paths) NetworkLifecycleLockPath() string {
 func (p *Paths) CoreAPITokenPath() string {
 	return filepath.Join(p.ConfigDir, "core-api-token")
 }
+
+func (p *Paths) SSHSecretKeyPath() string {
+	return filepath.Join(p.DataDir, ".ssh-secrets-key")
+}

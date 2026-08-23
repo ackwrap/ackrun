@@ -84,6 +84,12 @@ export function useRealtimeSocket(onEvent: (event: WSEvent) => void): {
   return { connected };
 }
 
+export function sendRealtime(type: string, data: unknown): boolean {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+  socket.send(JSON.stringify({ type, time: Date.now(), data }));
+  return true;
+}
+
 export function useRealtime() {
   const listeners = new Map<string, Set<(data: unknown) => void>>();
   const on = (type: string, fn: (data: unknown) => void) => {

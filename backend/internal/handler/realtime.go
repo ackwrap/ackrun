@@ -50,10 +50,11 @@ func (h *RealtimeHandler) HandleWS(c *gin.Context) {
 	defer h.svc.RemoveClient(conn)
 
 	for {
-		_, _, err := conn.ReadMessage()
-		if err != nil {
+		var command model.WSCommand
+		if err := conn.ReadJSON(&command); err != nil {
 			break
 		}
+		h.svc.HandleCommand(conn, command)
 	}
 }
 

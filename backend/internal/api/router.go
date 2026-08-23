@@ -29,6 +29,7 @@ func RegisterRoutes(
 	appUpdateSvc *service.AppUpdateService,
 	dashboardSvc *service.DashboardService,
 	advancedSvc *service.AdvancedRoutingService,
+	sshHostSvc *service.SSHHostService,
 ) {
 	runtimeH := handler.NewRuntimeHandler(runtimeSvc)
 	installerH := handler.NewInstallerHandler(installerSvc)
@@ -49,6 +50,7 @@ func RegisterRoutes(
 	appUpdateH := handler.NewAppUpdateHandler(appUpdateSvc)
 	dashboardH := handler.NewDashboardHandler(dashboardSvc)
 	advancedH := handler.NewAdvancedHandler(advancedSvc)
+	sshHostH := handler.NewSSHHostHandler(sshHostSvc)
 
 	clashProxyH := handler.NewClashProxyHandler(settingsSvc)
 
@@ -157,6 +159,7 @@ func RegisterRoutes(
 		v1.PUT("/nodes/:uid/preferred", nodeH.SetPreferred)
 
 		registerAdvancedRoutes(v1, nodeExposureH, advancedH)
+		registerSSHHostRoutes(v1, sshHostH)
 
 		v1.GET("/collections", proxyCollectionH.List)
 		v1.POST("/collections", proxyCollectionH.Create)
@@ -253,4 +256,23 @@ func registerAdvancedRoutes(group *gin.RouterGroup, nodeExposureH *handler.NodeE
 	group.DELETE("/advanced/access-logs", handler.ClearAccessLogs)
 	group.GET("/advanced/settings", handler.GetSettings)
 	group.PUT("/advanced/settings", handler.UpdateSettings)
+}
+
+func registerSSHHostRoutes(group *gin.RouterGroup, sshHostH *handler.SSHHostHandler) {
+	group.GET("/advanced/ssh/hosts", sshHostH.ListHosts)
+	group.POST("/advanced/ssh/hosts", sshHostH.CreateHost)
+	group.GET("/advanced/ssh/hosts/:id", sshHostH.GetHost)
+	group.PUT("/advanced/ssh/hosts/:id", sshHostH.UpdateHost)
+	group.DELETE("/advanced/ssh/hosts/:id", sshHostH.DeleteHost)
+	group.POST("/advanced/ssh/hosts/:id/test", sshHostH.TestHost)
+	group.POST("/advanced/ssh/hosts/:id/sessions", sshHostH.CreateSession)
+	group.DELETE("/advanced/ssh/sessions/:sessionID", sshHostH.DeleteSession)
+	group.GET("/advanced/ssh/hosts/:id/host-key", sshHostH.GetHostKey)
+	group.POST("/advanced/ssh/hosts/:id/host-key/trust", sshHostH.TrustHostKey)
+	group.POST("/advanced/ssh/hosts/:id/host-key/rotate", sshHostH.RotateHostKey)
+	group.DELETE("/advanced/ssh/hosts/:id/host-key", sshHostH.DeleteHostKey)
+	group.GET("/advanced/ssh/credentials", sshHostH.ListCredentials)
+	group.POST("/advanced/ssh/credentials", sshHostH.CreateCredential)
+	group.PUT("/advanced/ssh/credentials/:id", sshHostH.UpdateCredential)
+	group.DELETE("/advanced/ssh/credentials/:id", sshHostH.DeleteCredential)
 }

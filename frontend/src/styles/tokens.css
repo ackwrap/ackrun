@@ -59,6 +59,10 @@
   --easing-default: cubic-bezier(0.4, 0, 0.2, 1);
   --z-modal: 1000;
   --z-toast: 1100;
+  --ssh-terminal-bg: #07101D;
+  --ssh-terminal-text: #D9E7F5;
+  --ssh-terminal-cursor: #5FB3FF;
+  --ssh-terminal-selection: #24415F;
 }
 
 :root[data-theme='light'] {
@@ -92,6 +96,10 @@
   --text-secondary: #334155;
   --text-tertiary: #64748B;
   --text-disabled: #94A3B8;
+  --ssh-terminal-bg: #07101D;
+  --ssh-terminal-text: #D9E7F5;
+  --ssh-terminal-cursor: #5FB3FF;
+  --ssh-terminal-selection: #24415F;
   --text-sidebar: #475569;
   --text-sidebar-active: #1D4ED8;
   --border-default: rgba(30, 41, 59, 0.16);

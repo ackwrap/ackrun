@@ -56,8 +56,33 @@ func (client *realtimeClient) closeConnection() {
 }
 
 type RealtimeService struct {
-	mu      sync.Mutex
-	clients map[*websocket.Conn]*realtimeClient
+	mu             sync.Mutex
+	clients        map[*websocket.Conn]*realtimeClient
+	commandHandler func(*websocket.Conn, model.WSCommand)
+	closeHandler   func(*websocket.Conn)
+}
+
+func (svc *RealtimeService) SetCommandHandlers(command func(*websocket.Conn, model.WSCommand), closed func(*websocket.Conn)) {
+	svc.mu.Lock()
+	svc.commandHandler = command
+	svc.closeHandler = closed
+	svc.mu.Unlock()
+}
+
+func (svc *RealtimeService) HandleCommand(conn *websocket.Conn, command model.WSCommand) {
+	svc.mu.Lock()
+	handler, exists := svc.commandHandler, svc.clients[conn] != nil
+	svc.mu.Unlock()
+	if exists && handler != nil {
+		handler(conn, command)
+	}
+}
+
+func (svc *RealtimeService) HasClient(conn *websocket.Conn) bool {
+	svc.mu.Lock()
+	_, exists := svc.clients[conn]
+	svc.mu.Unlock()
+	return exists
 }
 
 func NewRealtimeService() *RealtimeService {
@@ -87,6 +112,7 @@ func (svc *RealtimeService) AddClientWithInitialState(conn *websocket.Conn, init
 		client.closeConnection()
 		return false
 	}
+	conn.SetReadLimit(128 << 10)
 	conn.SetPongHandler(func(string) error {
 		return conn.SetReadDeadline(time.Now().Add(pongWait))
 	})
@@ -160,6 +186,7 @@ func (svc *RealtimeService) completeClientInitialization(client *realtimeClient,
 func (svc *RealtimeService) RemoveClient(conn *websocket.Conn) {
 	svc.mu.Lock()
 	client, exists := svc.clients[conn]
+	closed := svc.closeHandler
 	if exists {
 		delete(svc.clients, conn)
 		client.signalStop()
@@ -170,8 +197,41 @@ func (svc *RealtimeService) RemoveClient(conn *websocket.Conn) {
 	if !exists {
 		return
 	}
+	if closed != nil {
+		closed(conn)
+	}
 	client.closeConnection()
 	logging.Info("websocket.connect", "client disconnected, total=%d", total)
+}
+
+func (svc *RealtimeService) SendTo(conn *websocket.Conn, eventType string, data any) bool {
+	event := model.WSEvent{Type: eventType, Time: time.Now().UnixMilli(), Data: data}
+	svc.mu.Lock()
+	client, exists := svc.clients[conn]
+	if !exists {
+		svc.mu.Unlock()
+		return false
+	}
+	message := outboundMessage{event: &event}
+	if client.initializing && len(client.pending) < realtimeQueueSize {
+		client.pending = append(client.pending, message)
+		svc.mu.Unlock()
+		return true
+	}
+	if !client.initializing {
+		select {
+		case client.send <- message:
+			svc.mu.Unlock()
+			return true
+		default:
+		}
+	}
+	delete(svc.clients, conn)
+	client.signalStop()
+	total := len(svc.clients)
+	svc.mu.Unlock()
+	go svc.finishSlowClients([]*realtimeClient{client}, total)
+	return false
 }
 
 func (svc *RealtimeService) writePump(client *realtimeClient) {
@@ -223,6 +283,7 @@ func (svc *RealtimeService) handleWriteError(client *realtimeClient, writeErr er
 		return
 	}
 	client.closeConnection()
+	svc.notifyClientClosed(client.conn)
 	logging.Info("websocket.connect", "client disconnected, total=%d", total)
 	logging.Error("websocket.broadcast", "write error: %v", writeErr)
 }
@@ -309,7 +370,17 @@ func (svc *RealtimeService) Broadcast(eventType string, data any) {
 
 func (svc *RealtimeService) finishSlowClients(clients []*realtimeClient, total int) {
 	for _, client := range clients {
+		svc.notifyClientClosed(client.conn)
 		client.closeConnection()
 	}
 	logging.Info("websocket.connect", "disconnected %d slow client(s), total=%d", len(clients), total)
+}
+
+func (svc *RealtimeService) notifyClientClosed(conn *websocket.Conn) {
+	svc.mu.Lock()
+	handler := svc.closeHandler
+	svc.mu.Unlock()
+	if handler != nil {
+		handler(conn)
+	}
 }

@@ -17,6 +17,7 @@ import {
   Wrench,
   Route,
   ChevronDown,
+  SquareTerminal,
 } from "lucide-vue-next";
 const props = withDefaults(
   defineProps<{ collapsed: boolean; mobileOpen?: boolean }>(),
@@ -37,7 +38,10 @@ const items = [
   ["日志", Activity, "/logs"],
   ["设置", Settings, "/settings"],
 ] as const;
-const advancedItems = [["路由与调度", Route, "/advanced/routing"]] as const;
+const advancedItems = [
+  ["路由与调度", Route, "/advanced/routing"],
+  ["SSH 主机", SquareTerminal, "/advanced/ssh"],
+] as const;
 
 watch(
   () => route.path,

@@ -14,6 +14,7 @@ const pages = {
   "/logs": () => import("@/pages/LogsPage.vue"),
   "/settings": () => import("@/pages/SettingsPage.vue"),
   "/advanced/routing": () => import("@/pages/AdvancedPage.vue"),
+  "/advanced/ssh": () => import("@/pages/SSHHostsPage.vue"),
 };
 
 const legacyAdvancedViews = {

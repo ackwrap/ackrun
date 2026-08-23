@@ -36,6 +36,7 @@ type Application struct {
 	routeRule              *service.RouteRuleService
 	proxyCollection        *service.ProxyCollectionService
 	advanced               *service.AdvancedRoutingService
+	sshHost                *service.SSHHostService
 	stopToolLogEvents      func()
 	toolLogEventsCompleted chan struct{}
 
@@ -76,6 +77,14 @@ func New(options Options) (*Application, error) {
 
 	coreLogSvc := service.NewCoreLogService()
 	singboxSvc := service.NewSingboxService(options.Paths, realtimeSvc, coreLogSvc, db)
+	sshHostSvc, err := service.NewSSHHostService(db, options.Paths, singboxSvc)
+	if err != nil {
+		stopToolLogEvents()
+		<-toolLogEventsCompleted
+		_ = db.Close()
+		return nil, fmt.Errorf("initialize SSH host service: %w", err)
+	}
+	sshHostSvc.SetRealtimeService(realtimeSvc)
 	if err := singboxSvc.RecoverStaleState(); err != nil {
 		logging.Error("core.cleanup", "启动时清理 sing-box 网络残留失败: %v", err)
 	}
@@ -155,7 +164,7 @@ func New(options Options) (*Application, error) {
 		gin.RecoveryWithWriter(accessTokenRedactingWriter{Writer: gin.DefaultErrorWriter}),
 	)
 	router.Use(api.SecurityMiddleware(options.APIToken))
-	api.RegisterRoutes(router, runtimeSvc, installerSvc, singboxSvc, configSvc, settingsSvc, subscriptionSvc, nodeSvc, nodeExposureSvc, routeRuleSvc, proxyCollectionSvc, configGenSvc, realtimeSvc, coreLogSvc, dnsSvc, nodeGroupSvc, reconcileSvc, coreRestartSvc, appUpdateSvc, dashboardSvc, advancedSvc)
+	api.RegisterRoutes(router, runtimeSvc, installerSvc, singboxSvc, configSvc, settingsSvc, subscriptionSvc, nodeSvc, nodeExposureSvc, routeRuleSvc, proxyCollectionSvc, configGenSvc, realtimeSvc, coreLogSvc, dnsSvc, nodeGroupSvc, reconcileSvc, coreRestartSvc, appUpdateSvc, dashboardSvc, advancedSvc, sshHostSvc)
 	if err := registerWebUI(router); err != nil {
 		reconcileSvc.Close()
 		stopToolLogEvents()
@@ -176,6 +185,7 @@ func New(options Options) (*Application, error) {
 		routeRule:              routeRuleSvc,
 		proxyCollection:        proxyCollectionSvc,
 		advanced:               advancedSvc,
+		sshHost:                sshHostSvc,
 		stopToolLogEvents:      stopToolLogEvents,
 		toolLogEventsCompleted: toolLogEventsCompleted,
 	}, nil
@@ -255,6 +265,7 @@ func (app *Application) PrepareShutdown() {
 		return
 	}
 	app.closed = true
+	app.sshHost.Close()
 	if app.started {
 		app.advanced.Stop()
 		app.coreRestart.StopScheduler()
