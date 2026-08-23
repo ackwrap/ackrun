@@ -1,5 +1,10 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import {
+  computed,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+} from "vue";
 import { Activity, Play, ShieldAlert } from "lucide-vue-next";
 import PageHeader from "@/components/layout/PageHeader.vue";
 import Button from "@/components/ui/Button.vue";
@@ -20,6 +25,8 @@ import {
   statusLabel,
 } from "./advancedUi";
 
+withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false });
+
 const states = ref<AdvancedHealthState[]>([]);
 const events = ref<AdvancedHealthEvent[]>([]);
 const settings = ref<Partial<AdvancedSettings>>({});
@@ -28,6 +35,7 @@ const running = ref(false);
 const message = ref("");
 const messageType = ref<"success" | "error" | "info">("success");
 let pollVersion = 0;
+let active = false;
 
 const healthy = computed(() => states.value.filter((item) => item.status === "healthy").length);
 const unhealthy = computed(
@@ -80,6 +88,7 @@ async function load() {
   loading.value = true;
   try {
     const response = await advancedApi.getHealthScheduling();
+    if (!active) return;
     applySnapshot(response);
     if (response.running) {
       const version = ++pollVersion;
@@ -91,9 +100,9 @@ async function load() {
       });
     }
   } catch (error) {
-    show(`加载健康调度失败: ${errorMessage(error)}`, "error");
+    if (active) show(`加载健康调度失败: ${errorMessage(error)}`, "error");
   } finally {
-    loading.value = false;
+    if (active) loading.value = false;
   }
 }
 
@@ -115,15 +124,21 @@ async function runNow() {
   }
 }
 
-onMounted(load);
-onBeforeUnmount(() => {
-  pollVersion++;
+onMounted(() => {
+  active = true;
+  void load();
 });
+function stopPolling() {
+  active = false;
+  pollVersion++;
+  running.value = false;
+}
+onBeforeUnmount(stopPolling);
 </script>
 
 <template>
   <div class="space-y-5">
-    <PageHeader title="健康调度" description="查看出口健康状态、状态迁移事件并触发一次真实探测。">
+    <PageHeader title="健康调度" description="查看出口健康状态、状态迁移事件并触发一次真实探测。" :embedded="embedded">
       <template #actions><Button variant="primary" :loading="running" :disabled="loading || !settings.health_enabled" @click="runNow"><template #icon><Play :size="14" /></template>立即探测</Button></template>
     </PageHeader>
     <Toast :message="message" :type="messageType" @dismiss="message = ''" />

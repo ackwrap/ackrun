@@ -13,46 +13,17 @@ const pages = {
   "/config": () => import("@/pages/ConfigPage.vue"),
   "/logs": () => import("@/pages/LogsPage.vue"),
   "/settings": () => import("@/pages/SettingsPage.vue"),
-  "/advanced/node-exposures": () =>
-    import("@/pages/advanced/AdvancedNodeExposurePage.vue"),
-  "/advanced/platform-routing": () =>
-    import("@/pages/advanced/PlatformRoutingPage.vue"),
-  "/advanced/session-leases": () =>
-    import("@/pages/advanced/SessionLeasesPage.vue"),
-  "/advanced/health-scheduling": () =>
-    import("@/pages/advanced/HealthSchedulingPage.vue"),
-  "/advanced/access-logs": () =>
-    import("@/pages/advanced/AccessLogsPage.vue"),
-  "/advanced/settings": () =>
-    import("@/pages/advanced/AdvancedSettingsPage.vue"),
+  "/advanced/routing": () => import("@/pages/AdvancedPage.vue"),
 };
 
-const advancedMeta: Record<string, { title: string; description: string }> = {
-  "/advanced/node-exposures": {
-    title: "节点暴露",
-    description: "为单个节点创建独立的固定代理入口。",
-  },
-  "/advanced/platform-routing": {
-    title: "平台路由",
-    description: "按平台、租户和业务入口编排路由策略。",
-  },
-  "/advanced/session-leases": {
-    title: "会话租约",
-    description: "为客户端维持稳定的出口节点和租约周期。",
-  },
-  "/advanced/health-scheduling": {
-    title: "健康调度",
-    description: "结合探测、熔断和恢复状态执行节点调度。",
-  },
-  "/advanced/access-logs": {
-    title: "访问日志",
-    description: "提供高级入口的访问审计和流量观测。",
-  },
-  "/advanced/settings": {
-    title: "高级设置",
-    description: "集中管理高级数据面和控制面参数。",
-  },
-};
+const legacyAdvancedViews = {
+  "advanced/node-exposures": "node-exposures",
+  "advanced/platform-routing": "platform-routing",
+  "advanced/session-leases": "session-leases",
+  "advanced/health-scheduling": "health-scheduling",
+  "advanced/access-logs": "access-logs",
+  "advanced/settings": "settings",
+} as const;
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -60,14 +31,17 @@ export const router = createRouter({
     {
       path: "/",
       component: AppLayout,
-      children: Object.entries(pages).map(([path, component]) => {
-        const meta = advancedMeta[path];
-        return {
+      children: [
+        ...Object.entries(pages).map(([path, component]) => ({
           path: path === "/" ? "" : path.slice(1),
           component,
-          ...(meta ? { meta } : {}),
-        };
-      }),
+        })),
+        ...Object.entries(legacyAdvancedViews).map(([path, view]) => ({
+          path,
+          redirect: () => ({ path: "/advanced/routing", query: { view } }),
+        })),
+        { path: "advanced", redirect: "/advanced/routing" },
+      ],
     },
     { path: "/:pathMatch(.*)*", redirect: "/" },
   ],

@@ -21,6 +21,8 @@ import {
 } from "./advancedUi";
 import { useAdvancedOptions } from "./useAdvancedOptions";
 
+withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false });
+
 interface RouteForm {
   name: string;
   enabled: boolean;
@@ -216,7 +218,7 @@ onMounted(load);
 
 <template>
   <div class="space-y-5">
-    <PageHeader title="平台路由" description="按来源、域名、目标网段和入口组合匹配出口，并记录业务平台标签。">
+    <PageHeader title="平台路由" description="按来源、域名、目标网段和入口组合匹配出口，并记录业务平台标签。" :embedded="embedded">
       <template #actions>
         <Button variant="primary" :disabled="loading || ordering" @click="openCreate">
           <template #icon><Plus :size="15" /></template>新增规则

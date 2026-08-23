@@ -26,6 +26,8 @@ import {
 } from "./advancedUi";
 import { useAdvancedOptions } from "./useAdvancedOptions";
 
+withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false });
+
 interface LeaseForm {
   name: string;
   enabled: boolean;
@@ -230,7 +232,7 @@ onMounted(load);
 
 <template>
   <div class="space-y-5">
-    <PageHeader title="会话租约" description="将来源网段在租期内稳定绑定到指定入口和出口，并关联业务平台标签。">
+    <PageHeader title="会话租约" description="将来源网段在租期内稳定绑定到指定入口和出口，并关联业务平台标签。" :embedded="embedded">
       <template #actions><Button variant="primary" :disabled="loading || !exposures.length || !routes.length" @click="openCreate"><template #icon><Plus :size="15" /></template>创建租约</Button></template>
     </PageHeader>
     <Toast :message="message" :type="messageType" @dismiss="message = ''" />

@@ -9,6 +9,8 @@ import { advancedApi } from "@/services/advancedApi";
 import type { AdvancedSettings } from "@/services/advancedTypes";
 import { errorMessage } from "./advancedUi";
 
+withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false });
+
 const safeDefaults: AdvancedSettings = {
   routing_enabled: false,
   leases_enabled: false,
@@ -87,7 +89,7 @@ onMounted(load);
 
 <template>
   <div class="space-y-5">
-    <PageHeader title="高级设置" description="集中配置平台路由、租约、健康调度和访问审计。">
+    <PageHeader title="高级设置" description="集中配置平台路由、租约、健康调度和访问审计。" :embedded="embedded">
       <template #actions><Button variant="primary" :loading="saving" :disabled="loading || !loaded" @click="save"><template #icon><Save :size="14" /></template>保存设置</Button></template>
     </PageHeader>
     <Toast :message="message" :type="messageType" @dismiss="message = ''" />

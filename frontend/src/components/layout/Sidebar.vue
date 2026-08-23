@@ -15,12 +15,7 @@ import {
   ChevronRight,
   Gauge,
   Wrench,
-  Share2,
   Route,
-  KeyRound,
-  HeartPulse,
-  ScrollText,
-  SlidersHorizontal,
   ChevronDown,
 } from "lucide-vue-next";
 const props = withDefaults(
@@ -29,8 +24,7 @@ const props = withDefaults(
 );
 const emit = defineEmits<{ toggle: []; close: [] }>();
 const route = useRoute();
-const showAdvancedFeatures = true;
-const advancedOpen = ref(route.path.startsWith("/advanced/"));
+const advancedOpen = ref(route.path.startsWith("/advanced"));
 const items = [
   ["控制面板", LayoutDashboard, "/"],
   ["仪表盘", Gauge, "/dashboard"],
@@ -43,19 +37,12 @@ const items = [
   ["日志", Activity, "/logs"],
   ["设置", Settings, "/settings"],
 ] as const;
-const advancedItems = [
-  ["节点暴露", Share2, "/advanced/node-exposures"],
-  ["平台路由", Route, "/advanced/platform-routing"],
-  ["会话租约", KeyRound, "/advanced/session-leases"],
-  ["健康调度", HeartPulse, "/advanced/health-scheduling"],
-  ["访问日志", ScrollText, "/advanced/access-logs"],
-  ["高级设置", SlidersHorizontal, "/advanced/settings"],
-] as const;
+const advancedItems = [["路由与调度", Route, "/advanced/routing"]] as const;
 
 watch(
   () => route.path,
   (path) => {
-    if (path.startsWith("/advanced/")) advancedOpen.value = true;
+    if (path.startsWith("/advanced")) advancedOpen.value = true;
   },
 );
 
@@ -105,11 +92,11 @@ function toggleAdvanced() {
           >{{ label }}</span
         ></RouterLink
       >
-      <div v-if="showAdvancedFeatures">
+      <div>
         <button
           class="flex h-11 w-full items-center gap-3 rounded-[var(--radius-lg)] border border-transparent px-4 text-left"
           :class="[
-            $route.path.startsWith('/advanced/')
+            $route.path.startsWith('/advanced')
               ? 'border-[var(--button-primary-border)] bg-[var(--button-primary-bg)] text-[var(--button-primary-text)]'
               : 'hover:bg-[var(--bg-sidebar-hover)]',
             collapsed && 'lg:justify-center lg:px-0',

@@ -16,6 +16,8 @@ import type {
 } from "@/services/advancedTypes";
 import type { NodeItem } from "@/services/types";
 
+withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false });
+
 interface ExposureForm {
   name: string;
   nodeKey: string;
@@ -201,7 +203,7 @@ onMounted(load);
 
 <template>
   <div class="space-y-5">
-    <PageHeader title="节点暴露">
+    <PageHeader title="节点入口" :embedded="embedded">
       <template #actions>
         <Button
           variant="primary"

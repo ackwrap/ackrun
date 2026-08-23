@@ -17,6 +17,8 @@ import {
   statusLabel,
 } from "./advancedUi";
 
+withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false });
+
 const items = ref<AdvancedAccessLog[]>([]);
 const total = ref(0);
 const page = ref(1);
@@ -112,7 +114,7 @@ onMounted(load);
 
 <template>
   <div class="space-y-5">
-    <PageHeader title="访问日志" description="审计高级入口的路由决策，不展示节点连接参数。">
+    <PageHeader title="访问审计" description="审计高级入口的路由决策，不展示节点连接参数。" :embedded="embedded">
       <template #actions><Button variant="danger" :disabled="loading || !total" @click="clearOpen = true"><template #icon><Trash2 :size="14" /></template>清空日志</Button></template>
     </PageHeader>
     <Toast :message="message" :type="messageType" @dismiss="message = ''" />
