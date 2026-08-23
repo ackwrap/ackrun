@@ -3,8 +3,6 @@ import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import Modal from "@/components/ui/Modal.vue";
-import StatusBadge from "@/components/ui/StatusBadge.vue";
 import {
   sendRealtime,
   useRealtimeSocket,
@@ -12,15 +10,17 @@ import {
 import type { WSEvent } from "@/services/types";
 import type { SSHSessionCreateResponse } from "@/services/sshTypes";
 
-const props = defineProps<{
-  open: boolean;
-  hostName: string;
-  session: SSHSessionCreateResponse;
+const props = defineProps<{ session: SSHSessionCreateResponse }>();
+const emit = defineEmits<{
+  status: [
+    state: "connecting" | "online" | "offline" | "error",
+    message: string,
+  ];
+  closed: [];
 }>();
-const emit = defineEmits<{ close: [] }>();
 
 const container = ref<HTMLElement | null>(null);
-const status = ref("connecting");
+const status = ref<"connecting" | "online" | "offline" | "error">("connecting");
 const statusMessage = ref("正在连接实时通道...");
 let terminal: Terminal | null = null;
 let fitAddon: FitAddon | null = null;
@@ -31,6 +31,15 @@ let closing = false;
 const encoder = new TextEncoder();
 
 const { connected } = useRealtimeSocket(handleEvent);
+
+function setStatus(
+  state: "connecting" | "online" | "offline" | "error",
+  message: string,
+) {
+  status.value = state;
+  statusMessage.value = message;
+  emit("status", state, message);
+}
 
 function bytesToBase64(content: Uint8Array) {
   let binary = "";
@@ -72,7 +81,7 @@ function fit() {
     fitAddon.fit();
     sendSize();
   } catch {
-    // The modal can disappear between ResizeObserver and this animation frame.
+    // The workspace can disappear between ResizeObserver and this frame.
   }
 }
 
@@ -83,15 +92,14 @@ function scheduleFit() {
 
 function attach() {
   if (!connected.value || !terminal || attached || closing) return;
-  status.value = "connecting";
-  statusMessage.value = "正在创建远端 PTY...";
+  setStatus("connecting", "正在创建远端 PTY...");
   const sent = sendRealtime("ssh.session.attach", {
     session_id: props.session.session_id,
     attach_token: props.session.attach_token,
     columns: terminal.cols,
     rows: terminal.rows,
   });
-  if (!sent) statusMessage.value = "实时通道尚未就绪，正在重试...";
+  if (!sent) setStatus("connecting", "实时通道尚未就绪，正在重试...");
 }
 
 function handleEvent(event: WSEvent) {
@@ -99,8 +107,7 @@ function handleEvent(event: WSEvent) {
   if (!data || data.session_id !== props.session.session_id) return;
   if (event.type === "ssh.session.status" && data.status === "attached") {
     attached = true;
-    status.value = "online";
-    statusMessage.value = "终端已连接";
+    setStatus("online", "终端已连接");
     terminal?.focus();
     return;
   }
@@ -109,46 +116,40 @@ function handleEvent(event: WSEvent) {
     return;
   }
   if (event.type === "ssh.session.error") {
-    status.value = "error";
-    statusMessage.value =
+    const message =
       typeof data.message === "string" ? data.message : "SSH 终端发生错误";
-    terminal?.writeln(`\r\n[${statusMessage.value}]`);
+    setStatus("error", message);
+    terminal?.writeln(`\r\n[${message}]`);
     return;
   }
   if (event.type === "ssh.session.closed") {
     attached = false;
-    status.value = data.result === "success" ? "offline" : "error";
-    statusMessage.value =
+    const message =
       typeof data.error_code === "string" && data.error_code
         ? `会话已关闭：${data.error_code}`
         : "会话已关闭";
-    terminal?.writeln(`\r\n[${statusMessage.value}]`);
+    setStatus(data.result === "success" ? "offline" : "error", message);
+    terminal?.writeln(`\r\n[${message}]`);
+    emit("closed");
   }
-}
-
-function requestClose() {
-  if (closing) return;
-  closing = true;
-  sendRealtime("ssh.session.close", { session_id: props.session.session_id });
-  emit("close");
 }
 
 watch(connected, (value) => {
   if (value) attach();
   else if (!closing) {
     attached = false;
-    status.value = "connecting";
-    statusMessage.value = "实时通道已断开";
+    setStatus("connecting", "实时通道已断开");
   }
 });
 
 onMounted(async () => {
+  emit("status", status.value, statusMessage.value);
   await nextTick();
   if (!container.value) return;
   const theme = getComputedStyle(document.documentElement);
   terminal = new Terminal({
     cursorBlink: true,
-    scrollback: 2000,
+    scrollback: 5000,
     convertEol: false,
     fontFamily: '"Cascadia Mono", "JetBrains Mono", Consolas, monospace',
     fontSize: 13,
@@ -192,6 +193,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   closing = true;
+  sendRealtime("ssh.session.close", { session_id: props.session.session_id });
   if (resizeFrame) cancelAnimationFrame(resizeFrame);
   resizeObserver?.disconnect();
   terminal?.dispose();
@@ -201,29 +203,19 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <Modal
-    :open="open"
-    :title="`SSH 终端 · ${hostName}`"
-    size="xl"
-    @close="requestClose"
+  <section
+    class="relative h-full min-h-0 overflow-hidden bg-[var(--ssh-terminal-bg)]"
   >
-    <template #actions>
-      <StatusBadge
-        :status="
-          status === 'online'
-            ? 'online'
-            : status === 'error'
-              ? 'error'
-              : 'pending'
-        "
-        :label="statusMessage"
-        size="sm"
-      />
-    </template>
     <div
       ref="container"
-      class="h-[min(68vh,720px)] min-h-[360px] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--ssh-terminal-bg)] p-2"
+      class="h-full w-full overflow-hidden p-3"
       aria-label="SSH 交互终端"
     />
-  </Modal>
+    <div
+      v-if="status !== 'online'"
+      class="pointer-events-none absolute right-4 top-3 rounded-full border border-white/10 bg-black/55 px-3 py-1 text-[11px] text-white/70 backdrop-blur"
+    >
+      {{ statusMessage }}
+    </div>
+  </section>
 </template>

@@ -89,7 +89,25 @@ export interface SSHConnectionTestResult {
 export interface SSHSessionCreateResponse {
   session_id: string;
   attach_token: string;
+  sftp_token: string;
   expires_at: number;
+}
+
+export interface SSHSFTPEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  is_symlink: boolean;
+  size: number;
+  mode: string;
+  modified_at: number;
+}
+
+export interface SSHSFTPListResponse {
+  path: string;
+  parent: string;
+  home: string;
+  entries: SSHSFTPEntry[];
 }
 
 export interface SSHActionResponse {

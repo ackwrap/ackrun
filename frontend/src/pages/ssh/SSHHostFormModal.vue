@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, watch } from "vue";
+import { Plus } from "lucide-vue-next";
 import Button from "@/components/ui/Button.vue";
 import Modal from "@/components/ui/Modal.vue";
 import type { NodeExposure } from "@/services/advancedTypes";
@@ -29,11 +30,13 @@ const props = defineProps<{
   open: boolean;
   editing: SSHHost | null;
   credentials: SSHCredential[];
+  preferredCredentialId: number;
   exposures: NodeExposure[];
   saving: boolean;
 }>();
 const emit = defineEmits<{
   close: [];
+  createCredential: [];
   save: [SSHHostRequest];
   invalid: [string];
 }>();
@@ -120,11 +123,17 @@ function save() {
 }
 
 watch(
-  () => [props.open, props.editing, props.credentials] as const,
-  ([open]) => {
+  () => props.open,
+  (open) => {
     if (open) reset();
   },
   { immediate: true },
+);
+watch(
+  () => props.preferredCredentialId,
+  (credentialID) => {
+    if (props.open && credentialID) form.credential_id = credentialID;
+  },
 );
 </script>
 
@@ -182,19 +191,31 @@ watch(
           autocomplete="off"
         />
       </label>
-      <label>
-        <span class="aw-modal-label text-xs">凭据</span>
+      <div>
+        <div class="flex items-center justify-between gap-3">
+          <span class="aw-modal-label text-xs">凭据</span>
+          <button
+            type="button"
+            class="inline-flex items-center gap-1 text-xs font-medium text-[var(--color-primary)] hover:text-[var(--color-primary-hover)]"
+            @click="$emit('createCredential')"
+          >
+            <Plus :size="13" />新建凭据
+          </button>
+        </div>
         <select
           v-model.number="form.credential_id"
           class="aw-input mt-1 w-full"
+          aria-label="凭据"
         >
-          <option :value="0" disabled>请选择</option>
+          <option :value="0" disabled>
+            {{ credentials.length ? "请选择" : "暂无凭据，请先新建" }}
+          </option>
           <option v-for="item in credentials" :key="item.id" :value="item.id">
             {{ item.name }} ·
             {{ item.auth_type === "password" ? "密码" : "私钥" }}
           </option>
         </select>
-      </label>
+      </div>
       <label>
         <span class="aw-modal-label text-xs">连接路径</span>
         <select v-model="form.connection_mode" class="aw-input mt-1 w-full">

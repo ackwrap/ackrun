@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 
 	"github.com/ackwrap/ackrun/internal/logging"
@@ -30,13 +31,16 @@ const (
 	sshMaximumInputSize      = 64 << 10
 	sshOutputChunkSize       = 32 << 10
 	sshSessionInputQueueSize = 32
+	sshSFTPCloseGrace        = 5 * time.Second
 )
 
 type managedSSHSession struct {
 	id          string
 	attachToken string
+	sftpToken   [sha256.Size]byte
 	host        *model.SSHHost
 	client      *ssh.Client
+	sftp        *sftp.Client
 	createdAt   time.Time
 	expiresAt   time.Time
 	columns     int
@@ -50,6 +54,9 @@ type managedSSHSession struct {
 	done       chan struct{}
 	lastActive atomic.Int64
 	closeOnce  sync.Once
+	sftpOps    sync.WaitGroup
+	uploads    map[uint64]io.ReadCloser
+	nextUpload uint64
 	terminated bool
 }
 
@@ -119,6 +126,11 @@ func (svc *SSHHostService) CreateSession(ctx context.Context, hostID int64, requ
 		client.Close()
 		return nil, sshError("SSH_SESSION_CREATE_FAILED", "无法创建 SSH 会话授权", err)
 	}
+	sftpToken, err := randomHex(32)
+	if err != nil {
+		client.Close()
+		return nil, sshError("SSH_SESSION_CREATE_FAILED", "无法创建 SFTP 会话授权", err)
+	}
 	now := svc.now()
 	managed := &managedSSHSession{
 		id: id, attachToken: token, host: host, client: client, createdAt: now,
@@ -126,6 +138,7 @@ func (svc *SSHHostService) CreateSession(ctx context.Context, hostID int64, requ
 		input: make(chan []byte, sshSessionInputQueueSize),
 		done:  make(chan struct{}),
 	}
+	managed.sftpToken = sha256.Sum256([]byte(sftpToken))
 	managed.lastActive.Store(now.UnixMilli())
 	svc.sessionMu.Lock()
 	if svc.closed {
@@ -148,7 +161,9 @@ func (svc *SSHHostService) CreateSession(ctx context.Context, hostID int64, requ
 	reserved = false
 	go svc.expireUnattachedSession(managed)
 	logging.Info("ssh_session.create", "创建 SSH 会话: host_id=%d", hostID)
-	return &model.SSHSessionCreateResponse{SessionID: id, AttachToken: token, ExpiresAt: managed.expiresAt.UnixMilli()}, nil
+	return &model.SSHSessionCreateResponse{
+		SessionID: id, AttachToken: token, SFTPToken: sftpToken, ExpiresAt: managed.expiresAt.UnixMilli(),
+	}, nil
 }
 
 func (svc *SSHHostService) CloseSession(sessionID string) error {
@@ -463,15 +478,37 @@ func (svc *SSHHostService) closeSession(sessionID, result, errorCode string) boo
 	managed.closeOnce.Do(func() {
 		managed.mu.Lock()
 		managed.terminated = true
-		owner, session, stdin := managed.owner, managed.session, managed.stdin
-		managed.owner, managed.session, managed.stdin = nil, nil, nil
+		owner, session, stdin, sftpClient := managed.owner, managed.session, managed.stdin, managed.sftp
+		uploads := make([]io.ReadCloser, 0, len(managed.uploads))
+		for _, upload := range managed.uploads {
+			uploads = append(uploads, upload)
+		}
+		managed.owner, managed.session, managed.stdin, managed.sftp = nil, nil, nil, nil
+		managed.uploads = nil
+		managed.sftpToken = [sha256.Size]byte{}
 		close(managed.done)
 		managed.mu.Unlock()
+		for _, upload := range uploads {
+			_ = upload.Close()
+		}
 		if stdin != nil {
 			_ = stdin.Close()
 		}
 		if session != nil {
 			_ = session.Close()
+		}
+		sftpDone := make(chan struct{})
+		go func() {
+			managed.sftpOps.Wait()
+			close(sftpDone)
+		}()
+		select {
+		case <-sftpDone:
+		case <-time.After(sshSFTPCloseGrace):
+			logging.Error("ssh_sftp.close", "等待 SFTP 操作结束超时: host_id=%d", managed.host.ID)
+		}
+		if sftpClient != nil {
+			_ = sftpClient.Close()
 		}
 		if managed.client != nil {
 			_ = managed.client.Close()

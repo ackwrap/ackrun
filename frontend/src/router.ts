@@ -44,6 +44,10 @@ export const router = createRouter({
         { path: "advanced", redirect: "/advanced/routing" },
       ],
     },
+    {
+      path: "/ssh-terminal/:hostId",
+      component: () => import("@/pages/SSHTerminalWorkspacePage.vue"),
+    },
     { path: "/:pathMatch(.*)*", redirect: "/" },
   ],
 });

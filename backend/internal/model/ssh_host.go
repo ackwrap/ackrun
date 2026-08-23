@@ -119,5 +119,6 @@ type SSHSessionCreateRequest struct {
 type SSHSessionCreateResponse struct {
 	SessionID   string `json:"session_id"`
 	AttachToken string `json:"attach_token"`
+	SFTPToken   string `json:"sftp_token"`
 	ExpiresAt   int64  `json:"expires_at"`
 }

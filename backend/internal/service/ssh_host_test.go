@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 
 	"github.com/ackwrap/ackrun/internal/model"
@@ -387,6 +388,7 @@ type testSSHServer struct {
 	config        *ssh.ServerConfig
 	hostKey       ssh.PublicKey
 	echoShell     bool
+	sftpRoot      string
 	windowChanges atomic.Int64
 	connections   atomic.Int64
 	done          chan struct{}
@@ -401,10 +403,15 @@ func newPublicKeyTestSSHServer(t *testing.T, publicKey ssh.PublicKey) *testSSHSe
 	return newConfiguredTestSSHServer(t, testSSHServerOptions{publicKey: publicKey, echoShell: true})
 }
 
+func newSFTPTestSSHServer(t *testing.T, password, root string) *testSSHServer {
+	return newConfiguredTestSSHServer(t, testSSHServerOptions{password: password, echoShell: true, sftpRoot: root})
+}
+
 type testSSHServerOptions struct {
 	password  string
 	publicKey ssh.PublicKey
 	echoShell bool
+	sftpRoot  string
 }
 
 func newConfiguredTestSSHServer(t *testing.T, options testSSHServerOptions) *testSSHServer {
@@ -434,7 +441,7 @@ func newConfiguredTestSSHServer(t *testing.T, options testSSHServerOptions) *tes
 	}
 	server := &testSSHServer{
 		listener: listener, config: config, hostKey: signer.PublicKey(),
-		echoShell: options.echoShell, done: make(chan struct{}),
+		echoShell: options.echoShell, sftpRoot: options.sftpRoot, done: make(chan struct{}),
 	}
 	go server.serve()
 	return server
@@ -511,6 +518,19 @@ func (server *testSSHServer) serveConnection(conn net.Conn) {
 			var shellOnce sync.Once
 			for request := range requests {
 				supported := request.Type == "pty-req" || request.Type == "shell" || request.Type == "window-change"
+				if request.Type == "subsystem" {
+					var payload struct{ Name string }
+					supported = ssh.Unmarshal(request.Payload, &payload) == nil && payload.Name == "sftp" && server.sftpRoot != ""
+					_ = request.Reply(supported, nil)
+					if supported {
+						sftpServer, err := sftp.NewServer(accepted, sftp.WithServerWorkingDirectory(server.sftpRoot))
+						if err == nil {
+							_ = sftpServer.Serve()
+							_ = sftpServer.Close()
+						}
+					}
+					return
+				}
 				_ = request.Reply(supported, nil)
 				if request.Type == "shell" && server.echoShell {
 					shellOnce.Do(func() { go serveTestSSHEchoShell(accepted) })

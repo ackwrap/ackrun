@@ -1,4 +1,5 @@
-import { request } from "./api";
+import { ApiRequestError, request } from "./api";
+import { apiTokenRequired, authenticatedFetch } from "./apiAuth";
 import type {
   SSHActionResponse,
   SSHConnectionTestResult,
@@ -7,11 +8,36 @@ import type {
   SSHHost,
   SSHHostKey,
   SSHHostRequest,
+  SSHSFTPListResponse,
   SSHSessionCreateResponse,
 } from "./sshTypes";
 
+const sftpEndpoint = (sessionID: string, suffix = "") =>
+  `/advanced/ssh/sessions/${encodeURIComponent(sessionID)}/sftp${suffix}`;
+
+async function parseSFTPError(
+  response: Response | XMLHttpRequest,
+): Promise<never> {
+  let payload: any = null;
+  try {
+    payload = JSON.parse(
+      response instanceof Response ? await response.text() : response.responseText,
+    );
+  } catch {
+    // Keep the fallback below for non-JSON proxy and transport errors.
+  }
+  const status = response.status;
+  throw new ApiRequestError(
+    payload?.error?.message || `SFTP 请求失败 (${status})`,
+    payload?.error?.code || "SSH_SFTP_FAILED",
+    payload?.error?.details,
+    status,
+  );
+}
+
 export const sshApi = {
   getHosts: () => request<SSHHost[]>("/advanced/ssh/hosts"),
+  getHost: (id: number) => request<SSHHost>(`/advanced/ssh/hosts/${id}`),
   createHost: (body: SSHHostRequest) =>
     request<SSHHost>("/advanced/ssh/hosts", {
       method: "POST",
@@ -77,4 +103,86 @@ export const sshApi = {
       `/advanced/ssh/sessions/${encodeURIComponent(sessionID)}`,
       { method: "DELETE" },
     ),
+  listSFTP: (sessionID: string, token: string, path: string) =>
+    request<SSHSFTPListResponse>(
+      `${sftpEndpoint(sessionID)}?path=${encodeURIComponent(path)}`,
+      { headers: { "X-SSH-Session-Token": token } },
+    ),
+  createSFTPDirectory: (sessionID: string, token: string, path: string) =>
+    request<SSHActionResponse>(sftpEndpoint(sessionID, "/mkdir"), {
+      method: "POST",
+      headers: { "X-SSH-Session-Token": token },
+      body: JSON.stringify({ path }),
+    }),
+  renameSFTP: (
+    sessionID: string,
+    token: string,
+    oldPath: string,
+    newPath: string,
+  ) =>
+    request<SSHActionResponse>(sftpEndpoint(sessionID, "/rename"), {
+      method: "POST",
+      headers: { "X-SSH-Session-Token": token },
+      body: JSON.stringify({ old_path: oldPath, new_path: newPath }),
+    }),
+  deleteSFTP: (
+    sessionID: string,
+    token: string,
+    path: string,
+    recursive: boolean,
+  ) =>
+    request<SSHActionResponse>(sftpEndpoint(sessionID), {
+      method: "DELETE",
+      headers: { "X-SSH-Session-Token": token },
+      body: JSON.stringify({ path, recursive }),
+    }),
+  downloadSFTP: async (
+    sessionID: string,
+    token: string,
+    path: string,
+  ): Promise<Blob> => {
+    const response = await authenticatedFetch(
+      `/api/v1${sftpEndpoint(sessionID, "/download")}?path=${encodeURIComponent(path)}`,
+      { headers: { "X-SSH-Session-Token": token } },
+    );
+    if (!response.ok) return parseSFTPError(response);
+    return response.blob();
+  },
+  uploadSFTP: (
+    sessionID: string,
+    token: string,
+    path: string,
+    file: File,
+    overwrite: boolean,
+    onProgress: (progress: number) => void,
+  ) =>
+    new Promise<SSHActionResponse>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open(
+        "POST",
+        `/api/v1${sftpEndpoint(sessionID, "/upload")}?path=${encodeURIComponent(path)}&overwrite=${overwrite}`,
+      );
+      xhr.withCredentials = true;
+      xhr.setRequestHeader("Content-Type", "application/octet-stream");
+      xhr.setRequestHeader("X-SSH-Session-Token", token);
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          onProgress(Math.round((event.loaded / event.total) * 100));
+        }
+      };
+      xhr.onerror = () => reject(new Error("SFTP 上传网络连接失败"));
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            resolve(JSON.parse(xhr.responseText) as SSHActionResponse);
+          } catch {
+            reject(new Error("SFTP 上传响应无效"));
+          }
+          return;
+        }
+        if (xhr.status === 401) apiTokenRequired.value = true;
+        void parseSFTPError(xhr).catch(reject);
+      };
+      xhr.send(file);
+    }),
 };

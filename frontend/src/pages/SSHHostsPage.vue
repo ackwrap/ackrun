@@ -31,10 +31,8 @@ import type {
   SSHHostKey,
   SSHHostKeyChallenge,
   SSHHostRequest,
-  SSHSessionCreateResponse,
 } from "@/services/sshTypes";
 import { errorMessage, formatTime } from "./advanced/advancedUi";
-import SSHTerminalModal from "./ssh/SSHTerminalModal.vue";
 import SSHHostFormModal from "./ssh/SSHHostFormModal.vue";
 
 type PageTab = "hosts" | "credentials";
@@ -64,13 +62,11 @@ const hostFormOpen = ref(false);
 const deletingHost = ref<SSHHost | null>(null);
 const editingCredential = ref<SSHCredential | null>(null);
 const credentialFormOpen = ref(false);
+const credentialRequestedByHost = ref(false);
+const preferredCredentialID = ref(0);
 const deletingCredential = ref<SSHCredential | null>(null);
 const hostKeyPrompt = ref<HostKeyPrompt | null>(null);
 const trustedKey = ref<{ host: SSHHost; key: SSHHostKey } | null>(null);
-const terminal = ref<{
-  host: SSHHost;
-  session: SSHSessionCreateResponse;
-} | null>(null);
 const credentialForm = reactive<CredentialForm>(emptyCredentialForm());
 const availableHosts = computed(
   () => hosts.value.filter((item) => item.last_status === "available").length,
@@ -107,17 +103,14 @@ async function load() {
 }
 
 function openCreateHost() {
-  if (!credentials.value.length) {
-    tab.value = "credentials";
-    show("请先创建 SSH 凭据", "info");
-    return;
-  }
   editingHost.value = null;
+  preferredCredentialID.value = 0;
   hostFormOpen.value = true;
 }
 
 function openEditHost(host: SSHHost) {
   editingHost.value = host;
+  preferredCredentialID.value = 0;
   hostFormOpen.value = true;
 }
 
@@ -227,45 +220,31 @@ async function deleteHostKey() {
   }
 }
 
-async function openTerminal(host: SSHHost) {
-  if (testingID.value) return;
-  testingID.value = host.id;
-  try {
-    const session = await sshApi.createSession(host.id, 80, 24);
-    terminal.value = { host, session };
-  } catch (error) {
-    if (!applyHostKeyError(host, error)) {
-      show(`创建 SSH 终端失败：${errorMessage(error)}`, "error");
-    }
-  } finally {
-    testingID.value = 0;
-  }
+function openTerminal(host: SSHHost) {
+  const opened = window.open(
+    `/ssh-terminal/${encodeURIComponent(host.id)}`,
+    "_blank",
+  );
+  if (opened) opened.opener = null;
+  else show("浏览器阻止了新标签页，请允许本站打开弹出窗口", "error");
 }
 
-async function closeTerminal() {
-  const current = terminal.value;
-  terminal.value = null;
-  if (!current) return;
-  try {
-    await sshApi.closeSession(current.session.session_id);
-  } catch (error) {
-    if (
-      !(error instanceof ApiRequestError) ||
-      error.code !== "SSH_SESSION_NOT_FOUND"
-    ) {
-      show(`关闭 SSH 终端失败：${errorMessage(error)}`, "error");
-    }
-  }
-}
-
-function openCreateCredential() {
+function openCreateCredential(requestedByHost = false) {
   editingCredential.value = null;
+  credentialRequestedByHost.value = requestedByHost;
   Object.assign(credentialForm, emptyCredentialForm());
   credentialFormOpen.value = true;
 }
 
+function closeCredentialForm() {
+  if (saving.value) return;
+  credentialFormOpen.value = false;
+  credentialRequestedByHost.value = false;
+}
+
 function openEditCredential(item: SSHCredential) {
   editingCredential.value = item;
+  credentialRequestedByHost.value = false;
   Object.assign(credentialForm, {
     name: item.name,
     auth_type: item.auth_type,
@@ -295,17 +274,26 @@ async function saveCredential() {
   }
   saving.value = true;
   try {
+    const requestedByHost = credentialRequestedByHost.value;
+    let createdCredential: SSHCredential | null = null;
     if (editingCredential.value) {
       await sshApi.updateCredential(
         editingCredential.value.id,
         credentialPayload(),
       );
     } else {
-      await sshApi.createCredential(credentialPayload());
+      createdCredential = await sshApi.createCredential(credentialPayload());
     }
     show(editingCredential.value ? "SSH 凭据已更新" : "SSH 凭据已创建");
-    credentialFormOpen.value = false;
     await load();
+    if (requestedByHost && createdCredential) {
+      if (!credentials.value.some((item) => item.id === createdCredential.id)) {
+        credentials.value = [...credentials.value, createdCredential];
+      }
+      preferredCredentialID.value = createdCredential.id;
+    }
+    credentialRequestedByHost.value = false;
+    credentialFormOpen.value = false;
   } catch (error) {
     show(`保存 SSH 凭据失败：${errorMessage(error)}`, "error");
   } finally {
@@ -363,7 +351,7 @@ onMounted(load);
         >
           <template #icon><Plus :size="14" /></template>新增主机
         </Button>
-        <Button v-else variant="primary" @click="openCreateCredential">
+        <Button v-else variant="primary" @click="openCreateCredential()">
           <template #icon><Plus :size="14" /></template>新增凭据
         </Button>
       </template>
@@ -430,7 +418,7 @@ onMounted(load);
           :size="34"
           class="mx-auto mb-3 text-[var(--text-tertiary)]"
         />
-        暂无 SSH 主机。先创建凭据，再添加第一台主机。
+        暂无 SSH 主机。新增主机时可直接创建并选择登录凭据。
       </div>
       <div v-else class="aw-data-table-wrap rounded-none border-0">
         <table class="aw-data-table min-w-[980px]">
@@ -511,6 +499,7 @@ onMounted(load);
                     size="sm"
                     variant="primary"
                     :disabled="!host.enabled || testingID > 0"
+                    title="在新标签页打开 SSH 与 SFTP 工作台"
                     @click="openTerminal(host)"
                   >
                     <template #icon><SquareTerminal :size="13" /></template>终端
@@ -596,9 +585,11 @@ onMounted(load);
       :open="hostFormOpen"
       :editing="editingHost"
       :credentials="credentials"
+      :preferred-credential-id="preferredCredentialID"
       :exposures="exposures"
       :saving="saving"
       @close="hostFormOpen = false"
+      @create-credential="openCreateCredential(true)"
       @invalid="show($event, 'error')"
       @save="saveHost"
     />
@@ -608,7 +599,7 @@ onMounted(load);
       :title="editingCredential ? '编辑 SSH 凭据' : '新增 SSH 凭据'"
       size="lg"
       :closable="!saving"
-      @close="!saving && (credentialFormOpen = false)"
+      @close="closeCredentialForm"
     >
       <div class="grid gap-4 sm:grid-cols-2">
         <label>
@@ -670,9 +661,7 @@ onMounted(load);
         秘密仅在本次请求中提交；保存后 API 只返回“已配置”和公钥指纹。
       </p>
       <template #footer>
-        <Button :disabled="saving" @click="credentialFormOpen = false"
-          >取消</Button
-        >
+        <Button :disabled="saving" @click="closeCredentialForm">取消</Button>
         <Button variant="primary" :loading="saving" @click="saveCredential"
           >保存</Button
         >
@@ -755,14 +744,6 @@ onMounted(load);
         <Button @click="trustedKey = null">关闭</Button>
       </template>
     </Modal>
-
-    <SSHTerminalModal
-      v-if="terminal"
-      open
-      :host-name="terminal.host.name"
-      :session="terminal.session"
-      @close="closeTerminal"
-    />
 
     <ConfirmDialog
       :open="!!deletingHost"
