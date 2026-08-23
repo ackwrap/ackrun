@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -131,6 +132,16 @@ func TestSSHCredentialUpdatePreservesSecretWhenOmitted(t *testing.T) {
 }
 
 func TestSSHEncryptedPrivateKeyCredential(t *testing.T) {
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientSigner, err := ssh.NewSignerFromKey(privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := newPublicKeyTestSSHServer(t, clientSigner.PublicKey())
+	defer server.Close()
 	root := t.TempDir()
 	db, err := store.Open(filepath.Join(root, "ackwrap.db"))
 	if err != nil {
@@ -142,16 +153,13 @@ func TestSSHEncryptedPrivateKeyCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer svc.Close()
-	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
 	block, err := ssh.MarshalPrivateKeyWithPassphrase(privateKey, "test", []byte("key-passphrase"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	privateKeyPEM := pem.EncodeToMemory(block)
 	credential, err := svc.CreateCredential(model.SSHCredentialRequest{
-		Name: "encrypted key", AuthType: "private_key", Secret: string(pem.EncodeToMemory(block)), Passphrase: "key-passphrase",
+		Name: "encrypted key", AuthType: "private_key", Secret: string(privateKeyPEM), Passphrase: "key-passphrase",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -159,12 +167,111 @@ func TestSSHEncryptedPrivateKeyCredential(t *testing.T) {
 	if credential.KeyFingerprint == "" {
 		t.Fatal("private key fingerprint was not populated")
 	}
+	encoded, err := json.Marshal(credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte("OPENSSH PRIVATE KEY")) || bytes.Contains(encoded, []byte("key-passphrase")) {
+		t.Fatal("private key credential response exposed secret material")
+	}
 	stored, err := db.GetSSHCredential(credential.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.authMethod(stored); err != nil {
 		t.Fatalf("stored encrypted private key could not be used: %v", err)
+	}
+	if bytes.Contains(stored.SecretCiphertext, privateKeyPEM) || bytes.Contains(stored.PassphraseCiphertext, []byte("key-passphrase")) {
+		t.Fatal("private key credential was stored without effective encryption")
+	}
+	host, err := svc.CreateHost(model.SSHHostRequest{
+		Name: "private key host", Host: "127.0.0.1", Port: server.Port(), Username: "tester",
+		CredentialID: credential.ID, ConnectionMode: "direct", TerminalType: "xterm-256color", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trustTestSSHHostKey(t, svc, host.ID)
+	if _, err := svc.TestHost(context.Background(), host.ID); err != nil {
+		t.Fatalf("encrypted private key SSH authentication failed: %v", err)
+	}
+}
+
+func TestSSHHostKeyChangeRequiresExplicitRotation(t *testing.T) {
+	server := newTestSSHServer(t, "correct-password")
+	defer server.Close()
+	root := t.TempDir()
+	db, err := store.Open(filepath.Join(root, "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	svc, err := NewSSHHostService(db, &paths.Paths{DataDir: root}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Close()
+	credential, err := svc.CreateCredential(model.SSHCredentialRequest{
+		Name: "password", AuthType: "password", Secret: "correct-password",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, err := svc.CreateHost(model.SSHHostRequest{
+		Name: "changed key host", Host: "127.0.0.1", Port: server.Port(), Username: "tester",
+		CredentialID: credential.ID, ConnectionMode: "direct", TerminalType: "xterm-256color", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldSigner := newTestSSHSigner(t)
+	if err := db.UpsertSSHHostKey(&model.SSHHostKey{
+		HostID: host.ID, KeyType: oldSigner.PublicKey().Type(),
+		PublicKey:         string(ssh.MarshalAuthorizedKey(oldSigner.PublicKey())),
+		FingerprintSHA256: ssh.FingerprintSHA256(oldSigner.PublicKey()),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.TestHost(context.Background(), host.ID)
+	var serviceErr *SSHServiceError
+	if !errors.As(err, &serviceErr) || serviceErr.Code != "SSH_HOST_KEY_CHANGED" {
+		t.Fatalf("expected changed host key rejection, got %v", err)
+	}
+	challenge, ok := serviceErr.Details.(*model.SSHHostKeyChallenge)
+	if !ok || challenge.TrustedFingerprint != ssh.FingerprintSHA256(oldSigner.PublicKey()) {
+		t.Fatalf("unexpected changed host key challenge: %#v", serviceErr.Details)
+	}
+	if _, err := svc.TrustHostKey(host.ID, model.SSHHostKeyTrustRequest{
+		ChallengeID: challenge.ChallengeID, FingerprintSHA256: challenge.FingerprintSHA256,
+	}, false); err == nil {
+		t.Fatal("changed Host Key was accepted without explicit rotation")
+	}
+	trusted, err := db.GetSSHHostKey(host.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trusted.FingerprintSHA256 != ssh.FingerprintSHA256(oldSigner.PublicKey()) {
+		t.Fatal("non-rotation confirmation changed the trusted Host Key")
+	}
+	_, err = svc.TestHost(context.Background(), host.ID)
+	if !errors.As(err, &serviceErr) || serviceErr.Code != "SSH_HOST_KEY_CHANGED" {
+		t.Fatalf("expected a fresh changed Host Key challenge, got %v", err)
+	}
+	challenge, ok = serviceErr.Details.(*model.SSHHostKeyChallenge)
+	if !ok {
+		t.Fatal("fresh Host Key rotation challenge is missing")
+	}
+	if _, err := svc.TrustHostKey(host.ID, model.SSHHostKeyTrustRequest{
+		ChallengeID: challenge.ChallengeID, FingerprintSHA256: challenge.FingerprintSHA256,
+	}, true); err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.TestHost(context.Background(), host.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FingerprintSHA256 != ssh.FingerprintSHA256(server.HostKey()) {
+		t.Fatalf("rotated host key mismatch: %+v", result)
 	}
 }
 
@@ -276,13 +383,64 @@ func TestSSHSessionTerminationPreventsAttachCommit(t *testing.T) {
 }
 
 type testSSHServer struct {
-	listener net.Listener
-	config   *ssh.ServerConfig
-	done     chan struct{}
-	once     sync.Once
+	listener      net.Listener
+	config        *ssh.ServerConfig
+	hostKey       ssh.PublicKey
+	echoShell     bool
+	windowChanges atomic.Int64
+	connections   atomic.Int64
+	done          chan struct{}
+	once          sync.Once
 }
 
 func newTestSSHServer(t *testing.T, password string) *testSSHServer {
+	return newConfiguredTestSSHServer(t, testSSHServerOptions{password: password, echoShell: true})
+}
+
+func newPublicKeyTestSSHServer(t *testing.T, publicKey ssh.PublicKey) *testSSHServer {
+	return newConfiguredTestSSHServer(t, testSSHServerOptions{publicKey: publicKey, echoShell: true})
+}
+
+type testSSHServerOptions struct {
+	password  string
+	publicKey ssh.PublicKey
+	echoShell bool
+}
+
+func newConfiguredTestSSHServer(t *testing.T, options testSSHServerOptions) *testSSHServer {
+	t.Helper()
+	signer := newTestSSHSigner(t)
+	config := &ssh.ServerConfig{}
+	if options.password != "" {
+		config.PasswordCallback = func(metadata ssh.ConnMetadata, content []byte) (*ssh.Permissions, error) {
+			if metadata.User() == "tester" && string(content) == options.password {
+				return nil, nil
+			}
+			return nil, errors.New("authentication failed")
+		}
+	}
+	if options.publicKey != nil {
+		config.PublicKeyCallback = func(metadata ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+			if metadata.User() == "tester" && sshKeysEqual(options.publicKey, key) {
+				return nil, nil
+			}
+			return nil, errors.New("authentication failed")
+		}
+	}
+	config.AddHostKey(signer)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &testSSHServer{
+		listener: listener, config: config, hostKey: signer.PublicKey(),
+		echoShell: options.echoShell, done: make(chan struct{}),
+	}
+	go server.serve()
+	return server
+}
+
+func newTestSSHSigner(t *testing.T) ssh.Signer {
 	t.Helper()
 	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -292,28 +450,25 @@ func newTestSSHServer(t *testing.T, password string) *testSSHServer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	config := &ssh.ServerConfig{
-		PasswordCallback: func(metadata ssh.ConnMetadata, content []byte) (*ssh.Permissions, error) {
-			if metadata.User() == "tester" && string(content) == password {
-				return nil, nil
-			}
-			return nil, errors.New("authentication failed")
-		},
-	}
-	config.AddHostKey(signer)
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	server := &testSSHServer{listener: listener, config: config, done: make(chan struct{})}
-	go server.serve()
-	return server
+	return signer
 }
 
 func (server *testSSHServer) Port() int {
 	_, port, _ := net.SplitHostPort(server.listener.Addr().String())
 	value, _ := strconv.Atoi(port)
 	return value
+}
+
+func (server *testSSHServer) HostKey() ssh.PublicKey {
+	return server.hostKey
+}
+
+func (server *testSSHServer) WindowChangeCount() int64 {
+	return server.windowChanges.Load()
+}
+
+func (server *testSSHServer) ConnectionCount() int64 {
+	return server.connections.Load()
 }
 
 func (server *testSSHServer) Close() {
@@ -329,6 +484,7 @@ func (server *testSSHServer) serve() {
 		if err != nil {
 			return
 		}
+		server.connections.Add(1)
 		go server.serveConnection(conn)
 	}
 }
@@ -352,9 +508,49 @@ func (server *testSSHServer) serveConnection(conn net.Conn) {
 		}
 		go func() {
 			defer accepted.Close()
+			var shellOnce sync.Once
 			for request := range requests {
-				_ = request.Reply(request.Type == "pty-req" || request.Type == "shell", nil)
+				supported := request.Type == "pty-req" || request.Type == "shell" || request.Type == "window-change"
+				_ = request.Reply(supported, nil)
+				if request.Type == "shell" && server.echoShell {
+					shellOnce.Do(func() { go serveTestSSHEchoShell(accepted) })
+				}
+				if request.Type == "window-change" {
+					server.windowChanges.Add(1)
+				}
 			}
 		}()
+	}
+}
+
+func serveTestSSHEchoShell(channel ssh.Channel) {
+	_, _ = channel.Write([]byte("ready\r\n"))
+	buffer := make([]byte, 4096)
+	for {
+		count, err := channel.Read(buffer)
+		if count > 0 {
+			_, _ = channel.Write(buffer[:count])
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+func trustTestSSHHostKey(t *testing.T, svc *SSHHostService, hostID int64) {
+	t.Helper()
+	_, err := svc.TestHost(context.Background(), hostID)
+	var serviceErr *SSHServiceError
+	if !errors.As(err, &serviceErr) || serviceErr.Code != "SSH_HOST_KEY_UNKNOWN" {
+		t.Fatalf("expected unknown host key, got %v", err)
+	}
+	challenge, ok := serviceErr.Details.(*model.SSHHostKeyChallenge)
+	if !ok {
+		t.Fatalf("missing host key challenge: %#v", serviceErr.Details)
+	}
+	if _, err := svc.TrustHostKey(hostID, model.SSHHostKeyTrustRequest{
+		ChallengeID: challenge.ChallengeID, FingerprintSHA256: challenge.FingerprintSHA256,
+	}, false); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -41,6 +41,35 @@ func TestSSHAttachRejectsDisconnectedRealtimeClient(t *testing.T) {
 	}
 }
 
+func TestRealtimeTargetedSendDropsSlowSSHClient(t *testing.T) {
+	realtime := NewRealtimeService()
+	key := &websocket.Conn{}
+	client := newRealtimeClient(nil)
+	realtime.clients[key] = client
+	closed := make(chan struct{}, 1)
+	realtime.SetCommandHandlers(nil, func(conn *websocket.Conn) {
+		if conn == nil {
+			closed <- struct{}{}
+		}
+	})
+	for index := 0; index < realtimeQueueSize; index++ {
+		if !realtime.SendTo(key, "ssh.session.output", map[string]any{"index": index}) {
+			t.Fatalf("targeted message %d was dropped before queue reached its limit", index)
+		}
+	}
+	if realtime.SendTo(key, "ssh.session.output", map[string]any{"overflow": true}) {
+		t.Fatal("slow SSH client remained connected after its bounded queue filled")
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("slow SSH client close handler was not called")
+	}
+	if realtime.HasClient(key) {
+		t.Fatal("slow SSH client remained registered")
+	}
+}
+
 func testManagedSSHHost() *model.SSHHost {
 	return &model.SSHHost{ID: 1, Name: "test", ConnectionMode: "direct"}
 }
