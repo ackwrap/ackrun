@@ -73,12 +73,6 @@ const shareOpen = ref(false);
 const sharingHosts = ref<SSHHost[]>([]);
 const selectedHostIDs = ref<number[]>([]);
 const credentialForm = reactive<CredentialForm>(emptyCredentialForm());
-const availableHosts = computed(
-  () => hosts.value.filter((item) => item.last_status === "available").length,
-);
-const trustedHosts = computed(
-  () => hosts.value.filter((item) => item.host_key_status === "trusted").length,
-);
 const selectedHosts = computed(() => {
   const selected = new Set(selectedHostIDs.value);
   return hosts.value.filter((host) => selected.has(host.id));
@@ -355,7 +349,6 @@ onMounted(load);
   <div class="space-y-5">
     <PageHeader
       title="SSH 主机"
-      description="通过直连或受管节点入口安全登录远程主机；Host Key 未确认时连接会被阻止。"
     >
       <template #actions>
         <Button
@@ -384,23 +377,6 @@ onMounted(load);
       </template>
     </PageHeader>
     <Toast :message="message" :type="messageType" @dismiss="message = ''" />
-
-    <div class="grid gap-3 sm:grid-cols-3">
-      <Card padding="sm">
-        <p class="text-xs text-[var(--text-secondary)]">主机总数</p>
-        <p class="mt-2 text-xl font-semibold">{{ hosts.length }}</p>
-      </Card>
-      <Card padding="sm">
-        <p class="text-xs text-[var(--text-secondary)]">连接可用</p>
-        <p class="mt-2 text-xl font-semibold text-[var(--color-success)]">
-          {{ availableHosts }}
-        </p>
-      </Card>
-      <Card padding="sm">
-        <p class="text-xs text-[var(--text-secondary)]">Host Key 已信任</p>
-        <p class="mt-2 text-xl font-semibold">{{ trustedHosts }}</p>
-      </Card>
-    </div>
 
     <div
       class="flex gap-1 border-b border-[var(--border-default)]"
