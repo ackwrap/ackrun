@@ -18,11 +18,14 @@ const props = defineProps<{
   hosts: SSHHost[];
   loading: boolean;
   testingId: number;
+  openingShellId: number;
+  shellOpen: boolean;
   selectedIds: number[];
 }>();
 const emit = defineEmits<{
   "update:selectedIds": [ids: number[]];
   test: [host: SSHHost];
+  shell: [host: SSHHost];
   terminal: [host: SSHHost];
   edit: [host: SSHHost];
   share: [host: SSHHost];
@@ -167,7 +170,7 @@ function connectionLabel(host: SSHHost) {
                 <Button
                   size="sm"
                   :loading="testingId === host.id"
-                  :disabled="!host.enabled"
+                  :disabled="!host.enabled || openingShellId > 0"
                   title="测试连接"
                   @click="$emit('test', host)"
                 >
@@ -176,11 +179,22 @@ function connectionLabel(host: SSHHost) {
                 <Button
                   size="sm"
                   variant="primary"
-                  :disabled="!host.enabled || testingId > 0"
+                  :disabled="
+                    !host.enabled || testingId > 0 || openingShellId > 0 || shellOpen
+                  "
+                  :loading="openingShellId === host.id"
+                  title="在当前页面打开临时 Shell"
+                  @click="$emit('shell', host)"
+                >
+                  <template #icon><SquareTerminal :size="13" /></template>Shell
+                </Button>
+                <Button
+                  size="sm"
+                  :disabled="!host.enabled || testingId > 0 || openingShellId > 0"
                   title="在新标签页打开 SSH 与 SFTP 工作台"
                   @click="$emit('terminal', host)"
                 >
-                  <template #icon><SquareTerminal :size="13" /></template>终端
+                  <template #icon><SquareTerminal :size="13" /></template>工作台
                 </Button>
                 <Button size="sm" variant="ghost" @click="$emit('edit', host)">
                   <template #icon><Pencil :size="13" /></template>

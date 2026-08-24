@@ -1,5 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import {
+  computed,
+  defineAsyncComponent,
+  onBeforeUnmount,
+  onMounted,
+  reactive,
+  ref,
+} from "vue";
 import {
   Fingerprint,
   KeyRound,
@@ -30,12 +37,17 @@ import type {
   SSHHostKey,
   SSHHostKeyChallenge,
   SSHHostRequest,
+  SSHSessionCreateResponse,
 } from "@/services/sshTypes";
 import { errorMessage, formatTime } from "./advanced/advancedUi";
 import SSHHostFormModal from "./ssh/SSHHostFormModal.vue";
 import SSHCredentialFormModal from "./ssh/SSHCredentialFormModal.vue";
 import SSHHostShareModal from "./ssh/SSHHostShareModal.vue";
 import SSHHostTable from "./ssh/SSHHostTable.vue";
+
+const SSHTerminalModal = defineAsyncComponent(
+  () => import("./ssh/SSHTerminalModal.vue"),
+);
 
 type PageTab = "hosts" | "credentials";
 interface CredentialForm {
@@ -57,6 +69,7 @@ const exposures = ref<NodeExposure[]>([]);
 const loading = ref(true);
 const saving = ref(false);
 const testingID = ref(0);
+const openingShellID = ref(0);
 const message = ref("");
 const messageType = ref<"success" | "error" | "info">("success");
 const editingHost = ref<SSHHost | null>(null);
@@ -72,12 +85,18 @@ const trustedKey = ref<{ host: SSHHost; key: SSHHostKey } | null>(null);
 const shareOpen = ref(false);
 const sharingHosts = ref<SSHHost[]>([]);
 const selectedHostIDs = ref<number[]>([]);
+const quickShell = ref<{
+  host: SSHHost;
+  session: SSHSessionCreateResponse;
+} | null>(null);
 const credentialForm = reactive<CredentialForm>(emptyCredentialForm());
 const selectedHosts = computed(() => {
   const selected = new Set(selectedHostIDs.value);
   return hosts.value.filter((host) => selected.has(host.id));
 });
 const maxSharedHosts = 100;
+let shellRequestGeneration = 0;
+let pageUnmounting = false;
 
 function emptyCredentialForm(): CredentialForm {
   return { name: "", auth_type: "password", secret: "", passphrase: "" };
@@ -228,6 +247,49 @@ async function deleteHostKey() {
   }
 }
 
+async function openShell(host: SSHHost) {
+  if (testingID.value || openingShellID.value || quickShell.value) return;
+  const generation = ++shellRequestGeneration;
+  openingShellID.value = host.id;
+  try {
+    const session = await sshApi.createSession(host.id, 100, 30);
+    if (pageUnmounting || generation !== shellRequestGeneration) {
+      try {
+        await sshApi.closeSession(session.session_id);
+      } catch {
+        // The session may already have expired or closed with its transport.
+      }
+      return;
+    }
+    quickShell.value = { host, session };
+  } catch (error) {
+    if (pageUnmounting || generation !== shellRequestGeneration) return;
+    if (!applyHostKeyError(host, error)) {
+      show(`创建临时 Shell 失败：${errorMessage(error)}`, "error");
+    }
+  } finally {
+    if (!pageUnmounting && generation === shellRequestGeneration) {
+      openingShellID.value = 0;
+    }
+  }
+}
+
+async function closeShell() {
+  const current = quickShell.value;
+  quickShell.value = null;
+  if (!current) return;
+  try {
+    await sshApi.closeSession(current.session.session_id);
+  } catch (error) {
+    if (
+      !(error instanceof ApiRequestError) ||
+      error.code !== "SSH_SESSION_NOT_FOUND"
+    ) {
+      show(`关闭临时 Shell 失败：${errorMessage(error)}`, "error");
+    }
+  }
+}
+
 function openTerminal(host: SSHHost) {
   const opened = window.open(
     `/ssh-terminal/${encodeURIComponent(host.id)}`,
@@ -343,6 +405,13 @@ function openBatchShare() {
 }
 
 onMounted(load);
+onBeforeUnmount(() => {
+  pageUnmounting = true;
+  shellRequestGeneration++;
+  const current = quickShell.value;
+  quickShell.value = null;
+  if (current) void sshApi.closeSession(current.session.session_id).catch(() => {});
+});
 </script>
 
 <template>
@@ -412,7 +481,10 @@ onMounted(load);
       :hosts="hosts"
       :loading="loading"
       :testing-id="testingID"
+      :opening-shell-id="openingShellID"
+      :shell-open="!!quickShell"
       @test="testHost"
+      @shell="openShell"
       @terminal="openTerminal"
       @edit="openEditHost"
       @share="sharingHosts = [$event]; shareOpen = true"
@@ -509,6 +581,14 @@ onMounted(load);
       :hosts="sharingHosts"
       @close="shareOpen = false"
       @imported="importedHost"
+    />
+
+    <SSHTerminalModal
+      v-if="quickShell"
+      open
+      :host-name="quickShell.host.name"
+      :session="quickShell.session"
+      @close="closeShell"
     />
 
     <Modal
