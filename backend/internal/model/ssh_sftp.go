@@ -26,3 +26,23 @@ type SSHSFTPRenameRequest struct {
 	OldPath string `json:"old_path"`
 	NewPath string `json:"new_path"`
 }
+
+type SSHSFTPCopyRequest struct {
+	SourcePath string `json:"source_path"`
+	TargetPath string `json:"target_path"`
+}
+
+type SSHSFTPTextWriteRequest struct {
+	Path           string `json:"path"`
+	Content        string `json:"content"`
+	ExpectedSHA256 string `json:"expected_sha256"`
+}
+
+type SSHSFTPTextFile struct {
+	Path       string `json:"path"`
+	Name       string `json:"name"`
+	Content    string `json:"content"`
+	SHA256     string `json:"sha256"`
+	Size       int64  `json:"size"`
+	ModifiedAt int64  `json:"modified_at"`
+}

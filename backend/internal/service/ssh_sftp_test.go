@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path"
 	"path/filepath"
 	"sync"
@@ -167,6 +168,123 @@ func TestSSHSFTPFileLifecycleAndSessionIsolation(t *testing.T) {
 	if err := svc.RenameSFTP(session.SessionID, session.SFTPToken, filePath, targetPath); sshServiceCode(err) != "SSH_SFTP_EXISTS" {
 		t.Fatalf("rename over an existing target was not rejected: %v", err)
 	}
+	textFile, err := svc.ReadSFTPText(session.SessionID, session.SFTPToken, filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if textFile.Content != "replacement" || textFile.SHA256 == "" {
+		t.Fatalf("unexpected SFTP text response: %+v", textFile)
+	}
+	savedText, err := svc.WriteSFTPText(session.SessionID, session.SFTPToken, model.SSHSFTPTextWriteRequest{
+		Path: filePath, Content: "edited content\n", ExpectedSHA256: textFile.SHA256,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if savedText.Content != "edited content\n" || savedText.SHA256 == textFile.SHA256 {
+		t.Fatalf("unexpected saved SFTP text response: %+v", savedText)
+	}
+	if _, err := svc.WriteSFTPText(session.SessionID, session.SFTPToken, model.SSHSFTPTextWriteRequest{
+		Path: filePath, Content: "stale overwrite", ExpectedSHA256: textFile.SHA256,
+	}); sshServiceCode(err) != "SSH_SFTP_CONFLICT" {
+		t.Fatalf("stale SFTP text update was not rejected: %v", err)
+	}
+	binaryPath := path.Join(directory, "binary.dat")
+	if _, err := svc.UploadSFTP(
+		session.SessionID, session.SFTPToken, binaryPath, false,
+		io.NopCloser(bytes.NewReader([]byte{0xff, 0xfe, 0xfd})),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ReadSFTPText(session.SessionID, session.SFTPToken, binaryPath); sshServiceCode(err) != "SSH_SFTP_BINARY" {
+		t.Fatalf("binary SFTP file was accepted by the text editor: %v", err)
+	}
+	if err := svc.DeleteSFTP(session.SessionID, session.SFTPToken, binaryPath, false); err != nil {
+		t.Fatal(err)
+	}
+	copyPath := path.Join(directory, "copied.txt")
+	if err := svc.CopySFTP(context.Background(), session.SessionID, session.SFTPToken, filePath, copyPath); err != nil {
+		t.Fatal(err)
+	}
+	copyDownload, err := svc.OpenSFTPDownload(session.SessionID, session.SFTPToken, copyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err = io.ReadAll(copyDownload.Reader)
+	_ = copyDownload.Reader.Close()
+	if err != nil || string(content) != savedText.Content {
+		t.Fatalf("copied SFTP file mismatch: content=%q err=%v", content, err)
+	}
+	if err := svc.CopySFTP(context.Background(), session.SessionID, session.SFTPToken, filePath, copyPath); sshServiceCode(err) != "SSH_SFTP_EXISTS" {
+		t.Fatalf("copy over an existing target was not rejected: %v", err)
+	}
+	if err := svc.DeleteSFTP(session.SessionID, session.SFTPToken, copyPath, false); err != nil {
+		t.Fatal(err)
+	}
+	directoryCopy := path.Join(listing.Home, "documents-copy")
+	if err := svc.CopySFTP(context.Background(), session.SessionID, session.SFTPToken, directory, directoryCopy); err != nil {
+		t.Fatal(err)
+	}
+	copyListing, err := svc.ListSFTP(context.Background(), session.SessionID, session.SFTPToken, directoryCopy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(copyListing.Entries) != 2 {
+		t.Fatalf("copied SFTP directory is incomplete: %+v", copyListing.Entries)
+	}
+	if err := svc.DeleteSFTP(session.SessionID, session.SFTPToken, directoryCopy, true); err != nil {
+		t.Fatal(err)
+	}
+	concurrentVersion, err := svc.ReadSFTPText(session.SessionID, session.SFTPToken, filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	concurrentSession, err := svc.CreateSession(context.Background(), host.ID, model.SSHSessionCreateRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type textWriteResult struct {
+		content string
+		err     error
+	}
+	startWrites := make(chan struct{})
+	writeResults := make(chan textWriteResult, 2)
+	writeText := func(currentSession *model.SSHSessionCreateResponse, value string) {
+		<-startWrites
+		_, writeErr := svc.WriteSFTPText(currentSession.SessionID, currentSession.SFTPToken, model.SSHSFTPTextWriteRequest{
+			Path: filePath, Content: value, ExpectedSHA256: concurrentVersion.SHA256,
+		})
+		writeResults <- textWriteResult{content: value, err: writeErr}
+	}
+	go writeText(session, "first concurrent value")
+	go writeText(concurrentSession, "second concurrent value")
+	close(startWrites)
+	successes, conflicts, successfulContent := 0, 0, ""
+	for range 2 {
+		result := <-writeResults
+		switch sshServiceCode(result.err) {
+		case "":
+			successes++
+			successfulContent = result.content
+		case "SSH_SFTP_CONFLICT":
+			conflicts++
+		default:
+			t.Fatalf("unexpected concurrent text write result: %v", result.err)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("concurrent text writes were not serialized: successes=%d conflicts=%d", successes, conflicts)
+	}
+	finalText, err := svc.ReadSFTPText(session.SessionID, session.SFTPToken, filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finalText.Content != successfulContent {
+		t.Fatalf("concurrent text write content mismatch: got=%q want=%q", finalText.Content, successfulContent)
+	}
+	if err := svc.CloseSession(concurrentSession.SessionID); err != nil {
+		t.Fatal(err)
+	}
 
 	renamedPath := path.Join(directory, "renamed.txt")
 	if err := svc.RenameSFTP(session.SessionID, session.SFTPToken, filePath, renamedPath); err != nil {
@@ -259,3 +377,21 @@ func sshServiceCode(err error) string {
 	}
 	return ""
 }
+
+func TestValidateSFTPCopyInfoRejectsSymlink(t *testing.T) {
+	if code := sshServiceCode(validateSFTPCopyInfo(testSFTPFileInfo{mode: os.ModeSymlink})); code != "SSH_SFTP_UNSUPPORTED" {
+		t.Fatalf("SFTP symlink copy was not rejected: %s", code)
+	}
+	if err := validateSFTPCopyInfo(testSFTPFileInfo{mode: 0644}); err != nil {
+		t.Fatalf("regular SFTP file was rejected: %v", err)
+	}
+}
+
+type testSFTPFileInfo struct{ mode os.FileMode }
+
+func (info testSFTPFileInfo) Name() string       { return "test" }
+func (info testSFTPFileInfo) Size() int64        { return 0 }
+func (info testSFTPFileInfo) Mode() os.FileMode  { return info.mode }
+func (info testSFTPFileInfo) ModTime() time.Time { return time.Time{} }
+func (info testSFTPFileInfo) IsDir() bool        { return info.mode.IsDir() }
+func (info testSFTPFileInfo) Sys() any           { return nil }

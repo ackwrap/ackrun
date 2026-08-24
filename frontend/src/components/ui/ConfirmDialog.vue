@@ -8,13 +8,18 @@ withDefaults(
     cancelText?: string;
     danger?: boolean;
     showCancel?: boolean;
+    aboveModal?: boolean;
   }>(),
   { confirmText: "确认", cancelText: "取消", showCancel: true },
 );
 defineEmits<{ confirm: []; cancel: [] }>();
 </script>
 <template>
-  <div v-if="open" class="aw-modal-backdrop z-[80]">
+  <div
+    v-if="open"
+    class="aw-modal-backdrop"
+    :class="aboveModal ? 'z-[1100]' : 'z-[80]'"
+  >
     <div class="aw-modal-panel max-w-md">
       <div class="border-b border-[var(--border-default)] px-5 py-4">
         <h3 class="text-base font-semibold">{{ title }}</h3>

@@ -280,8 +280,12 @@ func writeSSHError(c *gin.Context, err error) {
 		status = http.StatusNotFound
 	case "SSH_HOST_KEY_UNKNOWN", "SSH_HOST_KEY_CHANGED", "SSH_HOST_KEY_CHALLENGE_INVALID",
 		"SSH_HOST_KEY_ALREADY_TRUSTED", "SSH_HOST_KEY_NOT_TRUSTED", "SSH_RESOURCE_IN_USE", "SSH_NAME_CONFLICT",
-		"SSH_SFTP_EXISTS":
+		"SSH_SFTP_EXISTS", "SSH_SFTP_CONFLICT":
 		status = http.StatusConflict
+	case "SSH_SFTP_TEXT_TOO_LARGE":
+		status = http.StatusRequestEntityTooLarge
+	case "SSH_SFTP_BINARY":
+		status = http.StatusUnprocessableEntity
 	case "SSH_CONNECT_TIMEOUT":
 		status = http.StatusGatewayTimeout
 	case "SSH_SESSION_LIMIT":

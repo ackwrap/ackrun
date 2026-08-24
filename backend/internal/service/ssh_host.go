@@ -63,6 +63,9 @@ type SSHHostService struct {
 	pendingByHost   map[int64]int
 	realtime        *RealtimeService
 	closed          bool
+
+	sftpTextLockMu sync.Mutex
+	sftpTextLocks  map[string]*sshSFTPTextLock
 }
 
 func NewSSHHostService(db *store.Store, p *paths.Paths, core sshCore) (*SSHHostService, error) {

@@ -16,6 +16,7 @@ import (
 
 const (
 	maxSSHSFTPRequestBody = 16 << 10
+	maxSSHSFTPTextBody    = 13 << 20
 	maxSSHSFTPUploadBody  = 512 << 20
 	sshSFTPTokenHeader    = "X-SSH-Session-Token"
 )
@@ -85,6 +86,64 @@ func (h *SSHHostHandler) RenameSFTP(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, model.ActionResponse{Success: true, Message: "SFTP entry renamed"})
+}
+
+func (h *SSHHostHandler) CopySFTP(c *gin.Context) {
+	sessionID, token, ok := parseSSHSFTPSession(c)
+	if !ok {
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxSSHSFTPRequestBody)
+	var request model.SSHSFTPCopyRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		writeSSHInvalidRequest(c, err)
+		return
+	}
+	if err := h.service.CopySFTP(c.Request.Context(), sessionID, token, request.SourcePath, request.TargetPath); err != nil {
+		writeSSHError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, model.ActionResponse{Success: true, Message: "SFTP entry copied"})
+}
+
+func (h *SSHHostHandler) ReadSFTPText(c *gin.Context) {
+	sessionID, token, ok := parseSSHSFTPSession(c)
+	if !ok {
+		return
+	}
+	result, err := h.service.ReadSFTPText(sessionID, token, c.Query("path"))
+	if err != nil {
+		writeSSHError(c, err)
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, result)
+}
+
+func (h *SSHHostHandler) WriteSFTPText(c *gin.Context) {
+	sessionID, token, ok := parseSSHSFTPSession(c)
+	if !ok {
+		return
+	}
+	if c.Request.ContentLength > maxSSHSFTPTextBody {
+		c.JSON(http.StatusRequestEntityTooLarge, model.ErrorResponse{Error: model.APIError{
+			Code: "SSH_REQUEST_TOO_LARGE", Message: "SSH 文本编辑请求体过大",
+		}})
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxSSHSFTPTextBody)
+	var request model.SSHSFTPTextWriteRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		writeSSHInvalidRequest(c, err)
+		return
+	}
+	result, err := h.service.WriteSFTPText(sessionID, token, request)
+	if err != nil {
+		writeSSHError(c, err)
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, result)
 }
 
 func (h *SSHHostHandler) DeleteSFTP(c *gin.Context) {

@@ -110,6 +110,15 @@ export interface SSHSFTPListResponse {
   entries: SSHSFTPEntry[];
 }
 
+export interface SSHSFTPTextFile {
+  path: string;
+  name: string;
+  content: string;
+  sha256: string;
+  size: number;
+  modified_at: number;
+}
+
 export interface SSHActionResponse {
   success: boolean;
   message: string;

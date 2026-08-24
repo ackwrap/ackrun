@@ -30,6 +30,8 @@ func TestSSHSFTPHTTPRequiresSessionTokenAndEnforcesUploadLimit(t *testing.T) {
 	handler := NewSSHHostHandler(svc)
 	router := gin.New()
 	router.GET("/sessions/:sessionID/sftp", handler.ListSFTP)
+	router.POST("/sessions/:sessionID/sftp/copy", handler.CopySFTP)
+	router.PUT("/sessions/:sessionID/sftp/text", handler.WriteSFTPText)
 	router.POST("/sessions/:sessionID/sftp/upload", handler.UploadSFTP)
 
 	request := httptest.NewRequest(http.MethodGet, "/sessions/missing/sftp?path=.", nil)
@@ -54,5 +56,21 @@ func TestSSHSFTPHTTPRequiresSessionTokenAndEnforcesUploadLimit(t *testing.T) {
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusRequestEntityTooLarge || !strings.Contains(response.Body.String(), "SSH_SFTP_UPLOAD_TOO_LARGE") {
 		t.Fatalf("oversized SFTP upload response: status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/sessions/missing/sftp/copy", http.NoBody)
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound || !strings.Contains(response.Body.String(), "SSH_SESSION_NOT_FOUND") {
+		t.Fatalf("missing copy token response: status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodPut, "/sessions/missing/sftp/text", http.NoBody)
+	request.Header.Set(sshSFTPTokenHeader, "token")
+	request.ContentLength = maxSSHSFTPTextBody + 1
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusRequestEntityTooLarge || !strings.Contains(response.Body.String(), "SSH_REQUEST_TOO_LARGE") {
+		t.Fatalf("oversized SFTP text response: status=%d body=%s", response.Code, response.Body.String())
 	}
 }

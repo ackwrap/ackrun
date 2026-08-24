@@ -1,18 +1,5 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import {
-  ArrowDownToLine,
-  ArrowUp,
-  File as FileIcon,
-  FilePlus2,
-  Folder,
-  FolderPlus,
-  Home,
-  Pencil,
-  RefreshCw,
-  Trash2,
-  Upload,
-} from "lucide-vue-next";
 import Button from "@/components/ui/Button.vue";
 import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
 import Modal from "@/components/ui/Modal.vue";
@@ -20,7 +7,12 @@ import { sshApi } from "@/services/sshApi";
 import type {
   SSHSessionCreateResponse,
   SSHSFTPEntry,
+  SSHSFTPTextFile,
 } from "@/services/sshTypes";
+import SFTPContextMenu from "./SFTPContextMenu.vue";
+import SFTPFileTable from "./SFTPFileTable.vue";
+import SFTPTextEditorModal from "./SFTPTextEditorModal.vue";
+import SFTPToolbar from "./SFTPToolbar.vue";
 
 const props = defineProps<{ session: SSHSessionCreateResponse }>();
 
@@ -30,22 +22,65 @@ const home = ref(".");
 const parent = ref(".");
 const entries = ref<SSHSFTPEntry[]>([]);
 const selected = ref<SSHSFTPEntry | null>(null);
+const selectedPaths = ref<Set<string>>(new Set());
+const selectionAnchor = ref("");
 const loading = ref(true);
 const error = ref("");
 const message = ref("");
-const fileInput = ref<HTMLInputElement | null>(null);
 const uploading = ref(false);
 const uploadProgress = ref(0);
 const uploadName = ref("");
 const action = ref<"create" | "mkdir" | "rename" | null>(null);
 const actionName = ref("");
 const actionSaving = ref(false);
-const deleting = ref<SSHSFTPEntry | null>(null);
+const deleting = ref<SSHSFTPEntry[]>([]);
 const pendingOverwrite = ref<File[]>([]);
+const working = ref(false);
+const clipboard = ref<{
+  mode: "copy" | "move";
+  sourceDirectory: string;
+  entries: SSHSFTPEntry[];
+} | null>(null);
+const contextMenu = ref({ open: false, x: 0, y: 0 });
+const editorFile = ref<SSHSFTPTextFile | null>(null);
+const editorSaving = ref(false);
+const editorError = ref("");
 
 const canGoUp = computed(
   () => path.value !== "/" && parent.value !== path.value,
 );
+const selectedEntries = computed(() =>
+  entries.value.filter((entry) => selectedPaths.value.has(entry.path)),
+);
+const singleSelected = computed(() =>
+  selectedEntries.value.length === 1 ? selectedEntries.value[0] : null,
+);
+const selectedFiles = computed(() =>
+  selectedEntries.value.filter((entry) => !entry.is_dir),
+);
+const busy = computed(
+  () =>
+    uploading.value ||
+    working.value ||
+    actionSaving.value ||
+    editorSaving.value,
+);
+const deleteSummary = computed(() => {
+  if (deleting.value.length === 1) {
+    const entry = deleting.value[0];
+    return `确认永久删除${entry.is_dir ? "目录" : "文件"}「${entry.name}」？${entry.is_dir ? "目录及其全部内容都会被删除。" : "此操作无法撤销。"}`;
+  }
+  const names = deleting.value
+    .slice(0, 3)
+    .map((entry) => `「${entry.name}」`)
+    .join("、");
+  const total = deleting.value.length;
+  const remaining = total > 3 ? `，其余 ${total - 3} 项` : "";
+  const directoryWarning = deleting.value.some((entry) => entry.is_dir)
+    ? "所选目录及其全部内容都会被删除。"
+    : "";
+  return `确认永久删除 ${names}${remaining}（共 ${total} 项）？${directoryWarning}此操作无法撤销。`;
+});
 
 function remoteJoin(base: string, name: string) {
   return base === "/" ? `/${name}` : `${base.replace(/\/+$/, "")}/${name}`;
@@ -59,28 +94,6 @@ function validName(value: string) {
     !/[\\/]/.test(value) &&
     !/[\0\r\n]/.test(value)
   );
-}
-
-function formatSize(size: number) {
-  if (size < 1024) return `${size} B`;
-  const units = ["KB", "MB", "GB", "TB"];
-  let value = size / 1024;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit++;
-  }
-  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`;
-}
-
-function formatTime(value: number) {
-  if (!value) return "--";
-  return new Date(value).toLocaleString(undefined, {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
 }
 
 async function load(requestedPath = pathInput.value) {
@@ -98,7 +111,7 @@ async function load(requestedPath = pathInput.value) {
     home.value = result.home;
     parent.value = result.parent;
     entries.value = result.entries;
-    selected.value = null;
+    clearSelection();
   } catch (cause: any) {
     error.value = cause?.message || "SFTP 目录读取失败";
   } finally {
@@ -106,21 +119,122 @@ async function load(requestedPath = pathInput.value) {
   }
 }
 
-function openEntry(entry: SSHSFTPEntry) {
-  if (uploading.value) return;
+function clearSelection() {
+  selectedPaths.value = new Set();
+  selected.value = null;
+  selectionAnchor.value = "";
+  contextMenu.value.open = false;
+}
+
+function restoreSelection(paths: string[]) {
+  const available = new Set(
+    entries.value
+      .filter((entry) => paths.includes(entry.path))
+      .map((entry) => entry.path),
+  );
+  selectedPaths.value = available;
+  selected.value =
+    entries.value.find((entry) => available.has(entry.path)) || null;
+}
+
+function syncPrimarySelection(preferred?: SSHSFTPEntry) {
+  if (preferred && selectedPaths.value.has(preferred.path)) {
+    selected.value = preferred;
+    return;
+  }
+  selected.value = selectedEntries.value[0] || null;
+}
+
+function selectEntry(entry: SSHSFTPEntry, event: MouseEvent) {
+  if (busy.value) return;
+  const paths = new Set(selectedPaths.value);
+  const toggle = event.ctrlKey || event.metaKey;
+  if (event.shiftKey && selectionAnchor.value) {
+    const anchorIndex = entries.value.findIndex(
+      (item) => item.path === selectionAnchor.value,
+    );
+    const currentIndex = entries.value.findIndex(
+      (item) => item.path === entry.path,
+    );
+    if (anchorIndex >= 0 && currentIndex >= 0) {
+      if (!toggle) paths.clear();
+      const start = Math.min(anchorIndex, currentIndex);
+      const end = Math.max(anchorIndex, currentIndex);
+      for (const item of entries.value.slice(start, end + 1)) {
+        paths.add(item.path);
+      }
+    }
+  } else if (toggle) {
+    if (paths.has(entry.path)) paths.delete(entry.path);
+    else paths.add(entry.path);
+    selectionAnchor.value = entry.path;
+  } else {
+    paths.clear();
+    paths.add(entry.path);
+    selectionAnchor.value = entry.path;
+  }
+  selectedPaths.value = paths;
+  syncPrimarySelection(entry);
+}
+
+function toggleEntry(entry: SSHSFTPEntry) {
+  if (busy.value) return;
+  const paths = new Set(selectedPaths.value);
+  if (paths.has(entry.path)) paths.delete(entry.path);
+  else paths.add(entry.path);
+  selectedPaths.value = paths;
+  selectionAnchor.value = entry.path;
+  syncPrimarySelection(entry);
+}
+
+function toggleAll() {
+  if (busy.value) return;
+  if (selectedPaths.value.size === entries.value.length) clearSelection();
+  else {
+    selectedPaths.value = new Set(entries.value.map((entry) => entry.path));
+    selected.value = entries.value[0] || null;
+  }
+}
+
+function openContextMenu(entry: SSHSFTPEntry, event: MouseEvent) {
+  if (busy.value) return;
+  if (!selectedPaths.value.has(entry.path)) {
+    selectedPaths.value = new Set([entry.path]);
+  }
   selected.value = entry;
+  selectionAnchor.value = entry.path;
+  contextMenu.value = {
+    open: true,
+    x: Math.max(8, Math.min(event.clientX, window.innerWidth - 205)),
+    y: Math.max(8, Math.min(event.clientY, window.innerHeight - 330)),
+  };
+}
+
+function closeContextMenu() {
+  contextMenu.value.open = false;
+}
+
+function openSelectedEntry() {
+  const entry = singleSelected.value;
+  closeContextMenu();
+  if (entry) openEntry(entry);
+}
+
+function openEntry(entry: SSHSFTPEntry) {
+  if (busy.value) return;
   if (entry.is_dir) void load(entry.path);
-  else void download(entry);
+  else void downloadEntry(entry);
 }
 
 function openAction(next: "create" | "mkdir" | "rename") {
-  if (uploading.value) return;
+  closeContextMenu();
+  if (busy.value) return;
   action.value = next;
-  actionName.value = next === "rename" ? selected.value?.name || "" : "";
+  actionName.value = next === "rename" ? singleSelected.value?.name || "" : "";
 }
 
 async function saveAction() {
-  if (uploading.value || actionSaving.value) return;
+  if (busy.value) return;
   const name = actionName.value.trim();
   if (!validName(name)) {
     message.value = "名称不能为空，且不能包含斜杠或换行";
@@ -143,11 +257,11 @@ async function saveAction() {
         remoteJoin(path.value, name),
       );
       message.value = "目录已创建";
-    } else if (action.value === "rename" && selected.value) {
+    } else if (action.value === "rename" && singleSelected.value) {
       await sshApi.renameSFTP(
         props.session.session_id,
         props.session.sftp_token,
-        selected.value.path,
+        singleSelected.value.path,
         remoteJoin(path.value, name),
       );
       message.value = "名称已更新";
@@ -162,26 +276,42 @@ async function saveAction() {
 }
 
 async function removeEntry() {
-  if (uploading.value) return;
-  const entry = deleting.value;
-  deleting.value = null;
-  if (!entry) return;
-  try {
-    await sshApi.deleteSFTP(
-      props.session.session_id,
-      props.session.sftp_token,
-      entry.path,
-      entry.is_dir,
-    );
-    message.value = `${entry.name} 已删除`;
-    await load(path.value);
-  } catch (cause: any) {
-    message.value = cause?.message || "删除失败";
+  if (busy.value) return;
+  const items = [...deleting.value];
+  deleting.value = [];
+  if (!items.length) return;
+  working.value = true;
+  let completed = 0;
+  const failures: Array<{ entry: SSHSFTPEntry; message: string }> = [];
+  for (const entry of items) {
+    try {
+      await sshApi.deleteSFTP(
+        props.session.session_id,
+        props.session.sftp_token,
+        entry.path,
+        entry.is_dir,
+      );
+      completed++;
+    } catch (cause: any) {
+      failures.push({ entry, message: cause?.message || "删除失败" });
+    }
   }
+  await load(path.value);
+  if (failures.length) {
+    restoreSelection(failures.map((failure) => failure.entry.path));
+    const names = failures
+      .slice(0, 3)
+      .map((failure) => failure.entry.name)
+      .join("、");
+    message.value = `已删除 ${completed}/${items.length} 项；失败：${names}${failures.length > 3 ? ` 等 ${failures.length} 项` : ""}`;
+  } else {
+    message.value = `${completed} 项已删除`;
+  }
+  working.value = false;
 }
 
-async function download(entry: SSHSFTPEntry) {
-  if (uploading.value || entry.is_dir) return;
+async function downloadEntry(entry: SSHSFTPEntry) {
+  if (busy.value || entry.is_dir) return;
   message.value = `正在下载 ${entry.name}`;
   try {
     const blob = await sshApi.downloadSFTP(
@@ -201,8 +331,172 @@ async function download(entry: SSHSFTPEntry) {
   }
 }
 
+async function downloadSelected() {
+  closeContextMenu();
+  if (busy.value || !selectedFiles.value.length) return;
+  const items = [...selectedFiles.value];
+  working.value = true;
+  let completed = 0;
+  const failures: Array<{ entry: SSHSFTPEntry; message: string }> = [];
+  for (const entry of items) {
+    try {
+      const blob = await sshApi.downloadSFTP(
+        props.session.session_id,
+        props.session.sftp_token,
+        entry.path,
+      );
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = entry.name;
+      link.click();
+      URL.revokeObjectURL(url);
+      completed++;
+    } catch (cause: any) {
+      failures.push({ entry, message: cause?.message || "下载失败" });
+    }
+  }
+  if (failures.length) {
+    const names = failures
+      .slice(0, 3)
+      .map((failure) => failure.entry.name)
+      .join("、");
+    message.value = `已下载 ${completed}/${items.length} 个文件；失败：${names}${failures.length > 3 ? ` 等 ${failures.length} 个` : ""}`;
+  } else {
+    message.value = `${completed} 个文件下载已开始`;
+  }
+  working.value = false;
+}
+
+function putSelectionOnClipboard(mode: "copy" | "move") {
+  closeContextMenu();
+  if (busy.value || !selectedEntries.value.length) return;
+  clipboard.value = {
+    mode,
+    sourceDirectory: path.value,
+    entries: selectedEntries.value.map((entry) => ({ ...entry })),
+  };
+  message.value = `已${mode === "copy" ? "复制" : "剪切"} ${selectedEntries.value.length} 项，进入目标目录后粘贴`;
+}
+
+async function pasteClipboard() {
+  closeContextMenu();
+  const current = clipboard.value;
+  if (busy.value || !current?.entries.length) return;
+  if (current.sourceDirectory === path.value) {
+    message.value = "目标目录与来源目录相同";
+    return;
+  }
+  working.value = true;
+  let completed = 0;
+  try {
+    for (const entry of current.entries) {
+      const targetPath = remoteJoin(path.value, entry.name);
+      if (entry.is_dir && path.value.startsWith(`${entry.path}/`)) {
+        throw new Error("不能粘贴到来源目录内部");
+      }
+      if (current.mode === "copy") {
+        await sshApi.copySFTP(
+          props.session.session_id,
+          props.session.sftp_token,
+          entry.path,
+          targetPath,
+        );
+      } else {
+        await sshApi.renameSFTP(
+          props.session.session_id,
+          props.session.sftp_token,
+          entry.path,
+          targetPath,
+        );
+      }
+      completed++;
+    }
+    message.value = `${completed} 项已${current.mode === "copy" ? "复制" : "移动"}`;
+    if (current.mode === "move") clipboard.value = null;
+  } catch (cause: any) {
+    if (completed > 0 && completed < current.entries.length) {
+      clipboard.value = {
+        ...current,
+        entries: current.entries.slice(completed),
+      };
+    }
+    message.value = `已完成 ${completed}/${current.entries.length} 项：${cause?.message || "粘贴失败"}`;
+  } finally {
+    working.value = false;
+    await load(path.value);
+  }
+}
+
+function requestDeleteSelection() {
+  closeContextMenu();
+  if (!busy.value && selectedEntries.value.length) {
+    deleting.value = [...selectedEntries.value];
+  }
+}
+
+async function openEditor(entry = singleSelected.value) {
+  closeContextMenu();
+  if (busy.value || !entry || entry.is_dir) return;
+  working.value = true;
+  editorError.value = "";
+  message.value = `正在读取 ${entry.name}`;
+  try {
+    editorFile.value = await sshApi.readSFTPText(
+      props.session.session_id,
+      props.session.sftp_token,
+      entry.path,
+    );
+    message.value = `${entry.name} 已在编辑器中打开`;
+  } catch (cause: any) {
+    message.value = cause?.message || "文本文件读取失败";
+  } finally {
+    working.value = false;
+  }
+}
+
+async function reloadEditor() {
+  const current = editorFile.value;
+  if (!current || editorSaving.value) return;
+  editorSaving.value = true;
+  editorError.value = "";
+  try {
+    editorFile.value = await sshApi.readSFTPText(
+      props.session.session_id,
+      props.session.sftp_token,
+      current.path,
+    );
+  } catch (cause: any) {
+    editorError.value = cause?.message || "重新加载失败";
+  } finally {
+    editorSaving.value = false;
+  }
+}
+
+async function saveEditor(content: string) {
+  const current = editorFile.value;
+  if (!current || editorSaving.value) return;
+  editorSaving.value = true;
+  editorError.value = "";
+  try {
+    editorFile.value = await sshApi.writeSFTPText(
+      props.session.session_id,
+      props.session.sftp_token,
+      current.path,
+      content,
+      current.sha256,
+    );
+    message.value = `${current.name} 已保存`;
+    await load(path.value);
+  } catch (cause: any) {
+    editorError.value = cause?.message || "保存失败";
+  } finally {
+    editorSaving.value = false;
+  }
+}
+
 function uploadFiles(files: File[]) {
-  if (!files.length || uploading.value) return;
+  if (!files.length || busy.value) return;
   const existingNames = new Set(entries.value.map((entry) => entry.name));
   if (files.some((file) => existingNames.has(file.name))) {
     pendingOverwrite.value = files;
@@ -212,11 +506,12 @@ function uploadFiles(files: File[]) {
 }
 
 async function performUploads(files: File[], overwrite: boolean) {
+  if (busy.value) return;
   const targetPath = path.value;
   let completed = 0;
   let failure = "";
   action.value = null;
-  deleting.value = null;
+  deleting.value = [];
   uploading.value = true;
   message.value = "";
   try {
@@ -242,7 +537,6 @@ async function performUploads(files: File[], overwrite: boolean) {
     uploading.value = false;
     uploadName.value = "";
     uploadProgress.value = 0;
-    if (fileInput.value) fileInput.value.value = "";
     await load(targetPath);
     message.value = failure
       ? `已完成 ${completed}/${files.length}：${failure}`
@@ -254,11 +548,6 @@ function confirmOverwrite() {
   const files = pendingOverwrite.value;
   pendingOverwrite.value = [];
   void performUploads(files, true);
-}
-
-function chooseFiles(event: Event) {
-  const input = event.target as HTMLInputElement;
-  uploadFiles(Array.from(input.files || []));
 }
 
 function dropFiles(event: DragEvent) {
@@ -274,128 +563,33 @@ onMounted(() => load("."));
     @dragover.prevent
     @drop.prevent="dropFiles"
   >
-    <header class="shrink-0 border-b border-[var(--border-default)] p-3">
-      <div class="flex items-center justify-between gap-2">
-        <div class="flex items-center gap-2">
-          <Folder :size="16" class="text-[var(--color-primary)]" />
-          <span class="text-sm font-semibold">SFTP 文件</span>
-        </div>
-        <div class="flex items-center gap-1">
-          <button
-            class="aw-modal-close inline-flex h-8 w-8 items-center justify-center"
-            title="主目录"
-            aria-label="主目录"
-            :disabled="uploading"
-            @click="load(home)"
-          >
-            <Home :size="15" />
-          </button>
-          <button
-            class="aw-modal-close inline-flex h-8 w-8 items-center justify-center"
-            title="上一级"
-            aria-label="上一级"
-            :disabled="uploading || !canGoUp"
-            @click="load(parent)"
-          >
-            <ArrowUp :size="15" />
-          </button>
-          <button
-            class="aw-modal-close inline-flex h-8 w-8 items-center justify-center"
-            title="刷新文件夹"
-            aria-label="刷新文件夹"
-            :disabled="loading || uploading"
-            @click="load(path)"
-          >
-            <RefreshCw :size="15" :class="loading && 'animate-spin'" />
-          </button>
-        </div>
-      </div>
-      <form class="mt-2 flex gap-2" @submit.prevent="load(pathInput)">
-        <input
-          v-model="pathInput"
-          class="aw-input min-w-0 flex-1 font-mono text-xs"
-          aria-label="远端路径"
-          spellcheck="false"
-          :disabled="uploading"
-        />
-        <Button size="sm" :disabled="loading || uploading" type="submit"
-          >转到</Button
-        >
-      </form>
-      <div
-        class="mt-2 flex items-center gap-1 border-t border-[var(--border-light)] pt-2"
-        role="toolbar"
-        aria-label="SFTP 文件操作"
-      >
-        <button
-          class="aw-modal-close inline-flex h-8 w-8 items-center justify-center"
-          title="上传文件"
-          aria-label="上传文件"
-          :disabled="uploading"
-          @click="fileInput?.click()"
-        >
-          <Upload :size="15" />
-        </button>
-        <button
-          class="aw-modal-close inline-flex h-8 w-8 items-center justify-center"
-          title="下载选中文件"
-          aria-label="下载选中文件"
-          :disabled="uploading || !selected || selected.is_dir"
-          @click="selected && download(selected)"
-        >
-          <ArrowDownToLine :size="15" />
-        </button>
-        <span class="mx-0.5 h-5 w-px bg-[var(--border-default)]" />
-        <button
-          class="aw-modal-close inline-flex h-8 w-8 items-center justify-center"
-          title="新建文件"
-          aria-label="新建文件"
-          :disabled="uploading"
-          @click="openAction('create')"
-        >
-          <FilePlus2 :size="15" />
-        </button>
-        <button
-          class="aw-modal-close inline-flex h-8 w-8 items-center justify-center"
-          title="新建目录"
-          aria-label="新建目录"
-          :disabled="uploading"
-          @click="openAction('mkdir')"
-        >
-          <FolderPlus :size="15" />
-        </button>
-        <button
-          class="aw-modal-close inline-flex h-8 w-8 items-center justify-center"
-          title="重命名选中的文件或目录"
-          aria-label="重命名选中的文件或目录"
-          :disabled="uploading || !selected"
-          @click="openAction('rename')"
-        >
-          <Pencil :size="15" />
-        </button>
-        <button
-          class="aw-modal-close inline-flex h-8 w-8 items-center justify-center text-[var(--color-error)]"
-          title="删除选中的文件或目录"
-          aria-label="删除选中的文件或目录"
-          :disabled="uploading || !selected"
-          @click="deleting = selected"
-        >
-          <Trash2 :size="15" />
-        </button>
-        <span
-          class="ml-auto min-w-0 truncate text-[11px] text-[var(--text-tertiary)]"
-        >
-          {{ selected ? selected.name : `${entries.length} 项` }}
-        </span>
-        <input
-          ref="fileInput"
-          type="file"
-          class="hidden"
-          multiple
-          @change="chooseFiles"
-        />
-      </div>
-    </header>
+    <SFTPToolbar
+      :path-input="pathInput"
+      :loading="loading"
+      :busy="busy"
+      :can-go-up="canGoUp"
+      :entry-count="entries.length"
+      :selected-count="selectedEntries.length"
+      :selected-file-count="selectedFiles.length"
+      :can-edit="!!singleSelected && !singleSelected.is_dir"
+      :can-rename="!!singleSelected"
+      :can-paste="!!clipboard"
+      @update:path-input="pathInput = $event"
+      @go="load(pathInput)"
+      @home="load(home)"
+      @parent="load(parent)"
+      @refresh="load(path)"
+      @upload="uploadFiles"
+      @download="downloadSelected"
+      @create-file="openAction('create')"
+      @create-directory="openAction('mkdir')"
+      @edit="openEditor()"
+      @copy="putSelectionOnClipboard('copy')"
+      @cut="putSelectionOnClipboard('move')"
+      @paste="pasteClipboard"
+      @rename="openAction('rename')"
+      @delete="requestDeleteSelection"
+    />
 
     <div
       v-if="uploading"
@@ -429,61 +623,18 @@ onMounted(() => load("."));
       </button>
     </div>
 
-    <div v-else class="min-h-0 flex-1 overflow-auto">
-      <table class="w-full table-fixed text-left text-xs">
-        <thead
-          class="sticky top-0 z-10 bg-[var(--bg-elevated)] text-[var(--text-tertiary)]"
-        >
-          <tr class="border-b border-[var(--border-default)]">
-            <th class="w-[48%] px-3 py-2 font-medium">名称</th>
-            <th class="w-[22%] px-2 py-2 font-medium">大小</th>
-            <th class="px-2 py-2 font-medium">修改时间</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr
-            v-for="entry in entries"
-            :key="entry.path"
-            class="cursor-default border-b border-[var(--border-light)] transition-colors hover:bg-[var(--bg-sidebar-hover)]"
-            :class="
-              selected?.path === entry.path && 'bg-[var(--color-primary-bg)]'
-            "
-            @click="selected = entry"
-            @dblclick="openEntry(entry)"
-          >
-            <td class="px-3 py-2">
-              <div class="flex min-w-0 items-center gap-2">
-                <Folder
-                  v-if="entry.is_dir"
-                  :size="15"
-                  class="shrink-0 text-[var(--color-warning)]"
-                />
-                <FileIcon
-                  v-else
-                  :size="15"
-                  class="shrink-0 text-[var(--text-tertiary)]"
-                />
-                <span class="truncate" :title="entry.name">{{
-                  entry.name
-                }}</span>
-              </div>
-            </td>
-            <td class="px-2 py-2 font-mono text-[var(--text-secondary)]">
-              {{ entry.is_dir ? "--" : formatSize(entry.size) }}
-            </td>
-            <td class="truncate px-2 py-2 text-[var(--text-tertiary)]">
-              {{ formatTime(entry.modified_at) }}
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <div
-        v-if="!loading && !entries.length"
-        class="p-8 text-center text-xs text-[var(--text-tertiary)]"
-      >
-        此目录为空，可拖放文件到这里上传。
-      </div>
-    </div>
+    <SFTPFileTable
+      v-else
+      :entries="entries"
+      :selected-paths="selectedPaths"
+      :loading="loading"
+      :busy="busy"
+      @toggle-all="toggleAll"
+      @toggle="toggleEntry"
+      @select="selectEntry"
+      @open="openEntry"
+      @context="openContextMenu"
+    />
 
     <footer
       class="flex min-h-10 shrink-0 items-center border-t border-[var(--border-default)] px-3 py-2"
@@ -491,9 +642,9 @@ onMounted(() => load("."));
       <p class="min-w-0 truncate text-[11px] text-[var(--text-secondary)]">
         {{
           message ||
-          (selected
-            ? `已选择：${selected.name}`
-            : `${entries.length} 项 · 双击目录打开，双击文件下载`)
+          (selectedEntries.length
+            ? `已选择 ${selectedEntries.length} 项${clipboard ? ` · 剪贴板 ${clipboard.entries.length} 项待粘贴` : ""}`
+            : `${entries.length} 项 · Ctrl/Command 或 Shift 多选 · 右键查看更多操作`)
         }}
       </p>
     </footer>
@@ -531,13 +682,13 @@ onMounted(() => load("."));
     </Modal>
 
     <ConfirmDialog
-      :open="!!deleting"
-      title="删除远端文件"
-      :message="`确认删除 ${deleting?.name || ''}？${deleting?.is_dir ? '目录及其全部内容都会被永久删除。' : '此操作无法撤销。'}`"
+      :open="deleting.length > 0"
+      title="删除远端文件或目录"
+      :message="deleteSummary"
       confirm-text="删除"
       danger
       @confirm="removeEntry"
-      @cancel="deleting = null"
+      @cancel="deleting = []"
     />
     <ConfirmDialog
       :open="pendingOverwrite.length > 0"
@@ -547,6 +698,33 @@ onMounted(() => load("."));
       danger
       @confirm="confirmOverwrite"
       @cancel="pendingOverwrite = []"
+    />
+    <SFTPContextMenu
+      :open="contextMenu.open"
+      :x="contextMenu.x"
+      :y="contextMenu.y"
+      :is-directory="!!singleSelected?.is_dir"
+      :selection-count="selectedEntries.length"
+      :download-count="selectedFiles.length"
+      :can-paste="!!clipboard"
+      :busy="busy"
+      @close="closeContextMenu"
+      @open-entry="openSelectedEntry"
+      @download="downloadSelected"
+      @edit="openEditor()"
+      @copy="putSelectionOnClipboard('copy')"
+      @cut="putSelectionOnClipboard('move')"
+      @paste="pasteClipboard"
+      @rename="openAction('rename')"
+      @delete="requestDeleteSelection"
+    />
+    <SFTPTextEditorModal
+      :file="editorFile"
+      :saving="editorSaving"
+      :error="editorError"
+      @close="editorFile = null"
+      @reload="reloadEditor"
+      @save="saveEditor"
     />
   </section>
 </template>

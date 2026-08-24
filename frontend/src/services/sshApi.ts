@@ -9,6 +9,7 @@ import type {
   SSHHostKey,
   SSHHostRequest,
   SSHSFTPListResponse,
+  SSHSFTPTextFile,
   SSHSessionCreateResponse,
 } from "./sshTypes";
 
@@ -130,6 +131,38 @@ export const sshApi = {
       method: "POST",
       headers: { "X-SSH-Session-Token": token },
       body: JSON.stringify({ old_path: oldPath, new_path: newPath }),
+    }),
+  copySFTP: (
+    sessionID: string,
+    token: string,
+    sourcePath: string,
+    targetPath: string,
+  ) =>
+    request<SSHActionResponse>(sftpEndpoint(sessionID, "/copy"), {
+      method: "POST",
+      headers: { "X-SSH-Session-Token": token },
+      body: JSON.stringify({ source_path: sourcePath, target_path: targetPath }),
+    }),
+  readSFTPText: (sessionID: string, token: string, path: string) =>
+    request<SSHSFTPTextFile>(
+      `${sftpEndpoint(sessionID, "/text")}?path=${encodeURIComponent(path)}`,
+      { headers: { "X-SSH-Session-Token": token } },
+    ),
+  writeSFTPText: (
+    sessionID: string,
+    token: string,
+    path: string,
+    content: string,
+    expectedSHA256: string,
+  ) =>
+    request<SSHSFTPTextFile>(sftpEndpoint(sessionID, "/text"), {
+      method: "PUT",
+      headers: { "X-SSH-Session-Token": token },
+      body: JSON.stringify({
+        path,
+        content,
+        expected_sha256: expectedSHA256,
+      }),
     }),
   deleteSFTP: (
     sessionID: string,
