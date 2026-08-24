@@ -110,6 +110,29 @@ export interface SSHSessionCreateResponse {
   expires_at: number;
 }
 
+export interface SSHMonitorSnapshot {
+  hostname: string;
+  username: string;
+  cpu_total: number;
+  cpu_idle: number;
+  memory_total_bytes: number;
+  memory_available_bytes: number;
+  network_received_bytes: number;
+  network_transmitted_bytes: number;
+  uptime_seconds: number;
+  login_sessions: number;
+  disks: SSHMonitorDisk[];
+  collected_at: number;
+}
+
+export interface SSHMonitorDisk {
+  mount_point: string;
+  total_bytes: number;
+  used_bytes: number;
+  available_bytes: number;
+  usage_percent: number;
+}
+
 export interface SSHSFTPEntry {
   name: string;
   path: string;

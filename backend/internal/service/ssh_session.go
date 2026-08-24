@@ -55,6 +55,7 @@ type managedSSHSession struct {
 	lastActive atomic.Int64
 	closeOnce  sync.Once
 	sftpOps    sync.WaitGroup
+	monitorMu  sync.Mutex
 	uploads    map[uint64]io.ReadCloser
 	nextUpload uint64
 	terminated bool

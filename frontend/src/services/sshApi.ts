@@ -10,6 +10,7 @@ import type {
   SSHHostKey,
   SSHHostRequest,
   SSHHostShareResponse,
+  SSHMonitorSnapshot,
   SSHSFTPListResponse,
   SSHSFTPTextFile,
   SSHSessionCreateResponse,
@@ -120,6 +121,15 @@ export const sshApi = {
     request<SSHActionResponse>(
       `/advanced/ssh/sessions/${encodeURIComponent(sessionID)}`,
       { method: "DELETE" },
+    ),
+  getSessionMonitor: (
+    sessionID: string,
+    token: string,
+    signal?: AbortSignal,
+  ) =>
+    request<SSHMonitorSnapshot>(
+      `/advanced/ssh/sessions/${encodeURIComponent(sessionID)}/monitor`,
+      { headers: { "X-SSH-Session-Token": token }, signal },
     ),
   listSFTP: (sessionID: string, token: string, path: string) =>
     request<SSHSFTPListResponse>(

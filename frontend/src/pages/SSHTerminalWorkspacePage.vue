@@ -19,6 +19,7 @@ import type {
   SSHSessionCreateResponse,
 } from "@/services/sshTypes";
 import SFTPFileManager from "./ssh/SFTPFileManager.vue";
+import SSHMonitorBar from "./ssh/SSHMonitorBar.vue";
 import SSHTerminalPane from "./ssh/SSHTerminalPane.vue";
 
 type TerminalStatus = "connecting" | "online" | "offline" | "error";
@@ -256,21 +257,30 @@ onBeforeUnmount(() => {
 
     <section
       v-if="session"
-      class="ssh-workspace min-h-0 flex-1"
-      :style="{ '--sftp-width': `${sftpWidth}px` }"
+      class="flex min-h-0 flex-1 flex-col"
     >
-      <SFTPFileManager :session="session" />
       <div
-        class="ssh-workspace-divider"
-        title="拖动调整 SFTP 面板宽度"
-        @pointerdown="startResize"
+        class="ssh-workspace min-h-0 flex-1"
+        :style="{ '--sftp-width': `${sftpWidth}px` }"
       >
-        <PanelLeft :size="12" />
+        <SFTPFileManager :session="session" />
+        <div
+          class="ssh-workspace-divider"
+          title="拖动调整 SFTP 面板宽度"
+          @pointerdown="startResize"
+        >
+          <PanelLeft :size="12" />
+        </div>
+        <SSHTerminalPane
+          :session="session"
+          @status="updateTerminalStatus"
+          @closed="terminalStatus = 'offline'"
+        />
       </div>
-      <SSHTerminalPane
+      <SSHMonitorBar
         :session="session"
-        @status="updateTerminalStatus"
-        @closed="terminalStatus = 'offline'"
+        :host-name="host?.name || 'SSH 主机'"
+        :active="terminalStatus === 'online'"
       />
     </section>
 

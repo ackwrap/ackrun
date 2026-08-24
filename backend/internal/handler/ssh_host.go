@@ -343,7 +343,9 @@ func writeSSHError(c *gin.Context, err error) {
 		status = http.StatusUnprocessableEntity
 	case "SSH_CONNECT_TIMEOUT":
 		status = http.StatusGatewayTimeout
-	case "SSH_SESSION_LIMIT":
+	case "SSH_MONITOR_TIMEOUT":
+		status = http.StatusGatewayTimeout
+	case "SSH_SESSION_LIMIT", "SSH_MONITOR_BUSY":
 		status = http.StatusTooManyRequests
 	case "SSH_SFTP_PERMISSION_DENIED":
 		status = http.StatusForbidden
@@ -351,7 +353,7 @@ func writeSSHError(c *gin.Context, err error) {
 		"SSH_CORE_NOT_RUNNING", "SSH_PROXY_CONNECT_FAILED", "SSH_PROXY_AUTH_FAILED",
 		"SSH_CONNECT_FAILED", "SSH_CONNECT_CANCELLED", "SSH_AUTH_FAILED", "SSH_HANDSHAKE_FAILED",
 		"SSH_SESSION_OPEN_FAILED", "SSH_SESSION_OPEN_TIMEOUT", "SSH_SFTP_UNAVAILABLE",
-		"SSH_SFTP_UNSUPPORTED", "SSH_SFTP_FAILED":
+		"SSH_SFTP_UNSUPPORTED", "SSH_SFTP_FAILED", "SSH_MONITOR_UNAVAILABLE", "SSH_MONITOR_UNSUPPORTED":
 		status = http.StatusBadGateway
 	case "SSH_HOST_INVALID", "SSH_CREDENTIAL_INVALID", "SSH_REFERENCE_INVALID", "SSH_SFTP_INVALID_PATH",
 		"SSH_SHARE_INVALID", "SSH_SHARE_PASSWORD_INVALID", "SSH_SHARE_DECRYPT_FAILED":
