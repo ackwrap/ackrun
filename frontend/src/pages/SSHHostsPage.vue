@@ -41,9 +41,11 @@ import type {
 } from "@/services/sshTypes";
 import { errorMessage, formatTime } from "./advanced/advancedUi";
 import SSHHostFormModal from "./ssh/SSHHostFormModal.vue";
+import SSHHostDetailsModal from "./ssh/SSHHostDetailsModal.vue";
 import SSHCredentialFormModal from "./ssh/SSHCredentialFormModal.vue";
 import SSHHostShareModal from "./ssh/SSHHostShareModal.vue";
 import SSHHostTable from "./ssh/SSHHostTable.vue";
+import { useSSHHostDetails } from "./ssh/useSSHHostDetails";
 
 const SSHTerminalModal = defineAsyncComponent(
   () => import("./ssh/SSHTerminalModal.vue"),
@@ -97,6 +99,21 @@ const selectedHosts = computed(() => {
 const maxSharedHosts = 100;
 let shellRequestGeneration = 0;
 let pageUnmounting = false;
+
+const {
+  detailsHost,
+  deviceDetails,
+  detailsError,
+  loadingDetailsID,
+  openDetails: openDeviceDetails,
+  retryDetails,
+  retryDetailsAfterTrust,
+  closeDetails,
+  disposeDetails,
+} = useSSHHostDetails({
+  applyHostKeyError,
+  notifyError: (text) => show(text, "error"),
+});
 
 function emptyCredentialForm(): CredentialForm {
   return { name: "", auth_type: "password", secret: "", passphrase: "" };
@@ -189,7 +206,7 @@ function applyHostKeyError(host: SSHHost, error: unknown) {
 }
 
 async function testHost(host: SSHHost) {
-  if (testingID.value) return;
+  if (testingID.value || loadingDetailsID.value) return;
   testingID.value = host.id;
   try {
     const result = await sshApi.testHost(host.id);
@@ -219,6 +236,8 @@ async function trustHostKey() {
     show(prompt.rotate ? "Host Key 已显式轮换" : "Host Key 已信任");
     hostKeyPrompt.value = null;
     await load();
+    const refreshed = hosts.value.find((host) => host.id === prompt.host.id);
+    retryDetailsAfterTrust(prompt.host.id, refreshed);
   } catch (error) {
     show(`更新 Host Key 信任失败：${errorMessage(error)}`, "error");
   } finally {
@@ -248,7 +267,13 @@ async function deleteHostKey() {
 }
 
 async function openShell(host: SSHHost) {
-  if (testingID.value || openingShellID.value || quickShell.value) return;
+  if (
+    testingID.value ||
+    openingShellID.value ||
+    loadingDetailsID.value ||
+    quickShell.value
+  )
+    return;
   const generation = ++shellRequestGeneration;
   openingShellID.value = host.id;
   try {
@@ -272,6 +297,11 @@ async function openShell(host: SSHHost) {
       openingShellID.value = 0;
     }
   }
+}
+
+function openDetails(host: SSHHost) {
+  if (testingID.value || loadingDetailsID.value || openingShellID.value) return;
+  openDeviceDetails(host);
 }
 
 async function closeShell() {
@@ -408,6 +438,7 @@ onMounted(load);
 onBeforeUnmount(() => {
   pageUnmounting = true;
   shellRequestGeneration++;
+  disposeDetails();
   const current = quickShell.value;
   quickShell.value = null;
   if (current) void sshApi.closeSession(current.session.session_id).catch(() => {});
@@ -482,10 +513,12 @@ onBeforeUnmount(() => {
       :loading="loading"
       :testing-id="testingID"
       :opening-shell-id="openingShellID"
+      :loading-details-id="loadingDetailsID"
       :shell-open="!!quickShell"
       @test="testHost"
       @shell="openShell"
       @terminal="openTerminal"
+      @details="openDetails"
       @edit="openEditHost"
       @share="sharingHosts = [$event]; shareOpen = true"
       @delete="deletingHost = $event"
@@ -562,6 +595,15 @@ onBeforeUnmount(() => {
       @create-credential="openCreateCredential(true)"
       @invalid="show($event, 'error')"
       @save="saveHost"
+    />
+
+    <SSHHostDetailsModal
+      :host="detailsHost"
+      :details="deviceDetails"
+      :loading="loadingDetailsID > 0"
+      :error="detailsError"
+      @close="closeDetails"
+      @retry="retryDetails"
     />
 
     <SSHCredentialFormModal

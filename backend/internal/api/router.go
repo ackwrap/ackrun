@@ -271,6 +271,7 @@ func registerSSHHostRoutes(group *gin.RouterGroup, sshHostH *handler.SSHHostHand
 	group.POST("/advanced/ssh/hosts/:id/sessions", sshHostH.CreateSession)
 	group.DELETE("/advanced/ssh/sessions/:sessionID", sshHostH.DeleteSession)
 	group.GET("/advanced/ssh/sessions/:sessionID/monitor", sshHostH.GetSessionMonitor)
+	group.GET("/advanced/ssh/sessions/:sessionID/details", sshHostH.GetSessionDetails)
 	group.GET("/advanced/ssh/sessions/:sessionID/sftp", sshHostH.ListSFTP)
 	group.POST("/advanced/ssh/sessions/:sessionID/sftp/mkdir", sshHostH.CreateSFTPDirectory)
 	group.POST("/advanced/ssh/sessions/:sessionID/sftp/touch", sshHostH.CreateSFTPFile)

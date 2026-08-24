@@ -131,6 +131,15 @@ export const sshApi = {
       `/advanced/ssh/sessions/${encodeURIComponent(sessionID)}/monitor`,
       { headers: { "X-SSH-Session-Token": token }, signal },
     ),
+  getSessionDetails: (
+    sessionID: string,
+    token: string,
+    signal?: AbortSignal,
+  ) =>
+    request<SSHMonitorSnapshot>(
+      `/advanced/ssh/sessions/${encodeURIComponent(sessionID)}/details`,
+      { headers: { "X-SSH-Session-Token": token }, signal },
+    ),
   listSFTP: (sessionID: string, token: string, path: string) =>
     request<SSHSFTPListResponse>(
       `${sftpEndpoint(sessionID)}?path=${encodeURIComponent(path)}`,

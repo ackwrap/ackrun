@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,19 +27,60 @@ const (
 	sshMonitorMaximumDisks  = 12
 )
 
-const sshMonitorCommand = `LC_ALL=C
+const sshMonitorBaseCommand = `LC_ALL=C
 export LC_ALL
 printf 'ACKWRAP_MONITOR_V1\n'
 hostname 2>/dev/null | awk 'NR == 1 { print "HOST\t" $0 }'
 id -un 2>/dev/null | awk 'NR == 1 { print "USER\t" $0 }'
 awk '/^cpu / { total = 0; for (i = 2; i <= NF; i++) total += $i; printf "CPU\t%.0f\t%.0f\n", total, $5 + $6; exit }' /proc/stat 2>/dev/null
-awk '/^MemTotal:/ { total = $2 } /^MemAvailable:/ { available = $2 } /^MemFree:/ { free = $2 } /^Buffers:/ { buffers = $2 } /^Cached:/ { cached = $2 } END { if (!available) available = free + buffers + cached; printf "MEM\t%.0f\t%.0f\n", total * 1024, available * 1024 }' /proc/meminfo 2>/dev/null
+awk '/^MemTotal:/ { total = $2 } /^MemAvailable:/ { available = $2 } /^MemFree:/ { free = $2 } /^Buffers:/ { buffers = $2 } /^Cached:/ { cached = $2 } /^SwapTotal:/ { swap_total = $2 } /^SwapFree:/ { swap_free = $2 } END { if (!available) available = free + buffers + cached; printf "MEM\t%.0f\t%.0f\t%.0f\t%.0f\n", total * 1024, available * 1024, swap_total * 1024, swap_free * 1024 }' /proc/meminfo 2>/dev/null
 awk -F '[: ]+' 'NR > 2 && $2 != "lo" { received += $3; transmitted += $11 } END { printf "NET\t%.0f\t%.0f\n", received, transmitted }' /proc/net/dev 2>/dev/null
 awk 'NR == 1 { printf "UPTIME\t%.0f\n", $1 }' /proc/uptime 2>/dev/null
+awk 'NR == 1 { printf "LOAD\t%s\t%s\t%s\n", $1, $2, $3 }' /proc/loadavg 2>/dev/null
 who 2>/dev/null | awk 'END { print "LOGINS\t" NR }'
 df -Pk 2>/dev/null | awk 'NR > 1 && count < 12 { for (i = 2; i + 4 <= NF; i++) { if ($i ~ /^[0-9]+$/ && $(i + 1) ~ /^[0-9]+$/ && $(i + 2) ~ /^[0-9]+$/ && $(i + 3) ~ /^[0-9]+%$/) { mount = $(i + 4); for (j = i + 5; j <= NF; j++) mount = mount " " $j; printf "DISK\t-\t%.0f\t%.0f\t%.0f\t%s\n", $i * 1024, $(i + 1) * 1024, $(i + 2) * 1024, mount; count++; break } } }'
-printf 'END\n'
 `
+
+const sshDeviceDetailsCommand = `awk -F= '$1 == "PRETTY_NAME" { value = substr($0, index($0, "=") + 1); gsub(/^"/, "", value); gsub(/"$/, "", value); print "OS\t" value; exit }' /etc/os-release 2>/dev/null
+uname -r 2>/dev/null | awk 'NR == 1 { print "KERNEL\t" $0 }'
+uname -m 2>/dev/null | awk 'NR == 1 { print "ARCH\t" $0 }'
+awk -F: '/^(model name|Hardware)[ \t]*:/ { value = $2; sub(/^[ \t]+/, "", value); print "CPU_MODEL\t" value; exit }' /proc/cpuinfo 2>/dev/null
+awk '/^processor[ \t]*:/ { cores++ } END { print "CPU_CORES\t" (cores ? cores : 1) }' /proc/cpuinfo 2>/dev/null
+virtualization=none
+if command -v systemd-detect-virt >/dev/null 2>&1; then
+  detected="$(systemd-detect-virt 2>/dev/null)"
+  if test -n "$detected"; then virtualization="$detected"; fi
+elif grep -Eqi '(docker|containerd)' /proc/1/cgroup 2>/dev/null; then virtualization=docker
+elif grep -Eqi 'lxc' /proc/1/cgroup 2>/dev/null; then virtualization=lxc
+fi
+printf 'VIRT\t%s\n' "$virtualization"
+package_manager=unknown
+for candidate in apt-get dnf yum apk opkg pacman; do
+  if command -v "$candidate" >/dev/null 2>&1; then package_manager="$candidate"; break; fi
+done
+printf 'PACKAGE_MANAGER\t%s\n' "$package_manager"
+if command -v docker >/dev/null 2>&1; then
+  docker_version="$(docker --version 2>/dev/null | head -n 1)"
+  printf 'SOFTWARE\tdocker\t1\t%s\n' "$docker_version"
+else
+  printf 'SOFTWARE\tdocker\t0\t\n'
+fi
+compose_version=""
+if command -v docker >/dev/null 2>&1; then compose_version="$(docker compose version 2>/dev/null | head -n 1)"; fi
+if test -z "$compose_version" && command -v docker-compose >/dev/null 2>&1; then compose_version="$(docker-compose --version 2>/dev/null | head -n 1)"; fi
+if test -n "$compose_version"; then
+  printf 'SOFTWARE\tdocker-compose\t1\t%s\n' "$compose_version"
+else
+  printf 'SOFTWARE\tdocker-compose\t0\t\n'
+fi
+`
+
+const sshMonitorCommandEnd = "printf 'END\\n'\n"
+
+const (
+	sshMonitorCommand        = sshMonitorBaseCommand + sshMonitorCommandEnd
+	sshMonitorDetailsCommand = sshMonitorBaseCommand + sshDeviceDetailsCommand + sshMonitorCommandEnd
+)
 
 type sshMonitorCommandResult struct {
 	output   []byte
@@ -67,6 +109,18 @@ func (output *sshMonitorOutput) Write(content []byte) (int, error) {
 }
 
 func (svc *SSHHostService) GetSessionMonitor(ctx context.Context, sessionID, token string) (*model.SSHMonitorSnapshot, error) {
+	return svc.getSessionMonitor(ctx, sessionID, token, sshMonitorCommand)
+}
+
+func (svc *SSHHostService) GetSessionDetails(ctx context.Context, sessionID, token string) (*model.SSHMonitorSnapshot, error) {
+	snapshot, err := svc.getSessionMonitor(ctx, sessionID, token, sshMonitorDetailsCommand)
+	if err == nil {
+		logging.Info("ssh_device.details", "读取 SSH 设备详情: session=%s", sessionIDHash(sessionID))
+	}
+	return snapshot, err
+}
+
+func (svc *SSHHostService) getSessionMonitor(ctx context.Context, sessionID, token, command string) (*model.SSHMonitorSnapshot, error) {
 	managed, client, err := svc.monitorClient(sessionID, token)
 	if err != nil {
 		return nil, err
@@ -91,7 +145,7 @@ func (svc *SSHHostService) GetSessionMonitor(ctx context.Context, sessionID, tok
 
 	commandCtx, cancel := context.WithTimeout(ctx, sshMonitorTimeout)
 	defer cancel()
-	output, commandCompletion, err := runSSHMonitorCommand(commandCtx, client)
+	output, commandCompletion, err := runSSHMonitorCommand(commandCtx, client, command)
 	if commandCompletion != nil {
 		releaseDeferred = true
 		go func() {
@@ -136,7 +190,7 @@ func (svc *SSHHostService) monitorClient(sessionID, token string) (*managedSSHSe
 	return managed, managed.client, nil
 }
 
-func runSSHMonitorCommand(ctx context.Context, client *ssh.Client) ([]byte, <-chan struct{}, error) {
+func runSSHMonitorCommand(ctx context.Context, client *ssh.Client, command string) ([]byte, <-chan struct{}, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
@@ -150,7 +204,7 @@ func runSSHMonitorCommand(ctx context.Context, client *ssh.Client) ([]byte, <-ch
 	session.Stderr = io.Discard
 	result := make(chan sshMonitorCommandResult, 1)
 	go func() {
-		commandErr := session.Run(sshMonitorCommand)
+		commandErr := session.Run(command)
 		result <- sshMonitorCommandResult{
 			output: output.buffer.Bytes(), overflow: output.overflow, err: commandErr,
 		}
@@ -179,8 +233,11 @@ func parseSSHMonitorOutput(output []byte, collectedAt time.Time) (*model.SSHMoni
 	if len(output) == 0 || len(output) > sshMonitorMaximumOutput {
 		return nil, errors.New("SSH monitor output has invalid size")
 	}
-	snapshot := &model.SSHMonitorSnapshot{Disks: make([]model.SSHMonitorDisk, 0)}
+	snapshot := &model.SSHMonitorSnapshot{
+		Disks: make([]model.SSHMonitorDisk, 0), Software: make([]model.SSHSoftware, 0),
+	}
 	seenMounts := make(map[string]bool)
+	seenSoftware := make(map[string]bool)
 	seenHeader, seenEnd, seenCPU, seenMemory, seenNetwork, seenUptime := false, false, false, false, false, false
 	scanner := bufio.NewScanner(strings.NewReader(string(output)))
 	scanner.Buffer(make([]byte, 1024), 16<<10)
@@ -206,6 +263,20 @@ func parseSSHMonitorOutput(output []byte, collectedAt time.Time) (*model.SSHMoni
 			snapshot.Hostname = monitorText(fields[1])
 		case "USER":
 			snapshot.Username = monitorText(fields[1])
+		case "OS":
+			snapshot.OSName = monitorText(fields[1])
+		case "KERNEL":
+			snapshot.KernelVersion = monitorText(fields[1])
+		case "ARCH":
+			snapshot.Architecture = monitorText(fields[1])
+		case "CPU_MODEL":
+			snapshot.CPUModel = monitorText(fields[1])
+		case "CPU_CORES":
+			if len(fields) == 2 {
+				if cores, coresErr := monitorInt(fields[1]); coresErr == nil && cores > 0 {
+					snapshot.CPUCores = cores
+				}
+			}
 		case "CPU":
 			if len(fields) != 3 {
 				continue
@@ -216,13 +287,20 @@ func parseSSHMonitorOutput(output []byte, collectedAt time.Time) (*model.SSHMoni
 				snapshot.CPUTotal, snapshot.CPUIdle, seenCPU = total, idle, true
 			}
 		case "MEM":
-			if len(fields) != 3 {
+			if len(fields) != 3 && len(fields) != 5 {
 				continue
 			}
 			total, totalErr := monitorInt(fields[1])
 			available, availableErr := monitorInt(fields[2])
 			if totalErr == nil && availableErr == nil && total > 0 && available <= total {
 				snapshot.MemoryTotalBytes, snapshot.MemoryAvailableBytes, seenMemory = total, available, true
+				if len(fields) == 5 {
+					swapTotal, swapTotalErr := monitorInt(fields[3])
+					swapAvailable, swapAvailableErr := monitorInt(fields[4])
+					if swapTotalErr == nil && swapAvailableErr == nil && swapAvailable <= swapTotal {
+						snapshot.SwapTotalBytes, snapshot.SwapAvailableBytes = swapTotal, swapAvailable
+					}
+				}
 			}
 		case "NET":
 			if len(fields) != 3 {
@@ -240,12 +318,37 @@ func parseSSHMonitorOutput(output []byte, collectedAt time.Time) (*model.SSHMoni
 					snapshot.UptimeSeconds, seenUptime = uptime, true
 				}
 			}
+		case "LOAD":
+			if len(fields) == 4 {
+				one, oneErr := monitorFloat(fields[1])
+				five, fiveErr := monitorFloat(fields[2])
+				fifteen, fifteenErr := monitorFloat(fields[3])
+				if oneErr == nil && fiveErr == nil && fifteenErr == nil {
+					snapshot.LoadAverage1, snapshot.LoadAverage5, snapshot.LoadAverage15 = one, five, fifteen
+				}
+			}
 		case "LOGINS":
 			if len(fields) == 2 {
 				if sessions, sessionsErr := monitorInt(fields[1]); sessionsErr == nil {
 					snapshot.LoginSessions = sessions
 				}
 			}
+		case "VIRT":
+			snapshot.Virtualization = monitorText(fields[1])
+		case "PACKAGE_MANAGER":
+			snapshot.PackageManager = monitorText(fields[1])
+		case "SOFTWARE":
+			if len(fields) != 4 {
+				continue
+			}
+			key := monitorText(fields[1])
+			if key == "" || seenSoftware[key] || (fields[2] != "0" && fields[2] != "1") {
+				continue
+			}
+			seenSoftware[key] = true
+			snapshot.Software = append(snapshot.Software, model.SSHSoftware{
+				Key: key, Installed: fields[2] == "1", Version: monitorText(fields[3]),
+			})
 		case "DISK":
 			if len(fields) != 6 || len(snapshot.Disks) >= sshMonitorMaximumDisks {
 				continue
@@ -282,6 +385,14 @@ func monitorInt(value string) (int64, error) {
 	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
 	if err != nil || parsed < 0 {
 		return 0, fmt.Errorf("invalid monitor integer")
+	}
+	return parsed, nil
+}
+
+func monitorFloat(value string) (float64, error) {
+	parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	if err != nil || parsed < 0 || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+		return 0, fmt.Errorf("invalid monitor float")
 	}
 	return parsed, nil
 }

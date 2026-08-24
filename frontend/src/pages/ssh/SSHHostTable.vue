@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import {
+  Info,
   Pencil,
   Play,
   Route,
@@ -19,6 +20,7 @@ const props = defineProps<{
   loading: boolean;
   testingId: number;
   openingShellId: number;
+  loadingDetailsId: number;
   shellOpen: boolean;
   selectedIds: number[];
 }>();
@@ -27,6 +29,7 @@ const emit = defineEmits<{
   test: [host: SSHHost];
   shell: [host: SSHHost];
   terminal: [host: SSHHost];
+  details: [host: SSHHost];
   edit: [host: SSHHost];
   share: [host: SSHHost];
   delete: [host: SSHHost];
@@ -86,7 +89,7 @@ function connectionLabel(host: SSHHost) {
       暂无 SSH 主机。新增主机时可直接创建并选择登录凭据。
     </div>
     <div v-else class="aw-data-table-wrap rounded-none border-0">
-      <table class="aw-data-table min-w-[1040px]">
+      <table class="aw-data-table min-w-[1160px]">
         <thead>
           <tr>
             <th class="w-10">
@@ -169,8 +172,24 @@ function connectionLabel(host: SSHHost) {
               <div class="flex justify-end gap-1">
                 <Button
                   size="sm"
+                  :loading="loadingDetailsId === host.id"
+                  :disabled="
+                    !host.enabled ||
+                    testingId > 0 ||
+                    loadingDetailsId > 0 ||
+                    openingShellId > 0
+                  "
+                  title="查看设备详情与快捷安装区域"
+                  @click="$emit('details', host)"
+                >
+                  <template #icon><Info :size="13" /></template>详情
+                </Button>
+                <Button
+                  size="sm"
                   :loading="testingId === host.id"
-                  :disabled="!host.enabled || openingShellId > 0"
+                  :disabled="
+                    !host.enabled || openingShellId > 0 || loadingDetailsId > 0
+                  "
                   title="测试连接"
                   @click="$emit('test', host)"
                 >
@@ -180,7 +199,11 @@ function connectionLabel(host: SSHHost) {
                   size="sm"
                   variant="primary"
                   :disabled="
-                    !host.enabled || testingId > 0 || openingShellId > 0 || shellOpen
+                    !host.enabled ||
+                    testingId > 0 ||
+                    openingShellId > 0 ||
+                    loadingDetailsId > 0 ||
+                    shellOpen
                   "
                   :loading="openingShellId === host.id"
                   title="在当前页面打开临时 Shell"
@@ -190,7 +213,12 @@ function connectionLabel(host: SSHHost) {
                 </Button>
                 <Button
                   size="sm"
-                  :disabled="!host.enabled || testingId > 0 || openingShellId > 0"
+                  :disabled="
+                    !host.enabled ||
+                    testingId > 0 ||
+                    openingShellId > 0 ||
+                    loadingDetailsId > 0
+                  "
                   title="在新标签页打开 SSH 与 SFTP 工作台"
                   @click="$emit('terminal', host)"
                 >
