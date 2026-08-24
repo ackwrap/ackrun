@@ -9,7 +9,6 @@ import {
   MemoryStick,
   PackagePlus,
   RefreshCw,
-  Server,
 } from "lucide-vue-next";
 import Button from "@/components/ui/Button.vue";
 import Modal from "@/components/ui/Modal.vue";
@@ -155,21 +154,6 @@ function valueOrDash(value?: string | number) {
       </div>
 
       <template v-else-if="details">
-        <section>
-          <div class="mb-3 flex items-center gap-2">
-            <Server :size="17" class="text-[var(--color-primary)]" />
-            <h3 class="text-sm font-semibold">系统参数</h3>
-          </div>
-          <dl class="grid overflow-hidden rounded-[var(--radius-lg)] border border-[var(--border-default)] sm:grid-cols-2 lg:grid-cols-3">
-            <div class="detail-cell"><dt>主机名</dt><dd>{{ valueOrDash(details.hostname) }}</dd></div>
-            <div class="detail-cell"><dt>操作系统</dt><dd>{{ valueOrDash(details.os_name) }}</dd></div>
-            <div class="detail-cell"><dt>内核版本</dt><dd>{{ valueOrDash(details.kernel_version) }}</dd></div>
-            <div class="detail-cell"><dt>系统架构</dt><dd>{{ valueOrDash(details.architecture) }}</dd></div>
-            <div class="detail-cell"><dt>虚拟化</dt><dd>{{ valueOrDash(details.virtualization) }}</dd></div>
-            <div class="detail-cell"><dt>包管理器</dt><dd>{{ valueOrDash(details.package_manager) }}</dd></div>
-          </dl>
-        </section>
-
         <section class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <div class="metric-card">
             <Cpu :size="18" class="text-[var(--color-primary)]" />
@@ -185,29 +169,7 @@ function valueOrDash(value?: string | number) {
           </div>
           <div class="metric-card">
             <HardDrive :size="18" class="text-[var(--color-warning)]" />
-            <div><p>交换空间</p><strong>{{ details.swap_total_bytes ? `${formatBytes(swapUsed)} / ${formatBytes(details.swap_total_bytes)}` : '未配置' }}</strong><small>{{ details.disks.length }} 个文件系统</small></div>
-          </div>
-        </section>
-
-        <section>
-          <div class="mb-3 flex items-center gap-2">
-            <HardDrive :size="17" class="text-[var(--color-warning)]" />
-            <h3 class="text-sm font-semibold">磁盘使用</h3>
-          </div>
-          <div class="aw-data-table-wrap max-h-48">
-            <table class="aw-data-table min-w-[620px]">
-              <thead><tr><th>挂载点</th><th>已用</th><th>可用</th><th>总容量</th><th>占用率</th></tr></thead>
-              <tbody>
-                <tr v-if="!details.disks.length"><td colspan="5" class="py-6 text-center text-[var(--text-tertiary)]">未读取到磁盘信息</td></tr>
-                <tr v-for="disk in details.disks" :key="disk.mount_point">
-                  <td class="font-mono text-xs">{{ disk.mount_point }}</td>
-                  <td>{{ formatBytes(disk.used_bytes) }}</td>
-                  <td>{{ formatBytes(disk.available_bytes) }}</td>
-                  <td>{{ formatBytes(disk.total_bytes) }}</td>
-                  <td>{{ disk.usage_percent }}%</td>
-                </tr>
-              </tbody>
-            </table>
+            <div><p>交换空间</p><strong>{{ details.swap_total_bytes ? `${formatBytes(swapUsed)} / ${formatBytes(details.swap_total_bytes)}` : '未配置' }}</strong><small>{{ details.swap_total_bytes ? `可用 ${formatBytes(details.swap_available_bytes)}` : '未启用 Swap' }}</small></div>
           </div>
         </section>
       </template>
@@ -248,23 +210,9 @@ function valueOrDash(value?: string | number) {
 </template>
 
 <style scoped>
-.detail-cell {
-  min-width: 0;
-  padding: 0.75rem 1rem;
-  border-right: 1px solid var(--border-light);
-  border-bottom: 1px solid var(--border-light);
-}
-.detail-cell dt,
 .metric-card p {
   font-size: 0.7rem;
   color: var(--text-tertiary);
-}
-.detail-cell dd {
-  margin-top: 0.3rem;
-  overflow: hidden;
-  font-size: 0.8rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .metric-card,
 .software-card {
