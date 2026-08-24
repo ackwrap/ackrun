@@ -144,6 +144,52 @@ func (s *Store) CreateSSHHost(item *model.SSHHost) error {
 	return err
 }
 
+func (s *Store) CreateSSHHostWithCredential(credential *model.SSHCredential, host *model.SSHHost) error {
+	tags, err := json.Marshal(host.Tags)
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	now := time.Now().UnixMilli()
+	credential.CreatedAt, credential.UpdatedAt = now, now
+	result, err := tx.Exec(`INSERT INTO ssh_credentials
+		(name, auth_type, secret_context, secret_ciphertext, secret_nonce, passphrase_ciphertext,
+		 passphrase_nonce, key_fingerprint, key_version, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, credential.Name, credential.AuthType,
+		credential.SecretContext, credential.SecretCiphertext, credential.SecretNonce,
+		nullableBytes(credential.PassphraseCiphertext), nullableBytes(credential.PassphraseNonce),
+		credential.KeyFingerprint, credential.KeyVersion, now, now)
+	if err != nil {
+		return err
+	}
+	credential.ID, err = result.LastInsertId()
+	if err != nil {
+		return err
+	}
+
+	host.CredentialID = credential.ID
+	host.CreatedAt, host.UpdatedAt = now, now
+	result, err = tx.Exec(`INSERT INTO ssh_hosts
+		(name, group_name, host, port, username, credential_id, connection_mode, node_exposure_id,
+		 terminal_type, enabled, tags_json, notes, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, host.Name, host.GroupName, host.Host,
+		host.Port, host.Username, host.CredentialID, host.ConnectionMode, host.NodeExposureID,
+		host.TerminalType, boolToInt(host.Enabled), string(tags), host.Notes, now, now)
+	if err != nil {
+		return err
+	}
+	host.ID, err = result.LastInsertId()
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (s *Store) UpdateSSHHost(item *model.SSHHost) error {
 	tags, err := json.Marshal(item.Tags)
 	if err != nil {

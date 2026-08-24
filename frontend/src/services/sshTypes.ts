@@ -59,6 +59,18 @@ export interface SSHHostRequest {
   notes: string;
 }
 
+export interface SSHHostShareResponse {
+  code: string;
+  host_name: string;
+}
+
+export interface SSHHostImportResponse {
+  success: boolean;
+  message: string;
+  host: SSHHost;
+  converted_to_direct: boolean;
+}
+
 export interface SSHHostKey {
   host_id: number;
   key_type: string;

@@ -6,8 +6,10 @@ import type {
   SSHCredential,
   SSHCredentialRequest,
   SSHHost,
+  SSHHostImportResponse,
   SSHHostKey,
   SSHHostRequest,
+  SSHHostShareResponse,
   SSHSFTPListResponse,
   SSHSFTPTextFile,
   SSHSessionCreateResponse,
@@ -52,6 +54,16 @@ export const sshApi = {
   deleteHost: (id: number) =>
     request<SSHActionResponse>(`/advanced/ssh/hosts/${id}`, {
       method: "DELETE",
+    }),
+  shareHost: (id: number, password: string) =>
+    request<SSHHostShareResponse>(`/advanced/ssh/hosts/${id}/share`, {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    }),
+  importHost: (code: string, password: string) =>
+    request<SSHHostImportResponse>("/advanced/ssh/hosts/import", {
+      method: "POST",
+      body: JSON.stringify({ code, password }),
     }),
   testHost: (id: number) =>
     request<SSHConnectionTestResult>(`/advanced/ssh/hosts/${id}/test`, {

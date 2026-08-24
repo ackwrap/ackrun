@@ -14,6 +14,7 @@ import (
 const (
 	maxSSHCredentialRequestBody = 512 << 10
 	maxSSHHostRequestBody       = 64 << 10
+	maxSSHHostImportRequestBody = 2 << 20
 )
 
 type SSHHostHandler struct {
@@ -90,6 +91,42 @@ func (h *SSHHostHandler) DeleteHost(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, model.ActionResponse{Success: true, Message: "SSH host deleted"})
+}
+
+func (h *SSHHostHandler) ShareHost(c *gin.Context) {
+	id, ok := parseSSHID(c)
+	if !ok {
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxSSHHostRequestBody)
+	var request model.SSHHostShareRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		writeSSHInvalidRequest(c, err)
+		return
+	}
+	result, err := h.service.ShareHost(id, request.Password)
+	if err != nil {
+		writeSSHError(c, err)
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, result)
+}
+
+func (h *SSHHostHandler) ImportHost(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxSSHHostImportRequestBody)
+	var request model.SSHHostImportRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		writeSSHInvalidRequest(c, err)
+		return
+	}
+	result, err := h.service.ImportHost(request)
+	if err != nil {
+		writeSSHError(c, err)
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, result)
 }
 
 func (h *SSHHostHandler) TestHost(c *gin.Context) {
@@ -284,6 +321,8 @@ func writeSSHError(c *gin.Context, err error) {
 		status = http.StatusConflict
 	case "SSH_SFTP_TEXT_TOO_LARGE":
 		status = http.StatusRequestEntityTooLarge
+	case "SSH_SHARE_TOO_LARGE":
+		status = http.StatusRequestEntityTooLarge
 	case "SSH_SFTP_BINARY":
 		status = http.StatusUnprocessableEntity
 	case "SSH_CONNECT_TIMEOUT":
@@ -298,7 +337,8 @@ func writeSSHError(c *gin.Context, err error) {
 		"SSH_SESSION_OPEN_FAILED", "SSH_SESSION_OPEN_TIMEOUT", "SSH_SFTP_UNAVAILABLE",
 		"SSH_SFTP_UNSUPPORTED", "SSH_SFTP_FAILED":
 		status = http.StatusBadGateway
-	case "SSH_HOST_INVALID", "SSH_CREDENTIAL_INVALID", "SSH_REFERENCE_INVALID", "SSH_SFTP_INVALID_PATH":
+	case "SSH_HOST_INVALID", "SSH_CREDENTIAL_INVALID", "SSH_REFERENCE_INVALID", "SSH_SFTP_INVALID_PATH",
+		"SSH_SHARE_INVALID", "SSH_SHARE_PASSWORD_INVALID", "SSH_SHARE_DECRYPT_FAILED":
 		status = http.StatusBadRequest
 	}
 	c.JSON(status, model.ErrorResponse{Error: apiError})

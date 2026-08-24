@@ -30,9 +30,11 @@ func TestRegisterSSHHostRoutesContract(t *testing.T) {
 	want := map[string]bool{
 		"GET /api/v1/advanced/ssh/hosts":                      false,
 		"POST /api/v1/advanced/ssh/hosts":                     false,
+		"POST /api/v1/advanced/ssh/hosts/import":              false,
 		"GET /api/v1/advanced/ssh/hosts/:id":                  false,
 		"PUT /api/v1/advanced/ssh/hosts/:id":                  false,
 		"DELETE /api/v1/advanced/ssh/hosts/:id":               false,
+		"POST /api/v1/advanced/ssh/hosts/:id/share":           false,
 		"POST /api/v1/advanced/ssh/hosts/:id/test":            false,
 		"POST /api/v1/advanced/ssh/hosts/:id/sessions":        false,
 		"DELETE /api/v1/advanced/ssh/sessions/:sessionID":     false,

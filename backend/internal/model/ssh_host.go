@@ -1,5 +1,7 @@
 package model
 
+const MaxSSHHostShareCodeSize = 1 << 20
+
 type SSHCredential struct {
 	ID                   int64  `json:"id"`
 	Name                 string `json:"name"`
@@ -62,6 +64,27 @@ type SSHHostRequest struct {
 	Enabled        bool     `json:"enabled"`
 	Tags           []string `json:"tags"`
 	Notes          string   `json:"notes"`
+}
+
+type SSHHostShareRequest struct {
+	Password string `json:"password"`
+}
+
+type SSHHostShareResponse struct {
+	Code     string `json:"code"`
+	HostName string `json:"host_name"`
+}
+
+type SSHHostImportRequest struct {
+	Code     string `json:"code"`
+	Password string `json:"password"`
+}
+
+type SSHHostImportResponse struct {
+	Success           bool    `json:"success"`
+	Message           string  `json:"message"`
+	Host              SSHHost `json:"host"`
+	ConvertedToDirect bool    `json:"converted_to_direct"`
 }
 
 type SSHHostKey struct {

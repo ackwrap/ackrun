@@ -8,9 +8,11 @@ import {
   Play,
   Plus,
   Route,
+  Share2,
   ShieldAlert,
   SquareTerminal,
   Trash2,
+  Upload,
 } from "lucide-vue-next";
 import PageHeader from "@/components/layout/PageHeader.vue";
 import Button from "@/components/ui/Button.vue";
@@ -28,12 +30,15 @@ import type {
   SSHCredentialAuthType,
   SSHCredentialRequest,
   SSHHost,
+  SSHHostImportResponse,
   SSHHostKey,
   SSHHostKeyChallenge,
   SSHHostRequest,
 } from "@/services/sshTypes";
 import { errorMessage, formatTime } from "./advanced/advancedUi";
 import SSHHostFormModal from "./ssh/SSHHostFormModal.vue";
+import SSHCredentialFormModal from "./ssh/SSHCredentialFormModal.vue";
+import SSHHostShareModal from "./ssh/SSHHostShareModal.vue";
 
 type PageTab = "hosts" | "credentials";
 interface CredentialForm {
@@ -67,6 +72,8 @@ const preferredCredentialID = ref(0);
 const deletingCredential = ref<SSHCredential | null>(null);
 const hostKeyPrompt = ref<HostKeyPrompt | null>(null);
 const trustedKey = ref<{ host: SSHHost; key: SSHHostKey } | null>(null);
+const shareOpen = ref(false);
+const sharingHost = ref<SSHHost | null>(null);
 const credentialForm = reactive<CredentialForm>(emptyCredentialForm());
 const availableHosts = computed(
   () => hosts.value.filter((item) => item.last_status === "available").length,
@@ -334,6 +341,16 @@ function connectionLabel(host: SSHHost) {
     : host.node_exposure_name || "节点入口不可用";
 }
 
+function importedHost(result: SSHHostImportResponse) {
+  shareOpen.value = false;
+  show(
+    result.converted_to_direct
+      ? "SSH 主机已导入；原节点入口未导入，当前已改为直连"
+      : "SSH 主机已导入，请测试连接并核验 Host Key",
+  );
+  void load();
+}
+
 onMounted(load);
 </script>
 
@@ -344,6 +361,12 @@ onMounted(load);
       description="通过直连或受管节点入口安全登录远程主机；Host Key 未确认时连接会被阻止。"
     >
       <template #actions>
+        <Button
+          v-if="tab === 'hosts'"
+          @click="sharingHost = null; shareOpen = true"
+        >
+          <template #icon><Upload :size="14" /></template>导入主机
+        </Button>
         <Button
           v-if="tab === 'hosts'"
           variant="primary"
@@ -510,6 +533,14 @@ onMounted(load);
                   <Button
                     size="sm"
                     variant="ghost"
+                    title="加密分享主机"
+                    @click="sharingHost = host; shareOpen = true"
+                  >
+                    <template #icon><Share2 :size="13" /></template>
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
                     @click="deletingHost = host"
                   >
                     <template #icon><Trash2 :size="13" /></template>
@@ -594,79 +625,24 @@ onMounted(load);
       @save="saveHost"
     />
 
-    <Modal
+    <SSHCredentialFormModal
+      v-model:name="credentialForm.name"
+      v-model:auth-type="credentialForm.auth_type"
+      v-model:secret="credentialForm.secret"
+      v-model:passphrase="credentialForm.passphrase"
       :open="credentialFormOpen"
-      :title="editingCredential ? '编辑 SSH 凭据' : '新增 SSH 凭据'"
-      size="lg"
-      :closable="!saving"
+      :editing="editingCredential"
+      :saving="saving"
       @close="closeCredentialForm"
-    >
-      <div class="grid gap-4 sm:grid-cols-2">
-        <label>
-          <span class="aw-modal-label text-xs">凭据名称</span>
-          <input
-            v-model="credentialForm.name"
-            class="aw-input mt-1 w-full"
-            maxlength="128"
-          />
-        </label>
-        <label>
-          <span class="aw-modal-label text-xs">认证类型</span>
-          <select
-            v-model="credentialForm.auth_type"
-            class="aw-input mt-1 w-full"
-          >
-            <option value="password">密码</option>
-            <option value="private_key">私钥</option>
-          </select>
-        </label>
-        <label class="sm:col-span-2">
-          <span class="aw-modal-label text-xs">
-            {{
-              credentialForm.auth_type === "password" ? "密码" : "OpenSSH 私钥"
-            }}
-          </span>
-          <textarea
-            v-if="credentialForm.auth_type === 'private_key'"
-            v-model="credentialForm.secret"
-            class="aw-input mt-1 min-h-52 w-full resize-y font-mono text-xs"
-            autocomplete="off"
-            :placeholder="
-              editingCredential ? '留空保留现有私钥' : '粘贴私钥内容'
-            "
-          />
-          <input
-            v-else
-            v-model="credentialForm.secret"
-            class="aw-input mt-1 w-full"
-            type="password"
-            autocomplete="new-password"
-            :placeholder="editingCredential ? '留空保留现有密码' : '输入密码'"
-          />
-        </label>
-        <label
-          v-if="credentialForm.auth_type === 'private_key'"
-          class="sm:col-span-2"
-        >
-          <span class="aw-modal-label text-xs">私钥口令（如有）</span>
-          <input
-            v-model="credentialForm.passphrase"
-            class="aw-input mt-1 w-full"
-            type="password"
-            autocomplete="new-password"
-          />
-        </label>
-      </div>
-      <p class="mt-4 text-xs text-[var(--text-tertiary)]">
-        秘密仅在本次请求中提交；保存后 API 只返回“已配置”和公钥指纹。
-      </p>
-      <template #footer>
-        <Button :disabled="saving" @click="closeCredentialForm">取消</Button>
-        <Button variant="primary" :loading="saving" @click="saveCredential"
-          >保存</Button
-        >
-      </template>
-    </Modal>
+      @save="saveCredential"
+    />
+
+    <SSHHostShareModal
+      :open="shareOpen"
+      :host="sharingHost"
+      @close="shareOpen = false"
+      @imported="importedHost"
+    />
 
     <Modal
       :open="!!hostKeyPrompt"

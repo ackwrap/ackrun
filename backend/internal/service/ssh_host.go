@@ -66,6 +66,8 @@ type SSHHostService struct {
 
 	sftpTextLockMu sync.Mutex
 	sftpTextLocks  map[string]*sshSFTPTextLock
+
+	shareMu sync.Mutex
 }
 
 func NewSSHHostService(db *store.Store, p *paths.Paths, core sshCore) (*SSHHostService, error) {
@@ -227,6 +229,25 @@ func (svc *SSHHostService) DeleteHost(id int64) error {
 }
 
 func (svc *SSHHostService) normalizeHost(request model.SSHHostRequest) (*model.SSHHost, error) {
+	item, err := normalizeSSHHostFields(request)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := svc.store.GetSSHCredential(item.CredentialID); err != nil {
+		if errors.Is(err, store.ErrSSHCredentialNotFound) {
+			return nil, sshError("SSH_CREDENTIAL_NOT_FOUND", "SSH 凭据不存在", err)
+		}
+		return nil, err
+	}
+	if item.ConnectionMode == "node_exposure" {
+		if _, err := svc.store.GetNodeExposure(*item.NodeExposureID); err != nil {
+			return nil, sshError("SSH_NODE_EXPOSURE_NOT_FOUND", "节点入口不存在", err)
+		}
+	}
+	return item, nil
+}
+
+func normalizeSSHHostFields(request model.SSHHostRequest) (*model.SSHHost, error) {
 	request.Name = strings.TrimSpace(request.Name)
 	request.GroupName = strings.TrimSpace(request.GroupName)
 	request.Host = strings.TrimSpace(request.Host)
@@ -249,12 +270,6 @@ func (svc *SSHHostService) normalizeHost(request model.SSHHostRequest) (*model.S
 	if request.Username == "" || strings.ContainsAny(request.Username, "\x00\r\n") || utf8.RuneCountInString(request.Username) > 128 {
 		return nil, sshError("SSH_HOST_INVALID", "SSH 用户名无效", nil)
 	}
-	if _, err := svc.store.GetSSHCredential(request.CredentialID); err != nil {
-		if errors.Is(err, store.ErrSSHCredentialNotFound) {
-			return nil, sshError("SSH_CREDENTIAL_NOT_FOUND", "SSH 凭据不存在", err)
-		}
-		return nil, err
-	}
 	if request.ConnectionMode == "" {
 		request.ConnectionMode = "direct"
 	}
@@ -266,9 +281,6 @@ func (svc *SSHHostService) normalizeHost(request model.SSHHostRequest) (*model.S
 	} else {
 		if request.NodeExposureID == nil || *request.NodeExposureID <= 0 {
 			return nil, sshError("SSH_HOST_INVALID", "通过节点入口连接时必须选择入口", nil)
-		}
-		if _, err := svc.store.GetNodeExposure(*request.NodeExposureID); err != nil {
-			return nil, sshError("SSH_NODE_EXPOSURE_NOT_FOUND", "节点入口不存在", err)
 		}
 	}
 	if request.TerminalType == "" {

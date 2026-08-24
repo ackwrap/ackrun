@@ -261,9 +261,11 @@ func registerAdvancedRoutes(group *gin.RouterGroup, nodeExposureH *handler.NodeE
 func registerSSHHostRoutes(group *gin.RouterGroup, sshHostH *handler.SSHHostHandler) {
 	group.GET("/advanced/ssh/hosts", sshHostH.ListHosts)
 	group.POST("/advanced/ssh/hosts", sshHostH.CreateHost)
+	group.POST("/advanced/ssh/hosts/import", sshHostH.ImportHost)
 	group.GET("/advanced/ssh/hosts/:id", sshHostH.GetHost)
 	group.PUT("/advanced/ssh/hosts/:id", sshHostH.UpdateHost)
 	group.DELETE("/advanced/ssh/hosts/:id", sshHostH.DeleteHost)
+	group.POST("/advanced/ssh/hosts/:id/share", sshHostH.ShareHost)
 	group.POST("/advanced/ssh/hosts/:id/test", sshHostH.TestHost)
 	group.POST("/advanced/ssh/hosts/:id/sessions", sshHostH.CreateSession)
 	group.DELETE("/advanced/ssh/sessions/:sessionID", sshHostH.DeleteSession)
