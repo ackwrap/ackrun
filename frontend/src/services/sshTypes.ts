@@ -61,14 +61,19 @@ export interface SSHHostRequest {
 
 export interface SSHHostShareResponse {
   code: string;
-  host_name: string;
+  host_name?: string;
+  host_count: number;
 }
 
 export interface SSHHostImportResponse {
   success: boolean;
   message: string;
   host: SSHHost;
+  hosts: SSHHost[];
+  host_count: number;
+  credential_count: number;
   converted_to_direct: boolean;
+  converted_to_direct_count: number;
 }
 
 export interface SSHHostKey {

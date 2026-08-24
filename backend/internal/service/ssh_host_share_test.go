@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -181,6 +182,130 @@ func TestSSHHostShareValidatesPasswordAndImportedPayload(t *testing.T) {
 	assertSSHShareImportRejectedWithoutWrites(t, svc, db, model.SSHHostImportRequest{
 		Code: code, Password: "valid-share-password",
 	}, "SSH_SHARE_INVALID")
+}
+
+func TestSSHHostBatchShareDeduplicatesCredentialsAndImportsAtomically(t *testing.T) {
+	svc, db := newSSHHostShareTestService(t)
+	sharedCredential, err := svc.CreateCredential(model.SSHCredentialRequest{
+		Name: "batch shared credential", AuthType: "password", Secret: "batch-shared-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	uniqueCredential, err := svc.CreateCredential(model.SSHCredentialRequest{
+		Name: "batch unique credential", AuthType: "password", Secret: "batch-unique-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hosts := make([]*model.SSHHost, 0, 3)
+	for index, credentialID := range []int64{sharedCredential.ID, sharedCredential.ID, uniqueCredential.ID} {
+		host, err := svc.CreateHost(model.SSHHostRequest{
+			Name: fmt.Sprintf("batch host %d", index+1), Host: fmt.Sprintf("batch-%d.example.invalid", index+1),
+			Port: 22, Username: "batch", CredentialID: credentialID, ConnectionMode: "direct",
+			TerminalType: "xterm-256color", Enabled: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		hosts = append(hosts, host)
+	}
+	shared, err := svc.ShareHosts([]int64{hosts[0].ID, hosts[1].ID, hosts[2].ID, hosts[0].ID}, "batch-share-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shared.HostCount != 3 {
+		t.Fatalf("expected 3 deduplicated hosts, got %d", shared.HostCount)
+	}
+	imported, err := svc.ImportHost(model.SSHHostImportRequest{Code: shared.Code, Password: "batch-share-password"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if imported.HostCount != 3 || imported.CredentialCount != 2 || len(imported.Hosts) != 3 {
+		t.Fatalf("unexpected batch import counts: %+v", imported)
+	}
+	if imported.Hosts[0].CredentialID != imported.Hosts[1].CredentialID ||
+		imported.Hosts[0].CredentialID == imported.Hosts[2].CredentialID {
+		t.Fatalf("credential references were not preserved: %+v", imported.Hosts)
+	}
+	for _, host := range imported.Hosts {
+		if !strings.Contains(host.Name, "(导入)") || !strings.Contains(host.CredentialName, "(导入)") {
+			t.Fatalf("batch import did not resolve name conflicts: host=%q credential=%q", host.Name, host.CredentialName)
+		}
+	}
+
+	invalidPayload := sshHostShareBundlePayload{
+		Format: sshHostShareBundleFormat, Version: sshHostShareBundleVersion,
+		Credentials: []sshHostShareBundleCredential{{
+			Ref: "credential-1", Credential: sshHostShareCredential{Name: "rollback credential", AuthType: "password", Secret: []byte("rollback-secret")},
+		}},
+		Hosts: []sshHostShareBundleHost{
+			{CredentialRef: "credential-1", Host: sshHostShareHost{Name: "rollback valid", Host: "valid.example.invalid", Port: 22, Username: "root", ConnectionMode: "direct", TerminalType: "xterm-256color"}},
+			{CredentialRef: "credential-1", Host: sshHostShareHost{Name: "rollback invalid", Host: "invalid.example.invalid", Port: 0, Username: "root", ConnectionMode: "direct", TerminalType: "xterm-256color"}},
+		},
+	}
+	plaintext, err := json.Marshal(invalidPayload)
+	clearSSHHostShareBundle(&invalidPayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidCode, err := encryptSSHHostShare(plaintext, "batch-share-password")
+	clearBytes(plaintext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSSHShareImportRejectedWithoutWrites(t, svc, db, model.SSHHostImportRequest{
+		Code: invalidCode, Password: "batch-share-password",
+	}, "SSH_SHARE_INVALID")
+}
+
+func TestSSHHostBatchShareValidatesSelection(t *testing.T) {
+	svc, _ := newSSHHostShareTestService(t)
+	for _, ids := range [][]int64{nil, {0}, make([]int64, model.MaxSSHHostShareHosts+1)} {
+		_, err := svc.ShareHosts(ids, "batch-share-password")
+		if sshShareErrorCode(err) != "SSH_SHARE_INVALID" {
+			t.Fatalf("expected invalid batch selection error, got %v", err)
+		}
+	}
+}
+
+func TestSSHHostBatchShareRejectsInvalidReferences(t *testing.T) {
+	svc, db := newSSHHostShareTestService(t)
+	credential := sshHostShareBundleCredential{
+		Ref: "credential-1", Credential: sshHostShareCredential{Name: "credential", AuthType: "password", Secret: []byte("secret")},
+	}
+	host := sshHostShareBundleHost{
+		CredentialRef: "credential-1",
+		Host:          sshHostShareHost{Name: "host", Host: "host.example.invalid", Port: 22, Username: "root", ConnectionMode: "direct", TerminalType: "xterm-256color"},
+	}
+	secondHost := host
+	secondHost.Host.Name = "host two"
+	tooManyHosts := make([]sshHostShareBundleHost, model.MaxSSHHostShareHosts+1)
+	for index := range tooManyHosts {
+		tooManyHosts[index] = host
+		tooManyHosts[index].Host.Name = fmt.Sprintf("host %d", index+1)
+	}
+	cases := []sshHostShareBundlePayload{
+		{Format: sshHostShareBundleFormat, Version: sshHostShareBundleVersion, Credentials: []sshHostShareBundleCredential{credential, credential}, Hosts: []sshHostShareBundleHost{host, secondHost}},
+		{Format: sshHostShareBundleFormat, Version: sshHostShareBundleVersion, Credentials: []sshHostShareBundleCredential{credential}, Hosts: []sshHostShareBundleHost{{CredentialRef: "missing", Host: host.Host}}},
+		{Format: sshHostShareBundleFormat, Version: sshHostShareBundleVersion, Credentials: []sshHostShareBundleCredential{credential, {Ref: "unused", Credential: sshHostShareCredential{Name: "unused", AuthType: "password", Secret: []byte("unused")}}}, Hosts: []sshHostShareBundleHost{host, secondHost}},
+		{Format: sshHostShareBundleFormat, Version: sshHostShareBundleVersion, Credentials: []sshHostShareBundleCredential{credential}, Hosts: tooManyHosts},
+	}
+	for index := range cases {
+		plaintext, err := json.Marshal(cases[index])
+		clearSSHHostShareBundle(&cases[index])
+		if err != nil {
+			t.Fatal(err)
+		}
+		code, err := encryptSSHHostShare(plaintext, "batch-share-password")
+		clearBytes(plaintext)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertSSHShareImportRejectedWithoutWrites(t, svc, db, model.SSHHostImportRequest{
+			Code: code, Password: "batch-share-password",
+		}, "SSH_SHARE_INVALID")
+	}
 }
 
 func newSSHHostShareTestService(t *testing.T) (*SSHHostService, *store.Store) {

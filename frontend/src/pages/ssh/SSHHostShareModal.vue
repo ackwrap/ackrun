@@ -9,7 +9,7 @@ import { errorMessage } from "../advanced/advancedUi";
 
 const props = defineProps<{
   open: boolean;
-  host: SSHHost | null;
+  hosts: SSHHost[];
 }>();
 const emit = defineEmits<{
   close: [];
@@ -23,7 +23,7 @@ const busy = ref(false);
 const error = ref("");
 const copied = ref(false);
 const codeField = ref<HTMLTextAreaElement | null>(null);
-const exportMode = computed(() => props.host !== null);
+const exportMode = computed(() => props.hosts.length > 0);
 
 function clearSensitiveState(clearCode = true) {
   password.value = "";
@@ -50,7 +50,7 @@ function validPassword() {
 }
 
 async function exportHost() {
-  if (!props.host || busy.value || !validPassword()) return;
+  if (!props.hosts.length || busy.value || !validPassword()) return;
   if (password.value !== confirmation.value) {
     error.value = "两次输入的分享密码不一致";
     return;
@@ -59,7 +59,12 @@ async function exportHost() {
   error.value = "";
   copied.value = false;
   try {
-    code.value = (await sshApi.shareHost(props.host.id, password.value)).code;
+    code.value = (
+      await sshApi.shareHosts(
+        props.hosts.map((host) => host.id),
+        password.value,
+      )
+    ).code;
     clearSensitiveState(false);
   } catch (cause) {
     error.value = `生成分享码失败：${errorMessage(cause)}`;
@@ -121,10 +126,16 @@ function close() {
     <div class="rounded-[var(--radius-lg)] bg-[var(--color-warning-bg)] p-4 text-sm">
       <div class="flex items-center gap-2 font-medium">
         <LockKeyhole :size="17" class="text-[var(--color-warning)]" />
-        {{ exportMode ? host?.name : "密码保护的 SSH 主机分享码" }}
+        {{
+          exportMode
+            ? hosts.length === 1
+              ? hosts[0]?.name
+              : `已选择 ${hosts.length} 台 SSH 主机`
+            : "密码保护的 SSH 主机分享码"
+        }}
       </div>
       <p class="mt-2 text-xs leading-5 text-[var(--text-secondary)]">
-        分享码包含主机地址、用户名和关联凭据，并使用密码加密。请通过不同渠道发送分享码和密码。
+        分享码可包含一台或多台主机及去重后的关联凭据，并使用密码加密。请通过不同渠道发送分享码和密码。
         Host Key 信任及本机节点入口不会导出，导入后使用直连并需重新核验 Host Key。
       </p>
     </div>

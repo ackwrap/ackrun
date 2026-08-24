@@ -72,3 +72,33 @@ func TestSSHCredentialCiphertextStoredAsBlob(t *testing.T) {
 		t.Fatalf("ciphertext mismatch: %v", stored)
 	}
 }
+
+func TestCreateSSHHostsWithCredentialsRollsBackBatch(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	credential := &model.SSHCredential{
+		Name: "batch credential", AuthType: "password", SecretContext: "batch-context",
+		SecretCiphertext: []byte{1}, SecretNonce: []byte{2}, KeyVersion: 1,
+	}
+	hosts := []*model.SSHHost{
+		{Name: "duplicate batch host", Host: "one.example.invalid", Port: 22, Username: "root", ConnectionMode: "direct", TerminalType: "xterm-256color", Tags: []string{}},
+		{Name: "duplicate batch host", Host: "two.example.invalid", Port: 22, Username: "root", ConnectionMode: "direct", TerminalType: "xterm-256color", Tags: []string{}},
+	}
+	if err := db.CreateSSHHostsWithCredentials([]*model.SSHCredential{credential}, hosts, []int{0, 0}); err == nil {
+		t.Fatal("expected duplicate host name batch to fail")
+	}
+	credentials, err := db.ListSSHCredentials()
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadedHosts, err := db.ListSSHHosts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(credentials) != 0 || len(loadedHosts) != 0 {
+		t.Fatal("failed SSH import batch was not rolled back")
+	}
+}

@@ -145,9 +145,23 @@ func (s *Store) CreateSSHHost(item *model.SSHHost) error {
 }
 
 func (s *Store) CreateSSHHostWithCredential(credential *model.SSHCredential, host *model.SSHHost) error {
-	tags, err := json.Marshal(host.Tags)
-	if err != nil {
-		return err
+	return s.CreateSSHHostsWithCredentials([]*model.SSHCredential{credential}, []*model.SSHHost{host}, []int{0})
+}
+
+func (s *Store) CreateSSHHostsWithCredentials(credentials []*model.SSHCredential, hosts []*model.SSHHost, credentialIndexes []int) error {
+	if len(credentials) == 0 || len(hosts) == 0 || len(hosts) != len(credentialIndexes) {
+		return errors.New("invalid SSH host import batch")
+	}
+	tags := make([]string, len(hosts))
+	for index, host := range hosts {
+		if credentialIndexes[index] < 0 || credentialIndexes[index] >= len(credentials) {
+			return errors.New("invalid SSH credential index")
+		}
+		encoded, err := json.Marshal(host.Tags)
+		if err != nil {
+			return err
+		}
+		tags[index] = string(encoded)
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -156,36 +170,40 @@ func (s *Store) CreateSSHHostWithCredential(credential *model.SSHCredential, hos
 	defer tx.Rollback()
 
 	now := time.Now().UnixMilli()
-	credential.CreatedAt, credential.UpdatedAt = now, now
-	result, err := tx.Exec(`INSERT INTO ssh_credentials
-		(name, auth_type, secret_context, secret_ciphertext, secret_nonce, passphrase_ciphertext,
-		 passphrase_nonce, key_fingerprint, key_version, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, credential.Name, credential.AuthType,
-		credential.SecretContext, credential.SecretCiphertext, credential.SecretNonce,
-		nullableBytes(credential.PassphraseCiphertext), nullableBytes(credential.PassphraseNonce),
-		credential.KeyFingerprint, credential.KeyVersion, now, now)
-	if err != nil {
-		return err
-	}
-	credential.ID, err = result.LastInsertId()
-	if err != nil {
-		return err
+	for _, credential := range credentials {
+		credential.CreatedAt, credential.UpdatedAt = now, now
+		result, err := tx.Exec(`INSERT INTO ssh_credentials
+			(name, auth_type, secret_context, secret_ciphertext, secret_nonce, passphrase_ciphertext,
+			 passphrase_nonce, key_fingerprint, key_version, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, credential.Name, credential.AuthType,
+			credential.SecretContext, credential.SecretCiphertext, credential.SecretNonce,
+			nullableBytes(credential.PassphraseCiphertext), nullableBytes(credential.PassphraseNonce),
+			credential.KeyFingerprint, credential.KeyVersion, now, now)
+		if err != nil {
+			return err
+		}
+		credential.ID, err = result.LastInsertId()
+		if err != nil {
+			return err
+		}
 	}
 
-	host.CredentialID = credential.ID
-	host.CreatedAt, host.UpdatedAt = now, now
-	result, err = tx.Exec(`INSERT INTO ssh_hosts
-		(name, group_name, host, port, username, credential_id, connection_mode, node_exposure_id,
-		 terminal_type, enabled, tags_json, notes, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, host.Name, host.GroupName, host.Host,
-		host.Port, host.Username, host.CredentialID, host.ConnectionMode, host.NodeExposureID,
-		host.TerminalType, boolToInt(host.Enabled), string(tags), host.Notes, now, now)
-	if err != nil {
-		return err
-	}
-	host.ID, err = result.LastInsertId()
-	if err != nil {
-		return err
+	for index, host := range hosts {
+		host.CredentialID = credentials[credentialIndexes[index]].ID
+		host.CreatedAt, host.UpdatedAt = now, now
+		result, err := tx.Exec(`INSERT INTO ssh_hosts
+			(name, group_name, host, port, username, credential_id, connection_mode, node_exposure_id,
+			 terminal_type, enabled, tags_json, notes, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, host.Name, host.GroupName, host.Host,
+			host.Port, host.Username, host.CredentialID, host.ConnectionMode, host.NodeExposureID,
+			host.TerminalType, boolToInt(host.Enabled), tags[index], host.Notes, now, now)
+		if err != nil {
+			return err
+		}
+		host.ID, err = result.LastInsertId()
+		if err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

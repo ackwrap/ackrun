@@ -60,6 +60,11 @@ export const sshApi = {
       method: "POST",
       body: JSON.stringify({ password }),
     }),
+  shareHosts: (hostIDs: number[], password: string) =>
+    request<SSHHostShareResponse>("/advanced/ssh/hosts/share", {
+      method: "POST",
+      body: JSON.stringify({ host_ids: hostIDs, password }),
+    }),
   importHost: (code: string, password: string) =>
     request<SSHHostImportResponse>("/advanced/ssh/hosts/import", {
       method: "POST",

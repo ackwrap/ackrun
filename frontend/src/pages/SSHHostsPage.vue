@@ -5,12 +5,9 @@ import {
   KeyRound,
   Laptop,
   Pencil,
-  Play,
   Plus,
-  Route,
   Share2,
   ShieldAlert,
-  SquareTerminal,
   Trash2,
   Upload,
 } from "lucide-vue-next";
@@ -19,7 +16,6 @@ import Button from "@/components/ui/Button.vue";
 import Card from "@/components/ui/Card.vue";
 import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
 import Modal from "@/components/ui/Modal.vue";
-import StatusBadge from "@/components/ui/StatusBadge.vue";
 import Toast from "@/components/ui/Toast.vue";
 import { ApiRequestError } from "@/services/api";
 import { advancedApi } from "@/services/advancedApi";
@@ -39,6 +35,7 @@ import { errorMessage, formatTime } from "./advanced/advancedUi";
 import SSHHostFormModal from "./ssh/SSHHostFormModal.vue";
 import SSHCredentialFormModal from "./ssh/SSHCredentialFormModal.vue";
 import SSHHostShareModal from "./ssh/SSHHostShareModal.vue";
+import SSHHostTable from "./ssh/SSHHostTable.vue";
 
 type PageTab = "hosts" | "credentials";
 interface CredentialForm {
@@ -73,7 +70,8 @@ const deletingCredential = ref<SSHCredential | null>(null);
 const hostKeyPrompt = ref<HostKeyPrompt | null>(null);
 const trustedKey = ref<{ host: SSHHost; key: SSHHostKey } | null>(null);
 const shareOpen = ref(false);
-const sharingHost = ref<SSHHost | null>(null);
+const sharingHosts = ref<SSHHost[]>([]);
+const selectedHostIDs = ref<number[]>([]);
 const credentialForm = reactive<CredentialForm>(emptyCredentialForm());
 const availableHosts = computed(
   () => hosts.value.filter((item) => item.last_status === "available").length,
@@ -81,6 +79,11 @@ const availableHosts = computed(
 const trustedHosts = computed(
   () => hosts.value.filter((item) => item.host_key_status === "trusted").length,
 );
+const selectedHosts = computed(() => {
+  const selected = new Set(selectedHostIDs.value);
+  return hosts.value.filter((host) => selected.has(host.id));
+});
+const maxSharedHosts = 100;
 
 function emptyCredentialForm(): CredentialForm {
   return { name: "", auth_type: "password", secret: "", passphrase: "" };
@@ -100,6 +103,10 @@ async function load() {
       advancedApi.getNodeExposures(),
     ]);
     hosts.value = hostItems;
+    const availableHostIDs = new Set(hostItems.map((host) => host.id));
+    selectedHostIDs.value = selectedHostIDs.value.filter((id) =>
+      availableHostIDs.has(id),
+    );
     credentials.value = credentialItems;
     exposures.value = exposureItems;
   } catch (error) {
@@ -321,34 +328,24 @@ async function removeCredential() {
   }
 }
 
-function hostStatus(host: SSHHost) {
-  if (!host.enabled) return { status: "offline" as const, label: "已停用" };
-  if (host.last_status === "available") {
-    return { status: "online" as const, label: `${host.last_latency_ms} ms` };
-  }
-  if (host.last_status === "host_key_pending") {
-    return { status: "pending" as const, label: "待信任" };
-  }
-  if (host.last_status === "unavailable") {
-    return { status: "error" as const, label: "不可用" };
-  }
-  return { status: "offline" as const, label: "未测试" };
-}
-
-function connectionLabel(host: SSHHost) {
-  return host.connection_mode === "direct"
-    ? "直连"
-    : host.node_exposure_name || "节点入口不可用";
-}
-
 function importedHost(result: SSHHostImportResponse) {
   shareOpen.value = false;
+  selectedHostIDs.value = [];
   show(
     result.converted_to_direct
-      ? "SSH 主机已导入；原节点入口未导入，当前已改为直连"
-      : "SSH 主机已导入，请测试连接并核验 Host Key",
+      ? `已导入 ${result.host_count} 台 SSH 主机，其中 ${result.converted_to_direct_count} 台已从节点入口改为直连`
+      : `已导入 ${result.host_count} 台 SSH 主机，请测试连接并核验 Host Key`,
   );
   void load();
+}
+
+function openBatchShare() {
+  if (selectedHosts.value.length > maxSharedHosts) {
+    show(`单次最多分享 ${maxSharedHosts} 台 SSH 主机`, "error");
+    return;
+  }
+  sharingHosts.value = selectedHosts.value;
+  shareOpen.value = true;
 }
 
 onMounted(load);
@@ -363,9 +360,16 @@ onMounted(load);
       <template #actions>
         <Button
           v-if="tab === 'hosts'"
-          @click="sharingHost = null; shareOpen = true"
+          @click="sharingHosts = []; shareOpen = true"
         >
           <template #icon><Upload :size="14" /></template>导入主机
+        </Button>
+        <Button
+          v-if="tab === 'hosts' && selectedHosts.length"
+          @click="openBatchShare"
+        >
+          <template #icon><Share2 :size="14" /></template>
+          分享选中（{{ selectedHosts.length }}）
         </Button>
         <Button
           v-if="tab === 'hosts'"
@@ -426,132 +430,19 @@ onMounted(load);
       </button>
     </div>
 
-    <Card v-if="tab === 'hosts'" padding="none">
-      <div
-        v-if="loading"
-        class="p-10 text-center text-sm text-[var(--text-secondary)]"
-      >
-        加载中...
-      </div>
-      <div
-        v-else-if="!hosts.length"
-        class="p-12 text-center text-sm text-[var(--text-secondary)]"
-      >
-        <SquareTerminal
-          :size="34"
-          class="mx-auto mb-3 text-[var(--text-tertiary)]"
-        />
-        暂无 SSH 主机。新增主机时可直接创建并选择登录凭据。
-      </div>
-      <div v-else class="aw-data-table-wrap rounded-none border-0">
-        <table class="aw-data-table min-w-[980px]">
-          <thead>
-            <tr>
-              <th>主机</th>
-              <th>连接路径</th>
-              <th>凭据 / Host Key</th>
-              <th>状态</th>
-              <th>最近检查</th>
-              <th class="text-right">操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="host in hosts" :key="host.id">
-              <td>
-                <p class="font-medium">{{ host.name }}</p>
-                <p class="mt-1 font-mono text-xs text-[var(--text-tertiary)]">
-                  {{ host.username }}@{{ host.host }}:{{ host.port }}
-                </p>
-                <div v-if="host.tags?.length" class="mt-2 flex flex-wrap gap-1">
-                  <span
-                    v-for="tag in host.tags"
-                    :key="tag"
-                    class="rounded-full bg-[var(--color-primary-bg)] px-2 py-0.5 text-[10px] text-[var(--color-primary-hover)]"
-                    >{{ tag }}</span
-                  >
-                </div>
-              </td>
-              <td>
-                <div class="flex items-center gap-2 text-sm">
-                  <Route :size="14" class="text-[var(--text-tertiary)]" />
-                  {{ connectionLabel(host) }}
-                </div>
-              </td>
-              <td>
-                <p class="text-sm">{{ host.credential_name }}</p>
-                <button
-                  v-if="host.host_key_status === 'trusted'"
-                  class="mt-1 text-xs text-[var(--color-success)] hover:underline"
-                  @click="showHostKey(host)"
-                >
-                  Host Key 已信任
-                </button>
-                <p v-else class="mt-1 text-xs text-[var(--color-warning)]">
-                  Host Key 待确认
-                </p>
-              </td>
-              <td>
-                <StatusBadge
-                  :status="hostStatus(host).status"
-                  :label="hostStatus(host).label"
-                  size="sm"
-                />
-                <p
-                  v-if="host.last_error_message"
-                  class="mt-2 max-w-56 truncate text-xs text-[var(--color-error)]"
-                  :title="host.last_error_message"
-                >
-                  {{ host.last_error_message }}
-                </p>
-              </td>
-              <td class="text-xs text-[var(--text-secondary)]">
-                {{ formatTime(host.last_checked_at) }}
-              </td>
-              <td>
-                <div class="flex justify-end gap-1">
-                  <Button
-                    size="sm"
-                    :loading="testingID === host.id"
-                    :disabled="!host.enabled"
-                    title="测试连接"
-                    @click="testHost(host)"
-                  >
-                    <template #icon><Play :size="13" /></template>测试
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="primary"
-                    :disabled="!host.enabled || testingID > 0"
-                    title="在新标签页打开 SSH 与 SFTP 工作台"
-                    @click="openTerminal(host)"
-                  >
-                    <template #icon><SquareTerminal :size="13" /></template>终端
-                  </Button>
-                  <Button size="sm" variant="ghost" @click="openEditHost(host)">
-                    <template #icon><Pencil :size="13" /></template>
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    title="加密分享主机"
-                    @click="sharingHost = host; shareOpen = true"
-                  >
-                    <template #icon><Share2 :size="13" /></template>
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    @click="deletingHost = host"
-                  >
-                    <template #icon><Trash2 :size="13" /></template>
-                  </Button>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </Card>
+    <SSHHostTable
+      v-if="tab === 'hosts'"
+      v-model:selected-ids="selectedHostIDs"
+      :hosts="hosts"
+      :loading="loading"
+      :testing-id="testingID"
+      @test="testHost"
+      @terminal="openTerminal"
+      @edit="openEditHost"
+      @share="sharingHosts = [$event]; shareOpen = true"
+      @delete="deletingHost = $event"
+      @show-host-key="showHostKey"
+    />
 
     <Card v-else padding="none">
       <div
@@ -639,7 +530,7 @@ onMounted(load);
 
     <SSHHostShareModal
       :open="shareOpen"
-      :host="sharingHost"
+      :hosts="sharingHosts"
       @close="shareOpen = false"
       @imported="importedHost"
     />

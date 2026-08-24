@@ -31,6 +31,7 @@ func TestRegisterSSHHostRoutesContract(t *testing.T) {
 		"GET /api/v1/advanced/ssh/hosts":                      false,
 		"POST /api/v1/advanced/ssh/hosts":                     false,
 		"POST /api/v1/advanced/ssh/hosts/import":              false,
+		"POST /api/v1/advanced/ssh/hosts/share":               false,
 		"GET /api/v1/advanced/ssh/hosts/:id":                  false,
 		"PUT /api/v1/advanced/ssh/hosts/:id":                  false,
 		"DELETE /api/v1/advanced/ssh/hosts/:id":               false,

@@ -113,6 +113,22 @@ func (h *SSHHostHandler) ShareHost(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
+func (h *SSHHostHandler) ShareHosts(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxSSHHostRequestBody)
+	var request model.SSHHostsShareRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		writeSSHInvalidRequest(c, err)
+		return
+	}
+	result, err := h.service.ShareHosts(request.HostIDs, request.Password)
+	if err != nil {
+		writeSSHError(c, err)
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, result)
+}
+
 func (h *SSHHostHandler) ImportHost(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxSSHHostImportRequestBody)
 	var request model.SSHHostImportRequest

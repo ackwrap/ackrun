@@ -1,6 +1,9 @@
 package model
 
-const MaxSSHHostShareCodeSize = 1 << 20
+const (
+	MaxSSHHostShareCodeSize = 1 << 20
+	MaxSSHHostShareHosts    = 100
+)
 
 type SSHCredential struct {
 	ID                   int64  `json:"id"`
@@ -70,9 +73,15 @@ type SSHHostShareRequest struct {
 	Password string `json:"password"`
 }
 
+type SSHHostsShareRequest struct {
+	HostIDs  []int64 `json:"host_ids"`
+	Password string  `json:"password"`
+}
+
 type SSHHostShareResponse struct {
-	Code     string `json:"code"`
-	HostName string `json:"host_name"`
+	Code      string `json:"code"`
+	HostName  string `json:"host_name,omitempty"`
+	HostCount int    `json:"host_count"`
 }
 
 type SSHHostImportRequest struct {
@@ -81,10 +90,14 @@ type SSHHostImportRequest struct {
 }
 
 type SSHHostImportResponse struct {
-	Success           bool    `json:"success"`
-	Message           string  `json:"message"`
-	Host              SSHHost `json:"host"`
-	ConvertedToDirect bool    `json:"converted_to_direct"`
+	Success                bool      `json:"success"`
+	Message                string    `json:"message"`
+	Host                   SSHHost   `json:"host"`
+	Hosts                  []SSHHost `json:"hosts"`
+	HostCount              int       `json:"host_count"`
+	CredentialCount        int       `json:"credential_count"`
+	ConvertedToDirect      bool      `json:"converted_to_direct"`
+	ConvertedToDirectCount int       `json:"converted_to_direct_count"`
 }
 
 type SSHHostKey struct {

@@ -47,6 +47,7 @@ func TestSSHHostShareHTTPNoStoreAndLimits(t *testing.T) {
 	handler := NewSSHHostHandler(svc)
 	router := gin.New()
 	router.POST("/hosts/import", handler.ImportHost)
+	router.POST("/hosts/share", handler.ShareHosts)
 	router.POST("/hosts/:id/share", handler.ShareHost)
 
 	shared := performSSHHostJSONRequest(t, router, "/hosts/"+strconv.FormatInt(host.ID, 10)+"/share", map[string]string{
@@ -58,6 +59,12 @@ func TestSSHHostShareHTTPNoStoreAndLimits(t *testing.T) {
 	var shareResponse model.SSHHostShareResponse
 	if err := json.Unmarshal(shared.Body.Bytes(), &shareResponse); err != nil || shareResponse.Code == "" {
 		t.Fatal("share response is missing an encrypted code")
+	}
+	batchShared := performSSHHostJSONRequest(t, router, "/hosts/share", map[string]any{
+		"host_ids": []int64{host.ID}, "password": "handler-share-password",
+	})
+	if batchShared.Code != http.StatusOK || batchShared.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("unexpected batch share response: status=%d cache=%q", batchShared.Code, batchShared.Header().Get("Cache-Control"))
 	}
 
 	wrongPassword := performSSHHostJSONRequest(t, router, "/hosts/import", map[string]string{
