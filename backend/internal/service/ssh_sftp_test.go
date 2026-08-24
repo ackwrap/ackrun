@@ -77,6 +77,27 @@ func TestSSHSFTPFileLifecycleAndSessionIsolation(t *testing.T) {
 	if err := svc.CreateSFTPDirectory(session.SessionID, session.SFTPToken, directory); err != nil {
 		t.Fatal(err)
 	}
+	emptyPath := path.Join(directory, "empty.txt")
+	if err := svc.CreateSFTPFile(session.SessionID, session.SFTPToken, path.Join(directory, `..\escape.txt`)); sshServiceCode(err) != "SSH_SFTP_INVALID_PATH" {
+		t.Fatalf("SFTP file path containing a backslash was not rejected: %v", err)
+	}
+	if err := svc.CreateSFTPFile(session.SessionID, session.SFTPToken, emptyPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.CreateSFTPFile(session.SessionID, session.SFTPToken, emptyPath); sshServiceCode(err) != "SSH_SFTP_EXISTS" {
+		t.Fatalf("duplicate SFTP file creation was not rejected: %v", err)
+	}
+	emptyDownload, err := svc.OpenSFTPDownload(session.SessionID, session.SFTPToken, emptyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if emptyDownload.Size != 0 {
+		t.Fatalf("new SFTP file is not empty: %d", emptyDownload.Size)
+	}
+	_ = emptyDownload.Reader.Close()
+	if err := svc.DeleteSFTP(session.SessionID, session.SFTPToken, emptyPath, false); err != nil {
+		t.Fatal(err)
+	}
 	filePath := path.Join(directory, "notes.txt")
 	written, err := svc.UploadSFTP(session.SessionID, session.SFTPToken, filePath, false, io.NopCloser(bytes.NewBufferString("sftp-content")))
 	if err != nil {

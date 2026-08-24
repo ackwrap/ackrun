@@ -114,6 +114,12 @@ export const sshApi = {
       headers: { "X-SSH-Session-Token": token },
       body: JSON.stringify({ path }),
     }),
+  createSFTPFile: (sessionID: string, token: string, path: string) =>
+    request<SSHActionResponse>(sftpEndpoint(sessionID, "/touch"), {
+      method: "POST",
+      headers: { "X-SSH-Session-Token": token },
+      body: JSON.stringify({ path }),
+    }),
   renameSFTP: (
     sessionID: string,
     token: string,

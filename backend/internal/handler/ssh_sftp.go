@@ -51,6 +51,24 @@ func (h *SSHHostHandler) CreateSFTPDirectory(c *gin.Context) {
 	c.JSON(http.StatusOK, model.ActionResponse{Success: true, Message: "SFTP directory created"})
 }
 
+func (h *SSHHostHandler) CreateSFTPFile(c *gin.Context) {
+	sessionID, token, ok := parseSSHSFTPSession(c)
+	if !ok {
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxSSHSFTPRequestBody)
+	var request model.SSHSFTPPathRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		writeSSHInvalidRequest(c, err)
+		return
+	}
+	if err := h.service.CreateSFTPFile(sessionID, token, request.Path); err != nil {
+		writeSSHError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, model.ActionResponse{Success: true, Message: "SFTP file created"})
+}
+
 func (h *SSHHostHandler) RenameSFTP(c *gin.Context) {
 	sessionID, token, ok := parseSSHSFTPSession(c)
 	if !ok {

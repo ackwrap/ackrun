@@ -4,6 +4,7 @@ import {
   ArrowDownToLine,
   ArrowUp,
   File as FileIcon,
+  FilePlus2,
   Folder,
   FolderPlus,
   Home,
@@ -36,7 +37,7 @@ const fileInput = ref<HTMLInputElement | null>(null);
 const uploading = ref(false);
 const uploadProgress = ref(0);
 const uploadName = ref("");
-const action = ref<"mkdir" | "rename" | null>(null);
+const action = ref<"create" | "mkdir" | "rename" | null>(null);
 const actionName = ref("");
 const actionSaving = ref(false);
 const deleting = ref<SSHSFTPEntry | null>(null);
@@ -55,7 +56,7 @@ function validName(value: string) {
     value.length > 0 &&
     value !== "." &&
     value !== ".." &&
-    !value.includes("/") &&
+    !/[\\/]/.test(value) &&
     !/[\0\r\n]/.test(value)
   );
 }
@@ -112,14 +113,14 @@ function openEntry(entry: SSHSFTPEntry) {
   else void download(entry);
 }
 
-function openAction(next: "mkdir" | "rename") {
+function openAction(next: "create" | "mkdir" | "rename") {
   if (uploading.value) return;
   action.value = next;
   actionName.value = next === "rename" ? selected.value?.name || "" : "";
 }
 
 async function saveAction() {
-  if (uploading.value) return;
+  if (uploading.value || actionSaving.value) return;
   const name = actionName.value.trim();
   if (!validName(name)) {
     message.value = "名称不能为空，且不能包含斜杠或换行";
@@ -128,7 +129,14 @@ async function saveAction() {
   actionSaving.value = true;
   message.value = "";
   try {
-    if (action.value === "mkdir") {
+    if (action.value === "create") {
+      await sshApi.createSFTPFile(
+        props.session.session_id,
+        props.session.sftp_token,
+        remoteJoin(path.value, name),
+      );
+      message.value = "文件已创建";
+    } else if (action.value === "mkdir") {
       await sshApi.createSFTPDirectory(
         props.session.session_id,
         props.session.sftp_token,
@@ -276,6 +284,7 @@ onMounted(() => load("."));
           <button
             class="aw-modal-close inline-flex h-8 w-8 items-center justify-center"
             title="主目录"
+            aria-label="主目录"
             :disabled="uploading"
             @click="load(home)"
           >
@@ -283,7 +292,8 @@ onMounted(() => load("."));
           </button>
           <button
             class="aw-modal-close inline-flex h-8 w-8 items-center justify-center"
-            title="上级目录"
+            title="上一级"
+            aria-label="上一级"
             :disabled="uploading || !canGoUp"
             @click="load(parent)"
           >
@@ -291,7 +301,8 @@ onMounted(() => load("."));
           </button>
           <button
             class="aw-modal-close inline-flex h-8 w-8 items-center justify-center"
-            title="刷新"
+            title="刷新文件夹"
+            aria-label="刷新文件夹"
             :disabled="loading || uploading"
             @click="load(path)"
           >
@@ -311,20 +322,71 @@ onMounted(() => load("."));
           >转到</Button
         >
       </form>
-      <div class="mt-2 flex items-center gap-1">
-        <Button size="sm" :disabled="uploading" @click="fileInput?.click()">
-          <template #icon><Upload :size="13" /></template>上传
-        </Button>
-        <Button size="sm" :disabled="uploading" @click="openAction('mkdir')">
-          <template #icon><FolderPlus :size="13" /></template>新建目录
-        </Button>
-        <Button
-          size="sm"
+      <div
+        class="mt-2 flex items-center gap-1 border-t border-[var(--border-light)] pt-2"
+        role="toolbar"
+        aria-label="SFTP 文件操作"
+      >
+        <button
+          class="aw-modal-close inline-flex h-8 w-8 items-center justify-center"
+          title="上传文件"
+          aria-label="上传文件"
+          :disabled="uploading"
+          @click="fileInput?.click()"
+        >
+          <Upload :size="15" />
+        </button>
+        <button
+          class="aw-modal-close inline-flex h-8 w-8 items-center justify-center"
+          title="下载选中文件"
+          aria-label="下载选中文件"
+          :disabled="uploading || !selected || selected.is_dir"
+          @click="selected && download(selected)"
+        >
+          <ArrowDownToLine :size="15" />
+        </button>
+        <span class="mx-0.5 h-5 w-px bg-[var(--border-default)]" />
+        <button
+          class="aw-modal-close inline-flex h-8 w-8 items-center justify-center"
+          title="新建文件"
+          aria-label="新建文件"
+          :disabled="uploading"
+          @click="openAction('create')"
+        >
+          <FilePlus2 :size="15" />
+        </button>
+        <button
+          class="aw-modal-close inline-flex h-8 w-8 items-center justify-center"
+          title="新建目录"
+          aria-label="新建目录"
+          :disabled="uploading"
+          @click="openAction('mkdir')"
+        >
+          <FolderPlus :size="15" />
+        </button>
+        <button
+          class="aw-modal-close inline-flex h-8 w-8 items-center justify-center"
+          title="重命名选中的文件或目录"
+          aria-label="重命名选中的文件或目录"
           :disabled="uploading || !selected"
           @click="openAction('rename')"
         >
-          <template #icon><Pencil :size="13" /></template>重命名
-        </Button>
+          <Pencil :size="15" />
+        </button>
+        <button
+          class="aw-modal-close inline-flex h-8 w-8 items-center justify-center text-[var(--color-error)]"
+          title="删除选中的文件或目录"
+          aria-label="删除选中的文件或目录"
+          :disabled="uploading || !selected"
+          @click="deleting = selected"
+        >
+          <Trash2 :size="15" />
+        </button>
+        <span
+          class="ml-auto min-w-0 truncate text-[11px] text-[var(--text-tertiary)]"
+        >
+          {{ selected ? selected.name : `${entries.length} 项` }}
+        </span>
         <input
           ref="fileInput"
           type="file"
@@ -424,34 +486,27 @@ onMounted(() => load("."));
     </div>
 
     <footer
-      class="flex min-h-10 shrink-0 items-center justify-between gap-2 border-t border-[var(--border-default)] px-3 py-2"
+      class="flex min-h-10 shrink-0 items-center border-t border-[var(--border-default)] px-3 py-2"
     >
       <p class="min-w-0 truncate text-[11px] text-[var(--text-secondary)]">
-        {{ message || `${entries.length} 项 · 双击打开` }}
+        {{
+          message ||
+          (selected
+            ? `已选择：${selected.name}`
+            : `${entries.length} 项 · 双击目录打开，双击文件下载`)
+        }}
       </p>
-      <div class="flex shrink-0 items-center gap-1">
-        <button
-          class="aw-modal-close inline-flex h-7 w-7 items-center justify-center"
-          title="下载"
-          :disabled="uploading || !selected || selected.is_dir"
-          @click="selected && download(selected)"
-        >
-          <ArrowDownToLine :size="14" />
-        </button>
-        <button
-          class="aw-modal-close inline-flex h-7 w-7 items-center justify-center text-[var(--color-error)]"
-          title="删除"
-          :disabled="uploading || !selected"
-          @click="deleting = selected"
-        >
-          <Trash2 :size="14" />
-        </button>
-      </div>
     </footer>
 
     <Modal
       :open="!!action"
-      :title="action === 'mkdir' ? '新建远端目录' : '重命名远端文件'"
+      :title="
+        action === 'create'
+          ? '新建远端文件'
+          : action === 'mkdir'
+            ? '新建远端目录'
+            : '重命名远端文件或目录'
+      "
       size="sm"
       :closable="!actionSaving"
       @close="!actionSaving && (action = null)"
@@ -463,6 +518,7 @@ onMounted(() => load("."));
           class="aw-input mt-1 w-full"
           maxlength="255"
           autocomplete="off"
+          :disabled="actionSaving"
           @keyup.enter="saveAction"
         />
       </label>

@@ -94,6 +94,36 @@ func (svc *SSHHostService) CreateSFTPDirectory(sessionID, token, requestedPath s
 	return nil
 }
 
+func (svc *SSHHostService) CreateSFTPFile(sessionID, token, requestedPath string) error {
+	managed, client, err := svc.sftpClient(sessionID, token)
+	if err != nil {
+		return err
+	}
+	defer managed.sftpOps.Done()
+	if strings.Contains(requestedPath, "\\") {
+		return sshError("SSH_SFTP_INVALID_PATH", "新建文件路径不能包含反斜杠", nil)
+	}
+	remotePath, err := normalizeSFTPPath(requestedPath, false)
+	if err != nil {
+		return err
+	}
+	if _, err := client.Lstat(remotePath); err == nil {
+		return sshError("SSH_SFTP_EXISTS", "远端已存在同名文件", nil)
+	} else if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, sftp.ErrSSHFxNoSuchFile) {
+		return svc.sftpOperationError(managed, "create", "读取远端 SFTP 文件信息失败", err)
+	}
+	file, err := client.OpenFile(remotePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
+	if err != nil {
+		return svc.sftpOperationError(managed, "create", "创建 SFTP 文件失败", err)
+	}
+	if err := file.Close(); err != nil {
+		return svc.sftpOperationError(managed, "create", "文件已创建，但保存结果未确认，请刷新目录", err)
+	}
+	managed.lastActive.Store(svc.now().UnixMilli())
+	logging.Info("ssh_sftp.create", "创建 SFTP 文件: host_id=%d", managed.host.ID)
+	return nil
+}
+
 func (svc *SSHHostService) RenameSFTP(sessionID, token, oldPath, newPath string) error {
 	managed, client, err := svc.sftpClient(sessionID, token)
 	if err != nil {
