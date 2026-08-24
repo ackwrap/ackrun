@@ -78,12 +78,12 @@ function toggleAdvanced() {
         >AckWrap</b
       >
     </div>
-    <nav class="flex-1 space-y-2 overflow-y-auto px-4 py-5">
+    <nav class="flex-1 space-y-0.5 overflow-y-auto px-4 py-5">
       <RouterLink
         v-for="[label, icon, path] in items"
         :key="path"
         :to="path"
-        class="flex h-11 items-center gap-3 rounded-[var(--radius-lg)] border border-transparent px-4"
+        class="flex h-10 items-center gap-3 rounded-[var(--radius-lg)] border border-transparent px-4"
         :class="[
           $route.path === path
             ? 'border-[var(--button-primary-border)] bg-[var(--button-primary-bg)] text-[var(--button-primary-text)]'
@@ -98,7 +98,7 @@ function toggleAdvanced() {
       >
       <div>
         <button
-          class="flex h-11 w-full items-center gap-3 rounded-[var(--radius-lg)] border border-transparent px-4 text-left"
+          class="flex h-10 w-full items-center gap-3 rounded-[var(--radius-lg)] border border-transparent px-4 text-left"
           :class="[
             $route.path.startsWith('/advanced')
               ? 'border-[var(--button-primary-border)] bg-[var(--button-primary-bg)] text-[var(--button-primary-text)]'
