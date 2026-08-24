@@ -113,27 +113,29 @@ export interface SSHSessionCreateResponse {
 export interface SSHMonitorSnapshot {
   hostname: string;
   username: string;
-  os_name: string;
-  kernel_version: string;
-  architecture: string;
-  cpu_model: string;
-  cpu_cores: number;
   cpu_total: number;
   cpu_idle: number;
   memory_total_bytes: number;
   memory_available_bytes: number;
-  swap_total_bytes: number;
-  swap_available_bytes: number;
   network_received_bytes: number;
   network_transmitted_bytes: number;
+  uptime_seconds: number;
+  login_sessions: number;
+  disks: SSHMonitorDisk[];
+  collected_at: number;
+}
+
+export interface SSHDeviceDetails {
+  cpu_model: string;
+  cpu_cores: number;
+  memory_total_bytes: number;
+  memory_available_bytes: number;
+  swap_total_bytes: number;
+  swap_available_bytes: number;
   uptime_seconds: number;
   load_average_1: number;
   load_average_5: number;
   load_average_15: number;
-  login_sessions: number;
-  virtualization: string;
-  package_manager: string;
-  disks: SSHMonitorDisk[];
   software: SSHSoftware[];
   collected_at: number;
 }

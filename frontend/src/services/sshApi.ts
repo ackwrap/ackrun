@@ -10,6 +10,7 @@ import type {
   SSHHostKey,
   SSHHostRequest,
   SSHHostShareResponse,
+  SSHDeviceDetails,
   SSHMonitorSnapshot,
   SSHSFTPListResponse,
   SSHSFTPTextFile,
@@ -136,7 +137,7 @@ export const sshApi = {
     token: string,
     signal?: AbortSignal,
   ) =>
-    request<SSHMonitorSnapshot>(
+    request<SSHDeviceDetails>(
       `/advanced/ssh/sessions/${encodeURIComponent(sessionID)}/details`,
       { headers: { "X-SSH-Session-Token": token }, signal },
     ),

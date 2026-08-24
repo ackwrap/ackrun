@@ -1,7 +1,7 @@
 import { ref } from "vue";
 import { ApiRequestError } from "@/services/api";
 import { sshApi } from "@/services/sshApi";
-import type { SSHHost, SSHMonitorSnapshot } from "@/services/sshTypes";
+import type { SSHDeviceDetails, SSHHost } from "@/services/sshTypes";
 import { errorMessage } from "../advanced/advancedUi";
 
 interface SSHHostDetailsOptions {
@@ -11,7 +11,7 @@ interface SSHHostDetailsOptions {
 
 export function useSSHHostDetails(options: SSHHostDetailsOptions) {
   const host = ref<SSHHost | null>(null);
-  const details = ref<SSHMonitorSnapshot | null>(null);
+  const details = ref<SSHDeviceDetails | null>(null);
   const error = ref("");
   const loadingID = ref(0);
   let requestGeneration = 0;

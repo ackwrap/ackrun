@@ -14,14 +14,14 @@ import Button from "@/components/ui/Button.vue";
 import Modal from "@/components/ui/Modal.vue";
 import StatusBadge from "@/components/ui/StatusBadge.vue";
 import type {
+  SSHDeviceDetails,
   SSHHost,
-  SSHMonitorSnapshot,
   SSHSoftware,
 } from "@/services/sshTypes";
 
 const props = defineProps<{
   host: SSHHost | null;
-  details: SSHMonitorSnapshot | null;
+  details: SSHDeviceDetails | null;
   loading: boolean;
   error: string;
 }>();

@@ -1,9 +1,13 @@
 package service
 
 import (
+	"encoding/json"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ackwrap/ackrun/internal/model"
 )
 
 func TestParseSSHMonitorOutput(t *testing.T) {
@@ -11,21 +15,11 @@ func TestParseSSHMonitorOutput(t *testing.T) {
 	output := []byte("ACKWRAP_MONITOR_V1\n" +
 		"HOST\tvm-01\n" +
 		"USER\toperator\n" +
-		"OS\tDebian GNU/Linux 13\n" +
-		"KERNEL\t6.12.0-amd64\n" +
-		"ARCH\tx86_64\n" +
-		"CPU_MODEL\tExample CPU\n" +
-		"CPU_CORES\t4\n" +
 		"CPU\t12000\t9000\n" +
-		"MEM\t4294967296\t1073741824\t2147483648\t1073741824\n" +
+		"MEM\t4294967296\t1073741824\n" +
 		"NET\t123456\t654321\n" +
 		"UPTIME\t3600\n" +
-		"LOAD\t0.25\t0.50\t0.75\n" +
 		"LOGINS\t2\n" +
-		"VIRT\tkvm\n" +
-		"PACKAGE_MANAGER\tapt-get\n" +
-		"SOFTWARE\tdocker\t1\tDocker version 28.0.0\n" +
-		"SOFTWARE\tdocker-compose\t0\t\n" +
 		"DISK\t/dev/root\t10737418240\t2147483648\t8589934592\t/\n" +
 		"DISK\t/dev/root\t10737418240\t2147483648\t8589934592\t/\n" +
 		"DISK\t-\t21474836480\t10737418240\t10737418240\t/mnt/data disk\n" +
@@ -37,20 +31,11 @@ func TestParseSSHMonitorOutput(t *testing.T) {
 	if snapshot.Hostname != "vm-01" || snapshot.Username != "operator" {
 		t.Fatalf("unexpected host identity: %#v", snapshot)
 	}
-	if snapshot.OSName != "Debian GNU/Linux 13" || snapshot.KernelVersion != "6.12.0-amd64" || snapshot.Architecture != "x86_64" {
-		t.Fatalf("unexpected system identity: %#v", snapshot)
-	}
-	if snapshot.CPUModel != "Example CPU" || snapshot.CPUCores != 4 {
-		t.Fatalf("unexpected CPU details: %#v", snapshot)
-	}
 	if snapshot.CPUTotal != 12000 || snapshot.CPUIdle != 9000 {
 		t.Fatalf("unexpected CPU counters: %#v", snapshot)
 	}
 	if snapshot.MemoryTotalBytes != 4294967296 || snapshot.MemoryAvailableBytes != 1073741824 {
 		t.Fatalf("unexpected memory counters: %#v", snapshot)
-	}
-	if snapshot.SwapTotalBytes != 2147483648 || snapshot.SwapAvailableBytes != 1073741824 {
-		t.Fatalf("unexpected swap counters: %#v", snapshot)
 	}
 	if snapshot.NetworkReceivedBytes != 123456 || snapshot.NetworkTransmittedBytes != 654321 {
 		t.Fatalf("unexpected network counters: %#v", snapshot)
@@ -58,20 +43,46 @@ func TestParseSSHMonitorOutput(t *testing.T) {
 	if snapshot.UptimeSeconds != 3600 || snapshot.LoginSessions != 2 || snapshot.CollectedAt != collectedAt.UnixMilli() {
 		t.Fatalf("unexpected monitor metadata: %#v", snapshot)
 	}
-	if snapshot.LoadAverage1 != 0.25 || snapshot.LoadAverage5 != 0.5 || snapshot.LoadAverage15 != 0.75 {
-		t.Fatalf("unexpected load averages: %#v", snapshot)
-	}
-	if snapshot.Virtualization != "kvm" || snapshot.PackageManager != "apt-get" {
-		t.Fatalf("unexpected platform details: %#v", snapshot)
-	}
-	if len(snapshot.Software) != 2 || !snapshot.Software[0].Installed || snapshot.Software[1].Installed {
-		t.Fatalf("unexpected software status: %#v", snapshot.Software)
-	}
 	if len(snapshot.Disks) != 2 || snapshot.Disks[0].MountPoint != "/" || snapshot.Disks[0].UsagePercent != 20 {
 		t.Fatalf("unexpected disk data: %#v", snapshot.Disks)
 	}
 	if snapshot.Disks[1].MountPoint != "/mnt/data disk" || snapshot.Disks[1].UsagePercent != 50 {
 		t.Fatalf("unexpected spaced disk mount: %#v", snapshot.Disks[1])
+	}
+}
+
+func TestParseSSHDeviceDetailsOutput(t *testing.T) {
+	collectedAt := time.UnixMilli(1724500000000)
+	output := []byte("ACKWRAP_DETAILS_V1\n" +
+		"CPU_MODEL\tExample CPU\n" +
+		"CPU_CORES\t4\n" +
+		"MEM\t4294967296\t1073741824\t2147483648\t1073741824\n" +
+		"UPTIME\t3600\n" +
+		"LOAD\t0.25\t0.50\t0.75\n" +
+		"SOFTWARE\tdocker\t1\tDocker version 28.0.0\n" +
+		"SOFTWARE\tdocker-compose\t0\t\n" +
+		"END\n")
+	details, err := parseSSHDeviceDetailsOutput(output, collectedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if details.CPUModel != "Example CPU" || details.CPUCores != 4 {
+		t.Fatalf("unexpected CPU details: %#v", details)
+	}
+	if details.MemoryTotalBytes != 4294967296 || details.MemoryAvailableBytes != 1073741824 {
+		t.Fatalf("unexpected memory details: %#v", details)
+	}
+	if details.SwapTotalBytes != 2147483648 || details.SwapAvailableBytes != 1073741824 {
+		t.Fatalf("unexpected swap details: %#v", details)
+	}
+	if details.UptimeSeconds != 3600 || details.CollectedAt != collectedAt.UnixMilli() {
+		t.Fatalf("unexpected details metadata: %#v", details)
+	}
+	if details.LoadAverage1 != 0.25 || details.LoadAverage5 != 0.5 || details.LoadAverage15 != 0.75 {
+		t.Fatalf("unexpected load averages: %#v", details)
+	}
+	if len(details.Software) != 2 || !details.Software[0].Installed || details.Software[1].Installed {
+		t.Fatalf("unexpected software status: %#v", details.Software)
 	}
 }
 
@@ -88,11 +99,52 @@ func TestSSHMonitorOutputCapsBufferedContent(t *testing.T) {
 }
 
 func TestSSHMonitorCommandKeepsStaticChecksOutOfPolling(t *testing.T) {
-	if strings.Contains(sshMonitorCommand, "docker") || strings.Contains(sshMonitorCommand, "systemd-detect-virt") {
+	if strings.Contains(sshMonitorCommand, "docker") {
 		t.Fatal("lightweight monitor command includes static device checks")
 	}
-	if !strings.Contains(sshMonitorDetailsCommand, "docker") || !strings.Contains(sshMonitorDetailsCommand, "systemd-detect-virt") {
-		t.Fatal("device details command is missing static checks")
+	for _, required := range []string{"hostname", "df -Pk"} {
+		if !strings.Contains(sshMonitorCommand, required) {
+			t.Fatalf("lightweight monitor command is missing required probe %q", required)
+		}
+	}
+	if !strings.Contains(sshDeviceDetailsCommand, "docker") {
+		t.Fatal("device details command is missing software checks")
+	}
+	for _, removed := range []string{"hostname", "id", "uname", "who", "df", "systemd-detect-virt", "apt-get", "dnf", "yum", "apk", "opkg", "pacman"} {
+		pattern := regexp.MustCompile(`(^|[^A-Za-z0-9_-])` + regexp.QuoteMeta(removed) + `([^A-Za-z0-9_-]|$)`)
+		if pattern.MatchString(sshDeviceDetailsCommand) {
+			t.Fatalf("device details command still includes removed command %q", removed)
+		}
+	}
+	if strings.Contains(sshDeviceDetailsCommand, "os-release") {
+		t.Fatal("device details command still reads operating system metadata")
+	}
+}
+
+func TestSSHDeviceDetailsJSONOmitsRemovedFields(t *testing.T) {
+	encoded, err := json.Marshal(&model.SSHDeviceDetails{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatal(err)
+	}
+	allowed := map[string]bool{
+		"cpu_model": true, "cpu_cores": true,
+		"memory_total_bytes": true, "memory_available_bytes": true,
+		"swap_total_bytes": true, "swap_available_bytes": true,
+		"uptime_seconds": true, "load_average_1": true,
+		"load_average_5": true, "load_average_15": true,
+		"software": true, "collected_at": true,
+	}
+	if len(fields) != len(allowed) {
+		t.Fatalf("unexpected device details JSON fields: %s", encoded)
+	}
+	for field := range fields {
+		if !allowed[field] {
+			t.Fatalf("device details JSON includes disallowed field %q", field)
+		}
 	}
 }
 
@@ -115,6 +167,20 @@ func TestParseSSHMonitorOutputRejectsIncompleteData(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if _, err := parseSSHMonitorOutput([]byte(output), time.Now()); err == nil {
 				t.Fatal("expected invalid monitor output to be rejected")
+			}
+		})
+	}
+}
+
+func TestParseSSHDeviceDetailsOutputRejectsIncompleteData(t *testing.T) {
+	for name, output := range map[string]string{
+		"missing header": "CPU_CORES\t1\nEND\n",
+		"missing end":    "ACKWRAP_DETAILS_V1\nCPU_CORES\t1\n",
+		"invalid memory": "ACKWRAP_DETAILS_V1\nCPU_CORES\t1\nMEM\t1\t2\t0\t0\nUPTIME\t1\nLOAD\t0\t0\t0\nEND\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parseSSHDeviceDetailsOutput([]byte(output), time.Now()); err == nil {
+				t.Fatal("expected invalid device details output to be rejected")
 			}
 		})
 	}
