@@ -170,6 +170,12 @@ export interface SSHSingboxDeployRequest {
   replace_existing_config: boolean;
 }
 
+export interface SSHSingboxInstallResponse {
+  success: boolean;
+  message: string;
+  version: string;
+}
+
 export interface SSHSingboxDeployResponse {
   success: boolean;
   message: string;

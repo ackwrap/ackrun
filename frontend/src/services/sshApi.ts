@@ -14,6 +14,7 @@ import type {
   SSHMonitorSnapshot,
   SSHSingboxDeployRequest,
   SSHSingboxDeployResponse,
+  SSHSingboxInstallResponse,
   SSHSFTPListResponse,
   SSHSFTPTextFile,
   SSHSessionCreateResponse,
@@ -142,6 +143,11 @@ export const sshApi = {
     request<SSHDeviceDetails>(
       `/advanced/ssh/sessions/${encodeURIComponent(sessionID)}/details`,
       { headers: { "X-SSH-Session-Token": token }, signal },
+    ),
+  installSingbox: (hostID: number) =>
+    request<SSHSingboxInstallResponse>(
+      `/advanced/ssh/hosts/${hostID}/sing-box/install`,
+      { method: "POST" },
     ),
   deploySingbox: (hostID: number, body: SSHSingboxDeployRequest) =>
     request<SSHSingboxDeployResponse>(

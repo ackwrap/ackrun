@@ -181,16 +181,15 @@ func sshSingboxProtocolTestRequests() map[string]model.SSHSingboxDeployRequest {
 	return requests
 }
 
-func TestSSHSingboxDeployScriptUsesOfficialAtomicWorkflow(t *testing.T) {
+func TestSSHSingboxDeployScriptRequiresInstalledCoreAndUsesAtomicWorkflow(t *testing.T) {
 	serverConfig := []byte(`{"inbounds":[]}`)
 	clientConfig := []byte(`{"outbounds":[]}`)
 	script := buildSSHSingboxDeployScript(serverConfig, clientConfig, false)
 	for _, required := range []string{
-		"https://sing-box.app/gpg.key",
-		"https://deb.sagernet.org/",
-		"Pin: origin deb.sagernet.org",
-		"dpkg --compare-versions \"$candidate_version\" lt \"$installed_version\"",
-		"apt-get install -y --reinstall sing-box",
+		"fail singbox_not_installed",
+		"dpkg-query -W sing-box >/dev/null 2>&1 || fail singbox_not_installed",
+		"getent group sing-box",
+		"systemctl cat sing-box",
 		"\"$singbox_bin\" check -c \"$server_tmp\"",
 		"\"$singbox_bin\" check -c \"$client_tmp\"",
 		"singbox_bin='/usr/bin/sing-box'",
@@ -219,17 +218,19 @@ func TestSSHSingboxDeployScriptUsesOfficialAtomicWorkflow(t *testing.T) {
 			t.Fatalf("deployment script is missing required workflow marker %q", required)
 		}
 	}
-	if strings.Contains(script, "curl -fsSL https://sing-box.app/install.sh | sh") {
-		t.Fatal("deployment script executes the remote convenience installer directly")
-	}
-	if strings.Contains(script, "--allow-downgrades") {
-		t.Fatal("deployment script permits an unrecoverable automatic core downgrade")
+	for _, forbidden := range []string{"apt-get install", "https://sing-box.app/gpg.key", "https://deb.sagernet.org/"} {
+		if strings.Contains(script, forbidden) {
+			t.Fatalf("deployment script still mutates package installation with %q", forbidden)
+		}
 	}
 	if strings.Contains(script, string(serverConfig)) || strings.Contains(script, string(clientConfig)) {
 		t.Fatal("deployment script embeds sensitive JSON as plaintext")
 	}
-	if strings.Index(script, "ACKWRAP_DEPLOY_CONFLICT") > strings.Index(script, "apt-get update") {
-		t.Fatal("existing unmanaged configuration is checked only after package mutations")
+	if strings.Index(script, "fail singbox_not_installed") > strings.Index(script, "mktemp /etc/sing-box") {
+		t.Fatal("deployment script checks installation only after creating configuration files")
+	}
+	if strings.Index(script, "dpkg-query -W sing-box >/dev/null 2>&1 || fail singbox_not_installed") > strings.Index(script, "had_config=0") {
+		t.Fatal("deployment script checks package state only after reading remote configuration")
 	}
 	if replaced := buildSSHSingboxDeployScript(serverConfig, clientConfig, true); !strings.Contains(replaced, "replace_existing='1'") {
 		t.Fatal("explicit replacement confirmation was not included in deployment script")
@@ -268,6 +269,10 @@ func TestParseSSHSingboxDeployOutput(t *testing.T) {
 	_, _, err = parseSSHSingboxDeployOutput([]byte("ACKWRAP_DEPLOY_ERROR\tdeploy_locked\n"), errors.New("exit status 1"))
 	if !errors.As(err, &serviceError) || serviceError.Code != "SSH_SINGBOX_DEPLOY_BUSY" {
 		t.Fatalf("unexpected remote deployment lock result: %v", err)
+	}
+	_, _, err = parseSSHSingboxDeployOutput([]byte("ACKWRAP_DEPLOY_ERROR\tsingbox_not_installed\n"), errors.New("exit status 1"))
+	if !errors.As(err, &serviceError) || serviceError.Code != "SSH_SINGBOX_NOT_INSTALLED" {
+		t.Fatalf("unexpected missing installation result: %v", err)
 	}
 	_, _, err = parseSSHSingboxDeployOutput([]byte("ACKWRAP_DEPLOY_OK\tsing-box version 1.13.14\t\nACKWRAP_DEPLOY_ERROR\trollback_failed\n"), errors.New("exit status 130"))
 	if !errors.As(err, &serviceError) || !strings.Contains(serviceError.Message, "人工检查") {

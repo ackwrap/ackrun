@@ -132,6 +132,11 @@ func TestSSHMonitorCommandKeepsStaticChecksOutOfPolling(t *testing.T) {
 	if !strings.Contains(sshDeviceDetailsCommand, "docker") || !strings.Contains(sshDeviceDetailsCommand, "sing-box") {
 		t.Fatal("device details command is missing software checks")
 	}
+	for _, required := range []string{"/usr/bin/sing-box", "dpkg-query -W sing-box", "getent group sing-box", "systemctl cat sing-box"} {
+		if !strings.Contains(sshDeviceDetailsCommand, required) {
+			t.Fatalf("device details command accepts incomplete sing-box installation without %q", required)
+		}
+	}
 	for _, required := range []string{"hostname", "uname", "df", "systemd-detect-virt", "apt-get", "dnf", "yum", "apk", "opkg", "pacman"} {
 		pattern := regexp.MustCompile(`(^|[^A-Za-z0-9_-])` + regexp.QuoteMeta(required) + `([^A-Za-z0-9_-]|$)`)
 		if !pattern.MatchString(sshDeviceDetailsCommand) {

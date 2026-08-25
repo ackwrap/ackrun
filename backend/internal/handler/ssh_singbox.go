@@ -10,6 +10,20 @@ import (
 
 const maxSSHSingboxDeployRequestBody = 32 << 10
 
+func (h *SSHHostHandler) InstallSingbox(c *gin.Context) {
+	hostID, ok := parseSSHID(c)
+	if !ok {
+		return
+	}
+	result, err := h.service.InstallSingbox(c.Request.Context(), hostID)
+	if err != nil {
+		writeSSHError(c, err)
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, result)
+}
+
 func (h *SSHHostHandler) DeploySingbox(c *gin.Context) {
 	hostID, ok := parseSSHID(c)
 	if !ok {

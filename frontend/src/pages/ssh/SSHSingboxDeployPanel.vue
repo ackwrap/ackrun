@@ -44,6 +44,7 @@ const emit = defineEmits<{
 }>();
 
 const deploying = ref(false);
+const installing = ref(false);
 const deployError = ref("");
 const notice = ref("");
 const noticeError = ref(false);
@@ -66,6 +67,9 @@ const clientConfigText = computed(() =>
 const protocolMeta = computed(() => deployProtocolMap[protocol.value]);
 const environmentReady = computed(
   () => !props.detailsLoading && Boolean(props.details) && !props.detailsError,
+);
+const installationReady = computed(
+  () => environmentReady.value && Boolean(installedVersion.value),
 );
 const addressValid = computed(() => {
   const value = form.server_address.trim();
@@ -93,7 +97,7 @@ const protocolValid = computed(() => {
 });
 const deploymentReady = computed(
   () =>
-    environmentReady.value &&
+    installationReady.value &&
     addressValid.value &&
     portValid.value &&
     protocolValid.value,
@@ -138,6 +142,7 @@ function emptyForm(host: SSHHost): SSHSingboxDeployRequest {
 
 function validate() {
   if (!environmentReady.value) return "请先完成远端环境检测";
+  if (!installedVersion.value) return "请先安装 sing-box";
   if (!addressValid.value) return "请输入有效的客户端连接 IP 或域名";
   if (!portValid.value) return "监听端口无效或与 SSH 端口冲突";
   if (!protocolValid.value) {
@@ -151,8 +156,10 @@ function validate() {
 function nextStep() {
   deployError.value = "";
   if (activeStep.value === 1) {
-    if (!environmentReady.value) {
-      deployError.value = "请先完成远端环境检测";
+    if (!installationReady.value) {
+      deployError.value = environmentReady.value
+        ? "请先安装 sing-box"
+        : "请先完成远端环境检测";
       return;
     }
     activeStep.value = 2;
@@ -164,6 +171,28 @@ function nextStep() {
     return;
   }
   activeStep.value = 3;
+}
+
+async function install() {
+  if (installing.value || !environmentReady.value || installedVersion.value)
+    return;
+  installing.value = true;
+  deployError.value = "";
+  notice.value = "";
+  emit("busy", true);
+  const requestHostID = props.host.id;
+  try {
+    const response = await sshApi.installSingbox(requestHostID);
+    if (props.host.id !== requestHostID) return;
+    noticeError.value = false;
+    notice.value = `${response.message}，正在重新检测。`;
+    emit("refresh");
+  } catch (cause) {
+    if (props.host.id === requestHostID) deployError.value = errorMessage(cause);
+  } finally {
+    installing.value = false;
+    emit("busy", false);
+  }
 }
 
 function previousStep() {
@@ -252,7 +281,7 @@ async function copy(value: string, label: string) {
             :class="detailsError ? 'text-[var(--color-error)]' : environmentReady ? 'text-[var(--color-success)]' : 'text-[var(--color-warning)]'"
           />
           <div>
-            <strong>{{ detailsLoading ? '正在检测' : detailsError ? '检测失败' : installedVersion ? '已安装' : environmentReady ? '未安装，将自动安装' : '等待检测' }}</strong>
+            <strong>{{ detailsLoading ? '正在检测' : detailsError ? '检测失败' : installedVersion ? '已安装' : environmentReady ? '未安装，请先安装' : '等待检测' }}</strong>
             <small v-if="detailsLoading">正在读取远端软件状态</small>
             <small v-else-if="installedVersion">{{ installedVersion }}</small>
             <small v-else>官方 APT 源 · Debian / Ubuntu</small>
@@ -260,14 +289,21 @@ async function copy(value: string, label: string) {
         </div>
         <div class="environment-item">
           <span>服务状态</span>
-          <strong>{{ result ? 'systemd · active (running)' : detailsLoading ? '正在检测' : installedVersion ? '部署时检查并重启' : '安装后自动启用' }}</strong>
+          <strong>{{ result ? 'systemd · active (running)' : detailsLoading ? '正在检测' : installedVersion ? '配置部署后启用' : '安装后保持停用' }}</strong>
         </div>
         <div class="environment-item"><span>配置保护</span><strong>指纹校验 · 失败回滚</strong></div>
         <div class="environment-item"><span>配置文件</span><strong class="font-mono">/etc/sing-box/config.json</strong></div>
       </div>
       <div class="wizard-actions">
-        <p>{{ detailsError || (environmentReady ? '环境检测已通过，可以继续配置协议。' : '等待远端环境检测完成。') }}</p>
-        <Button variant="primary" :disabled="!environmentReady" @click="nextStep">下一步：配置协议</Button>
+        <p>{{ detailsError || (installationReady ? 'sing-box 已安装，可以继续配置协议。' : environmentReady ? '需要先安装官方 sing-box 核心。' : '等待远端环境检测完成。') }}</p>
+        <Button
+          v-if="!installedVersion"
+          variant="primary"
+          :loading="installing"
+          :disabled="!environmentReady || installing"
+          @click="install"
+        >{{ installing ? '正在安装 sing-box...' : '安装 sing-box' }}</Button>
+        <Button v-else variant="primary" :disabled="!installationReady" @click="nextStep">下一步：配置协议</Button>
       </div>
     </section>
 
@@ -338,7 +374,7 @@ async function copy(value: string, label: string) {
           <Button :disabled="deploying || Boolean(result)" @click="previousStep">上一步</Button>
           <Button class="deploy-button" variant="primary" size="lg" :disabled="deploying || !deploymentReady || (Boolean(installedVersion) && !regenerateConfirmed)" @click="deploy">
             <template #icon><LoaderCircle v-if="deploying" :size="16" class="animate-spin" /><Rocket v-else :size="16" /></template>
-            {{ deploying ? '正在安装、校验并启动...' : installedVersion ? '校验并重新部署' : '校验并部署到生产' }}
+            {{ deploying ? '正在校验并启动...' : installedVersion ? '校验并重新部署' : '校验并部署到生产' }}
           </Button>
         </div>
       </div>

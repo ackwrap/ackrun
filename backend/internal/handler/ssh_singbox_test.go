@@ -18,8 +18,11 @@ func TestWriteSSHErrorMapsSingboxDeploymentFailures(t *testing.T) {
 		"SSH_SINGBOX_CONFIG_INVALID":  http.StatusBadRequest,
 		"SSH_SINGBOX_ROOT_REQUIRED":   http.StatusBadRequest,
 		"SSH_SINGBOX_CONFIG_CONFLICT": http.StatusConflict,
+		"SSH_SINGBOX_NOT_INSTALLED":   http.StatusConflict,
 		"SSH_SINGBOX_DEPLOY_BUSY":     http.StatusTooManyRequests,
+		"SSH_SINGBOX_INSTALL_FAILED":  http.StatusBadGateway,
 		"SSH_SINGBOX_DEPLOY_FAILED":   http.StatusBadGateway,
+		"SSH_SINGBOX_INSTALL_TIMEOUT": http.StatusGatewayTimeout,
 		"SSH_SINGBOX_DEPLOY_TIMEOUT":  http.StatusGatewayTimeout,
 	}
 	for code, expectedStatus := range tests {

@@ -10,6 +10,12 @@ type SSHSingboxDeployRequest struct {
 	ReplaceExistingConfig bool   `json:"replace_existing_config"`
 }
 
+type SSHSingboxInstallResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+	Version string `json:"version"`
+}
+
 type SSHSingboxDeployResponse struct {
 	Success      bool                   `json:"success"`
 	Message      string                 `json:"message"`

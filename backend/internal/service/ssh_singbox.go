@@ -132,7 +132,7 @@ func (svc *SSHHostService) DeploySingbox(ctx context.Context, hostID int64, requ
 	if privilege == "sudo" {
 		command = "sudo -n sh -s"
 	}
-	svc.broadcastSingboxDeploy(hostID, "installing", "正在安装并校验 sing-box", "")
+	svc.broadcastSingboxDeploy(hostID, "deploying", "正在校验配置并启动 sing-box", "")
 	output, runErr := runSSHSingboxCommand(deployCtx, client, command, strings.NewReader(script))
 	version, backupPath, resultErr := parseSSHSingboxDeployOutput(output, runErr)
 	if resultErr != nil {
@@ -145,7 +145,7 @@ func (svc *SSHHostService) DeploySingbox(ctx context.Context, hostID int64, requ
 	logging.Info("ssh_singbox.deploy", "远端 sing-box 部署完成: host_id=%d", hostID)
 	svc.broadcastSingboxDeploy(hostID, "success", "sing-box 部署完成", "")
 	return &model.SSHSingboxDeployResponse{
-		Success: true, Message: "sing-box 已安装、校验并启动", Version: version,
+		Success: true, Message: "sing-box 已校验并启动", Version: version,
 		ConfigPath: sshSingboxConfigPath, BackupPath: backupPath,
 		Nodes: deployment.nodes, ClientConfig: deployment.clientConfig,
 	}, nil
@@ -572,6 +572,11 @@ fail() { printf 'ACKWRAP_DEPLOY_ERROR\t%%s\n' "$1"; exit 1; }
 config_path='%s'
 marker_path='%s'
 replace_existing='%s'
+singbox_bin='/usr/bin/sing-box'
+test -x "$singbox_bin" || fail singbox_not_installed
+dpkg-query -W sing-box >/dev/null 2>&1 || fail singbox_not_installed
+getent group sing-box >/dev/null 2>&1 || fail singbox_not_installed
+systemctl cat sing-box >/dev/null 2>&1 || fail singbox_not_installed
 had_config=0
 had_marker=0
 managed_unchanged=0
@@ -592,7 +597,6 @@ fi
 test -r /etc/os-release || fail unsupported_os
 . /etc/os-release
 case "${ID:-}" in debian|ubuntu) ;; *) fail unsupported_os ;; esac
-command -v apt-get >/dev/null 2>&1 || fail apt_unavailable
 command -v dpkg-query >/dev/null 2>&1 || fail dpkg_unavailable
 command -v systemctl >/dev/null 2>&1 || fail systemd_unavailable
 command -v flock >/dev/null 2>&1 || fail flock_unavailable
@@ -602,20 +606,6 @@ was_enabled=0
 was_active=0
 systemctl is-enabled --quiet sing-box >/dev/null 2>&1 && was_enabled=1
 systemctl is-active --quiet sing-box >/dev/null 2>&1 && was_active=1
-apt-get update >/dev/null 2>&1 || fail apt_update
-apt-get install -y ca-certificates curl >/dev/null 2>&1 || fail install_dependencies
-install -d -m 0755 /etc/apt/keyrings || fail create_keyring
-curl -fsSL https://sing-box.app/gpg.key -o /etc/apt/keyrings/sagernet.asc >/dev/null 2>&1 || fail download_repository_key
-chmod a+r /etc/apt/keyrings/sagernet.asc || fail repository_key_permissions
-printf 'Types: deb\nURIs: https://deb.sagernet.org/\nSuites: *\nComponents: *\nEnabled: yes\nSigned-By: /etc/apt/keyrings/sagernet.asc\n' > /etc/apt/sources.list.d/sagernet.sources || fail write_repository
-printf 'Package: sing-box\nPin: origin deb.sagernet.org\nPin-Priority: 1001\n' > /etc/apt/preferences.d/sagernet-sing-box || fail write_repository_pin
-apt-get update >/dev/null 2>&1 || fail repository_update
-installed_version="$(dpkg-query -W -f='${Version}' sing-box 2>/dev/null || true)"
-candidate_version="$(apt-cache policy sing-box 2>/dev/null | awk '/Candidate:/ { print $2; exit }')"
-if test -n "$installed_version" && test -n "$candidate_version" && test "$candidate_version" != '(none)' && dpkg --compare-versions "$candidate_version" lt "$installed_version"; then fail singbox_downgrade_refused; fi
-apt-get install -y --reinstall sing-box >/dev/null 2>&1 || fail install_singbox
-singbox_bin='/usr/bin/sing-box'
-test -x "$singbox_bin" || fail singbox_binary_missing
 install -d -m 0755 /etc/sing-box || fail create_config_directory
 umask 077
 server_tmp="$(mktemp /etc/sing-box/.ackwrap-server.XXXXXX)" || fail create_server_temp
@@ -784,47 +774,59 @@ func sshSingboxStepError(step string, cause error) error {
 	if step == "config_changed_during_deploy" {
 		return &SSHServiceError{Code: "SSH_SINGBOX_CONFIG_CONFLICT", Message: "远端 sing-box 配置在部署期间发生变化，本次未覆盖", Details: map[string]interface{}{"config_path": sshSingboxConfigPath}, Cause: cause}
 	}
+	if step == "singbox_not_installed" {
+		return &SSHServiceError{Code: "SSH_SINGBOX_NOT_INSTALLED", Message: "远端尚未安装 sing-box，请先完成安装", Details: map[string]interface{}{"step": step}, Cause: cause}
+	}
 	messages := map[string]string{
-		"unsupported_os":             "仅支持 Debian 或 Ubuntu 远端主机",
-		"unsafe_config_path":         "远端 sing-box 配置或管理标记不能是符号链接",
-		"apt_unavailable":            "远端主机缺少 APT 包管理器",
-		"dpkg_unavailable":           "远端主机缺少 dpkg 包状态工具",
-		"systemd_unavailable":        "远端主机缺少 systemd 服务管理器",
-		"flock_unavailable":          "远端主机缺少部署锁工具 flock",
-		"create_deploy_lock":         "创建远端 sing-box 部署锁失败",
-		"apt_update":                 "更新远端 APT 索引失败",
-		"install_dependencies":       "安装远端基础依赖失败",
-		"create_keyring":             "创建远端 APT 密钥目录失败",
-		"download_repository_key":    "下载 sing-box 官方仓库密钥失败",
-		"repository_key_permissions": "设置 sing-box 官方仓库密钥权限失败",
-		"write_repository":           "写入 sing-box 官方 APT 软件源失败",
-		"write_repository_pin":       "写入 sing-box 官方软件源优先级失败",
-		"repository_update":          "更新 sing-box 官方软件源失败",
-		"install_singbox":            "安装 sing-box 软件包失败",
-		"singbox_downgrade_refused":  "官方源候选版本低于已安装版本，已拒绝自动降级",
-		"singbox_binary_missing":     "官方 sing-box 软件包未提供预期的核心文件",
-		"create_config_directory":    "创建远端 sing-box 配置目录失败",
-		"create_server_temp":         "创建远端服务端临时配置失败",
-		"create_client_temp":         "创建远端客户端临时配置失败",
-		"create_marker_temp":         "创建远端 Ackwrap 管理标记失败",
-		"backup_marker":              "备份远端 Ackwrap 管理标记失败",
-		"decode_server_config":       "写入远端服务端临时配置失败",
-		"decode_client_config":       "写入远端客户端临时配置失败",
-		"server_config_invalid":      "生成的服务端配置未通过 sing-box 校验",
-		"client_config_invalid":      "生成的客户端配置未通过 sing-box 校验",
-		"backup_existing_config":     "备份远端原配置失败",
-		"config_ownership":           "设置远端 sing-box 配置所有者失败",
-		"config_permissions":         "设置远端 sing-box 配置权限失败",
-		"apply_config":               "写入远端 sing-box 配置失败",
-		"fingerprint_applied_config": "计算远端 sing-box 配置指纹失败，原配置已恢复",
-		"write_marker":               "写入远端 Ackwrap 管理标记失败，原配置已恢复",
-		"marker_permissions":         "设置远端 Ackwrap 管理标记权限失败，原配置已恢复",
-		"apply_marker":               "应用远端 Ackwrap 管理标记失败，原配置已恢复",
-		"enable_service":             "设置 sing-box 开机启动失败，原配置已恢复",
-		"restart_service":            "启动 sing-box 服务失败，原配置已恢复",
-		"service_inactive":           "sing-box 启动后未保持运行，原配置已恢复",
-		"interrupted":                "sing-box 部署已取消，远端配置与服务状态已恢复",
-		"rollback_failed":            "sing-box 部署失败且自动回滚未完整完成，请立即人工检查远端配置与服务状态",
+		"unsupported_os":                "仅支持 Debian 或 Ubuntu 远端主机",
+		"unsafe_config_path":            "远端 sing-box 配置或管理标记不能是符号链接",
+		"apt_unavailable":               "远端主机缺少 APT 包管理器",
+		"dpkg_unavailable":              "远端主机缺少 dpkg 包状态工具",
+		"systemd_unavailable":           "远端主机缺少 systemd 服务管理器",
+		"flock_unavailable":             "远端主机缺少部署锁工具 flock",
+		"create_deploy_lock":            "创建远端 sing-box 部署锁失败",
+		"apt_update":                    "更新远端 APT 索引失败",
+		"install_dependencies":          "安装远端基础依赖失败",
+		"create_keyring":                "创建远端 APT 密钥目录失败",
+		"download_repository_key":       "下载 sing-box 官方仓库密钥失败",
+		"repository_key_permissions":    "设置 sing-box 官方仓库密钥权限失败",
+		"unsafe_repository_path":        "远端 sing-box APT 仓库文件不能是符号链接",
+		"repository_config_conflict":    "远端已有不同的 sing-box APT 源或优先级配置，已拒绝覆盖",
+		"create_repository_temp":        "创建远端 sing-box APT 仓库临时文件失败",
+		"write_repository":              "写入 sing-box 官方 APT 软件源失败",
+		"write_repository_pin":          "写入 sing-box 官方软件源优先级失败",
+		"repository_update":             "更新 sing-box 官方软件源失败",
+		"install_singbox":               "安装 sing-box 软件包失败",
+		"singbox_downgrade_refused":     "官方源候选版本低于已安装版本，已拒绝自动降级",
+		"singbox_binary_missing":        "官方 sing-box 软件包未提供预期的核心文件",
+		"singbox_group_missing":         "官方 sing-box 软件包未创建服务用户组",
+		"singbox_service_missing":       "官方 sing-box 软件包未提供 systemd 服务",
+		"read_installed_version":        "读取已安装 sing-box 版本失败",
+		"stop_service_after_install":    "安装完成但停止未配置的 sing-box 服务失败",
+		"disable_service_after_install": "安装完成但禁用未配置的 sing-box 服务失败",
+		"restore_service_state":         "安装完成但恢复原 sing-box 服务状态失败",
+		"create_config_directory":       "创建远端 sing-box 配置目录失败",
+		"create_server_temp":            "创建远端服务端临时配置失败",
+		"create_client_temp":            "创建远端客户端临时配置失败",
+		"create_marker_temp":            "创建远端 Ackwrap 管理标记失败",
+		"backup_marker":                 "备份远端 Ackwrap 管理标记失败",
+		"decode_server_config":          "写入远端服务端临时配置失败",
+		"decode_client_config":          "写入远端客户端临时配置失败",
+		"server_config_invalid":         "生成的服务端配置未通过 sing-box 校验",
+		"client_config_invalid":         "生成的客户端配置未通过 sing-box 校验",
+		"backup_existing_config":        "备份远端原配置失败",
+		"config_ownership":              "设置远端 sing-box 配置所有者失败",
+		"config_permissions":            "设置远端 sing-box 配置权限失败",
+		"apply_config":                  "写入远端 sing-box 配置失败",
+		"fingerprint_applied_config":    "计算远端 sing-box 配置指纹失败，原配置已恢复",
+		"write_marker":                  "写入远端 Ackwrap 管理标记失败，原配置已恢复",
+		"marker_permissions":            "设置远端 Ackwrap 管理标记权限失败，原配置已恢复",
+		"apply_marker":                  "应用远端 Ackwrap 管理标记失败，原配置已恢复",
+		"enable_service":                "设置 sing-box 开机启动失败，原配置已恢复",
+		"restart_service":               "启动 sing-box 服务失败，原配置已恢复",
+		"service_inactive":              "sing-box 启动后未保持运行，原配置已恢复",
+		"interrupted":                   "sing-box 部署已取消，远端配置与服务状态已恢复",
+		"rollback_failed":               "sing-box 部署失败且自动回滚未完整完成，请立即人工检查远端配置与服务状态",
 	}
 	message := messages[step]
 	if message == "" {

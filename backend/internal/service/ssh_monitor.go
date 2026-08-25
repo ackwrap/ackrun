@@ -81,9 +81,9 @@ if test -n "$compose_version"; then
 else
   printf 'SOFTWARE\tdocker-compose\t0\t\n'
 fi
-if command -v sing-box >/dev/null 2>&1; then
-  singbox_version="$(sing-box version 2>/dev/null | head -n 1)"
-  printf 'SOFTWARE\tsing-box\t1\t%s\n' "$singbox_version"
+if test -x /usr/bin/sing-box && dpkg-query -W sing-box >/dev/null 2>&1 && getent group sing-box >/dev/null 2>&1 && systemctl cat sing-box >/dev/null 2>&1; then
+  singbox_version="$(/usr/bin/sing-box version 2>/dev/null | head -n 1)"
+  if test -n "$singbox_version"; then printf 'SOFTWARE\tsing-box\t1\t%s\n' "$singbox_version"; else printf 'SOFTWARE\tsing-box\t0\t\n'; fi
 else
   printf 'SOFTWARE\tsing-box\t0\t\n'
 fi
