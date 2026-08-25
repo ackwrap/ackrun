@@ -20,6 +20,8 @@ const deploymentBusy = ref(false);
     :title="`sing-box 服务端部署 · ${host?.name || ''}`"
     :width="1480"
     :closable="!deploymentBusy"
+    :close-on-backdrop="false"
+    :close-on-escape="false"
     @close="emit('close')"
   >
     <SSHSingboxDeployPanel

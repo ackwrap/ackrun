@@ -8,8 +8,15 @@ const p = withDefaults(
     width?: number;
     size?: "sm" | "md" | "lg" | "xl";
     closable?: boolean;
+    closeOnBackdrop?: boolean;
+    closeOnEscape?: boolean;
   }>(),
-  { size: "md", closable: true },
+  {
+    size: "md",
+    closable: true,
+    closeOnBackdrop: true,
+    closeOnEscape: true,
+  },
 );
 const emit = defineEmits<{ close: [] }>();
 const panel = ref<HTMLElement | null>(null);
@@ -35,13 +42,13 @@ const endBackdropPress = (e: PointerEvent) => {
     document.elementFromPoint(e.clientX, e.clientY) === backdrop;
   const shouldClose = e.isPrimary && e.button === 0 && releasedOnBackdrop;
   backdropPointerId = null;
-  if (shouldClose && p.closable) emit("close");
+  if (shouldClose && p.closable && p.closeOnBackdrop) emit("close");
 };
 const cancelBackdropPress = (e: PointerEvent) => {
   if (e.pointerId === backdropPointerId) backdropPointerId = null;
 };
 const key = (e: KeyboardEvent) => {
-  if (e.key === "Escape" && p.closable) {
+  if (e.key === "Escape" && p.closable && p.closeOnEscape) {
     emit("close");
     return;
   }
