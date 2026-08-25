@@ -76,7 +76,7 @@ function valueOrDash(value?: string | number) {
   <Modal
     :open="Boolean(host)"
     :title="`设备详情 · ${host?.name || ''}`"
-    size="xl"
+    :width="1480"
     :closable="!deploymentBusy"
     @close="emit('close')"
   >
@@ -122,7 +122,7 @@ function valueOrDash(value?: string | number) {
         v-else-if="error"
         class="rounded-[var(--radius-lg)] border border-[var(--color-error)] bg-[var(--color-error-bg)] p-5 text-sm"
       >
-        <p class="text-[var(--color-error)]">{{ error }}</p>
+        <p role="alert" class="text-[var(--color-error)]">{{ error }}</p>
         <Button class="mt-4" size="sm" @click="emit('retry')">
           <template #icon><RefreshCw :size="13" /></template>重新读取
         </Button>
@@ -153,7 +153,9 @@ function valueOrDash(value?: string | number) {
         :host="host"
         :details="details"
         :details-error="error"
+        :details-loading="loading"
         @busy="deploymentBusy = $event"
+        @refresh="emit('retry')"
       />
     </div>
   </Modal>

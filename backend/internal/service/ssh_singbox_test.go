@@ -124,6 +124,11 @@ func TestBuildSSHSingboxDeploymentRejectsUnsafeInputs(t *testing.T) {
 			value.ServerAddress = "https://proxy.example.com"
 			return value
 		}(),
+		"invalid IPv4": func() model.SSHSingboxDeployRequest {
+			value := base
+			value.ServerAddress = "999.999.999.999"
+			return value
+		}(),
 		"SSH port conflict": func() model.SSHSingboxDeployRequest { value := base; value.VLESSRealityPort = 22; return value }(),
 		"invalid reality": func() model.SSHSingboxDeployRequest {
 			value := base

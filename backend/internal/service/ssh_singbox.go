@@ -347,7 +347,28 @@ func validSSHDeploymentAddress(value string) bool {
 	if net.ParseIP(value) != nil {
 		return true
 	}
+	if looksLikeInvalidIPv4(value) {
+		return false
+	}
 	return validSSHDeploymentDomain(value)
+}
+
+func looksLikeInvalidIPv4(value string) bool {
+	parts := strings.Split(value, ".")
+	if len(parts) != 4 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" {
+			return false
+		}
+		for _, character := range part {
+			if character < '0' || character > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func validSSHDeploymentDomain(value string) bool {
