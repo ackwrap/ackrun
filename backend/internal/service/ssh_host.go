@@ -68,6 +68,10 @@ type SSHHostService struct {
 	sftpTextLocks  map[string]*sshSFTPTextLock
 
 	shareMu sync.Mutex
+
+	singboxDeployMu      sync.Mutex
+	singboxDeploying     map[int64]bool
+	singboxDeployCancels map[int64]context.CancelFunc
 }
 
 func NewSSHHostService(db *store.Store, p *paths.Paths, core sshCore) (*SSHHostService, error) {
@@ -82,7 +86,8 @@ func NewSSHHostService(db *store.Store, p *paths.Paths, core sshCore) (*SSHHostS
 	return &SSHHostService{
 		store: db, cipher: cipher, core: core, now: time.Now,
 		challenges: make(map[string]sshHostKeyChallenge), sessions: make(map[string]*managedSSHSession),
-		pendingByHost: make(map[int64]int),
+		pendingByHost: make(map[int64]int), singboxDeploying: make(map[int64]bool),
+		singboxDeployCancels: make(map[int64]context.CancelFunc),
 	}, nil
 }
 

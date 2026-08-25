@@ -61,6 +61,7 @@ func TestParseSSHDeviceDetailsOutput(t *testing.T) {
 		"LOAD\t0.25\t0.50\t0.75\n" +
 		"SOFTWARE\tdocker\t1\tDocker version 28.0.0\n" +
 		"SOFTWARE\tdocker-compose\t0\t\n" +
+		"SOFTWARE\tsing-box\t1\tsing-box version 1.13.14\n" +
 		"END\n")
 	details, err := parseSSHDeviceDetailsOutput(output, collectedAt)
 	if err != nil {
@@ -81,7 +82,7 @@ func TestParseSSHDeviceDetailsOutput(t *testing.T) {
 	if details.LoadAverage1 != 0.25 || details.LoadAverage5 != 0.5 || details.LoadAverage15 != 0.75 {
 		t.Fatalf("unexpected load averages: %#v", details)
 	}
-	if len(details.Software) != 2 || !details.Software[0].Installed || details.Software[1].Installed {
+	if len(details.Software) != 3 || !details.Software[0].Installed || details.Software[1].Installed || !details.Software[2].Installed {
 		t.Fatalf("unexpected software status: %#v", details.Software)
 	}
 }
@@ -107,7 +108,7 @@ func TestSSHMonitorCommandKeepsStaticChecksOutOfPolling(t *testing.T) {
 			t.Fatalf("lightweight monitor command is missing required probe %q", required)
 		}
 	}
-	if !strings.Contains(sshDeviceDetailsCommand, "docker") {
+	if !strings.Contains(sshDeviceDetailsCommand, "docker") || !strings.Contains(sshDeviceDetailsCommand, "sing-box") {
 		t.Fatal("device details command is missing software checks")
 	}
 	for _, removed := range []string{"hostname", "id", "uname", "who", "df", "systemd-detect-virt", "apt-get", "dnf", "yum", "apk", "opkg", "pacman"} {

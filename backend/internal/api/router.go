@@ -268,6 +268,7 @@ func registerSSHHostRoutes(group *gin.RouterGroup, sshHostH *handler.SSHHostHand
 	group.DELETE("/advanced/ssh/hosts/:id", sshHostH.DeleteHost)
 	group.POST("/advanced/ssh/hosts/:id/share", sshHostH.ShareHost)
 	group.POST("/advanced/ssh/hosts/:id/test", sshHostH.TestHost)
+	group.POST("/advanced/ssh/hosts/:id/sing-box/deploy", sshHostH.DeploySingbox)
 	group.POST("/advanced/ssh/hosts/:id/sessions", sshHostH.CreateSession)
 	group.DELETE("/advanced/ssh/sessions/:sessionID", sshHostH.DeleteSession)
 	group.GET("/advanced/ssh/sessions/:sessionID/monitor", sshHostH.GetSessionMonitor)

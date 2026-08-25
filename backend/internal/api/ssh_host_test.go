@@ -37,6 +37,7 @@ func TestRegisterSSHHostRoutesContract(t *testing.T) {
 		"DELETE /api/v1/advanced/ssh/hosts/:id":                false,
 		"POST /api/v1/advanced/ssh/hosts/:id/share":            false,
 		"POST /api/v1/advanced/ssh/hosts/:id/test":             false,
+		"POST /api/v1/advanced/ssh/hosts/:id/sing-box/deploy":  false,
 		"POST /api/v1/advanced/ssh/hosts/:id/sessions":         false,
 		"DELETE /api/v1/advanced/ssh/sessions/:sessionID":      false,
 		"GET /api/v1/advanced/ssh/sessions/:sessionID/monitor": false,

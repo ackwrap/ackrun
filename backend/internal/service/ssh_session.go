@@ -233,6 +233,15 @@ func (svc *SSHHostService) Close() {
 	}
 	svc.closed = true
 	svc.sessionMu.Unlock()
+	svc.singboxDeployMu.Lock()
+	deployCancels := make([]context.CancelFunc, 0, len(svc.singboxDeployCancels))
+	for _, cancel := range svc.singboxDeployCancels {
+		deployCancels = append(deployCancels, cancel)
+	}
+	svc.singboxDeployMu.Unlock()
+	for _, cancel := range deployCancels {
+		cancel()
+	}
 	for _, id := range ids {
 		svc.closeSession(id, "cancelled", "SSH_SERVICE_STOPPED")
 	}

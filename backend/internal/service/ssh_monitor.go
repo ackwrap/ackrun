@@ -63,6 +63,12 @@ if test -n "$compose_version"; then
 else
   printf 'SOFTWARE\tdocker-compose\t0\t\n'
 fi
+if command -v sing-box >/dev/null 2>&1; then
+  singbox_version="$(sing-box version 2>/dev/null | head -n 1)"
+  printf 'SOFTWARE\tsing-box\t1\t%s\n' "$singbox_version"
+else
+  printf 'SOFTWARE\tsing-box\t0\t\n'
+fi
 printf 'END\n'
 `
 

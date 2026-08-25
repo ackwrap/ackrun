@@ -146,6 +146,35 @@ export interface SSHSoftware {
   version: string;
 }
 
+export interface SSHSingboxDeployRequest {
+  server_address: string;
+  vless_reality_enabled: boolean;
+  vless_reality_port: number;
+  reality_server_name: string;
+  shadowsocks_enabled: boolean;
+  shadowsocks_port: number;
+  replace_existing_config: boolean;
+}
+
+export interface SSHSingboxDeployResponse {
+  success: boolean;
+  message: string;
+  version: string;
+  config_path: string;
+  backup_path?: string;
+  nodes: SSHSingboxNode[];
+  client_config: Record<string, unknown>;
+}
+
+export interface SSHSingboxNode {
+  type: string;
+  name: string;
+  listen_port: number;
+  network: string;
+  share_uri: string;
+  client_outbound: Record<string, unknown>;
+}
+
 export interface SSHMonitorDisk {
   mount_point: string;
   total_bytes: number;

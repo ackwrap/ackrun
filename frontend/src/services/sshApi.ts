@@ -12,6 +12,8 @@ import type {
   SSHHostShareResponse,
   SSHDeviceDetails,
   SSHMonitorSnapshot,
+  SSHSingboxDeployRequest,
+  SSHSingboxDeployResponse,
   SSHSFTPListResponse,
   SSHSFTPTextFile,
   SSHSessionCreateResponse,
@@ -140,6 +142,11 @@ export const sshApi = {
     request<SSHDeviceDetails>(
       `/advanced/ssh/sessions/${encodeURIComponent(sessionID)}/details`,
       { headers: { "X-SSH-Session-Token": token }, signal },
+    ),
+  deploySingbox: (hostID: number, body: SSHSingboxDeployRequest) =>
+    request<SSHSingboxDeployResponse>(
+      `/advanced/ssh/hosts/${hostID}/sing-box/deploy`,
+      { method: "POST", body: JSON.stringify(body) },
     ),
   listSFTP: (sessionID: string, token: string, path: string) =>
     request<SSHSFTPListResponse>(

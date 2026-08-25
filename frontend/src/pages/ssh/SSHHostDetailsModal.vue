@@ -1,23 +1,17 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import {
-  Box,
-  Boxes,
   Clock3,
   Cpu,
   HardDrive,
   MemoryStick,
-  PackagePlus,
   RefreshCw,
 } from "lucide-vue-next";
 import Button from "@/components/ui/Button.vue";
 import Modal from "@/components/ui/Modal.vue";
 import StatusBadge from "@/components/ui/StatusBadge.vue";
-import type {
-  SSHDeviceDetails,
-  SSHHost,
-  SSHSoftware,
-} from "@/services/sshTypes";
+import type { SSHDeviceDetails, SSHHost } from "@/services/sshTypes";
+import SSHSingboxDeployPanel from "./SSHSingboxDeployPanel.vue";
 
 const props = defineProps<{
   host: SSHHost | null;
@@ -26,6 +20,7 @@ const props = defineProps<{
   error: string;
 }>();
 const emit = defineEmits<{ close: []; retry: [] }>();
+const deploymentBusy = ref(false);
 
 const memoryUsed = computed(() =>
   props.details
@@ -43,27 +38,6 @@ const swapUsed = computed(() =>
       )
     : 0,
 );
-
-const softwareCatalog = computed(() => [
-  {
-    key: "docker",
-    name: "Docker Engine",
-    description: "容器运行时与镜像管理",
-    icon: Box,
-    status: softwareStatus("docker"),
-  },
-  {
-    key: "docker-compose",
-    name: "Docker Compose",
-    description: "多容器应用编排工具",
-    icon: Boxes,
-    status: softwareStatus("docker-compose"),
-  },
-]);
-
-function softwareStatus(key: string): SSHSoftware | null {
-  return props.details?.software?.find((item) => item.key === key) || null;
-}
 
 function formatBytes(value: number) {
   if (!Number.isFinite(value) || value < 0) return "--";
@@ -103,6 +77,7 @@ function valueOrDash(value?: string | number) {
     :open="Boolean(host)"
     :title="`设备详情 · ${host?.name || ''}`"
     size="xl"
+    :closable="!deploymentBusy"
     @close="emit('close')"
   >
     <div v-if="host" class="space-y-5">
@@ -174,37 +149,12 @@ function valueOrDash(value?: string | number) {
         </section>
       </template>
 
-      <section class="border-t border-[var(--border-default)] pt-5">
-        <div class="mb-3 flex flex-wrap items-start justify-between gap-2">
-          <div>
-            <div class="flex items-center gap-2">
-              <PackagePlus :size="17" class="text-[var(--color-primary)]" />
-              <h3 class="text-sm font-semibold">快捷安装</h3>
-              <StatusBadge status="pending" label="框架预留" size="sm" />
-            </div>
-            <p class="mt-1 text-xs text-[var(--text-tertiary)]">本轮仅展示检测状态，不执行远端安装。后续安装项将使用后端白名单和确认流程。</p>
-          </div>
-        </div>
-        <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          <article v-for="software in softwareCatalog" :key="software.key" class="software-card">
-            <component :is="software.icon" :size="20" class="text-[var(--color-primary)]" />
-            <div class="min-w-0 flex-1">
-              <div class="flex items-center justify-between gap-2"><h4 class="text-sm font-medium">{{ software.name }}</h4><StatusBadge :status="error ? 'error' : !details ? 'pending' : software.status?.installed ? 'online' : 'offline'" :label="error ? '检测失败' : !details ? '待检测' : software.status?.installed ? '已安装' : '未安装'" size="sm" /></div>
-              <p class="mt-1 text-xs text-[var(--text-tertiary)]">{{ software.description }}</p>
-              <p v-if="software.status?.version" class="mt-2 truncate font-mono text-[10px] text-[var(--text-secondary)]" :title="software.status.version">{{ software.status.version }}</p>
-              <Button class="mt-3 w-full" size="sm" disabled>{{ error ? '检测失败，请重新读取' : !details ? '等待检测' : software.status?.installed ? '已安装' : '一键安装（待接入）' }}</Button>
-            </div>
-          </article>
-          <article class="software-card border-dashed">
-            <PackagePlus :size="20" class="text-[var(--text-tertiary)]" />
-            <div class="min-w-0 flex-1">
-              <h4 class="text-sm font-medium">自定义安装项</h4>
-              <p class="mt-1 text-xs text-[var(--text-tertiary)]">预留自定义软件名称、检测命令和白名单安装流程。</p>
-              <Button class="mt-3 w-full" size="sm" disabled>添加安装项（待接入）</Button>
-            </div>
-          </article>
-        </div>
-      </section>
+      <SSHSingboxDeployPanel
+        :host="host"
+        :details="details"
+        :details-error="error"
+        @busy="deploymentBusy = $event"
+      />
     </div>
   </Modal>
 </template>
@@ -214,8 +164,7 @@ function valueOrDash(value?: string | number) {
   font-size: 0.7rem;
   color: var(--text-tertiary);
 }
-.metric-card,
-.software-card {
+.metric-card {
   display: flex;
   align-items: flex-start;
   gap: 0.75rem;
