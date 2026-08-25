@@ -148,11 +148,18 @@ export interface SSHSoftware {
 
 export interface SSHSingboxDeployRequest {
   server_address: string;
-  vless_reality_enabled: boolean;
-  vless_reality_port: number;
+  protocol:
+    | "vless-reality"
+    | "shadowsocks-2022"
+    | "vmess-ws-tls"
+    | "trojan-tls"
+    | "hysteria2"
+    | "tuic"
+    | "anytls";
+  listen_port: number;
   reality_server_name: string;
-  shadowsocks_enabled: boolean;
-  shadowsocks_port: number;
+  tls_server_name: string;
+  acme_email: string;
   replace_existing_config: boolean;
 }
 

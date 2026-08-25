@@ -2,11 +2,11 @@ package model
 
 type SSHSingboxDeployRequest struct {
 	ServerAddress         string `json:"server_address"`
-	VLESSRealityEnabled   bool   `json:"vless_reality_enabled"`
-	VLESSRealityPort      int    `json:"vless_reality_port"`
+	Protocol              string `json:"protocol"`
+	ListenPort            int    `json:"listen_port"`
 	RealityServerName     string `json:"reality_server_name"`
-	ShadowsocksEnabled    bool   `json:"shadowsocks_enabled"`
-	ShadowsocksPort       int    `json:"shadowsocks_port"`
+	TLSServerName         string `json:"tls_server_name"`
+	ACMEEmail             string `json:"acme_email"`
 	ReplaceExistingConfig bool   `json:"replace_existing_config"`
 }
 

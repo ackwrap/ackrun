@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/mail"
 	"net/url"
 	"strconv"
 	"strings"
@@ -29,9 +30,17 @@ const (
 	sshSingboxMaximumOutput        = 8 << 10
 	sshSingboxConfigPath           = "/etc/sing-box/config.json"
 	sshSingboxManagedMarkerPath    = "/etc/sing-box/.ackwrap-managed"
-	sshSingboxRealityDefaultPort   = 443
-	sshSingboxShadowsocksPort      = 8388
 	sshSingboxDefaultRealityServer = "www.microsoft.com"
+)
+
+const (
+	sshSingboxProtocolVLESSReality = "vless-reality"
+	sshSingboxProtocolShadowsocks  = "shadowsocks-2022"
+	sshSingboxProtocolVMess        = "vmess-ws-tls"
+	sshSingboxProtocolTrojan       = "trojan-tls"
+	sshSingboxProtocolHysteria2    = "hysteria2"
+	sshSingboxProtocolTUIC         = "tuic"
+	sshSingboxProtocolAnyTLS       = "anytls"
 )
 
 const sshSingboxPrivilegeCommand = `if test "$(id -u)" = "0"; then
@@ -191,37 +200,46 @@ func buildSSHSingboxDeployment(host *model.SSHHost, request model.SSHSingboxDepl
 	if !validSSHDeploymentAddress(serverAddress) {
 		return nil, sshError("SSH_SINGBOX_CONFIG_INVALID", "服务器地址必须是有效的 IP 或域名，且不能包含协议和端口", nil)
 	}
-	if !request.VLESSRealityEnabled && !request.ShadowsocksEnabled {
-		return nil, sshError("SSH_SINGBOX_CONFIG_INVALID", "至少启用一种 sing-box 入站协议", nil)
+	protocol := strings.ToLower(strings.TrimSpace(request.Protocol))
+	if !supportedSSHSingboxProtocol(protocol) {
+		return nil, sshError("SSH_SINGBOX_CONFIG_INVALID", "仅支持官方 sing-box 常见服务端协议，不支持 SSR 或已移除协议", nil)
 	}
-	if request.VLESSRealityPort == 0 {
-		request.VLESSRealityPort = sshSingboxRealityDefaultPort
+	if request.ListenPort == 0 {
+		request.ListenPort = defaultSSHSingboxPort(protocol)
 	}
-	if request.ShadowsocksPort == 0 {
-		request.ShadowsocksPort = sshSingboxShadowsocksPort
-	}
-	if request.RealityServerName == "" {
-		request.RealityServerName = sshSingboxDefaultRealityServer
+	if !validSSHDeploymentPort(request.ListenPort, host.Port) {
+		return nil, sshError("SSH_SINGBOX_CONFIG_INVALID", "协议监听端口无效或与 SSH 端口冲突", nil)
 	}
 	request.RealityServerName = strings.TrimSpace(request.RealityServerName)
-	if request.VLESSRealityEnabled && !validSSHDeploymentDomain(request.RealityServerName) {
-		return nil, sshError("SSH_SINGBOX_CONFIG_INVALID", "Reality 伪装域名必须是有效域名", nil)
+	request.TLSServerName = strings.TrimSpace(request.TLSServerName)
+	request.ACMEEmail = strings.TrimSpace(request.ACMEEmail)
+	if protocol == sshSingboxProtocolVLESSReality {
+		if request.RealityServerName == "" {
+			request.RealityServerName = sshSingboxDefaultRealityServer
+		}
+		if !validSSHDeploymentDomain(request.RealityServerName) {
+			return nil, sshError("SSH_SINGBOX_CONFIG_INVALID", "Reality 伪装域名必须是有效域名", nil)
+		}
 	}
-	if request.VLESSRealityEnabled && !validSSHDeploymentPort(request.VLESSRealityPort, host.Port) {
-		return nil, sshError("SSH_SINGBOX_CONFIG_INVALID", "VLESS + REALITY 端口无效或与 SSH 端口冲突", nil)
-	}
-	if request.ShadowsocksEnabled && !validSSHDeploymentPort(request.ShadowsocksPort, host.Port) {
-		return nil, sshError("SSH_SINGBOX_CONFIG_INVALID", "Shadowsocks 端口无效或与 SSH 端口冲突", nil)
-	}
-	if request.VLESSRealityEnabled && request.ShadowsocksEnabled && request.VLESSRealityPort == request.ShadowsocksPort {
-		return nil, sshError("SSH_SINGBOX_CONFIG_INVALID", "不同协议不能监听同一个端口", nil)
+	if sshSingboxProtocolUsesACME(protocol) {
+		if !validSSHDeploymentDomain(request.TLSServerName) {
+			return nil, sshError("SSH_SINGBOX_CONFIG_INVALID", "TLS 证书域名必须是有效域名，不能使用 IP 地址", nil)
+		}
+		if request.ACMEEmail != "" {
+			address, err := mail.ParseAddress(request.ACMEEmail)
+			if err != nil || address.Address != request.ACMEEmail {
+				return nil, sshError("SSH_SINGBOX_CONFIG_INVALID", "ACME 邮箱格式无效", nil)
+			}
+		}
 	}
 
-	inbounds := make([]interface{}, 0, 2)
-	clientOutbounds := make([]interface{}, 0, 2)
-	nodes := make([]model.SSHSingboxNode, 0, 2)
-	protocols := make([]string, 0, 2)
-	if request.VLESSRealityEnabled {
+	var inbound, outbound map[string]interface{}
+	var node model.SSHSingboxNode
+	port := request.ListenPort
+	shareHost := net.JoinHostPort(serverAddress, strconv.Itoa(port))
+	name := host.Name
+	switch protocol {
+	case sshSingboxProtocolVLESSReality:
 		privateKey, publicKey, keyErr := generateSSHX25519KeyPair()
 		if keyErr != nil {
 			return nil, sshError("SSH_SINGBOX_CONFIG_INVALID", "生成 Reality 密钥失败", keyErr)
@@ -234,8 +252,8 @@ func buildSSHSingboxDeployment(host *model.SSHHost, request model.SSHSingboxDepl
 		if shortIDErr != nil {
 			return nil, sshError("SSH_SINGBOX_CONFIG_INVALID", "生成 Reality Short ID 失败", shortIDErr)
 		}
-		inbounds = append(inbounds, map[string]interface{}{
-			"type": "vless", "tag": "vless-reality-in", "listen": "::", "listen_port": request.VLESSRealityPort,
+		inbound = map[string]interface{}{
+			"type": "vless", "tag": "vless-reality-in", "listen": "::", "listen_port": port,
 			"users": []interface{}{map[string]interface{}{"name": "ackwrap", "uuid": uuid, "flow": "xtls-rprx-vision"}},
 			"tls": map[string]interface{}{
 				"enabled": true,
@@ -245,9 +263,9 @@ func buildSSHSingboxDeployment(host *model.SSHHost, request model.SSHSingboxDepl
 					"private_key": privateKey, "short_id": []string{shortID},
 				},
 			},
-		})
-		outbound := map[string]interface{}{
-			"type": "vless", "tag": "vless-reality", "server": serverAddress, "server_port": request.VLESSRealityPort,
+		}
+		outbound = map[string]interface{}{
+			"type": "vless", "tag": "vless-reality", "server": serverAddress, "server_port": port,
 			"uuid": uuid, "flow": "xtls-rprx-vision",
 			"tls": map[string]interface{}{
 				"enabled": true, "server_name": request.RealityServerName,
@@ -259,37 +277,138 @@ func buildSSHSingboxDeployment(host *model.SSHHost, request model.SSHSingboxDepl
 			"encryption": {"none"}, "flow": {"xtls-rprx-vision"}, "security": {"reality"},
 			"sni": {request.RealityServerName}, "fp": {"chrome"}, "pbk": {publicKey}, "sid": {shortID}, "type": {"tcp"},
 		}
-		shareURL := &url.URL{Scheme: "vless", User: url.User(uuid), Host: net.JoinHostPort(serverAddress, strconv.Itoa(request.VLESSRealityPort)), RawQuery: query.Encode(), Fragment: host.Name + " VLESS Reality"}
-		clientOutbounds = append(clientOutbounds, outbound)
-		nodes = append(nodes, model.SSHSingboxNode{Type: "vless-reality", Name: host.Name + " VLESS Reality", ListenPort: request.VLESSRealityPort, Network: "TCP", ShareURI: shareURL.String(), ClientOutbound: outbound})
-		protocols = append(protocols, "vless-reality")
-	}
-	if request.ShadowsocksEnabled {
-		passwordBytes := make([]byte, 16)
-		if _, err := rand.Read(passwordBytes); err != nil {
+		shareURL := &url.URL{Scheme: "vless", User: url.User(uuid), Host: shareHost, RawQuery: query.Encode(), Fragment: name + " VLESS Reality"}
+		node = model.SSHSingboxNode{Type: protocol, Name: name + " VLESS Reality", ListenPort: port, Network: "TCP", ShareURI: shareURL.String(), ClientOutbound: outbound}
+	case sshSingboxProtocolShadowsocks:
+		password, err := generateSSHBase64Secret(16)
+		if err != nil {
 			return nil, sshError("SSH_SINGBOX_CONFIG_INVALID", "生成 Shadowsocks 密码失败", err)
 		}
-		password := base64.StdEncoding.EncodeToString(passwordBytes)
-		clearBytes(passwordBytes)
 		const method = "2022-blake3-aes-128-gcm"
-		inbounds = append(inbounds, map[string]interface{}{
-			"type": "shadowsocks", "tag": "shadowsocks-in", "listen": "::", "listen_port": request.ShadowsocksPort,
+		inbound = map[string]interface{}{
+			"type": "shadowsocks", "tag": "shadowsocks-in", "listen": "::", "listen_port": port,
 			"method": method, "password": password,
-		})
-		outbound := map[string]interface{}{
+		}
+		outbound = map[string]interface{}{
 			"type": "shadowsocks", "tag": "shadowsocks-2022", "server": serverAddress,
-			"server_port": request.ShadowsocksPort, "method": method, "password": password,
+			"server_port": port, "method": method, "password": password,
 		}
 		userInfo := base64.RawURLEncoding.EncodeToString([]byte(method + ":" + password))
-		shareURL := &url.URL{Scheme: "ss", User: url.User(userInfo), Host: net.JoinHostPort(serverAddress, strconv.Itoa(request.ShadowsocksPort)), Fragment: host.Name + " Shadowsocks 2022"}
-		clientOutbounds = append(clientOutbounds, outbound)
-		nodes = append(nodes, model.SSHSingboxNode{Type: "shadowsocks-2022", Name: host.Name + " Shadowsocks 2022", ListenPort: request.ShadowsocksPort, Network: "TCP + UDP", ShareURI: shareURL.String(), ClientOutbound: outbound})
-		protocols = append(protocols, "shadowsocks-2022")
+		shareURL := &url.URL{Scheme: "ss", User: url.User(userInfo), Host: shareHost, Fragment: name + " Shadowsocks 2022"}
+		node = model.SSHSingboxNode{Type: protocol, Name: name + " Shadowsocks 2022", ListenPort: port, Network: "TCP + UDP", ShareURI: shareURL.String(), ClientOutbound: outbound}
+	case sshSingboxProtocolVMess:
+		uuid, err := generateSSHUUID()
+		if err != nil {
+			return nil, sshError("SSH_SINGBOX_CONFIG_INVALID", "生成 VMess UUID 失败", err)
+		}
+		pathValue, err := randomHex(8)
+		if err != nil {
+			return nil, sshError("SSH_SINGBOX_CONFIG_INVALID", "生成 WebSocket 路径失败", err)
+		}
+		wsPath := "/" + pathValue
+		serverTLS, clientTLS := buildSSHACMETLS(request.TLSServerName, request.ACMEEmail)
+		transport := map[string]interface{}{"type": "ws", "path": wsPath}
+		inbound = map[string]interface{}{
+			"type": "vmess", "tag": "vmess-ws-tls-in", "listen": "::", "listen_port": port,
+			"users": []interface{}{map[string]interface{}{"name": "ackwrap", "uuid": uuid}}, "tls": serverTLS, "transport": transport,
+		}
+		outbound = map[string]interface{}{
+			"type": "vmess", "tag": "vmess-ws-tls", "server": serverAddress, "server_port": port,
+			"uuid": uuid, "security": "auto", "tls": clientTLS, "transport": transport,
+		}
+		vmessShare, err := json.Marshal(map[string]string{
+			"v": "2", "ps": name + " VMess WS TLS", "add": serverAddress, "port": strconv.Itoa(port), "id": uuid,
+			"aid": "0", "scy": "auto", "net": "ws", "type": "none", "host": request.TLSServerName,
+			"path": wsPath, "tls": "tls", "sni": request.TLSServerName,
+		})
+		if err != nil {
+			return nil, sshError("SSH_SINGBOX_CONFIG_INVALID", "生成 VMess 分享信息失败", err)
+		}
+		node = model.SSHSingboxNode{Type: protocol, Name: name + " VMess WS TLS", ListenPort: port, Network: "TCP (WebSocket)", ShareURI: "vmess://" + base64.StdEncoding.EncodeToString(vmessShare), ClientOutbound: outbound}
+	case sshSingboxProtocolTrojan:
+		password, err := generateSSHURLSafeSecret(24)
+		if err != nil {
+			return nil, sshError("SSH_SINGBOX_CONFIG_INVALID", "生成 Trojan 密码失败", err)
+		}
+		serverTLS, clientTLS := buildSSHACMETLS(request.TLSServerName, request.ACMEEmail)
+		inbound = map[string]interface{}{
+			"type": "trojan", "tag": "trojan-tls-in", "listen": "::", "listen_port": port,
+			"users": []interface{}{map[string]interface{}{"name": "ackwrap", "password": password}}, "tls": serverTLS,
+		}
+		outbound = map[string]interface{}{
+			"type": "trojan", "tag": "trojan-tls", "server": serverAddress, "server_port": port,
+			"password": password, "tls": clientTLS,
+		}
+		query := url.Values{"security": {"tls"}, "sni": {request.TLSServerName}, "type": {"tcp"}}
+		shareURL := &url.URL{Scheme: "trojan", User: url.User(password), Host: shareHost, RawQuery: query.Encode(), Fragment: name + " Trojan TLS"}
+		node = model.SSHSingboxNode{Type: protocol, Name: name + " Trojan TLS", ListenPort: port, Network: "TCP", ShareURI: shareURL.String(), ClientOutbound: outbound}
+	case sshSingboxProtocolHysteria2:
+		password, err := generateSSHURLSafeSecret(24)
+		if err != nil {
+			return nil, sshError("SSH_SINGBOX_CONFIG_INVALID", "生成 Hysteria2 密码失败", err)
+		}
+		obfsPassword, err := generateSSHURLSafeSecret(16)
+		if err != nil {
+			return nil, sshError("SSH_SINGBOX_CONFIG_INVALID", "生成 Hysteria2 混淆密码失败", err)
+		}
+		serverTLS, clientTLS := buildSSHACMETLS(request.TLSServerName, request.ACMEEmail)
+		obfs := map[string]interface{}{"type": "salamander", "password": obfsPassword}
+		inbound = map[string]interface{}{
+			"type": "hysteria2", "tag": "hysteria2-in", "listen": "::", "listen_port": port,
+			"users": []interface{}{map[string]interface{}{"name": "ackwrap", "password": password}}, "obfs": obfs, "tls": serverTLS,
+		}
+		outbound = map[string]interface{}{
+			"type": "hysteria2", "tag": "hysteria2", "server": serverAddress, "server_port": port,
+			"password": password, "obfs": obfs, "tls": clientTLS,
+		}
+		query := url.Values{"sni": {request.TLSServerName}, "obfs": {"salamander"}, "obfs-password": {obfsPassword}}
+		shareURL := &url.URL{Scheme: "hysteria2", User: url.User(password), Host: shareHost, RawQuery: query.Encode(), Fragment: name + " Hysteria2"}
+		node = model.SSHSingboxNode{Type: protocol, Name: name + " Hysteria2", ListenPort: port, Network: "UDP (QUIC)", ShareURI: shareURL.String(), ClientOutbound: outbound}
+	case sshSingboxProtocolTUIC:
+		uuid, err := generateSSHUUID()
+		if err != nil {
+			return nil, sshError("SSH_SINGBOX_CONFIG_INVALID", "生成 TUIC UUID 失败", err)
+		}
+		password, err := generateSSHURLSafeSecret(24)
+		if err != nil {
+			return nil, sshError("SSH_SINGBOX_CONFIG_INVALID", "生成 TUIC 密码失败", err)
+		}
+		serverTLS, clientTLS := buildSSHACMETLS(request.TLSServerName, request.ACMEEmail)
+		inbound = map[string]interface{}{
+			"type": "tuic", "tag": "tuic-in", "listen": "::", "listen_port": port,
+			"users":              []interface{}{map[string]interface{}{"name": "ackwrap", "uuid": uuid, "password": password}},
+			"congestion_control": "bbr", "zero_rtt_handshake": false, "tls": serverTLS,
+		}
+		outbound = map[string]interface{}{
+			"type": "tuic", "tag": "tuic", "server": serverAddress, "server_port": port,
+			"uuid": uuid, "password": password, "congestion_control": "bbr", "udp_relay_mode": "native",
+			"zero_rtt_handshake": false, "tls": clientTLS,
+		}
+		query := url.Values{"sni": {request.TLSServerName}, "congestion_control": {"bbr"}, "udp_relay_mode": {"native"}, "alpn": {"h3"}}
+		shareURL := &url.URL{Scheme: "tuic", User: url.UserPassword(uuid, password), Host: shareHost, RawQuery: query.Encode(), Fragment: name + " TUIC"}
+		node = model.SSHSingboxNode{Type: protocol, Name: name + " TUIC", ListenPort: port, Network: "UDP (QUIC)", ShareURI: shareURL.String(), ClientOutbound: outbound}
+	case sshSingboxProtocolAnyTLS:
+		password, err := generateSSHURLSafeSecret(24)
+		if err != nil {
+			return nil, sshError("SSH_SINGBOX_CONFIG_INVALID", "生成 AnyTLS 密码失败", err)
+		}
+		serverTLS, clientTLS := buildSSHACMETLS(request.TLSServerName, request.ACMEEmail)
+		inbound = map[string]interface{}{
+			"type": "anytls", "tag": "anytls-in", "listen": "::", "listen_port": port,
+			"users": []interface{}{map[string]interface{}{"name": "ackwrap", "password": password}}, "tls": serverTLS,
+		}
+		outbound = map[string]interface{}{
+			"type": "anytls", "tag": "anytls", "server": serverAddress, "server_port": port,
+			"password": password, "tls": clientTLS,
+		}
+		query := url.Values{"security": {"tls"}, "sni": {request.TLSServerName}}
+		shareURL := &url.URL{Scheme: "anytls", User: url.User(password), Host: shareHost, RawQuery: query.Encode(), Fragment: name + " AnyTLS"}
+		node = model.SSHSingboxNode{Type: protocol, Name: name + " AnyTLS", ListenPort: port, Network: "TCP", ShareURI: shareURL.String(), ClientOutbound: outbound}
 	}
 
 	serverConfig := map[string]interface{}{
 		"log":       map[string]interface{}{"level": "info", "timestamp": true},
-		"inbounds":  inbounds,
+		"inbounds":  []interface{}{inbound},
 		"outbounds": []interface{}{map[string]interface{}{"type": "direct", "tag": "direct"}},
 		"route":     map[string]interface{}{"final": "direct"},
 	}
@@ -297,24 +416,76 @@ func buildSSHSingboxDeployment(host *model.SSHHost, request model.SSHSingboxDepl
 	if err != nil {
 		return nil, sshError("SSH_SINGBOX_CONFIG_INVALID", "生成服务端配置失败", err)
 	}
-	clientTags := make([]string, 0, len(nodes))
-	for _, node := range nodes {
-		clientTags = append(clientTags, node.ClientOutbound["tag"].(string))
-	}
-	finalOutbound := clientTags[0]
-	if len(clientTags) > 1 {
-		clientOutbounds = append(clientOutbounds, map[string]interface{}{
-			"type": "selector", "tag": "proxy", "outbounds": clientTags, "default": clientTags[0],
-		})
-		finalOutbound = "proxy"
-	}
+	finalOutbound := outbound["tag"].(string)
 	clientConfig := map[string]interface{}{
 		"log":       map[string]interface{}{"level": "info", "timestamp": true},
 		"inbounds":  []interface{}{map[string]interface{}{"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 7890}},
-		"outbounds": clientOutbounds,
+		"outbounds": []interface{}{outbound},
 		"route":     map[string]interface{}{"final": finalOutbound},
 	}
-	return &sshSingboxDeployment{serverConfig: serverJSON, clientConfig: clientConfig, nodes: nodes, protocols: protocols}, nil
+	return &sshSingboxDeployment{serverConfig: serverJSON, clientConfig: clientConfig, nodes: []model.SSHSingboxNode{node}, protocols: []string{protocol}}, nil
+}
+
+func supportedSSHSingboxProtocol(protocol string) bool {
+	switch protocol {
+	case sshSingboxProtocolVLESSReality, sshSingboxProtocolShadowsocks, sshSingboxProtocolVMess,
+		sshSingboxProtocolTrojan, sshSingboxProtocolHysteria2, sshSingboxProtocolTUIC, sshSingboxProtocolAnyTLS:
+		return true
+	default:
+		return false
+	}
+}
+
+func sshSingboxProtocolUsesACME(protocol string) bool {
+	switch protocol {
+	case sshSingboxProtocolVMess, sshSingboxProtocolTrojan, sshSingboxProtocolHysteria2,
+		sshSingboxProtocolTUIC, sshSingboxProtocolAnyTLS:
+		return true
+	default:
+		return false
+	}
+}
+
+func defaultSSHSingboxPort(protocol string) int {
+	if protocol == sshSingboxProtocolShadowsocks {
+		return 8388
+	}
+	return 443
+}
+
+func buildSSHACMETLS(serverName, email string) (map[string]interface{}, map[string]interface{}) {
+	acme := map[string]interface{}{
+		"domain": []string{serverName}, "provider": "letsencrypt",
+		"data_directory": "/var/lib/sing-box/acme", "disable_tls_alpn_challenge": true,
+	}
+	if email != "" {
+		acme["email"] = email
+	}
+	return map[string]interface{}{
+			"enabled": true, "server_name": serverName, "acme": acme,
+		}, map[string]interface{}{
+			"enabled": true, "server_name": serverName,
+		}
+}
+
+func generateSSHBase64Secret(size int) (string, error) {
+	value := make([]byte, size)
+	if _, err := rand.Read(value); err != nil {
+		return "", err
+	}
+	encoded := base64.StdEncoding.EncodeToString(value)
+	clearBytes(value)
+	return encoded, nil
+}
+
+func generateSSHURLSafeSecret(size int) (string, error) {
+	value := make([]byte, size)
+	if _, err := rand.Read(value); err != nil {
+		return "", err
+	}
+	encoded := base64.RawURLEncoding.EncodeToString(value)
+	clearBytes(value)
+	return encoded, nil
 }
 
 func generateSSHX25519KeyPair() (string, string, error) {
@@ -422,26 +593,29 @@ test -r /etc/os-release || fail unsupported_os
 . /etc/os-release
 case "${ID:-}" in debian|ubuntu) ;; *) fail unsupported_os ;; esac
 command -v apt-get >/dev/null 2>&1 || fail apt_unavailable
+command -v dpkg-query >/dev/null 2>&1 || fail dpkg_unavailable
 command -v systemctl >/dev/null 2>&1 || fail systemd_unavailable
 command -v flock >/dev/null 2>&1 || fail flock_unavailable
 exec 9>/var/lock/ackwrap-singbox-deploy.lock || fail create_deploy_lock
 flock -n 9 || fail deploy_locked
 was_enabled=0
 was_active=0
-installed_before=0
 systemctl is-enabled --quiet sing-box >/dev/null 2>&1 && was_enabled=1
 systemctl is-active --quiet sing-box >/dev/null 2>&1 && was_active=1
-command -v sing-box >/dev/null 2>&1 && installed_before=1
-if ! command -v sing-box >/dev/null 2>&1; then
-  apt-get update >/dev/null 2>&1 || fail apt_update
-  apt-get install -y ca-certificates curl >/dev/null 2>&1 || fail install_dependencies
-  install -d -m 0755 /etc/apt/keyrings || fail create_keyring
-  curl -fsSL https://sing-box.app/gpg.key -o /etc/apt/keyrings/sagernet.asc >/dev/null 2>&1 || fail download_repository_key
-  chmod a+r /etc/apt/keyrings/sagernet.asc || fail repository_key_permissions
-  printf 'Types: deb\nURIs: https://deb.sagernet.org/\nSuites: *\nComponents: *\nEnabled: yes\nSigned-By: /etc/apt/keyrings/sagernet.asc\n' > /etc/apt/sources.list.d/sagernet.sources || fail write_repository
-  apt-get update >/dev/null 2>&1 || fail repository_update
-  apt-get install -y sing-box >/dev/null 2>&1 || fail install_singbox
-fi
+apt-get update >/dev/null 2>&1 || fail apt_update
+apt-get install -y ca-certificates curl >/dev/null 2>&1 || fail install_dependencies
+install -d -m 0755 /etc/apt/keyrings || fail create_keyring
+curl -fsSL https://sing-box.app/gpg.key -o /etc/apt/keyrings/sagernet.asc >/dev/null 2>&1 || fail download_repository_key
+chmod a+r /etc/apt/keyrings/sagernet.asc || fail repository_key_permissions
+printf 'Types: deb\nURIs: https://deb.sagernet.org/\nSuites: *\nComponents: *\nEnabled: yes\nSigned-By: /etc/apt/keyrings/sagernet.asc\n' > /etc/apt/sources.list.d/sagernet.sources || fail write_repository
+printf 'Package: sing-box\nPin: origin deb.sagernet.org\nPin-Priority: 1001\n' > /etc/apt/preferences.d/sagernet-sing-box || fail write_repository_pin
+apt-get update >/dev/null 2>&1 || fail repository_update
+installed_version="$(dpkg-query -W -f='${Version}' sing-box 2>/dev/null || true)"
+candidate_version="$(apt-cache policy sing-box 2>/dev/null | awk '/Candidate:/ { print $2; exit }')"
+if test -n "$installed_version" && test -n "$candidate_version" && test "$candidate_version" != '(none)' && dpkg --compare-versions "$candidate_version" lt "$installed_version"; then fail singbox_downgrade_refused; fi
+apt-get install -y --reinstall sing-box >/dev/null 2>&1 || fail install_singbox
+singbox_bin='/usr/bin/sing-box'
+test -x "$singbox_bin" || fail singbox_binary_missing
 install -d -m 0755 /etc/sing-box || fail create_config_directory
 umask 077
 server_tmp="$(mktemp /etc/sing-box/.ackwrap-server.XXXXXX)" || fail create_server_temp
@@ -457,8 +631,8 @@ trap cleanup EXIT
 trap 'exit 130' HUP INT TERM
 printf '%%s' '%s' | base64 -d > "$server_tmp" || fail decode_server_config
 printf '%%s' '%s' | base64 -d > "$client_tmp" || fail decode_client_config
-sing-box check -c "$server_tmp" >/dev/null 2>&1 || fail server_config_invalid
-sing-box check -c "$client_tmp" >/dev/null 2>&1 || fail client_config_invalid
+"$singbox_bin" check -c "$server_tmp" >/dev/null 2>&1 || fail server_config_invalid
+"$singbox_bin" check -c "$client_tmp" >/dev/null 2>&1 || fail client_config_invalid
 latest_had_config=0
 latest_had_marker=0
 if test -L "$config_path" || test -L "$marker_path"; then fail unsafe_config_path; fi
@@ -473,7 +647,7 @@ if test "$replace_existing" != 1; then
   elif test "$latest_had_config" = 1; then
     package_md5=''
     actual_md5=''
-    if test "$installed_before" = 0 && command -v dpkg-query >/dev/null 2>&1 && command -v md5sum >/dev/null 2>&1; then
+    if command -v dpkg-query >/dev/null 2>&1 && command -v md5sum >/dev/null 2>&1; then
       package_md5="$(dpkg-query -W -f='${Conffiles}\n' sing-box 2>/dev/null | awk -v path="$config_path" '$1 == path { print $2; exit }')"
       actual_md5="$(md5sum "$config_path" 2>/dev/null | awk 'NR == 1 { print $1 }')"
     fi
@@ -506,7 +680,8 @@ cancel_deployment() {
   exit 130
 }
 trap cancel_deployment HUP INT TERM
-chmod 0600 "$server_tmp" || fail config_permissions
+chown root:sing-box "$server_tmp" || fail config_ownership
+chmod 0640 "$server_tmp" || fail config_permissions
 transaction_started=1
 mv -f "$server_tmp" "$config_path" || fail apply_config
 new_hash="$(sha256sum "$config_path" 2>/dev/null | awk 'NR == 1 { print $1 }')"
@@ -519,7 +694,7 @@ systemctl enable sing-box >/dev/null 2>&1 || deployment_fail enable_service
 systemctl restart sing-box >/dev/null 2>&1 || deployment_fail restart_service
 sleep 1
 systemctl is-active --quiet sing-box || deployment_fail service_inactive
-version="$(sing-box version 2>/dev/null | head -n 1 | tr '\t\r\n' '   ')"
+version="$("$singbox_bin" version 2>/dev/null | head -n 1 | tr '\t\r\n' '   ')"
 printf 'ACKWRAP_DEPLOY_OK\t%%s\t%%s\n' "$version" "$backup_path"
 transaction_started=0
 trap - HUP INT TERM
@@ -613,6 +788,7 @@ func sshSingboxStepError(step string, cause error) error {
 		"unsupported_os":             "仅支持 Debian 或 Ubuntu 远端主机",
 		"unsafe_config_path":         "远端 sing-box 配置或管理标记不能是符号链接",
 		"apt_unavailable":            "远端主机缺少 APT 包管理器",
+		"dpkg_unavailable":           "远端主机缺少 dpkg 包状态工具",
 		"systemd_unavailable":        "远端主机缺少 systemd 服务管理器",
 		"flock_unavailable":          "远端主机缺少部署锁工具 flock",
 		"create_deploy_lock":         "创建远端 sing-box 部署锁失败",
@@ -622,8 +798,11 @@ func sshSingboxStepError(step string, cause error) error {
 		"download_repository_key":    "下载 sing-box 官方仓库密钥失败",
 		"repository_key_permissions": "设置 sing-box 官方仓库密钥权限失败",
 		"write_repository":           "写入 sing-box 官方 APT 软件源失败",
+		"write_repository_pin":       "写入 sing-box 官方软件源优先级失败",
 		"repository_update":          "更新 sing-box 官方软件源失败",
 		"install_singbox":            "安装 sing-box 软件包失败",
+		"singbox_downgrade_refused":  "官方源候选版本低于已安装版本，已拒绝自动降级",
+		"singbox_binary_missing":     "官方 sing-box 软件包未提供预期的核心文件",
 		"create_config_directory":    "创建远端 sing-box 配置目录失败",
 		"create_server_temp":         "创建远端服务端临时配置失败",
 		"create_client_temp":         "创建远端客户端临时配置失败",
@@ -634,6 +813,7 @@ func sshSingboxStepError(step string, cause error) error {
 		"server_config_invalid":      "生成的服务端配置未通过 sing-box 校验",
 		"client_config_invalid":      "生成的客户端配置未通过 sing-box 校验",
 		"backup_existing_config":     "备份远端原配置失败",
+		"config_ownership":           "设置远端 sing-box 配置所有者失败",
 		"config_permissions":         "设置远端 sing-box 配置权限失败",
 		"apply_config":               "写入远端 sing-box 配置失败",
 		"fingerprint_applied_config": "计算远端 sing-box 配置指纹失败，原配置已恢复",

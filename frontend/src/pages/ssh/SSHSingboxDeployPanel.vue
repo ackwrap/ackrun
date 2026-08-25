@@ -22,8 +22,15 @@ import type {
 } from "@/services/sshTypes";
 import { writeClipboardText } from "@/utils/clipboard";
 import { errorMessage } from "../advanced/advancedUi";
-
-type DeployProtocol = "vless-reality" | "shadowsocks-2022";
+import {
+  deployProtocolMap,
+  deployProtocolOptions,
+  type DeployProtocol,
+  validSingboxDomain,
+  validSingboxEmail,
+  validSingboxIPv4,
+  validSingboxIPv6,
+} from "./sshSingboxProtocols";
 
 const props = defineProps<{
   host: SSHHost;
@@ -54,36 +61,34 @@ const installedVersion = computed(
 const clientConfigText = computed(() =>
   result.value ? JSON.stringify(result.value.client_config, null, 2) : "",
 );
-const activePort = computed({
-  get: () =>
-    protocol.value === "vless-reality"
-      ? form.vless_reality_port
-      : form.shadowsocks_port,
-  set: (value: number) => {
-    if (protocol.value === "vless-reality") form.vless_reality_port = value;
-    else form.shadowsocks_port = value;
-  },
-});
+const protocolMeta = computed(() => deployProtocolMap[protocol.value]);
 const environmentReady = computed(
   () => !props.detailsLoading && Boolean(props.details) && !props.detailsError,
 );
 const addressValid = computed(() => {
   const value = form.server_address.trim();
-  if (/^\d+(?:\.\d+){3}$/.test(value)) return validIPv4(value);
-  return validDomain(value) || validIPv6(value);
+  if (/^\d+(?:\.\d+){3}$/.test(value)) return validSingboxIPv4(value);
+  return validSingboxDomain(value) || validSingboxIPv6(value);
 });
 const portValid = computed(
   () =>
-    Number.isInteger(activePort.value) &&
-    activePort.value > 0 &&
-    activePort.value <= 65535 &&
-    activePort.value !== props.host.port,
+    Number.isInteger(form.listen_port) &&
+    form.listen_port > 0 &&
+    form.listen_port <= 65535 &&
+    form.listen_port !== props.host.port,
 );
-const protocolValid = computed(() =>
-  protocol.value === "vless-reality"
-    ? validDomain(form.reality_server_name.trim())
-    : true,
-);
+const protocolValid = computed(() => {
+  if (protocolMeta.value.tlsMode === "reality") {
+    return validSingboxDomain(form.reality_server_name.trim());
+  }
+  if (protocolMeta.value.tlsMode === "acme") {
+    return (
+      validSingboxDomain(form.tls_server_name.trim()) &&
+      validSingboxEmail(form.acme_email.trim())
+    );
+  }
+  return true;
+});
 const deploymentReady = computed(
   () =>
     environmentReady.value &&
@@ -105,65 +110,32 @@ watch(
 );
 
 watch(protocol, (value) => {
-  form.vless_reality_enabled = value === "vless-reality";
-  form.shadowsocks_enabled = value === "shadowsocks-2022";
+  form.protocol = value;
+  form.listen_port = deployProtocolMap[value].defaultPort;
   deployError.value = "";
 });
 
 function emptyForm(host: SSHHost): SSHSingboxDeployRequest {
   return {
     server_address: host.host,
-    vless_reality_enabled: true,
-    vless_reality_port: 443,
+    protocol: "vless-reality",
+    listen_port: 443,
     reality_server_name: "www.microsoft.com",
-    shadowsocks_enabled: false,
-    shadowsocks_port: 8388,
+    tls_server_name: validSingboxDomain(host.host) ? host.host : "",
+    acme_email: "",
     replace_existing_config: false,
   };
-}
-
-function validDomain(value: string) {
-  if (!value || value.length > 253 || value.startsWith(".") || value.endsWith(".")) {
-    return false;
-  }
-  return value.split(".").every(
-    (label) =>
-      Boolean(label) &&
-      label.length <= 63 &&
-      !label.startsWith("-") &&
-      !label.endsWith("-") &&
-      /^[A-Za-z0-9-]+$/.test(label),
-  );
-}
-
-function validIPv4(value: string) {
-  const parts = value.split(".");
-  return (
-    parts.length === 4 &&
-    parts.every(
-      (part) =>
-        /^\d{1,3}$/.test(part) &&
-        Number(part) >= 0 &&
-        Number(part) <= 255,
-    )
-  );
-}
-
-function validIPv6(value: string) {
-  if (!value.includes(":")) return false;
-  try {
-    const parsed = new URL(`http://[${value}]/`);
-    return parsed.hostname.startsWith("[") && parsed.hostname.endsWith("]");
-  } catch {
-    return false;
-  }
 }
 
 function validate() {
   if (!environmentReady.value) return "请先完成远端环境检测";
   if (!addressValid.value) return "请输入有效的客户端连接 IP 或域名";
   if (!portValid.value) return "监听端口无效或与 SSH 端口冲突";
-  if (!protocolValid.value) return "请填写有效的 Reality 伪装域名";
+  if (!protocolValid.value) {
+    return protocolMeta.value.tlsMode === "reality"
+      ? "请填写有效的 Reality 伪装域名"
+      : "请填写有效的 TLS 证书域名和 ACME 邮箱";
+  }
   return "";
 }
 
@@ -284,14 +256,17 @@ async function copy(value: string, label: string) {
             <label>
               部署协议
               <select v-model="protocol" class="aw-input mt-1 w-full" :disabled="deploying">
-                <option value="vless-reality">VLESS + REALITY</option>
-                <option value="shadowsocks-2022">Shadowsocks 2022</option>
+                <option
+                  v-for="item in deployProtocolOptions"
+                  :key="item.value"
+                  :value="item.value"
+                >{{ item.label }}</option>
               </select>
             </label>
             <label>
               监听端口
               <input
-                v-model.number="activePort"
+                v-model.number="form.listen_port"
                 class="aw-input mt-1 w-full font-mono"
                 type="number"
                 min="1"
@@ -300,12 +275,20 @@ async function copy(value: string, label: string) {
               />
             </label>
             <label>
-              {{ protocol === 'vless-reality' ? 'Reality 伪装域名' : '加密方法' }}
+              {{ protocolMeta.parameterLabel }}
               <input
-                v-if="protocol === 'vless-reality'"
+                v-if="protocolMeta.tlsMode === 'reality'"
                 v-model="form.reality_server_name"
                 class="aw-input mt-1 w-full font-mono"
                 maxlength="253"
+                :disabled="deploying"
+              />
+              <input
+                v-else-if="protocolMeta.tlsMode === 'acme'"
+                v-model="form.tls_server_name"
+                class="aw-input mt-1 w-full font-mono"
+                maxlength="253"
+                placeholder="proxy.example.com"
                 :disabled="deploying"
               />
               <input
@@ -316,8 +299,8 @@ async function copy(value: string, label: string) {
               />
             </label>
             <label>
-              {{ protocol === 'vless-reality' ? 'UUID' : '访问密码' }}
-              <div class="generated-field mt-1">自动安全生成</div>
+              {{ protocolMeta.credentialLabel }}
+              <div class="generated-field mt-1">{{ protocolMeta.generatedLabel }}</div>
             </label>
           </div>
 
@@ -326,18 +309,21 @@ async function copy(value: string, label: string) {
               <BookOpen :size="16" />
               <span>配置参考</span>
             </div>
-            <ul v-if="protocol === 'vless-reality'">
-              <li>传输协议：TCP</li>
-              <li>请在云防火墙与系统防火墙放行 TCP {{ activePort }}</li>
-              <li>自动生成 UUID、Reality 密钥和 Short ID</li>
-              <li>客户端默认启用 uTLS Chrome 指纹</li>
+            <ul>
+              <li>传输协议：{{ protocolMeta.network }}</li>
+              <li>请放行监听端口 {{ form.listen_port }}</li>
+              <li v-for="item in protocolMeta.references" :key="item">{{ item }}</li>
             </ul>
-            <ul v-else>
-              <li>传输协议：TCP + UDP</li>
-              <li>请在云防火墙与系统防火墙放行 {{ activePort }}</li>
-              <li>自动生成符合 Shadowsocks 2022 长度要求的密码</li>
-              <li>客户端配置和 SIP002 分享链接同时生成</li>
-            </ul>
+            <label v-if="protocolMeta.tlsMode === 'acme'" class="acme-email-field">
+              ACME 联系邮箱（可选）
+              <input
+                v-model="form.acme_email"
+                class="aw-input ml-2 min-w-0 flex-1 font-mono"
+                type="email"
+                placeholder="ops@example.com"
+                :disabled="deploying"
+              />
+            </label>
           </div>
         </div>
       </section>
@@ -405,7 +391,7 @@ async function copy(value: string, label: string) {
 
     <p class="mt-3 flex items-start gap-2 text-[11px] leading-5 text-[var(--text-tertiary)]">
       <Info :size="14" class="mt-0.5 shrink-0" />
-      实际耗时取决于远端 APT 下载速度；部署期间请勿关闭弹窗。系统不会自动修改 DNS、云防火墙或系统防火墙。
+      实际耗时取决于远端 APT 与证书签发速度；ACME 协议需将域名解析到该服务器并放行 TCP 80。系统不会自动修改 DNS 或防火墙。
     </p>
 
     <p v-if="deployError" role="alert" class="mt-4 rounded-[var(--radius-md)] bg-[var(--color-error-bg)] p-3 text-xs text-[var(--color-error)]">
@@ -612,6 +598,13 @@ async function copy(value: string, label: string) {
 .protocol-reference li::before {
   margin-right: 0.4rem;
   content: "•";
+}
+.acme-email-field {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.64rem;
+  color: var(--text-secondary);
 }
 .check-grid {
   display: grid;

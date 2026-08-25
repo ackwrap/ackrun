@@ -17,54 +17,70 @@ import (
 
 func TestBuildSSHSingboxDeploymentGeneratesValidatedProtocolShapes(t *testing.T) {
 	host := &model.SSHHost{ID: 7, Name: "edge", Host: "198.51.100.10", Port: 22, Enabled: true}
-	deployment, err := buildSSHSingboxDeployment(host, model.SSHSingboxDeployRequest{
-		ServerAddress:       "198.51.100.10",
-		VLESSRealityEnabled: true,
-		VLESSRealityPort:    443,
-		RealityServerName:   "www.microsoft.com",
-		ShadowsocksEnabled:  true,
-		ShadowsocksPort:     8388,
-	})
+	expectedInboundTypes := map[string]string{
+		sshSingboxProtocolVLESSReality: "vless", sshSingboxProtocolShadowsocks: "shadowsocks",
+		sshSingboxProtocolVMess: "vmess", sshSingboxProtocolTrojan: "trojan",
+		sshSingboxProtocolHysteria2: "hysteria2", sshSingboxProtocolTUIC: "tuic",
+		sshSingboxProtocolAnyTLS: "anytls",
+	}
+	for protocol, request := range sshSingboxProtocolTestRequests() {
+		t.Run(protocol, func(t *testing.T) {
+			deployment, err := buildSSHSingboxDeployment(host, request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(deployment.nodes) != 1 || len(deployment.protocols) != 1 || deployment.protocols[0] != protocol {
+				t.Fatalf("unexpected generated protocol metadata: nodes=%d protocols=%v", len(deployment.nodes), deployment.protocols)
+			}
+			var serverConfig map[string]interface{}
+			if err := json.Unmarshal(deployment.serverConfig, &serverConfig); err != nil {
+				t.Fatal(err)
+			}
+			inbounds := serverConfig["inbounds"].([]interface{})
+			inbound := inbounds[0].(map[string]interface{})
+			if len(inbounds) != 1 || inbound["type"] != expectedInboundTypes[protocol] || inbound["listen"] != "::" {
+				t.Fatal("generated official inbound shape is invalid")
+			}
+			if deployment.clientConfig["route"].(map[string]interface{})["final"] != deployment.nodes[0].ClientOutbound["tag"] {
+				t.Fatal("client route does not reference the generated outbound")
+			}
+			if deployment.nodes[0].Type == "shadowsocksr" || deployment.nodes[0].Type == "ssr" {
+				t.Fatal("removed SSR protocol entered the deployment catalog")
+			}
+		})
+	}
+
+	vlessDeployment, err := buildSSHSingboxDeployment(host, sshSingboxProtocolTestRequests()[sshSingboxProtocolVLESSReality])
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(deployment.nodes) != 2 || len(deployment.protocols) != 2 {
-		t.Fatalf("unexpected generated protocol count: nodes=%d protocols=%d", len(deployment.nodes), len(deployment.protocols))
-	}
-
-	var serverConfig map[string]interface{}
-	if err := json.Unmarshal(deployment.serverConfig, &serverConfig); err != nil {
+	var vlessServer map[string]interface{}
+	if err := json.Unmarshal(vlessDeployment.serverConfig, &vlessServer); err != nil {
 		t.Fatal(err)
 	}
-	inbounds, ok := serverConfig["inbounds"].([]interface{})
-	if !ok || len(inbounds) != 2 {
-		t.Fatalf("unexpected server inbound count: %T", serverConfig["inbounds"])
-	}
-	vlessInbound := inbounds[0].(map[string]interface{})
-	if vlessInbound["type"] != "vless" || vlessInbound["listen"] != "::" || int(vlessInbound["listen_port"].(float64)) != 443 {
-		t.Fatal("VLESS Reality inbound shape is invalid")
-	}
+	vlessInbound := vlessServer["inbounds"].([]interface{})[0].(map[string]interface{})
 	reality := vlessInbound["tls"].(map[string]interface{})["reality"].(map[string]interface{})
 	privateKey := reality["private_key"].(string)
 	if decoded, decodeErr := base64.RawURLEncoding.DecodeString(privateKey); decodeErr != nil || len(decoded) != 32 {
 		t.Fatal("Reality private key is not a 32-byte URL-safe X25519 key")
 	}
-	clientJSON, err := json.Marshal(deployment.clientConfig)
+	clientJSON, err := json.Marshal(vlessDeployment.clientConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(clientJSON), privateKey) {
 		t.Fatal("Reality private key leaked into generated client configuration")
 	}
-	if deployment.clientConfig["route"].(map[string]interface{})["final"] != "proxy" {
-		t.Fatal("multi-protocol client configuration does not use its selector")
-	}
-
-	vlessShare, err := url.Parse(deployment.nodes[0].ShareURI)
+	vlessShare, err := url.Parse(vlessDeployment.nodes[0].ShareURI)
 	if err != nil || vlessShare.Scheme != "vless" || vlessShare.Query().Get("security") != "reality" || vlessShare.Query().Get("pbk") == "" {
 		t.Fatal("generated VLESS Reality share URI is invalid")
 	}
-	ssShare, err := url.Parse(deployment.nodes[1].ShareURI)
+
+	ssDeployment, err := buildSSHSingboxDeployment(host, sshSingboxProtocolTestRequests()[sshSingboxProtocolShadowsocks])
+	if err != nil {
+		t.Fatal(err)
+	}
+	ssShare, err := url.Parse(ssDeployment.nodes[0].ShareURI)
 	if err != nil || ssShare.Scheme != "ss" || ssShare.User == nil {
 		t.Fatal("generated Shadowsocks share URI is invalid")
 	}
@@ -86,25 +102,24 @@ func TestGeneratedSSHSingboxConfigsPassInstalledCoreCheck(t *testing.T) {
 	if info, err := os.Stat(binaryPath); err != nil || info.IsDir() {
 		t.Skip("installed sing-box verification binary unavailable")
 	}
-	deployment, err := buildSSHSingboxDeployment(&model.SSHHost{Name: "edge", Port: 22}, model.SSHSingboxDeployRequest{
-		ServerAddress: "198.51.100.10", VLESSRealityEnabled: true, VLESSRealityPort: 443,
-		RealityServerName: "www.microsoft.com", ShadowsocksEnabled: true, ShadowsocksPort: 8388,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	clientConfig, err := json.Marshal(deployment.clientConfig)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for name, content := range map[string][]byte{"server": deployment.serverConfig, "client": clientConfig} {
-		t.Run(name, func(t *testing.T) {
-			configPath := filepath.Join(t.TempDir(), name+".json")
-			if err := os.WriteFile(configPath, content, 0600); err != nil {
+	for protocol, request := range sshSingboxProtocolTestRequests() {
+		t.Run(protocol, func(t *testing.T) {
+			deployment, err := buildSSHSingboxDeployment(&model.SSHHost{Name: "edge", Port: 22}, request)
+			if err != nil {
 				t.Fatal(err)
 			}
-			if err := exec.Command(binaryPath, "check", "-c", configPath).Run(); err != nil {
-				t.Fatalf("installed sing-box rejected generated %s configuration", name)
+			clientConfig, err := json.Marshal(deployment.clientConfig)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for name, content := range map[string][]byte{"server": deployment.serverConfig, "client": clientConfig} {
+				configPath := filepath.Join(t.TempDir(), name+".json")
+				if err := os.WriteFile(configPath, content, 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := exec.Command(binaryPath, "check", "-c", configPath).Run(); err != nil {
+					t.Fatalf("installed sing-box rejected generated %s configuration", name)
+				}
 			}
 		})
 	}
@@ -113,10 +128,8 @@ func TestGeneratedSSHSingboxConfigsPassInstalledCoreCheck(t *testing.T) {
 func TestBuildSSHSingboxDeploymentRejectsUnsafeInputs(t *testing.T) {
 	host := &model.SSHHost{Name: "edge", Port: 22}
 	base := model.SSHSingboxDeployRequest{
-		ServerAddress:       "proxy.example.com",
-		VLESSRealityEnabled: true,
-		VLESSRealityPort:    443,
-		RealityServerName:   "www.microsoft.com",
+		ServerAddress: "proxy.example.com", Protocol: sshSingboxProtocolVLESSReality,
+		ListenPort: 443, RealityServerName: "www.microsoft.com",
 	}
 	tests := map[string]model.SSHSingboxDeployRequest{
 		"URL address": func() model.SSHSingboxDeployRequest {
@@ -129,18 +142,20 @@ func TestBuildSSHSingboxDeploymentRejectsUnsafeInputs(t *testing.T) {
 			value.ServerAddress = "999.999.999.999"
 			return value
 		}(),
-		"SSH port conflict": func() model.SSHSingboxDeployRequest { value := base; value.VLESSRealityPort = 22; return value }(),
+		"SSH port conflict": func() model.SSHSingboxDeployRequest { value := base; value.ListenPort = 22; return value }(),
 		"invalid reality": func() model.SSHSingboxDeployRequest {
 			value := base
 			value.RealityServerName = "https://example.com"
 			return value
 		}(),
-		"no protocol": {ServerAddress: "proxy.example.com"},
-		"duplicate ports": func() model.SSHSingboxDeployRequest {
+		"no protocol": {ServerAddress: "proxy.example.com", ListenPort: 443},
+		"removed SSR": func() model.SSHSingboxDeployRequest {
 			value := base
-			value.ShadowsocksEnabled, value.ShadowsocksPort = true, value.VLESSRealityPort
+			value.Protocol = "shadowsocksr"
 			return value
 		}(),
+		"TLS protocol without domain": {ServerAddress: "proxy.example.com", Protocol: sshSingboxProtocolTrojan, ListenPort: 443},
+		"invalid ACME email":          {ServerAddress: "proxy.example.com", Protocol: sshSingboxProtocolAnyTLS, ListenPort: 443, TLSServerName: "proxy.example.com", ACMEEmail: "invalid"},
 	}
 	for name, request := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -151,6 +166,21 @@ func TestBuildSSHSingboxDeploymentRejectsUnsafeInputs(t *testing.T) {
 	}
 }
 
+func sshSingboxProtocolTestRequests() map[string]model.SSHSingboxDeployRequest {
+	requests := make(map[string]model.SSHSingboxDeployRequest)
+	for _, protocol := range []string{
+		sshSingboxProtocolVLESSReality, sshSingboxProtocolShadowsocks, sshSingboxProtocolVMess,
+		sshSingboxProtocolTrojan, sshSingboxProtocolHysteria2, sshSingboxProtocolTUIC, sshSingboxProtocolAnyTLS,
+	} {
+		request := model.SSHSingboxDeployRequest{
+			ServerAddress: "198.51.100.10", Protocol: protocol, ListenPort: defaultSSHSingboxPort(protocol),
+			RealityServerName: "www.microsoft.com", TLSServerName: "proxy.example.com", ACMEEmail: "ops@example.com",
+		}
+		requests[protocol] = request
+	}
+	return requests
+}
+
 func TestSSHSingboxDeployScriptUsesOfficialAtomicWorkflow(t *testing.T) {
 	serverConfig := []byte(`{"inbounds":[]}`)
 	clientConfig := []byte(`{"outbounds":[]}`)
@@ -158,8 +188,14 @@ func TestSSHSingboxDeployScriptUsesOfficialAtomicWorkflow(t *testing.T) {
 	for _, required := range []string{
 		"https://sing-box.app/gpg.key",
 		"https://deb.sagernet.org/",
-		"sing-box check -c \"$server_tmp\"",
-		"sing-box check -c \"$client_tmp\"",
+		"Pin: origin deb.sagernet.org",
+		"dpkg --compare-versions \"$candidate_version\" lt \"$installed_version\"",
+		"apt-get install -y --reinstall sing-box",
+		"\"$singbox_bin\" check -c \"$server_tmp\"",
+		"\"$singbox_bin\" check -c \"$client_tmp\"",
+		"singbox_bin='/usr/bin/sing-box'",
+		"chown root:sing-box \"$server_tmp\"",
+		"chmod 0640 \"$server_tmp\"",
 		"ACKWRAP_DEPLOY_CONFLICT",
 		"managed_unchanged=0",
 		"fail unsafe_config_path",
@@ -185,6 +221,9 @@ func TestSSHSingboxDeployScriptUsesOfficialAtomicWorkflow(t *testing.T) {
 	}
 	if strings.Contains(script, "curl -fsSL https://sing-box.app/install.sh | sh") {
 		t.Fatal("deployment script executes the remote convenience installer directly")
+	}
+	if strings.Contains(script, "--allow-downgrades") {
+		t.Fatal("deployment script permits an unrecoverable automatic core downgrade")
 	}
 	if strings.Contains(script, string(serverConfig)) || strings.Contains(script, string(clientConfig)) {
 		t.Fatal("deployment script embeds sensitive JSON as plaintext")
