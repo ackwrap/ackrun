@@ -54,11 +54,20 @@ func TestParseSSHMonitorOutput(t *testing.T) {
 func TestParseSSHDeviceDetailsOutput(t *testing.T) {
 	collectedAt := time.UnixMilli(1724500000000)
 	output := []byte("ACKWRAP_DETAILS_V1\n" +
+		"HOST\tvm-01\n" +
+		"OS\tDebian GNU/Linux 13\n" +
+		"KERNEL\t6.12.0-amd64\n" +
+		"ARCH\tx86_64\n" +
 		"CPU_MODEL\tExample CPU\n" +
 		"CPU_CORES\t4\n" +
 		"MEM\t4294967296\t1073741824\t2147483648\t1073741824\n" +
 		"UPTIME\t3600\n" +
 		"LOAD\t0.25\t0.50\t0.75\n" +
+		"VIRT\tkvm\n" +
+		"PACKAGE_MANAGER\tapt-get\n" +
+		"DISK\t/dev/root\t10737418240\t2147483648\t8589934592\t/\n" +
+		"DISK\t/dev/root\t10737418240\t2147483648\t8589934592\t/\n" +
+		"DISK\t-\t21474836480\t10737418240\t10737418240\t/mnt/data disk\n" +
 		"SOFTWARE\tdocker\t1\tDocker version 28.0.0\n" +
 		"SOFTWARE\tdocker-compose\t0\t\n" +
 		"SOFTWARE\tsing-box\t1\tsing-box version 1.13.14\n" +
@@ -69,6 +78,9 @@ func TestParseSSHDeviceDetailsOutput(t *testing.T) {
 	}
 	if details.CPUModel != "Example CPU" || details.CPUCores != 4 {
 		t.Fatalf("unexpected CPU details: %#v", details)
+	}
+	if details.Hostname != "vm-01" || details.OSName != "Debian GNU/Linux 13" || details.KernelVersion != "6.12.0-amd64" || details.Architecture != "x86_64" {
+		t.Fatalf("unexpected system details: %#v", details)
 	}
 	if details.MemoryTotalBytes != 4294967296 || details.MemoryAvailableBytes != 1073741824 {
 		t.Fatalf("unexpected memory details: %#v", details)
@@ -81,6 +93,15 @@ func TestParseSSHDeviceDetailsOutput(t *testing.T) {
 	}
 	if details.LoadAverage1 != 0.25 || details.LoadAverage5 != 0.5 || details.LoadAverage15 != 0.75 {
 		t.Fatalf("unexpected load averages: %#v", details)
+	}
+	if details.Virtualization != "kvm" || details.PackageManager != "apt-get" {
+		t.Fatalf("unexpected platform details: %#v", details)
+	}
+	if len(details.Disks) != 2 || details.Disks[0].MountPoint != "/" || details.Disks[0].UsagePercent != 20 {
+		t.Fatalf("unexpected disk data: %#v", details.Disks)
+	}
+	if details.Disks[1].MountPoint != "/mnt/data disk" || details.Disks[1].UsagePercent != 50 {
+		t.Fatalf("unexpected spaced disk mount: %#v", details.Disks[1])
 	}
 	if len(details.Software) != 3 || !details.Software[0].Installed || details.Software[1].Installed || !details.Software[2].Installed {
 		t.Fatalf("unexpected software status: %#v", details.Software)
@@ -111,18 +132,18 @@ func TestSSHMonitorCommandKeepsStaticChecksOutOfPolling(t *testing.T) {
 	if !strings.Contains(sshDeviceDetailsCommand, "docker") || !strings.Contains(sshDeviceDetailsCommand, "sing-box") {
 		t.Fatal("device details command is missing software checks")
 	}
-	for _, removed := range []string{"hostname", "id", "uname", "who", "df", "systemd-detect-virt", "apt-get", "dnf", "yum", "apk", "opkg", "pacman"} {
-		pattern := regexp.MustCompile(`(^|[^A-Za-z0-9_-])` + regexp.QuoteMeta(removed) + `([^A-Za-z0-9_-]|$)`)
-		if pattern.MatchString(sshDeviceDetailsCommand) {
-			t.Fatalf("device details command still includes removed command %q", removed)
+	for _, required := range []string{"hostname", "uname", "df", "systemd-detect-virt", "apt-get", "dnf", "yum", "apk", "opkg", "pacman"} {
+		pattern := regexp.MustCompile(`(^|[^A-Za-z0-9_-])` + regexp.QuoteMeta(required) + `([^A-Za-z0-9_-]|$)`)
+		if !pattern.MatchString(sshDeviceDetailsCommand) {
+			t.Fatalf("device details command is missing restored probe %q", required)
 		}
 	}
-	if strings.Contains(sshDeviceDetailsCommand, "os-release") {
-		t.Fatal("device details command still reads operating system metadata")
+	if !strings.Contains(sshDeviceDetailsCommand, "os-release") {
+		t.Fatal("device details command is missing operating system metadata")
 	}
 }
 
-func TestSSHDeviceDetailsJSONOmitsRemovedFields(t *testing.T) {
+func TestSSHDeviceDetailsJSONIncludesRestoredFields(t *testing.T) {
 	encoded, err := json.Marshal(&model.SSHDeviceDetails{})
 	if err != nil {
 		t.Fatal(err)
@@ -132,11 +153,15 @@ func TestSSHDeviceDetailsJSONOmitsRemovedFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	allowed := map[string]bool{
+		"hostname": true, "os_name": true,
+		"kernel_version": true, "architecture": true,
 		"cpu_model": true, "cpu_cores": true,
 		"memory_total_bytes": true, "memory_available_bytes": true,
 		"swap_total_bytes": true, "swap_available_bytes": true,
 		"uptime_seconds": true, "load_average_1": true,
 		"load_average_5": true, "load_average_15": true,
+		"virtualization": true, "package_manager": true,
+		"disks":    true,
 		"software": true, "collected_at": true,
 	}
 	if len(fields) != len(allowed) {

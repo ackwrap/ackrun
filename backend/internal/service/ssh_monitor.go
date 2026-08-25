@@ -44,11 +44,29 @@ printf 'END\n'
 const sshDeviceDetailsCommand = `LC_ALL=C
 export LC_ALL
 printf 'ACKWRAP_DETAILS_V1\n'
+hostname 2>/dev/null | awk 'NR == 1 { print "HOST\t" $0 }'
+awk -F= '$1 == "PRETTY_NAME" { value = substr($0, index($0, "=") + 1); gsub(/^"/, "", value); gsub(/"$/, "", value); print "OS\t" value; exit }' /etc/os-release 2>/dev/null
+uname -r 2>/dev/null | awk 'NR == 1 { print "KERNEL\t" $0 }'
+uname -m 2>/dev/null | awk 'NR == 1 { print "ARCH\t" $0 }'
 awk -F: '/^(model name|Hardware)[ \t]*:/ { value = $2; sub(/^[ \t]+/, "", value); print "CPU_MODEL\t" value; exit }' /proc/cpuinfo 2>/dev/null
 awk '/^processor[ \t]*:/ { cores++ } END { print "CPU_CORES\t" (cores ? cores : 1) }' /proc/cpuinfo 2>/dev/null
 awk '/^MemTotal:/ { total = $2 } /^MemAvailable:/ { available = $2 } /^MemFree:/ { free = $2 } /^Buffers:/ { buffers = $2 } /^Cached:/ { cached = $2 } /^SwapTotal:/ { swap_total = $2 } /^SwapFree:/ { swap_free = $2 } END { if (!available) available = free + buffers + cached; printf "MEM\t%.0f\t%.0f\t%.0f\t%.0f\n", total * 1024, available * 1024, swap_total * 1024, swap_free * 1024 }' /proc/meminfo 2>/dev/null
 awk 'NR == 1 { printf "UPTIME\t%.0f\n", $1 }' /proc/uptime 2>/dev/null
 awk 'NR == 1 { printf "LOAD\t%s\t%s\t%s\n", $1, $2, $3 }' /proc/loadavg 2>/dev/null
+virtualization=none
+if command -v systemd-detect-virt >/dev/null 2>&1; then
+  detected="$(systemd-detect-virt 2>/dev/null)"
+  if test -n "$detected"; then virtualization="$detected"; fi
+elif grep -Eqi '(docker|containerd)' /proc/1/cgroup 2>/dev/null; then virtualization=docker
+elif grep -Eqi 'lxc' /proc/1/cgroup 2>/dev/null; then virtualization=lxc
+fi
+printf 'VIRT\t%s\n' "$virtualization"
+package_manager=unknown
+for candidate in apt-get dnf yum apk opkg pacman; do
+  if command -v "$candidate" >/dev/null 2>&1; then package_manager="$candidate"; break; fi
+done
+printf 'PACKAGE_MANAGER\t%s\n' "$package_manager"
+df -Pk 2>/dev/null | awk 'NR > 1 && count < 12 { for (i = 2; i + 4 <= NF; i++) { if ($i ~ /^[0-9]+$/ && $(i + 1) ~ /^[0-9]+$/ && $(i + 2) ~ /^[0-9]+$/ && $(i + 3) ~ /^[0-9]+%$/) { mount = $(i + 4); for (j = i + 5; j <= NF; j++) mount = mount " " $j; printf "DISK\t-\t%.0f\t%.0f\t%.0f\t%s\n", $i * 1024, $(i + 1) * 1024, $(i + 2) * 1024, mount; count++; break } } }'
 if command -v docker >/dev/null 2>&1; then
   docker_version="$(docker --version 2>/dev/null | head -n 1)"
   printf 'SOFTWARE\tdocker\t1\t%s\n' "$docker_version"
@@ -336,7 +354,10 @@ func parseSSHDeviceDetailsOutput(output []byte, collectedAt time.Time) (*model.S
 	if len(output) == 0 || len(output) > sshMonitorMaximumOutput {
 		return nil, errors.New("SSH device details output has invalid size")
 	}
-	details := &model.SSHDeviceDetails{Software: make([]model.SSHSoftware, 0)}
+	details := &model.SSHDeviceDetails{
+		Disks: make([]model.SSHMonitorDisk, 0), Software: make([]model.SSHSoftware, 0),
+	}
+	seenMounts := make(map[string]bool)
 	seenSoftware := make(map[string]bool)
 	seenHeader, seenEnd, seenCores, seenMemory, seenUptime, seenLoad := false, false, false, false, false, false
 	scanner := bufio.NewScanner(strings.NewReader(string(output)))
@@ -359,6 +380,14 @@ func parseSSHDeviceDetailsOutput(output []byte, collectedAt time.Time) (*model.S
 			continue
 		}
 		switch fields[0] {
+		case "HOST":
+			details.Hostname = monitorText(fields[1])
+		case "OS":
+			details.OSName = monitorText(fields[1])
+		case "KERNEL":
+			details.KernelVersion = monitorText(fields[1])
+		case "ARCH":
+			details.Architecture = monitorText(fields[1])
 		case "CPU_MODEL":
 			details.CPUModel = monitorText(fields[1])
 		case "CPU_CORES":
@@ -396,6 +425,30 @@ func parseSSHDeviceDetailsOutput(output []byte, collectedAt time.Time) (*model.S
 					seenLoad = true
 				}
 			}
+		case "VIRT":
+			details.Virtualization = monitorText(fields[1])
+		case "PACKAGE_MANAGER":
+			details.PackageManager = monitorText(fields[1])
+		case "DISK":
+			if len(fields) != 6 || len(details.Disks) >= sshMonitorMaximumDisks {
+				continue
+			}
+			total, totalErr := monitorInt(fields[2])
+			used, usedErr := monitorInt(fields[3])
+			available, availableErr := monitorInt(fields[4])
+			mountPoint := monitorText(fields[5])
+			if totalErr != nil || usedErr != nil || availableErr != nil || total <= 0 || mountPoint == "" || seenMounts[mountPoint] {
+				continue
+			}
+			seenMounts[mountPoint] = true
+			usage := int(float64(used)/float64(total)*100 + 0.5)
+			if usage > 100 {
+				usage = 100
+			}
+			details.Disks = append(details.Disks, model.SSHMonitorDisk{
+				MountPoint: mountPoint, TotalBytes: total, UsedBytes: used,
+				AvailableBytes: available, UsagePercent: usage,
+			})
 		case "SOFTWARE":
 			if len(fields) != 4 {
 				continue

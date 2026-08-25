@@ -5,6 +5,7 @@ import {
   Pencil,
   Play,
   Route,
+  ServerCog,
   Share2,
   SquareTerminal,
   Trash2,
@@ -21,6 +22,7 @@ const props = defineProps<{
   testingId: number;
   openingShellId: number;
   loadingDetailsId: number;
+  detailsMode: "details" | "singbox" | null;
   shellOpen: boolean;
   selectedIds: number[];
 }>();
@@ -30,6 +32,7 @@ const emit = defineEmits<{
   shell: [host: SSHHost];
   terminal: [host: SSHHost];
   details: [host: SSHHost];
+  deploySingbox: [host: SSHHost];
   edit: [host: SSHHost];
   share: [host: SSHHost];
   delete: [host: SSHHost];
@@ -89,7 +92,7 @@ function connectionLabel(host: SSHHost) {
       暂无 SSH 主机。新增主机时可直接创建并选择登录凭据。
     </div>
     <div v-else class="aw-data-table-wrap rounded-none border-0">
-      <table class="aw-data-table min-w-[1160px]">
+      <table class="aw-data-table min-w-[1280px]">
         <thead>
           <tr>
             <th class="w-10">
@@ -172,17 +175,31 @@ function connectionLabel(host: SSHHost) {
               <div class="flex justify-end gap-1">
                 <Button
                   size="sm"
-                  :loading="loadingDetailsId === host.id"
+                  :loading="detailsMode === 'details' && loadingDetailsId === host.id"
                   :disabled="
                     !host.enabled ||
                     testingId > 0 ||
                     loadingDetailsId > 0 ||
                     openingShellId > 0
                   "
-                  title="查看设备详情与快捷安装区域"
+                  title="查看设备详情"
                   @click="$emit('details', host)"
                 >
                   <template #icon><Info :size="13" /></template>详情
+                </Button>
+                <Button
+                  size="sm"
+                  :loading="detailsMode === 'singbox' && loadingDetailsId === host.id"
+                  :disabled="
+                    !host.enabled ||
+                    testingId > 0 ||
+                    loadingDetailsId > 0 ||
+                    openingShellId > 0
+                  "
+                  title="打开 sing-box 服务端部署"
+                  @click="$emit('deploySingbox', host)"
+                >
+                  <template #icon><ServerCog :size="13" /></template>sing-box
                 </Button>
                 <Button
                   size="sm"

@@ -42,6 +42,7 @@ import type {
 import { errorMessage, formatTime } from "./advanced/advancedUi";
 import SSHHostFormModal from "./ssh/SSHHostFormModal.vue";
 import SSHHostDetailsModal from "./ssh/SSHHostDetailsModal.vue";
+import SSHSingboxDeployModal from "./ssh/SSHSingboxDeployModal.vue";
 import SSHCredentialFormModal from "./ssh/SSHCredentialFormModal.vue";
 import SSHHostShareModal from "./ssh/SSHHostShareModal.vue";
 import SSHHostTable from "./ssh/SSHHostTable.vue";
@@ -91,6 +92,7 @@ const quickShell = ref<{
   host: SSHHost;
   session: SSHSessionCreateResponse;
 } | null>(null);
+const detailsMode = ref<"details" | "singbox" | null>(null);
 const credentialForm = reactive<CredentialForm>(emptyCredentialForm());
 const selectedHosts = computed(() => {
   const selected = new Set(selectedHostIDs.value);
@@ -301,7 +303,19 @@ async function openShell(host: SSHHost) {
 
 function openDetails(host: SSHHost) {
   if (testingID.value || loadingDetailsID.value || openingShellID.value) return;
+  detailsMode.value = "details";
   openDeviceDetails(host);
+}
+
+function openSingboxDeploy(host: SSHHost) {
+  if (testingID.value || loadingDetailsID.value || openingShellID.value) return;
+  detailsMode.value = "singbox";
+  openDeviceDetails(host);
+}
+
+function closeDeviceAction() {
+  detailsMode.value = null;
+  closeDetails();
 }
 
 async function closeShell() {
@@ -514,11 +528,13 @@ onBeforeUnmount(() => {
       :testing-id="testingID"
       :opening-shell-id="openingShellID"
       :loading-details-id="loadingDetailsID"
+      :details-mode="detailsMode"
       :shell-open="!!quickShell"
       @test="testHost"
       @shell="openShell"
       @terminal="openTerminal"
       @details="openDetails"
+      @deploy-singbox="openSingboxDeploy"
       @edit="openEditHost"
       @share="sharingHosts = [$event]; shareOpen = true"
       @delete="deletingHost = $event"
@@ -598,11 +614,20 @@ onBeforeUnmount(() => {
     />
 
     <SSHHostDetailsModal
-      :host="detailsHost"
+      :host="detailsMode === 'details' ? detailsHost : null"
       :details="deviceDetails"
       :loading="loadingDetailsID > 0"
       :error="detailsError"
-      @close="closeDetails"
+      @close="closeDeviceAction"
+      @retry="retryDetails"
+    />
+
+    <SSHSingboxDeployModal
+      :host="detailsMode === 'singbox' ? detailsHost : null"
+      :details="deviceDetails"
+      :loading="loadingDetailsID > 0"
+      :error="detailsError"
+      @close="closeDeviceAction"
       @retry="retryDetails"
     />
 

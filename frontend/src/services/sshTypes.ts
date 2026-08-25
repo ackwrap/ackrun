@@ -126,6 +126,10 @@ export interface SSHMonitorSnapshot {
 }
 
 export interface SSHDeviceDetails {
+  hostname: string;
+  os_name: string;
+  kernel_version: string;
+  architecture: string;
   cpu_model: string;
   cpu_cores: number;
   memory_total_bytes: number;
@@ -136,6 +140,9 @@ export interface SSHDeviceDetails {
   load_average_1: number;
   load_average_5: number;
   load_average_15: number;
+  virtualization: string;
+  package_manager: string;
+  disks: SSHMonitorDisk[];
   software: SSHSoftware[];
   collected_at: number;
 }

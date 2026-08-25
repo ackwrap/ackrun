@@ -180,7 +180,7 @@ async function copy(value: string, label: string) {
 </script>
 
 <template>
-  <section class="border-t border-[var(--border-default)] pt-5">
+  <section>
     <div class="mb-4 flex items-center gap-2">
       <ServerCog :size="19" class="text-[var(--color-primary)]" />
       <h3 class="text-sm font-semibold">sing-box 服务端部署</h3>

@@ -1,17 +1,24 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed } from "vue";
 import {
+  Box,
+  Boxes,
   Clock3,
   Cpu,
   HardDrive,
   MemoryStick,
+  PackagePlus,
   RefreshCw,
+  Server,
 } from "lucide-vue-next";
 import Button from "@/components/ui/Button.vue";
 import Modal from "@/components/ui/Modal.vue";
 import StatusBadge from "@/components/ui/StatusBadge.vue";
-import type { SSHDeviceDetails, SSHHost } from "@/services/sshTypes";
-import SSHSingboxDeployPanel from "./SSHSingboxDeployPanel.vue";
+import type {
+  SSHDeviceDetails,
+  SSHHost,
+  SSHSoftware,
+} from "@/services/sshTypes";
 
 const props = defineProps<{
   host: SSHHost | null;
@@ -20,7 +27,6 @@ const props = defineProps<{
   error: string;
 }>();
 const emit = defineEmits<{ close: []; retry: [] }>();
-const deploymentBusy = ref(false);
 
 const memoryUsed = computed(() =>
   props.details
@@ -38,6 +44,27 @@ const swapUsed = computed(() =>
       )
     : 0,
 );
+
+const softwareCatalog = computed(() => [
+  {
+    key: "docker",
+    name: "Docker Engine",
+    description: "容器运行时与镜像管理",
+    icon: Box,
+    status: softwareStatus("docker"),
+  },
+  {
+    key: "docker-compose",
+    name: "Docker Compose",
+    description: "多容器应用编排工具",
+    icon: Boxes,
+    status: softwareStatus("docker-compose"),
+  },
+]);
+
+function softwareStatus(key: string): SSHSoftware | null {
+  return props.details?.software?.find((item) => item.key === key) || null;
+}
 
 function formatBytes(value: number) {
   if (!Number.isFinite(value) || value < 0) return "--";
@@ -76,8 +103,7 @@ function valueOrDash(value?: string | number) {
   <Modal
     :open="Boolean(host)"
     :title="`设备详情 · ${host?.name || ''}`"
-    :width="1480"
-    :closable="!deploymentBusy"
+    size="xl"
     @close="emit('close')"
   >
     <div v-if="host" class="space-y-5">
@@ -129,6 +155,21 @@ function valueOrDash(value?: string | number) {
       </div>
 
       <template v-else-if="details">
+        <section>
+          <div class="mb-3 flex items-center gap-2">
+            <Server :size="17" class="text-[var(--color-primary)]" />
+            <h3 class="text-sm font-semibold">系统参数</h3>
+          </div>
+          <dl class="grid overflow-hidden rounded-[var(--radius-lg)] border border-[var(--border-default)] sm:grid-cols-2 lg:grid-cols-3">
+            <div class="detail-cell"><dt>主机名</dt><dd>{{ valueOrDash(details.hostname) }}</dd></div>
+            <div class="detail-cell"><dt>操作系统</dt><dd>{{ valueOrDash(details.os_name) }}</dd></div>
+            <div class="detail-cell"><dt>内核版本</dt><dd>{{ valueOrDash(details.kernel_version) }}</dd></div>
+            <div class="detail-cell"><dt>系统架构</dt><dd>{{ valueOrDash(details.architecture) }}</dd></div>
+            <div class="detail-cell"><dt>虚拟化</dt><dd>{{ valueOrDash(details.virtualization) }}</dd></div>
+            <div class="detail-cell"><dt>包管理器</dt><dd>{{ valueOrDash(details.package_manager) }}</dd></div>
+          </dl>
+        </section>
+
         <section class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <div class="metric-card">
             <Cpu :size="18" class="text-[var(--color-primary)]" />
@@ -144,29 +185,89 @@ function valueOrDash(value?: string | number) {
           </div>
           <div class="metric-card">
             <HardDrive :size="18" class="text-[var(--color-warning)]" />
-            <div><p>交换空间</p><strong>{{ details.swap_total_bytes ? `${formatBytes(swapUsed)} / ${formatBytes(details.swap_total_bytes)}` : '未配置' }}</strong><small>{{ details.swap_total_bytes ? `可用 ${formatBytes(details.swap_available_bytes)}` : '未启用 Swap' }}</small></div>
+            <div><p>交换空间</p><strong>{{ details.swap_total_bytes ? `${formatBytes(swapUsed)} / ${formatBytes(details.swap_total_bytes)}` : '未配置' }}</strong><small>{{ details.disks.length }} 个文件系统</small></div>
+          </div>
+        </section>
+
+        <section>
+          <div class="mb-3 flex items-center gap-2">
+            <HardDrive :size="17" class="text-[var(--color-warning)]" />
+            <h3 class="text-sm font-semibold">磁盘使用</h3>
+          </div>
+          <div class="aw-data-table-wrap max-h-48">
+            <table class="aw-data-table min-w-[620px]">
+              <thead><tr><th>挂载点</th><th>已用</th><th>可用</th><th>总容量</th><th>占用率</th></tr></thead>
+              <tbody>
+                <tr v-if="!details.disks.length"><td colspan="5" class="py-6 text-center text-[var(--text-tertiary)]">未读取到磁盘信息</td></tr>
+                <tr v-for="disk in details.disks" :key="disk.mount_point">
+                  <td class="font-mono text-xs">{{ disk.mount_point }}</td>
+                  <td>{{ formatBytes(disk.used_bytes) }}</td>
+                  <td>{{ formatBytes(disk.available_bytes) }}</td>
+                  <td>{{ formatBytes(disk.total_bytes) }}</td>
+                  <td>{{ disk.usage_percent }}%</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </section>
       </template>
 
-      <SSHSingboxDeployPanel
-        :host="host"
-        :details="details"
-        :details-error="error"
-        :details-loading="loading"
-        @busy="deploymentBusy = $event"
-        @refresh="emit('retry')"
-      />
+      <section class="border-t border-[var(--border-default)] pt-5">
+        <div class="mb-3 flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <div class="flex items-center gap-2">
+              <PackagePlus :size="17" class="text-[var(--color-primary)]" />
+              <h3 class="text-sm font-semibold">快捷安装</h3>
+              <StatusBadge status="pending" label="框架预留" size="sm" />
+            </div>
+            <p class="mt-1 text-xs text-[var(--text-tertiary)]">当前展示远端软件检测状态；安装能力将通过独立入口和确认流程逐项接入。</p>
+          </div>
+        </div>
+        <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <article v-for="software in softwareCatalog" :key="software.key" class="software-card">
+            <component :is="software.icon" :size="20" class="text-[var(--color-primary)]" />
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center justify-between gap-2"><h4 class="text-sm font-medium">{{ software.name }}</h4><StatusBadge :status="error ? 'error' : !details ? 'pending' : software.status?.installed ? 'online' : 'offline'" :label="error ? '检测失败' : !details ? '待检测' : software.status?.installed ? '已安装' : '未安装'" size="sm" /></div>
+              <p class="mt-1 text-xs text-[var(--text-tertiary)]">{{ software.description }}</p>
+              <p v-if="software.status?.version" class="mt-2 truncate font-mono text-[10px] text-[var(--text-secondary)]" :title="software.status.version">{{ software.status.version }}</p>
+              <Button class="mt-3 w-full" size="sm" disabled>{{ error ? '检测失败，请重新读取' : !details ? '等待检测' : software.status?.installed ? '已安装' : '一键安装（待接入）' }}</Button>
+            </div>
+          </article>
+          <article class="software-card border-dashed">
+            <PackagePlus :size="20" class="text-[var(--text-tertiary)]" />
+            <div class="min-w-0 flex-1">
+              <h4 class="text-sm font-medium">自定义安装项</h4>
+              <p class="mt-1 text-xs text-[var(--text-tertiary)]">预留自定义软件名称、检测命令和白名单安装流程。</p>
+              <Button class="mt-3 w-full" size="sm" disabled>添加安装项（待接入）</Button>
+            </div>
+          </article>
+        </div>
+      </section>
     </div>
   </Modal>
 </template>
 
 <style scoped>
+.detail-cell {
+  min-width: 0;
+  padding: 0.75rem 1rem;
+  border-right: 1px solid var(--border-light);
+  border-bottom: 1px solid var(--border-light);
+}
+.detail-cell dt,
 .metric-card p {
   font-size: 0.7rem;
   color: var(--text-tertiary);
 }
-.metric-card {
+.detail-cell dd {
+  margin-top: 0.3rem;
+  overflow: hidden;
+  font-size: 0.8rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.metric-card,
+.software-card {
   display: flex;
   align-items: flex-start;
   gap: 0.75rem;
