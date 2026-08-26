@@ -46,6 +46,28 @@ const selectedNode = computed(() =>
     (node) => nodeKey(node.subscription_id, node.uid) === form.nodeKey,
   ),
 );
+const nodeGroups = computed(() => {
+  const groups = new Map<
+    number,
+    { subscriptionName: string; nodes: NodeItem[] }
+  >();
+  for (const node of nodes.value) {
+    const group = groups.get(node.subscription_id);
+    if (group) {
+      group.nodes.push(node);
+    } else {
+      groups.set(node.subscription_id, {
+        subscriptionName:
+          node.subscription_name || `订阅 #${node.subscription_id}`,
+        nodes: [node],
+      });
+    }
+  }
+  return Array.from(groups, ([subscriptionID, group]) => ({
+    subscriptionID,
+    ...group,
+  })).sort((left, right) => right.subscriptionID - left.subscriptionID);
+});
 const remoteListen = computed(() => !isLoopback(form.listen));
 
 function emptyForm(): ExposureForm {
@@ -115,8 +137,9 @@ async function load() {
 function openCreate() {
   editing.value = null;
   Object.assign(form, emptyForm());
-  if (nodes.value.length) {
-    form.nodeKey = nodeKey(nodes.value[0].subscription_id, nodes.value[0].uid);
+  const firstNode = nodeGroups.value[0]?.nodes[0];
+  if (firstNode) {
+    form.nodeKey = nodeKey(firstNode.subscription_id, firstNode.uid);
   }
   formOpen.value = true;
 }
@@ -360,13 +383,19 @@ onMounted(load);
               {{ editing.node_exists ? "已停用" : "已失效" }} ·
               {{ editing.node_name || editing.node_uid }}
             </option>
-            <option
-              v-for="node in nodes"
-              :key="`${node.subscription_id}:${node.uid}`"
-              :value="nodeKey(node.subscription_id, node.uid)"
+            <optgroup
+              v-for="group in nodeGroups"
+              :key="group.subscriptionID"
+              :label="group.subscriptionName"
             >
-              {{ node.name }} · {{ node.type }} · {{ node.subscription_name }}
-            </option>
+              <option
+                v-for="node in group.nodes"
+                :key="`${node.subscription_id}:${node.uid}`"
+                :value="nodeKey(node.subscription_id, node.uid)"
+              >
+                {{ node.name }} · {{ node.type }}
+              </option>
+            </optgroup>
           </select>
           <p
             v-if="selectedNode"
