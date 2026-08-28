@@ -207,6 +207,12 @@ func RegisterRoutes(
 		v1.PUT("/dns/servers/:id", dnsH.UpdateDNSServer)
 		v1.DELETE("/dns/servers/:id", dnsH.DeleteDNSServer)
 
+		v1.GET("/dns/hosts", dnsH.ListDNSHosts)
+		v1.POST("/dns/hosts", dnsH.CreateDNSHost)
+		v1.GET("/dns/hosts/:id", dnsH.GetDNSHost)
+		v1.PUT("/dns/hosts/:id", dnsH.UpdateDNSHost)
+		v1.DELETE("/dns/hosts/:id", dnsH.DeleteDNSHost)
+
 		v1.GET("/dns/rules", dnsH.ListDNSRules)
 		v1.POST("/dns/rules", dnsH.CreateDNSRule)
 		v1.POST("/dns/rules/reorder", dnsH.ReorderDNSRules)

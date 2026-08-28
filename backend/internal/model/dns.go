@@ -32,6 +32,24 @@ type DNSServerRequest struct {
 	Options         map[string]interface{} `json:"options"`
 }
 
+// DNSHost maps one exact domain to one or more fixed IP addresses.
+type DNSHost struct {
+	ID        int64    `json:"id"`
+	Domain    string   `json:"domain"`
+	Addresses []string `json:"addresses"`
+	Enabled   bool     `json:"enabled"`
+	Comment   string   `json:"comment"`
+	CreatedAt int64    `json:"created_at"`
+	UpdatedAt int64    `json:"updated_at"`
+}
+
+type DNSHostRequest struct {
+	Domain    string   `json:"domain" binding:"required"`
+	Addresses []string `json:"addresses" binding:"required"`
+	Enabled   bool     `json:"enabled"`
+	Comment   string   `json:"comment"`
+}
+
 // DNSRule DNS 路由规则
 type DNSRule struct {
 	ID             int64  `json:"id"`

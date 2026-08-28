@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -370,6 +371,118 @@ func TestDNSServerRejectsControlledOptionsAndInvalidDetours(t *testing.T) {
 	}
 	if _, err := svc.CreateDNSServer(&model.DNSServerRequest{Tag: "custom-fakeip", Enabled: true, ServerType: "fakeip"}); err == nil || !strings.Contains(err.Error(), "自动管理") {
 		t.Fatalf("manual FakeIP Server error = %v", err)
+	}
+}
+
+func TestDNSHostsCRUDValidationAndNormalization(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	svc := NewDNSService(db, nil)
+
+	created, err := svc.CreateDNSHost(&model.DNSHostRequest{
+		Domain:    " API.Example.COM. ",
+		Addresses: []string{"192.0.2.10", "::ffff:192.0.2.10", "2001:db8::10"},
+		Enabled:   true,
+		Comment:   " internal API ",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Domain != "api.example.com" || created.Comment != "internal API" {
+		t.Fatalf("normalized DNS Hosts mapping = %+v", created)
+	}
+	if len(created.Addresses) != 2 || created.Addresses[0] != "192.0.2.10" || created.Addresses[1] != "2001:db8::10" {
+		t.Fatalf("normalized DNS Hosts addresses = %v", created.Addresses)
+	}
+	if _, err := svc.CreateDNSHost(&model.DNSHostRequest{Domain: "api.example.com", Addresses: []string{"192.0.2.11"}}); !errors.Is(err, ErrDNSHostDomainConflict) {
+		t.Fatalf("duplicate DNS Hosts domain error = %v", err)
+	}
+
+	for name, request := range map[string]*model.DNSHostRequest{
+		"wildcard domain": {Domain: "*.example.com", Addresses: []string{"192.0.2.1"}},
+		"empty label":     {Domain: "api..example.com", Addresses: []string{"192.0.2.1"}},
+		"invalid address": {Domain: "invalid.example.com", Addresses: []string{"not-an-ip"}},
+		"missing address": {Domain: "empty.example.com"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := svc.CreateDNSHost(request); err == nil {
+				t.Fatal("invalid DNS Hosts mapping was accepted")
+			}
+		})
+	}
+
+	updated, err := svc.UpdateDNSHost(created.ID, &model.DNSHostRequest{
+		Domain: created.Domain, Addresses: created.Addresses, Enabled: false, Comment: created.Comment,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Enabled {
+		t.Fatal("DNS Hosts mapping was not disabled")
+	}
+	if _, err := svc.UpdateDNSHost(999999, &model.DNSHostRequest{Domain: "missing.example.com", Addresses: []string{"192.0.2.1"}}); !errors.Is(err, ErrDNSHostNotFound) {
+		t.Fatalf("missing DNS Hosts update error = %v", err)
+	}
+	if err := svc.DeleteDNSHost(created.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.DeleteDNSHost(created.ID); !errors.Is(err, ErrDNSHostNotFound) {
+		t.Fatalf("missing DNS Hosts delete error = %v", err)
+	}
+}
+
+func TestGenerateDNSHostsBeforeExplicitAndFakeIPRules(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	svc := NewDNSService(db, nil)
+	if _, err := svc.CreateDNSServer(&model.DNSServerRequest{
+		Tag: managedDNSHostsServerTag, Enabled: true, ServerType: "udp", Address: "192.0.2.53",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CreateDNSHost(&model.DNSHostRequest{
+		Domain: "api.example.com", Addresses: []string{"192.0.2.10", "2001:db8::10"}, Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CreateDNSHost(&model.DNSHostRequest{
+		Domain: "disabled.example.com", Addresses: []string{"192.0.2.11"}, Enabled: false,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	dns := mustGenerateDNS(t, NewConfigGeneratorService(db, nil))
+	servers, _ := dns["servers"].([]map[string]interface{})
+	hostsTag := ""
+	var predefined map[string]interface{}
+	for _, server := range servers {
+		if server["type"] == "hosts" && server["tag"] != managedDNSHostsServerTag {
+			hostsTag, _ = server["tag"].(string)
+			predefined, _ = server["predefined"].(map[string]interface{})
+		}
+	}
+	if hostsTag != managedDNSHostsServerTag+"-2" {
+		t.Fatalf("managed DNS Hosts server tag = %q", hostsTag)
+	}
+	if len(predefined) != 1 || predefined["disabled.example.com"] != nil {
+		t.Fatalf("managed DNS Hosts predefined = %+v", predefined)
+	}
+	addresses, ok := predefined["api.example.com"].([]string)
+	if !ok || len(addresses) != 2 || addresses[0] != "192.0.2.10" || addresses[1] != "2001:db8::10" {
+		t.Fatalf("managed DNS Hosts addresses = %#v", predefined["api.example.com"])
+	}
+	rules, _ := dns["rules"].([]map[string]interface{})
+	if len(rules) < 3 || rules[0]["server"] != hostsTag || !stringListContains(rules[0]["domain"], "api.example.com") || !stringListContains(rules[0]["query_type"], "A") || !stringListContains(rules[0]["query_type"], "AAAA") {
+		t.Fatalf("DNS Hosts rule is not first: %+v", rules)
+	}
+	if rules[len(rules)-1]["server"] != "fakeip" {
+		t.Fatalf("FakeIP fallback is not last: %+v", rules)
 	}
 }
 

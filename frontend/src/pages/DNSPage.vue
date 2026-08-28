@@ -9,6 +9,7 @@ import DNSRuleFormModal from "./dns/DNSRuleFormModal.vue";
 import DNSServerFormModal from "./dns/DNSServerFormModal.vue";
 import DNSFakeIPCard from "./dns/DNSFakeIPCard.vue";
 import DNSGlobalSettingsCard from "./dns/DNSGlobalSettingsCard.vue";
+import DNSHostsCard from "./dns/DNSHostsCard.vue";
 interface Server {
   id: number;
   tag: string;
@@ -607,6 +608,7 @@ onMounted(load);
           </table>
         </div>
       </section>
+      <DNSHostsCard @notify="show" />
       <section
         class="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
       >

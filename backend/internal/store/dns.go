@@ -220,6 +220,108 @@ func (s *Store) ReorderDNSServers(ids []int64) error {
 	return tx.Commit()
 }
 
+// DNS Hosts
+
+func (s *Store) ListDNSHosts() ([]model.DNSHost, error) {
+	rows, err := s.db.Query(`SELECT id, domain, addresses_json, enabled, comment, created_at, updated_at FROM dns_hosts ORDER BY domain COLLATE NOCASE ASC, id ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]model.DNSHost, 0)
+	for rows.Next() {
+		item, err := scanDNSHost(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, *item)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) GetDNSHost(id int64) (*model.DNSHost, error) {
+	item, err := scanDNSHost(s.db.QueryRow(`SELECT id, domain, addresses_json, enabled, comment, created_at, updated_at FROM dns_hosts WHERE id = ?`, id))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return item, err
+}
+
+func (s *Store) CreateDNSHost(req *model.DNSHostRequest) (*model.DNSHost, error) {
+	addressesJSON, err := json.Marshal(req.Addresses)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UnixMilli()
+	result, err := s.db.Exec(`INSERT INTO dns_hosts (domain, addresses_json, enabled, comment, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		req.Domain, string(addressesJSON), req.Enabled, req.Comment, now, now)
+	if err != nil {
+		return nil, err
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	return s.GetDNSHost(id)
+}
+
+func (s *Store) UpdateDNSHost(id int64, req *model.DNSHostRequest) (*model.DNSHost, error) {
+	addressesJSON, err := json.Marshal(req.Addresses)
+	if err != nil {
+		return nil, err
+	}
+	result, err := s.db.Exec(`UPDATE dns_hosts SET domain = ?, addresses_json = ?, enabled = ?, comment = ?, updated_at = ? WHERE id = ?`,
+		req.Domain, string(addressesJSON), req.Enabled, req.Comment, time.Now().UnixMilli(), id)
+	if err != nil {
+		return nil, err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if updated == 0 {
+		return nil, sql.ErrNoRows
+	}
+	return s.GetDNSHost(id)
+}
+
+func (s *Store) DeleteDNSHost(id int64) error {
+	result, err := s.db.Exec(`DELETE FROM dns_hosts WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if deleted == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+type dnsHostScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanDNSHost(scanner dnsHostScanner) (*model.DNSHost, error) {
+	var item model.DNSHost
+	var addressesJSON string
+	var enabled int
+	if err := scanner.Scan(&item.ID, &item.Domain, &addressesJSON, &enabled, &item.Comment, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal([]byte(addressesJSON), &item.Addresses); err != nil {
+		return nil, fmt.Errorf("decode DNS host %d addresses: %w", item.ID, err)
+	}
+	if item.Addresses == nil {
+		item.Addresses = []string{}
+	}
+	item.Enabled = enabled != 0
+	return &item, nil
+}
+
 // DNS Rules
 
 func (s *Store) ListDNSRules() ([]model.DNSRule, error) {

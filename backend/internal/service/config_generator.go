@@ -32,6 +32,7 @@ var ErrInvalidConfigFileName = errors.New("配置文件名无效")
 
 const (
 	defaultRuleSetHTTPClientTag = "ackwrap-rule-set-direct"
+	managedDNSHostsServerTag    = "ackwrap-hosts"
 	defaultTUNIPv4Address       = "172.31.255.1/30"
 	defaultTUNIPv6Address       = "fdfe:dcba:9875::1/126"
 	defaultAutoRedirectMark     = 0x2024
@@ -2533,6 +2534,27 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase(routeFinal ...string) (
 	if err != nil {
 		return nil, fmt.Errorf("读取 DNS Server 失败: %w", err)
 	}
+	dnsHosts, err := s.store.ListDNSHosts()
+	if err != nil {
+		return nil, fmt.Errorf("读取 DNS Hosts 映射失败: %w", err)
+	}
+	hostDomains := make([]string, 0, len(dnsHosts))
+	hostPredefined := make(map[string]interface{}, len(dnsHosts))
+	for _, host := range dnsHosts {
+		if !host.Enabled {
+			continue
+		}
+		req := &model.DNSHostRequest{Domain: host.Domain, Addresses: host.Addresses, Enabled: true, Comment: host.Comment}
+		if err := normalizeDNSHostRequest(req); err != nil {
+			return nil, fmt.Errorf("DNS Hosts 映射 %d 配置无效: %w", host.ID, err)
+		}
+		hostDomains = append(hostDomains, req.Domain)
+		if len(req.Addresses) == 1 {
+			hostPredefined[req.Domain] = req.Addresses[0]
+		} else {
+			hostPredefined[req.Domain] = req.Addresses
+		}
+	}
 	servers := []map[string]interface{}{}
 	serverTags := enabledDNSServerTags(dnsServers, globalSettings.FakeIPEnabled)
 	fakeIPServerTags := map[string]bool{"fakeip": true}
@@ -2547,6 +2569,11 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase(routeFinal ...string) (
 		generatedBootstrapTag = uniqueDNSServerTag("ackwrap-bootstrap-local", serverTags)
 		bootstrapTag = generatedBootstrapTag
 		serverTags[bootstrapTag] = true
+	}
+	hostsServerTag := ""
+	if len(hostDomains) > 0 {
+		hostsServerTag = uniqueDNSServerTag(managedDNSHostsServerTag, serverTags)
+		serverTags[hostsServerTag] = true
 	}
 	for _, srv := range dnsServers {
 		if !srv.Enabled || srv.ServerType == "fakeip" {
@@ -2610,6 +2637,13 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase(routeFinal ...string) (
 			"type": "local",
 		})
 	}
+	if hostsServerTag != "" {
+		servers = append(servers, map[string]interface{}{
+			"tag":        hostsServerTag,
+			"type":       "hosts",
+			"predefined": hostPredefined,
+		})
+	}
 	// 3. 读取显式 DNS 规则。旧版纯 outbound 策略绑定保留在数据库中，
 	// 但不再参与配置生成，避免每个业务策略复制一套本地 DNS。
 	dnsRules, err := s.store.ListDNSRules()
@@ -2667,6 +2701,13 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase(routeFinal ...string) (
 	// 4. 显式规则用于国内、局域网等真实 IP 例外。TUN 客户端未命中的
 	// A/AAAA 查询随后使用 FakeIP；其他查询进入统一 DNS final。
 	rules := []map[string]interface{}{}
+	if hostsServerTag != "" {
+		rules = append(rules, map[string]interface{}{
+			"domain":     hostDomains,
+			"query_type": []string{"A", "AAAA"},
+			"server":     hostsServerTag,
+		})
+	}
 	for _, rule := range dnsRules {
 		if !rule.Enabled {
 			continue

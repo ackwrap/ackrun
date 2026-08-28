@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -102,6 +103,96 @@ func (h *DNSHandler) ReorderDNSServers(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, model.ActionResponse{Success: true, Message: "DNS servers reordered"})
+}
+
+// DNS Hosts
+
+func (h *DNSHandler) ListDNSHosts(c *gin.Context) {
+	items, err := h.svc.ListDNSHosts()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{Error: model.APIError{Code: "DNS_HOSTS_LIST_FAILED", Message: err.Error()}})
+		return
+	}
+	c.JSON(http.StatusOK, items)
+}
+
+func (h *DNSHandler) GetDNSHost(c *gin.Context) {
+	id, ok := parseDNSHostID(c)
+	if !ok {
+		return
+	}
+	item, err := h.svc.GetDNSHost(id)
+	if err != nil {
+		writeDNSHostError(c, "DNS_HOST_GET_FAILED", err)
+		return
+	}
+	c.JSON(http.StatusOK, item)
+}
+
+func (h *DNSHandler) CreateDNSHost(c *gin.Context) {
+	var req model.DNSHostRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "DNS_HOST_INVALID", Message: err.Error()}})
+		return
+	}
+	item, err := h.svc.CreateDNSHost(&req)
+	if err != nil {
+		writeDNSHostError(c, "DNS_HOST_CREATE_FAILED", err)
+		return
+	}
+	c.JSON(http.StatusCreated, item)
+}
+
+func (h *DNSHandler) UpdateDNSHost(c *gin.Context) {
+	id, ok := parseDNSHostID(c)
+	if !ok {
+		return
+	}
+	var req model.DNSHostRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "DNS_HOST_INVALID", Message: err.Error()}})
+		return
+	}
+	item, err := h.svc.UpdateDNSHost(id, &req)
+	if err != nil {
+		writeDNSHostError(c, "DNS_HOST_UPDATE_FAILED", err)
+		return
+	}
+	c.JSON(http.StatusOK, item)
+}
+
+func (h *DNSHandler) DeleteDNSHost(c *gin.Context) {
+	id, ok := parseDNSHostID(c)
+	if !ok {
+		return
+	}
+	if err := h.svc.DeleteDNSHost(id); err != nil {
+		writeDNSHostError(c, "DNS_HOST_DELETE_FAILED", err)
+		return
+	}
+	c.JSON(http.StatusOK, model.ActionResponse{Success: true, Message: "DNS Hosts mapping deleted"})
+}
+
+func parseDNSHostID(c *gin.Context) (int64, bool) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "ID_INVALID", Message: "invalid id"}})
+		return 0, false
+	}
+	return id, true
+}
+
+func writeDNSHostError(c *gin.Context, fallbackCode string, err error) {
+	status, code := http.StatusInternalServerError, fallbackCode
+	switch {
+	case errors.Is(err, service.ErrDNSHostInvalid):
+		status, code = http.StatusBadRequest, "DNS_HOST_INVALID"
+	case errors.Is(err, service.ErrDNSHostNotFound):
+		status, code = http.StatusNotFound, "DNS_HOST_NOT_FOUND"
+	case errors.Is(err, service.ErrDNSHostDomainConflict):
+		status, code = http.StatusConflict, "DNS_HOST_DOMAIN_CONFLICT"
+	}
+	c.JSON(status, model.ErrorResponse{Error: model.APIError{Code: code, Message: err.Error()}})
 }
 
 // DNS Rules

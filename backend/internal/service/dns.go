@@ -1,9 +1,13 @@
 package service
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
+	"net/netip"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/ackwrap/ackrun/internal/logging"
 	"github.com/ackwrap/ackrun/internal/model"
@@ -17,6 +21,12 @@ type DNSService struct {
 	readCoreVersion func() string
 	cacheMu         sync.Mutex
 }
+
+var (
+	ErrDNSHostNotFound       = errors.New("DNS Hosts 映射不存在")
+	ErrDNSHostDomainConflict = errors.New("DNS Hosts 域名已存在")
+	ErrDNSHostInvalid        = errors.New("DNS Hosts 配置无效")
+)
 
 func NewDNSService(s *store.Store, p *paths.Paths) *DNSService {
 	return &DNSService{store: s, paths: p}
@@ -144,6 +154,118 @@ func (svc *DNSService) ReorderDNSServers(ids []int64) error {
 	defer releaseConfigUpdate()
 	logging.Info("dns.server.reorder", "调整 %d 个 DNS Server 的顺序", len(ids))
 	return svc.store.ReorderDNSServers(ids)
+}
+
+// DNS Hosts
+
+func (svc *DNSService) ListDNSHosts() ([]model.DNSHost, error) {
+	logging.Info("dns.host.list", "listing DNS Hosts mappings")
+	return svc.store.ListDNSHosts()
+}
+
+func (svc *DNSService) GetDNSHost(id int64) (*model.DNSHost, error) {
+	item, err := svc.store.GetDNSHost(id)
+	if err != nil {
+		return nil, err
+	}
+	if item == nil {
+		return nil, ErrDNSHostNotFound
+	}
+	return item, nil
+}
+
+func (svc *DNSService) CreateDNSHost(req *model.DNSHostRequest) (*model.DNSHost, error) {
+	if err := normalizeDNSHostRequest(req); err != nil {
+		return nil, err
+	}
+	releaseConfigUpdate := svc.store.HoldConfigUpdate()
+	defer releaseConfigUpdate()
+	logging.Info("dns.host.create", "creating DNS Hosts mapping")
+	item, err := svc.store.CreateDNSHost(req)
+	return item, normalizeDNSHostStoreError(err)
+}
+
+func (svc *DNSService) UpdateDNSHost(id int64, req *model.DNSHostRequest) (*model.DNSHost, error) {
+	if err := normalizeDNSHostRequest(req); err != nil {
+		return nil, err
+	}
+	releaseConfigUpdate := svc.store.HoldConfigUpdate()
+	defer releaseConfigUpdate()
+	logging.Info("dns.host.update", "updating DNS Hosts mapping: %d", id)
+	item, err := svc.store.UpdateDNSHost(id, req)
+	return item, normalizeDNSHostStoreError(err)
+}
+
+func (svc *DNSService) DeleteDNSHost(id int64) error {
+	releaseConfigUpdate := svc.store.HoldConfigUpdate()
+	defer releaseConfigUpdate()
+	logging.Info("dns.host.delete", "deleting DNS Hosts mapping: %d", id)
+	return normalizeDNSHostStoreError(svc.store.DeleteDNSHost(id))
+}
+
+func normalizeDNSHostRequest(req *model.DNSHostRequest) error {
+	if req == nil {
+		return fmt.Errorf("%w: 请求不能为空", ErrDNSHostInvalid)
+	}
+	domain := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(req.Domain)), ".")
+	if !validDNSHostDomain(domain) {
+		return fmt.Errorf("%w: 域名无效，仅支持精确域名或 punycode 域名", ErrDNSHostInvalid)
+	}
+	if len(req.Addresses) == 0 || len(req.Addresses) > 16 {
+		return fmt.Errorf("%w: 地址数量必须在 1 到 16 之间", ErrDNSHostInvalid)
+	}
+	addresses := make([]string, 0, len(req.Addresses))
+	seen := make(map[netip.Addr]bool, len(req.Addresses))
+	for _, value := range req.Addresses {
+		address, err := netip.ParseAddr(strings.TrimSpace(value))
+		if err != nil || address.Zone() != "" {
+			return fmt.Errorf("%w: 地址 %q 不是有效的 IPv4 或 IPv6", ErrDNSHostInvalid, strings.TrimSpace(value))
+		}
+		address = address.Unmap()
+		if !seen[address] {
+			seen[address] = true
+			addresses = append(addresses, address.String())
+		}
+	}
+	comment := strings.TrimSpace(req.Comment)
+	if utf8.RuneCountInString(comment) > 200 {
+		return fmt.Errorf("%w: 备注不能超过 200 个字符", ErrDNSHostInvalid)
+	}
+	req.Domain = domain
+	req.Addresses = addresses
+	req.Comment = comment
+	return nil
+}
+
+func validDNSHostDomain(domain string) bool {
+	if len(domain) == 0 || len(domain) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(domain, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, char := range label {
+			if (char < 'a' || char > 'z') && (char < '0' || char > '9') && char != '-' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func normalizeDNSHostStoreError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrDNSHostNotFound
+	}
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "unique constraint") && strings.Contains(message, "dns_hosts.domain") {
+		return ErrDNSHostDomainConflict
+	}
+	return err
 }
 
 // DNS Rules
