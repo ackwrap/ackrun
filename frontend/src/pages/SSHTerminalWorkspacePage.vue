@@ -189,7 +189,7 @@ onBeforeUnmount(() => {
 
 <template>
   <main
-    class="flex h-screen min-h-[520px] flex-col overflow-hidden bg-[var(--bg-base)] text-[var(--text-primary)]"
+    class="flex h-dvh min-h-[520px] flex-col overflow-hidden bg-[var(--bg-base)] text-[var(--text-primary)]"
   >
     <header
       class="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--border-default)] bg-[var(--header-bg)] px-3 sm:px-4"
@@ -257,7 +257,7 @@ onBeforeUnmount(() => {
 
     <section
       v-if="session"
-      class="flex min-h-0 flex-1 flex-col"
+      class="flex min-h-0 flex-1 flex-col overflow-hidden"
     >
       <div
         class="ssh-workspace min-h-0 flex-1"
@@ -272,6 +272,7 @@ onBeforeUnmount(() => {
           <PanelLeft :size="12" />
         </div>
         <SSHTerminalPane
+          class="pb-4"
           :session="session"
           @status="updateTerminalStatus"
           @closed="terminalStatus = 'offline'"
