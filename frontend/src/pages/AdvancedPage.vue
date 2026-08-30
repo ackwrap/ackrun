@@ -3,6 +3,7 @@ import { computed } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
   Activity,
+  BellRing,
   KeyRound,
   Route,
   ScrollText,
@@ -16,6 +17,7 @@ import SessionLeasesPage from "./advanced/SessionLeasesPage.vue";
 import HealthSchedulingPage from "./advanced/HealthSchedulingPage.vue";
 import AccessLogsPage from "./advanced/AccessLogsPage.vue";
 import AdvancedSettingsPage from "./advanced/AdvancedSettingsPage.vue";
+import AlertNotificationsPage from "./advanced/AlertNotificationsPage.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -46,6 +48,12 @@ const modules = [
     component: HealthSchedulingPage,
   },
   {
+	  id: "alerts",
+	  label: "告警通知",
+	  icon: BellRing,
+	  component: AlertNotificationsPage,
+	},
+	{
     id: "access-logs",
     label: "访问审计",
     icon: ScrollText,
@@ -76,8 +84,8 @@ function selectView(view: string) {
 <template>
   <div class="space-y-5">
     <PageHeader
-      title="路由与调度"
-      description="集中管理高级流量入口、平台路由、会话绑定、健康状态和访问决策。"
+      title="高级功能"
+      description="集中管理高级流量入口、平台路由、健康调度、告警通知和访问决策。"
     />
 
     <div

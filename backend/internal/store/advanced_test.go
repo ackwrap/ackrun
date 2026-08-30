@@ -53,7 +53,8 @@ func TestAdvancedMigrationsAreIdempotent(t *testing.T) {
 	defer store.Close()
 	for _, table := range []string{
 		"platform_routes", "session_leases", "advanced_health_states",
-		"advanced_health_events", "advanced_access_logs",
+		"advanced_health_events", "advanced_access_logs", "alert_channels",
+		"alert_rules", "alert_rule_channels", "alert_rule_cooldowns", "alert_deliveries",
 	} {
 		var count int
 		if err := store.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&count); err != nil {

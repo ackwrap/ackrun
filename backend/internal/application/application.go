@@ -36,6 +36,7 @@ type Application struct {
 	routeRule              *service.RouteRuleService
 	proxyCollection        *service.ProxyCollectionService
 	advanced               *service.AdvancedRoutingService
+	alert                  *service.AlertService
 	sshHost                *service.SSHHostService
 	stopToolLogEvents      func()
 	toolLogEventsCompleted chan struct{}
@@ -77,8 +78,16 @@ func New(options Options) (*Application, error) {
 
 	coreLogSvc := service.NewCoreLogService()
 	singboxSvc := service.NewSingboxService(options.Paths, realtimeSvc, coreLogSvc, db)
+	alertSvc, err := service.NewAlertService(db, options.Paths)
+	if err != nil {
+		stopToolLogEvents()
+		<-toolLogEventsCompleted
+		_ = db.Close()
+		return nil, fmt.Errorf("initialize alert service: %w", err)
+	}
 	sshHostSvc, err := service.NewSSHHostService(db, options.Paths, singboxSvc)
 	if err != nil {
+		alertSvc.Close()
 		stopToolLogEvents()
 		<-toolLogEventsCompleted
 		_ = db.Close()
@@ -147,6 +156,8 @@ func New(options Options) (*Application, error) {
 	nodeExposureRuntime := service.NewNodeExposureRuntimeClient(coreAPIToken)
 	nodeExposureSvc.SetRuntimeDependencies(nodeExposureRuntime, singboxSvc)
 	advancedSvc := service.NewAdvancedRoutingService(db, nodeExposureRuntime, singboxSvc, realtimeSvc, coreAPIToken)
+	advancedSvc.SetAlertService(alertSvc)
+	subscriptionSvc.SetAlertService(alertSvc)
 	singboxSvc.SetStartHooks(configGenSvc.EnsureRuntimeAPIConfig, combineStartHooks(nodeExposureSvc.SyncRuntime, advancedSvc.SyncRuntime))
 	settingsSvc.SetModeDependencies(singboxSvc, configGenSvc)
 	settingsSvc.SetConnectivitySettingsHook(proxyCollectionSvc.RefreshHealthCheckJobs)
@@ -164,9 +175,10 @@ func New(options Options) (*Application, error) {
 		gin.RecoveryWithWriter(accessTokenRedactingWriter{Writer: gin.DefaultErrorWriter}),
 	)
 	router.Use(api.SecurityMiddleware(options.APIToken))
-	api.RegisterRoutes(router, runtimeSvc, installerSvc, singboxSvc, configSvc, settingsSvc, subscriptionSvc, nodeSvc, nodeExposureSvc, routeRuleSvc, proxyCollectionSvc, configGenSvc, realtimeSvc, coreLogSvc, dnsSvc, nodeGroupSvc, reconcileSvc, coreRestartSvc, appUpdateSvc, dashboardSvc, advancedSvc, sshHostSvc)
+	api.RegisterRoutes(router, runtimeSvc, installerSvc, singboxSvc, configSvc, settingsSvc, subscriptionSvc, nodeSvc, nodeExposureSvc, routeRuleSvc, proxyCollectionSvc, configGenSvc, realtimeSvc, coreLogSvc, dnsSvc, nodeGroupSvc, reconcileSvc, coreRestartSvc, appUpdateSvc, dashboardSvc, advancedSvc, alertSvc, sshHostSvc)
 	if err := registerWebUI(router); err != nil {
 		reconcileSvc.Close()
+		alertSvc.Close()
 		stopToolLogEvents()
 		<-toolLogEventsCompleted
 		_ = db.Close()
@@ -185,6 +197,7 @@ func New(options Options) (*Application, error) {
 		routeRule:              routeRuleSvc,
 		proxyCollection:        proxyCollectionSvc,
 		advanced:               advancedSvc,
+		alert:                  alertSvc,
 		sshHost:                sshHostSvc,
 		stopToolLogEvents:      stopToolLogEvents,
 		toolLogEventsCompleted: toolLogEventsCompleted,
@@ -274,6 +287,7 @@ func (app *Application) PrepareShutdown() {
 		app.subscription.StopScheduler()
 		app.started = false
 	}
+	app.alert.Close()
 	if app.singbox.IsRunning() {
 		if _, err := app.singbox.Shutdown(); err != nil {
 			logging.Error("application.shutdown", "stop sing-box during shutdown: %v", err)

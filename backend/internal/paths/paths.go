@@ -190,3 +190,7 @@ func (p *Paths) CoreAPITokenPath() string {
 func (p *Paths) SSHSecretKeyPath() string {
 	return filepath.Join(p.DataDir, ".ssh-secrets-key")
 }
+
+func (p *Paths) AlertSecretKeyPath() string {
+	return filepath.Join(p.DataDir, ".alert-secrets-key")
+}

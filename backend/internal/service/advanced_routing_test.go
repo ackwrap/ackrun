@@ -2,6 +2,8 @@ package service
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -9,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ackwrap/ackrun/internal/model"
+	"github.com/ackwrap/ackrun/internal/paths"
 	"github.com/ackwrap/ackrun/internal/store"
 )
 
@@ -389,6 +392,64 @@ func TestAdvancedHealthThresholdAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertAdvancedHealthStatus(t, data.store, model.AdvancedHealthHealthy)
+}
+
+func TestAdvancedHealthTransitionsDispatchAlerts(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	data := newAdvancedTestData(t)
+	alerts, err := NewAlertService(data.store, &paths.Paths{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(alerts.Close)
+	channel := createWebhookAlertChannel(t, alerts, server.URL)
+	if _, err := alerts.CreateRule(model.AlertRuleRequest{
+		Name: "Health transitions", Enabled: true,
+		EventTypes: []string{model.AlertEventCircuitOpen, model.AlertEventRecovered},
+		ChannelIDs: []int64{channel.ID}, CooldownMinutes: 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	data.service.SetAlertService(alerts)
+	if _, err := data.service.CreatePlatformRoute(model.PlatformRoute{
+		Name: "Alert health route", Platform: "health", Enabled: true,
+		TargetType: model.AdvancedTargetNode, TargetSubscriptionID: int64TestPointer(data.subscription),
+		TargetNodeUID: stringTestPointer(data.nodeUID), FallbackType: model.AdvancedTargetDirect,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	settings := store.DefaultAdvancedSettings()
+	settings.RoutingEnabled, settings.HealthEnabled = true, true
+	settings.FailureThreshold, settings.RecoveryThreshold, settings.CircuitOpenSeconds = 1, 1, 1
+	if err := data.store.SetAdvancedSettings(&settings); err != nil {
+		t.Fatal(err)
+	}
+	current := time.Date(2026, time.August, 30, 12, 0, 0, 0, time.UTC)
+	data.service.now = func() time.Time { return current }
+	alerts.now = func() time.Time { return current }
+	data.core.running = true
+	probeCount := 0
+	data.service.probe = func(advancedResolvedTarget, time.Duration) (int, error) {
+		probeCount++
+		if probeCount == 1 {
+			return 0, errors.New("probe unavailable")
+		}
+		return 20, nil
+	}
+	if err := data.service.runHealth(); err != nil {
+		t.Fatal(err)
+	}
+	current = current.Add(2 * time.Second)
+	if err := data.service.runHealth(); err != nil {
+		t.Fatal(err)
+	}
+	deliveries := waitForAlertDeliveryCount(t, alerts, 2)
+	if deliveries[0].EventType != model.AlertEventRecovered || deliveries[1].EventType != model.AlertEventCircuitOpen {
+		t.Fatalf("health alert deliveries = %+v", deliveries)
+	}
 }
 
 func TestAdvancedHealthRuntimeFailureDoesNotPersistTransition(t *testing.T) {

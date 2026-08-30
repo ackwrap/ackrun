@@ -156,6 +156,95 @@ export interface AdvancedActionResponse {
   message: string;
 }
 
+export type AlertChannelType = "webhook" | "telegram" | "email";
+export type AlertEventType =
+  | "circuit_open"
+  | "recovered"
+  | "subscription_failed";
+
+export interface AlertChannelConfig {
+  webhook_allow_private?: boolean;
+  telegram_chat_id?: string;
+  smtp_host?: string;
+  smtp_port?: number;
+  smtp_username?: string;
+  smtp_from?: string;
+  smtp_recipients?: string[];
+  smtp_tls_mode?: "starttls" | "tls" | "none";
+}
+
+export interface AlertChannel {
+  id: number;
+  name: string;
+  type: AlertChannelType;
+  enabled: boolean;
+  config: AlertChannelConfig;
+  destination: string;
+  has_secret: boolean;
+  last_status: "never" | "success" | "failed" | string;
+  last_error: string;
+  last_delivered_at: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface AlertChannelRequest {
+  name: string;
+  type: AlertChannelType;
+  enabled: boolean;
+  config: AlertChannelConfig;
+  secret?: string;
+}
+
+export interface AlertRule {
+  id: number;
+  name: string;
+  enabled: boolean;
+  event_types: AlertEventType[];
+  channel_ids: number[];
+  cooldown_minutes: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface AlertRuleRequest {
+  name: string;
+  enabled: boolean;
+  event_types: AlertEventType[];
+  channel_ids: number[];
+  cooldown_minutes: number;
+}
+
+export interface AlertDelivery {
+  id: number;
+  rule_id?: number;
+  channel_id?: number;
+  channel_name: string;
+  channel_type: AlertChannelType;
+  event_type: AlertEventType | "test" | string;
+  event_title: string;
+  success: boolean;
+  status_code: number;
+  error: string;
+  is_test: boolean;
+  delivered_at: number;
+}
+
+export interface AlertDeliveryParams {
+  page?: number;
+  page_size?: number;
+  channel_id?: number;
+  event_type?: string;
+  status?: "success" | "failed" | "";
+}
+
+export interface AlertDeliveryPage {
+  items: AlertDelivery[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
 export type NodeExposureInboundType = "http" | "socks" | "mixed";
 
 export interface NodeExposure {

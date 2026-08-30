@@ -271,6 +271,24 @@ func (svc *AdvancedRoutingService) runHealth() error {
 	if err := svc.applyHealthResults(updatedStates, healthEvents, runtimeChanged); err != nil {
 		return err
 	}
+	if svc.alerts != nil {
+		for _, event := range healthEvents {
+			switch event.EventType {
+			case model.AdvancedHealthEventCircuitOpen:
+				svc.alerts.Notify(model.AlertEvent{
+					Type: model.AlertEventCircuitOpen, TargetKey: event.TargetKey, SourceName: event.DisplayName,
+					Title: "[Ackwrap] 出口熔断", Message: "目标「" + event.DisplayName + "」已进入熔断状态。" + event.Message,
+					OccurredAt: event.CreatedAt,
+				})
+			case model.AdvancedHealthEventRecovered:
+				svc.alerts.Notify(model.AlertEvent{
+					Type: model.AlertEventRecovered, TargetKey: event.TargetKey, SourceName: event.DisplayName,
+					Title: "[Ackwrap] 出口恢复", Message: "目标「" + event.DisplayName + "」已恢复可用。" + event.Message,
+					OccurredAt: event.CreatedAt,
+				})
+			}
+		}
+	}
 	_, _ = svc.store.PruneAdvancedHealthEvents(1000)
 	logging.Info("advanced.health.run", "高级健康检查完成: targets=%d", len(targets))
 	return nil

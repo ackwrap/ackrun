@@ -29,6 +29,7 @@ func RegisterRoutes(
 	appUpdateSvc *service.AppUpdateService,
 	dashboardSvc *service.DashboardService,
 	advancedSvc *service.AdvancedRoutingService,
+	alertSvc *service.AlertService,
 	sshHostSvc *service.SSHHostService,
 ) {
 	runtimeH := handler.NewRuntimeHandler(runtimeSvc)
@@ -50,6 +51,7 @@ func RegisterRoutes(
 	appUpdateH := handler.NewAppUpdateHandler(appUpdateSvc)
 	dashboardH := handler.NewDashboardHandler(dashboardSvc)
 	advancedH := handler.NewAdvancedHandler(advancedSvc)
+	alertH := handler.NewAlertHandler(alertSvc)
 	sshHostH := handler.NewSSHHostHandler(sshHostSvc)
 
 	clashProxyH := handler.NewClashProxyHandler(settingsSvc)
@@ -158,7 +160,7 @@ func RegisterRoutes(
 		v1.PUT("/nodes/:uid/enabled", nodeH.SetEnabled)
 		v1.PUT("/nodes/:uid/preferred", nodeH.SetPreferred)
 
-		registerAdvancedRoutes(v1, nodeExposureH, advancedH)
+		registerAdvancedRoutes(v1, nodeExposureH, advancedH, alertH)
 		registerSSHHostRoutes(v1, sshHostH)
 
 		v1.GET("/collections", proxyCollectionH.List)
@@ -241,7 +243,7 @@ func RegisterRoutes(
 	}
 }
 
-func registerAdvancedRoutes(group *gin.RouterGroup, nodeExposureH *handler.NodeExposureHandler, handler *handler.AdvancedHandler) {
+func registerAdvancedRoutes(group *gin.RouterGroup, nodeExposureH *handler.NodeExposureHandler, handler *handler.AdvancedHandler, alerts ...*handler.AlertHandler) {
 	group.GET("/advanced/node-exposures", nodeExposureH.List)
 	group.POST("/advanced/node-exposures", nodeExposureH.Create)
 	group.PUT("/advanced/node-exposures/:id", nodeExposureH.Update)
@@ -262,6 +264,21 @@ func registerAdvancedRoutes(group *gin.RouterGroup, nodeExposureH *handler.NodeE
 	group.DELETE("/advanced/access-logs", handler.ClearAccessLogs)
 	group.GET("/advanced/settings", handler.GetSettings)
 	group.PUT("/advanced/settings", handler.UpdateSettings)
+	if len(alerts) == 0 || alerts[0] == nil {
+		return
+	}
+	alert := alerts[0]
+	group.GET("/advanced/alerts/channels", alert.ListChannels)
+	group.POST("/advanced/alerts/channels", alert.CreateChannel)
+	group.PUT("/advanced/alerts/channels/:id", alert.UpdateChannel)
+	group.DELETE("/advanced/alerts/channels/:id", alert.DeleteChannel)
+	group.POST("/advanced/alerts/channels/:id/test", alert.TestChannel)
+	group.GET("/advanced/alerts/rules", alert.ListRules)
+	group.POST("/advanced/alerts/rules", alert.CreateRule)
+	group.PUT("/advanced/alerts/rules/:id", alert.UpdateRule)
+	group.DELETE("/advanced/alerts/rules/:id", alert.DeleteRule)
+	group.GET("/advanced/alerts/deliveries", alert.ListDeliveries)
+	group.DELETE("/advanced/alerts/deliveries", alert.ClearDeliveries)
 }
 
 func registerSSHHostRoutes(group *gin.RouterGroup, sshHostH *handler.SSHHostHandler) {

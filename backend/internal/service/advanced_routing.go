@@ -64,6 +64,11 @@ type AdvancedRoutingService struct {
 	lastCleanup  time.Time
 	probe        func(target advancedResolvedTarget, timeout time.Duration) (int, error)
 	healthClient *http.Client
+	alerts       *AlertService
+}
+
+func (svc *AdvancedRoutingService) SetAlertService(alerts *AlertService) {
+	svc.alerts = alerts
 }
 
 type advancedResolvedTarget struct {

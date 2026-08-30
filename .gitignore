@@ -49,6 +49,7 @@ Thumbs.db
 *.tmp
 **/core-api-token
 **/.ssh-secrets-key
+**/.alert-secrets-key
 **/config/*.json
 **/config/**/*.json
 /tmp/

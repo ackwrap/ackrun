@@ -16,24 +16,30 @@ const sshSecretKeySize = 32
 
 var ErrSSHSecretKeyUnavailable = errors.New("SSH secret key is unavailable")
 
-type sshSecretCipher struct {
+type secretCipher struct {
 	aead cipher.AEAD
 }
 
+type sshSecretCipher = secretCipher
+
 func loadOrCreateSSHSecretCipher(p *paths.Paths, allowCreate bool) (*sshSecretCipher, error) {
-	key, err := loadOrCreateSecretKey(p.SSHSecretKeyPath(), allowCreate)
+	return loadOrCreateSecretCipher(p.SSHSecretKeyPath(), allowCreate, ErrSSHSecretKeyUnavailable)
+}
+
+func loadOrCreateSecretCipher(path string, allowCreate bool, unavailable error) (*secretCipher, error) {
+	key, err := loadOrCreateSecretKey(path, allowCreate)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrSSHSecretKeyUnavailable, err)
+		return nil, fmt.Errorf("%w: %v", unavailable, err)
 	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, fmt.Errorf("%w: initialize cipher", ErrSSHSecretKeyUnavailable)
+		return nil, fmt.Errorf("%w: initialize cipher", unavailable)
 	}
 	aead, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, fmt.Errorf("%w: initialize AEAD", ErrSSHSecretKeyUnavailable)
+		return nil, fmt.Errorf("%w: initialize AEAD", unavailable)
 	}
-	return &sshSecretCipher{aead: aead}, nil
+	return &secretCipher{aead: aead}, nil
 }
 
 func loadOrCreateSecretKey(path string, allowCreate bool) ([]byte, error) {
@@ -81,7 +87,7 @@ func loadOrCreateSecretKey(path string, allowCreate bool) ([]byte, error) {
 	return key, nil
 }
 
-func (c *sshSecretCipher) encrypt(context, field string, plaintext []byte) ([]byte, []byte, error) {
+func (c *secretCipher) encrypt(context, field string, plaintext []byte) ([]byte, []byte, error) {
 	nonce := make([]byte, c.aead.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return nil, nil, err
@@ -90,10 +96,10 @@ func (c *sshSecretCipher) encrypt(context, field string, plaintext []byte) ([]by
 	return sealed, nonce, nil
 }
 
-func (c *sshSecretCipher) decrypt(context, field string, ciphertext, nonce []byte) ([]byte, error) {
+func (c *secretCipher) decrypt(context, field string, ciphertext, nonce []byte) ([]byte, error) {
 	plaintext, err := c.aead.Open(nil, nonce, ciphertext, []byte(context+":"+field+":1"))
 	if err != nil {
-		return nil, errors.New("decrypt SSH credential failed")
+		return nil, errors.New("decrypt credential failed")
 	}
 	return plaintext, nil
 }

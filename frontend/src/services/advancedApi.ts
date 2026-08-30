@@ -5,6 +5,13 @@ import type {
   AdvancedActionResponse,
   AdvancedHealthResponse,
   AdvancedSettings,
+  AlertChannel,
+  AlertChannelRequest,
+  AlertDelivery,
+  AlertDeliveryPage,
+  AlertDeliveryParams,
+  AlertRule,
+  AlertRuleRequest,
   NodeExposure,
   NodeExposureRequest,
   PlatformRoute,
@@ -107,5 +114,51 @@ export const advancedApi = {
     request<AdvancedSettings>("/advanced/settings", {
       method: "PUT",
       body: JSON.stringify(body),
+    }),
+
+  getAlertChannels: () =>
+    request<AlertChannel[]>("/advanced/alerts/channels"),
+  createAlertChannel: (body: AlertChannelRequest) =>
+    request<AlertChannel>("/advanced/alerts/channels", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  updateAlertChannel: (id: number, body: AlertChannelRequest) =>
+    request<AlertChannel>(`/advanced/alerts/channels/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  deleteAlertChannel: (id: number) =>
+    request<AdvancedActionResponse>(`/advanced/alerts/channels/${id}`, {
+      method: "DELETE",
+    }),
+  testAlertChannel: (id: number) =>
+    request<AlertDelivery>(`/advanced/alerts/channels/${id}/test`, {
+      method: "POST",
+    }),
+
+  getAlertRules: () => request<AlertRule[]>("/advanced/alerts/rules"),
+  createAlertRule: (body: AlertRuleRequest) =>
+    request<AlertRule>("/advanced/alerts/rules", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  updateAlertRule: (id: number, body: AlertRuleRequest) =>
+    request<AlertRule>(`/advanced/alerts/rules/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  deleteAlertRule: (id: number) =>
+    request<AdvancedActionResponse>(`/advanced/alerts/rules/${id}`, {
+      method: "DELETE",
+    }),
+
+  getAlertDeliveries: (params: AlertDeliveryParams) =>
+    request<AlertDeliveryPage>(
+      `/advanced/alerts/deliveries${queryString(params)}`,
+    ),
+  clearAlertDeliveries: () =>
+    request<AdvancedActionResponse>("/advanced/alerts/deliveries", {
+      method: "DELETE",
     }),
 };
