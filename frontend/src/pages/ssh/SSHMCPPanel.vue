@@ -277,8 +277,8 @@ onMounted(load);
           <div>
             <p class="font-medium">文件操作</p>
             <p class="mt-1 text-xs leading-6 text-[var(--text-secondary)]">
-              大文件通过 HTTP 与 SFTP 流式上传下载，也可从 URL
-              直接上传，不设文件大小上限。内联文本读写上限 1 MiB。
+              大文件通过 HTTP 与 SFTP 流式上传下载，也可从公网 URL
+              直接上传；私网和本机地址会被拒绝。内联文本读写上限 1 MiB。
             </p>
           </div>
         </div>

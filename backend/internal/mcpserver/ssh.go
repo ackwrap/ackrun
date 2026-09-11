@@ -84,7 +84,7 @@ func NewSSHServer(svc *service.SSHHostService) *mcp.Server {
 		err := svc.WriteMCPFile(ctx, input, false)
 		return map[string]any{"success": err == nil}, err
 	})
-	addTool(server, "ssh_upload", "流式上传大文件，无总大小限制。提供 source_url 可直接下载并传到 SSH 主机；省略则返回 HTTP PUT 地址，由客户端以原始字节上传本地文件，需使用同一个 MCP Bearer Token。ready 仅表示上传准备就绪。覆盖需 overwrite=true，可传 sha256 校验。content 仅兼容小文件 Base64。", func(ctx context.Context, input model.SSHMCPUploadRequest) (any, error) {
+	addTool(server, "ssh_upload", "流式上传大文件，无总大小限制。提供解析到公网 IP 的 HTTP(S) source_url 可直接下载并传到 SSH 主机；私网、本机、链路本地、运营商级 NAT、未指定及组播地址会被拒绝。省略则返回 HTTP PUT 地址，由客户端以原始字节上传本地文件，需使用同一个 MCP Bearer Token。ready 仅表示上传准备就绪。覆盖需 overwrite=true，可传 sha256 校验。content 仅兼容小文件 Base64。", func(ctx context.Context, input model.SSHMCPUploadRequest) (any, error) {
 		return svc.UploadMCP(ctx, input)
 	})
 	addTool(server, "ssh_download", "返回大文件流式 HTTP GET 地址，无总大小限制；客户端需使用同一个 MCP Bearer Token 将响应保存到本地。ready 不表示已下载。仅小文件可用 inline=true 返回 Base64（最大 1 MiB）。", func(ctx context.Context, input model.SSHMCPDownloadRequest) (any, error) {

@@ -79,7 +79,7 @@ Command timeout defaults to 30 seconds (maximum 600), with stdout and stderr eac
 
 Large files stream between HTTP and SFTP with no total file-size cap, a bounded copy buffer, and no intermediate file on Ackwrap. Transfers have a one-hour timeout and share SSH session limits; disk space and client timeouts still apply. The 2 MiB MCP JSON request limit applies to control messages only. UTF-8 `ssh_read_file` / `ssh_write_file` and legacy inline Base64 remain limited to 1 MiB.
 
-- `ssh_upload` with `host_id`, remote `path`, and `source_url` downloads an HTTP(S) source directly into SFTP. The MCP token is never forwarded to that source. Optional `sha256` verifies the completed upload.
+- `ssh_upload` with `host_id`, remote `path`, and `source_url` downloads a public HTTP(S) source directly into SFTP. Loopback, private, link-local, carrier-grade NAT, unspecified, and multicast destinations are rejected after DNS resolution and on every redirect. The MCP token is never forwarded to that source. Optional `sha256` verifies the completed upload.
 - For a file on the AI client's computer, call `ssh_upload` with `host_id` and `path` to obtain `method`, `endpoint_path`, and headers, then stream the file using a local HTTP/file tool. A `status: ready` result means no bytes have been transferred yet. Ackwrap cannot open a Windows/local path on the client's computer.
 - `ssh_download` returns the corresponding HTTP GET descriptor. Save that response with a local HTTP/file tool. `inline: true` retains the small-file Base64 response; upload's legacy `content` accepts small Base64 files only.
 

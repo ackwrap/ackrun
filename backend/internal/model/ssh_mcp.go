@@ -48,7 +48,7 @@ type SSHMCPTransferRequest struct {
 
 type SSHMCPUploadRequest struct {
 	SSHMCPTransferRequest
-	SourceURL string  `json:"source_url,omitempty" jsonschema:"HTTP(S) download URL to stream directly to the SSH host; omit to obtain a binary HTTP PUT endpoint for a file on the client's computer"`
+	SourceURL string  `json:"source_url,omitempty" jsonschema:"Public HTTP(S) download URL to stream directly to the SSH host; private, loopback, link-local, carrier-grade NAT, unspecified, and multicast addresses are rejected; omit to obtain a binary HTTP PUT endpoint for a file on the client's computer"`
 	Content   *string `json:"content,omitempty" jsonschema:"Legacy inline base64 for small files only; use source_url or the returned HTTP endpoint for deployment packages"`
 }
 

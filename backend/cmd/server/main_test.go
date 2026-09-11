@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"net"
 	"net/http"
 	"strings"
 	"testing"
@@ -56,15 +55,9 @@ func TestLoadServerConfigRejectsInvalidAddress(t *testing.T) {
 }
 
 func TestStartHTTPServerAndCoreSkipsCoreWhenListenFails(t *testing.T) {
-	occupied, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer occupied.Close()
-
 	restored := false
 	started := false
-	server := &http.Server{Addr: occupied.Addr().String(), Handler: http.NewServeMux()}
+	server := &http.Server{Addr: "127.0.0.1", Handler: http.NewServeMux()}
 	if _, err := startHTTPServerAndCore(server, func() { restored = true }, func() error {
 		started = true
 		return nil

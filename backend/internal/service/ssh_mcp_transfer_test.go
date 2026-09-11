@@ -7,11 +7,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -165,8 +168,8 @@ func TestSSHMCPTransferSourceURLAndPublish(t *testing.T) {
 	}))
 	defer source.Close()
 	request := model.SSHMCPUploadRequest{SSHMCPTransferRequest: model.SSHMCPTransferRequest{HostID: hostID, Path: "url.bin", SHA256: hex.EncodeToString(hash[:])}, SourceURL: source.URL + "/redirect"}
-	result, err := svc.UploadMCP(context.Background(), request)
-	if err != nil || !result.(*model.SSHMCPTransferResult).Success {
+	result, err := svc.uploadMCPFromURL(context.Background(), request.SSHMCPTransferRequest, request.SourceURL, source.Client())
+	if err != nil || !result.Success {
 		t.Fatalf("URL upload: %v", err)
 	}
 	actual, err := os.ReadFile(filepath.Join(root, "url.bin"))
@@ -174,18 +177,22 @@ func TestSSHMCPTransferSourceURLAndPublish(t *testing.T) {
 		t.Fatalf("URL contents: %v", err)
 	}
 	request.Overwrite = true
-	if _, err := svc.UploadMCP(context.Background(), request); err != nil {
+	if _, err := svc.uploadMCPFromURL(context.Background(), request.SSHMCPTransferRequest, request.SourceURL, source.Client()); err != nil {
 		t.Fatalf("overwrite: %v", err)
 	}
-	for _, sourceURL := range []string{"file:///file", "http://user:password@127.0.0.1/file", source.URL + "/missing"} {
+	for _, sourceURL := range []string{"file:///file", "http://user:password@127.0.0.1/file", source.URL + "/file"} {
 		request.SourceURL = sourceURL
-		if _, err := svc.UploadMCP(context.Background(), request); err == nil {
-			t.Fatal("invalid/failed source was accepted")
+		if _, err := svc.UploadMCP(context.Background(), request); sshServiceCode(err) != "SSH_MCP_INVALID" {
+			t.Fatalf("invalid/private source result = %v", err)
 		}
 	}
+	request.SourceURL = source.URL + "/missing"
+	if _, err := svc.uploadMCPFromURL(context.Background(), request.SSHMCPTransferRequest, request.SourceURL, source.Client()); sshServiceCode(err) != "SSH_MCP_SOURCE_FAILED" {
+		t.Fatalf("failed source result = %v", err)
+	}
 	request.SourceURL = ""
-	result, err = svc.UploadMCP(context.Background(), request)
-	if err != nil || result.(map[string]any)["status"] != "ready" {
+	prepared, err := svc.UploadMCP(context.Background(), request)
+	if err != nil || prepared.(map[string]any)["status"] != "ready" {
 		t.Fatalf("prepare: %v", err)
 	}
 
@@ -208,5 +215,74 @@ func TestSSHMCPTransferSourceURLAndPublish(t *testing.T) {
 	actual, _ = os.ReadFile(filepath.Join(root, "race.bin"))
 	if string(actual) != "concurrent" {
 		t.Fatal("concurrent file was replaced")
+	}
+}
+
+func TestMCPSourceHTTPClientRejectsPrivateAddresses(t *testing.T) {
+	for _, address := range []string{
+		"127.0.0.1", "::1", "10.0.0.1", "fd00::1", "169.254.169.254", "fe80::1", "100.64.0.1", "0.0.0.0", "ff02::1",
+	} {
+		if !isDisallowedMCPSourceAddress(netip.MustParseAddr(address)) {
+			t.Fatalf("private or special address %s was allowed", address)
+		}
+	}
+	for _, address := range []string{"8.8.8.8", "2606:4700:4700::1111"} {
+		if isDisallowedMCPSourceAddress(netip.MustParseAddr(address)) {
+			t.Fatalf("public address %s was rejected", address)
+		}
+	}
+
+	var requested atomic.Bool
+	private := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requested.Store(true) }))
+	defer private.Close()
+	response, err := newMCPSourceHTTPClient().Get(private.URL)
+	if response != nil {
+		response.Body.Close()
+	}
+	if err == nil || requested.Load() {
+		t.Fatal("MCP source client connected to a loopback address")
+	}
+}
+
+func TestMCPSourceHTTPClientRejectsPrivateRedirect(t *testing.T) {
+	var secretRequested atomic.Bool
+	var private *httptest.Server
+	private = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/redirect" {
+			http.Redirect(w, request, private.URL+"/secret", http.StatusFound)
+			return
+		}
+		secretRequested.Store(true)
+		_, _ = w.Write([]byte("secret"))
+	}))
+	defer private.Close()
+	_, port, err := net.SplitHostPort(private.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dialer := &net.Dialer{}
+	expectedDialAddress := net.JoinHostPort("8.8.8.8", port)
+	var dialCalls atomic.Int32
+	client := newMCPSourceHTTPClientWithDial(
+		func(ctx context.Context, network, host string) ([]netip.Addr, error) {
+			if host == "public.example" {
+				return []netip.Addr{netip.MustParseAddr("8.8.8.8")}, nil
+			}
+			return net.DefaultResolver.LookupNetIP(ctx, network, host)
+		},
+		func(ctx context.Context, network, address string) (net.Conn, error) {
+			dialCalls.Add(1)
+			if address != expectedDialAddress {
+				return nil, errors.New("source client dialed an unverified address")
+			}
+			return dialer.DialContext(ctx, network, private.Listener.Addr().String())
+		},
+	)
+	response, err := client.Get("http://public.example:" + port + "/redirect")
+	if response != nil {
+		response.Body.Close()
+	}
+	if err == nil || secretRequested.Load() || dialCalls.Load() != 1 {
+		t.Fatal("MCP source client followed a redirect to a loopback address")
 	}
 }

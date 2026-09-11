@@ -9,7 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path"
@@ -25,6 +27,11 @@ import (
 )
 
 const SSHMCPTransferTimeout = time.Hour
+
+var (
+	errMCPSourceAddressDenied = errors.New("MCP source address is not public")
+	mcpSourceCGNATPrefix      = netip.MustParsePrefix("100.64.0.0/10")
+)
 
 func (svc *SSHHostService) UploadMCP(ctx context.Context, request model.SSHMCPUploadRequest) (any, error) {
 	if request.Content != nil && request.SourceURL != "" {
@@ -101,29 +108,81 @@ func (svc *SSHHostService) UploadMCPStream(ctx context.Context, request model.SS
 }
 
 func (svc *SSHHostService) UploadMCPFromURL(ctx context.Context, request model.SSHMCPTransferRequest, source string) (*model.SSHMCPTransferResult, error) {
-	validURL := func(value string) bool {
-		parsed, err := url.Parse(value)
-		return err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Hostname() != "" && parsed.User == nil && parsed.Fragment == ""
+	return svc.uploadMCPFromURL(ctx, request, source, newMCPSourceHTTPClient())
+}
+
+func validMCPSourceURL(value string) bool {
+	parsed, err := url.Parse(value)
+	return err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Hostname() != "" && parsed.User == nil && parsed.Fragment == ""
+}
+
+func newMCPSourceHTTPClient() *http.Client {
+	dialer := &net.Dialer{}
+	return newMCPSourceHTTPClientWithDial(net.DefaultResolver.LookupNetIP, dialer.DialContext)
+}
+
+func newMCPSourceHTTPClientWithDial(
+	lookup func(context.Context, string, string) ([]netip.Addr, error),
+	dial func(context.Context, string, string) (net.Conn, error),
+) *http.Client {
+	transport := directHTTPTransport()
+	transport.DisableKeepAlives = true
+	transport.DisableCompression = true
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, errors.New("invalid source address")
+		}
+		addresses, err := lookup(ctx, "ip", host)
+		if err != nil {
+			return nil, errors.New("source hostname resolution failed")
+		}
+		var lastErr error
+		for _, candidate := range addresses {
+			if isDisallowedMCPSourceAddress(candidate) {
+				continue
+			}
+			connection, err := dial(ctx, network, net.JoinHostPort(candidate.String(), port))
+			if err == nil {
+				return connection, nil
+			}
+			lastErr = err
+		}
+		if lastErr != nil {
+			return nil, lastErr
+		}
+		return nil, errMCPSourceAddressDenied
 	}
-	if !validURL(source) {
+	return &http.Client{Transport: transport, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 || !validMCPSourceURL(req.URL.String()) {
+			return errors.New("invalid source redirect")
+		}
+		return nil
+	}}
+}
+
+func isDisallowedMCPSourceAddress(address netip.Addr) bool {
+	address = address.Unmap()
+	if !address.IsValid() || !address.IsGlobalUnicast() || address.IsPrivate() || address.IsLoopback() || address.IsLinkLocalUnicast() || address.IsUnspecified() || address.IsMulticast() {
+		return true
+	}
+	return mcpSourceCGNATPrefix.Contains(address)
+}
+
+func (svc *SSHHostService) uploadMCPFromURL(ctx context.Context, request model.SSHMCPTransferRequest, source string, client *http.Client) (*model.SSHMCPTransferResult, error) {
+	if !validMCPSourceURL(source) {
 		return nil, sshError("SSH_MCP_INVALID", "下载来源必须是 HTTP(S) 地址，不能包含用户信息或 fragment", nil)
 	}
 	return svc.uploadMCPStream(ctx, request, func(ctx context.Context) (io.ReadCloser, int64, error) {
-		transport := directHTTPTransport()
-		transport.DisableKeepAlives = true
-		transport.DisableCompression = true
-		client := &http.Client{Transport: transport, CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 10 || !validURL(req.URL.String()) {
-				return errors.New("invalid source redirect")
-			}
-			return nil
-		}}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, source, nil)
 		if err != nil {
 			return nil, 0, sshError("SSH_MCP_SOURCE_FAILED", "无法创建文件下载请求", nil)
 		}
 		response, err := client.Do(req)
 		if err != nil {
+			if errors.Is(err, errMCPSourceAddressDenied) {
+				return nil, 0, sshError("SSH_MCP_INVALID", "source_url 只能解析到公网 IP 地址", nil)
+			}
 			return nil, 0, sshError("SSH_MCP_SOURCE_FAILED", "无法下载源文件", nil)
 		}
 		if response.StatusCode != http.StatusOK {
