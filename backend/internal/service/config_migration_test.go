@@ -330,7 +330,7 @@ func TestMigrateManagedConfigAddsTUNRoutingSafetyAndRemovesLegacyProxy(t *testin
 func TestMigrateManagedConfigAddsFakeIPICMPResolve(t *testing.T) {
 	input := []byte(`{
   "http_clients": [{"tag":"ackwrap-rule-set-direct"}],
-  "inbounds": [{"type":"tun","tag":"tun-in","address":["172.19.0.1/30","fdfe:dcba:9875::1/126"],"auto_route":true,"strict_route":true,"route_exclude_address":["169.254.0.0/16","fe80::/10"]}],
+  "inbounds": [{"type":"tun","tag":"tun-in","address":["172.19.0.1/30","fdfe:dcba:9875::1/126"],"auto_route":true,"strict_route":true,"auto_redirect":false,"route_exclude_address":["169.254.0.0/16","fe80::/10"]}],
   "outbounds": [{"type":"direct","tag":"direct"},{"type":"selector","tag":"proxy","outbounds":["direct"]}],
   "dns": {"servers":[{"type":"fakeip","tag":"fakeip"}]},
   "route": {"auto_detect_interface":true,"rules":[
