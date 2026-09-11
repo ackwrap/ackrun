@@ -424,7 +424,7 @@ func TestGenerateRouteIncludesDefaultLoopBypassRules(t *testing.T) {
 	if !ok {
 		t.Fatalf("route rules type = %T", route["rules"])
 	}
-	var processRule, processRuleScoped, domainRule, ipRule, reachedSniff bool
+	var processRule, processRuleScoped, kernelProcessRule, domainRule, ipRule, reachedSniff bool
 	standardDNSHijackIndex, firstBypassIndex, sniffIndex, icmpResolveIndex := -1, -1, -1, -1
 	for index, rule := range rules {
 		if stringListContains(rule["inbound"], legacyUpdateProxyInboundTag) {
@@ -444,7 +444,7 @@ func TestGenerateRouteIncludesDefaultLoopBypassRules(t *testing.T) {
 				t.Fatalf("FakeIP ICMP resolve rule is not scoped to TUN: %+v", rule)
 			}
 		}
-		if rule["outbound"] != "direct" {
+		if rule["action"] != "bypass" && rule["outbound"] != "direct" {
 			continue
 		}
 		if reachedSniff || rule["action"] != "bypass" {
@@ -454,6 +454,12 @@ func TestGenerateRouteIncludesDefaultLoopBypassRules(t *testing.T) {
 			firstBypassIndex = index
 		}
 		if rule["process_name"] != nil {
+			if _, exists := rule["outbound"]; !exists {
+				if processRule {
+					t.Fatalf("kernel process bypass must precede the direct fallback: %+v", rules)
+				}
+				kernelProcessRule = true
+			}
 			processRule = true
 			inbound, ok := rule["inbound"].([]string)
 			processRuleScoped = ok && len(inbound) == 1 && inbound[0] == "tun-in"
@@ -463,6 +469,9 @@ func TestGenerateRouteIncludesDefaultLoopBypassRules(t *testing.T) {
 	}
 	if !processRule || !processRuleScoped || !domainRule || !ipRule {
 		t.Fatalf("missing loop bypass rule: %+v", rules)
+	}
+	if kernelProcessRule != (runtime.GOOS == "linux") {
+		t.Fatalf("kernel process bypass = %v on %s", kernelProcessRule, runtime.GOOS)
 	}
 	if standardDNSHijackIndex == -1 || firstBypassIndex == -1 || standardDNSHijackIndex >= firstBypassIndex {
 		t.Fatalf("standard DNS hijack must precede every bypass rule: %+v", rules)
@@ -1863,26 +1872,126 @@ func TestTrafficBypassSettingsApplyToTUNAndRoute(t *testing.T) {
 	if tun == nil || !stringListContains(tun["exclude_interface"], "mesh-tun") || !stringListContains(tun["route_exclude_address"], "10.20.0.0/16") {
 		t.Fatalf("TUN bypass settings missing: %+v", tun)
 	}
-	rules, err := service.defaultBypassRules()
+	for _, autoRedirect := range []bool{false, true} {
+		t.Run(fmt.Sprintf("auto_redirect=%t", autoRedirect), func(t *testing.T) {
+			rules, err := service.defaultBypassRules(autoRedirect)
+			if err != nil {
+				t.Fatal(err)
+			}
+			first := rules[0]
+			_, hasOutbound := first["outbound"]
+			if hasOutbound == autoRedirect || first["action"] != "bypass" || !stringListEquals(first["inbound"], "tun-in") || !stringListContains(first["process_name"], "mesh-agent") || !stringListContains(first["process_name"], "ackwrap") {
+				t.Fatalf("unexpected first process bypass rule: %+v", first)
+			}
+			if autoRedirect && (rules[1]["outbound"] != "direct" || !reflect.DeepEqual(first["process_name"], rules[1]["process_name"]) || !reflect.DeepEqual(first["inbound"], rules[1]["inbound"])) {
+				t.Fatalf("missing process fallback for flows that cannot bypass: %+v", rules)
+			}
+			want := map[string]string{
+				"process_name":   "mesh-agent",
+				"ip_cidr":        "10.20.0.0/16",
+				"source_ip_cidr": "192.168.50.0/24",
+				"domain_suffix":  "mesh.example",
+			}
+			for key, value := range want {
+				found := false
+				for _, rule := range rules {
+					if stringListContains(rule[key], value) && rule["action"] == "bypass" && rule["outbound"] == "direct" {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Fatalf("missing %s bypass for %s: %+v", key, value, rules)
+				}
+			}
+		})
+	}
+}
+
+func TestGenerateInboundsExcludesEnabledNodeIPs(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{
-		"process_name":   "mesh-agent",
-		"ip_cidr":        "10.20.0.0/16",
-		"source_ip_cidr": "192.168.50.0/24",
-		"domain_suffix":  "mesh.example",
+	defer db.Close()
+	subscription, err := db.CreateSubscription(&model.SubscriptionRequest{
+		Name: "node-exclusions", URL: "https://example.com/subscription",
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	for key, value := range want {
-		found := false
-		for _, rule := range rules {
-			if stringListContains(rule[key], value) && rule["action"] == "bypass" && rule["outbound"] == "direct" {
-				found = true
-				break
+	if err := db.ReplaceSubscriptionNodes(subscription.ID, []model.ParsedNode{
+		{Name: "Domain", Type: "socks", Server: "node.example.com", ServerPort: 1080, RawJSON: `{"type":"socks"}`},
+		{Name: "IPv4", Type: "socks", Server: "192.0.2.20", ServerPort: 1080, RawJSON: `{"type":"socks"}`},
+		{Name: "IPv4 duplicate", Type: "socks", Server: "192.0.2.20", ServerPort: 1081, RawJSON: `{"type":"socks"}`},
+		{Name: "IPv6", Type: "socks", Server: "[2001:db8::20]", ServerPort: 1080, RawJSON: `{"type":"socks"}`},
+		{Name: "Disabled", Type: "socks", Server: "203.0.113.20", ServerPort: 1080, RawJSON: `{"type":"socks"}`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	nodes, err := db.ListNodesBySubscription(subscription.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, node := range nodes {
+		if node.Name == "Disabled" {
+			if err := db.SetNodeEnabled(node.UID, false); err != nil {
+				t.Fatal(err)
 			}
 		}
-		if !found {
-			t.Fatalf("missing %s bypass for %s: %+v", key, value, rules)
+	}
+	if err := NewSettingsService(db).SetTrafficBypassSettings(&model.TrafficBypassSettings{Rules: []model.TrafficBypassRule{
+		{Type: "ip_cidr", Value: "192.0.2.20/32"},
+		{Type: "ip_cidr", Value: "10.20.0.0/16"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	service := NewConfigGeneratorService(db, nil)
+	for _, mode := range []string{"tun", "tun_mixed", "mixed"} {
+		t.Run(mode, func(t *testing.T) {
+			if err := db.SetInboundMode(mode); err != nil {
+				t.Fatal(err)
+			}
+			inbounds, err := service.generateInbounds("127.0.0.1", 7893, defaultTUNIPv4Address, defaultTUNIPv6Address)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tunCount := 0
+			for _, rawInbound := range inbounds {
+				inbound := rawInbound.(map[string]interface{})
+				if inbound["type"] != "tun" {
+					if _, exists := inbound["route_exclude_address"]; exists {
+						t.Fatalf("non-TUN inbound has route exclusions: %+v", inbound)
+					}
+					continue
+				}
+				tunCount++
+				want := []string{defaultTUNIPv4LinkLocal, defaultTUNIPv6LinkLocal, "192.0.2.20/32", "10.20.0.0/16", "2001:db8::20/128"}
+				if !reflect.DeepEqual(inbound["route_exclude_address"], want) {
+					t.Fatalf("route exclusions = %v, want %v", inbound["route_exclude_address"], want)
+				}
+			}
+			if (tunCount == 1) != (mode != "mixed") {
+				t.Fatalf("unexpected TUN count: %d", tunCount)
+			}
+		})
+	}
+	for _, autoRedirect := range []bool{false, true} {
+		rules, err := service.defaultBypassRules(autoRedirect)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var domainFound, ipFallbackFound bool
+		for _, rule := range rules {
+			if stringListContains(rule["domain"], "node.example.com") {
+				domainFound = rule["action"] == "bypass" && rule["outbound"] == "direct"
+			}
+			if stringListContains(rule["ip_cidr"], "2001:db8::20/128") {
+				ipFallbackFound = rule["action"] == "bypass" && rule["outbound"] == "direct"
+			}
+		}
+		if !domainFound || !ipFallbackFound {
+			t.Fatalf("domain or mixed node IP direct fallback changed: %+v", rules)
 		}
 	}
 }

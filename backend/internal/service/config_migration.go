@@ -370,7 +370,7 @@ func migrateAckwrapProcessBypassRules(rules []interface{}) ([]interface{}, int) 
 	needsReorder := false
 	for _, rawRule := range rules {
 		rule, ok := rawRule.(map[string]interface{})
-		managedDNSHijack := ok && rule["action"] == "hijack-dns" && (rule["inbound"] == dnsInboundTag || stringListContains(rule["inbound"], dnsInboundTag))
+		managedDNSHijack := ok && rule["action"] == "hijack-dns" && (rule["inbound"] == dnsInboundTag || stringListContains(rule["inbound"], dnsInboundTag) || configNumber(rule["port"]) == 53)
 		if managedDNSHijack {
 			if lastCategory > 0 {
 				needsReorder = true
@@ -379,7 +379,8 @@ func migrateAckwrapProcessBypassRules(rules []interface{}) ([]interface{}, int) 
 			continue
 		}
 		ackwrapNames, _ := splitAckwrapProcessNames(rule["process_name"])
-		managedBypass := ok && rule["outbound"] == "direct" && stringListContains(rule["inbound"], "tun-in") && len(ackwrapNames) > 0
+		kernelBypass := rule["action"] == "bypass" && (rule["outbound"] == nil || rule["outbound"] == "")
+		managedBypass := ok && (rule["outbound"] == "direct" || kernelBypass) && stringListContains(rule["inbound"], "tun-in") && len(ackwrapNames) > 0
 		if !managedBypass {
 			lastCategory = 2
 			remainingRules = append(remainingRules, rawRule)

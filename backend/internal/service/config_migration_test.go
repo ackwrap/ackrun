@@ -490,6 +490,40 @@ func TestMigrateAckwrapProcessBypassKeepsDNSHijackFirst(t *testing.T) {
 	}
 }
 
+func TestMigrateAckwrapProcessBypassPreservesKernelBypassPriority(t *testing.T) {
+	kernelBypass := map[string]interface{}{
+		"process_name": []interface{}{"ackwrap", "sing-box", "easytier-core"},
+		"inbound":      []interface{}{"tun-in"},
+		"action":       "bypass",
+	}
+	fallback := map[string]interface{}{
+		"process_name": kernelBypass["process_name"],
+		"inbound":      kernelBypass["inbound"],
+		"action":       "bypass",
+		"outbound":     "direct",
+	}
+	dns := map[string]interface{}{"port": float64(53), "action": "hijack-dns"}
+	sniff := map[string]interface{}{"action": "sniff"}
+	want := []interface{}{dns, kernelBypass, fallback, sniff}
+	for _, ordered := range []bool{false, true} {
+		rules := want
+		if !ordered {
+			rules = []interface{}{sniff, kernelBypass, fallback, dns}
+		}
+		result, migrated := migrateAckwrapProcessBypassRules(rules)
+		if !reflect.DeepEqual(result, want) || (migrated == 0) != ordered {
+			t.Fatalf("ordered=%t migrated=%d rules=%+v, want DNS then pure bypass then fallback before sniff", ordered, migrated, result)
+		}
+		if _, exists := kernelBypass["outbound"]; exists {
+			t.Fatalf("migration added an outbound to pure bypass: %+v", kernelBypass)
+		}
+		secondPass, secondMigrated := migrateAckwrapProcessBypassRules(result)
+		if secondMigrated != 0 || !reflect.DeepEqual(secondPass, want) {
+			t.Fatalf("migration is not idempotent: migrated=%d rules=%+v", secondMigrated, secondPass)
+		}
+	}
+}
+
 func TestMigrateAckwrapTUNInboundsAddsMissingDefaultsAndPreservesExplicitSettings(t *testing.T) {
 	inbounds := []interface{}{
 		map[string]interface{}{"type": "tun", "tag": "tun-in", "interface_name": "tun0", "address": []string{defaultTUNIPv4Address}},

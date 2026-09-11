@@ -2179,7 +2179,7 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 	}
 
 	// 内核级绕过必须先于 sniff；TCP 预匹配遇到 sniff 后不会继续匹配后续规则。
-	bypassRules, err := s.defaultBypassRules()
+	bypassRules, err := s.defaultBypassRules(runtime.GOOS == "linux" && inboundMode != "mixed")
 	if err != nil {
 		return nil, err
 	}
@@ -2363,7 +2363,7 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 	return route, nil
 }
 
-func (s *ConfigGeneratorService) defaultBypassRules() ([]map[string]interface{}, error) {
+func (s *ConfigGeneratorService) defaultBypassRules(autoRedirect bool) ([]map[string]interface{}, error) {
 	currentExecutable, _ := os.Executable()
 	coreBinaryPath := ""
 	if s.paths != nil {
@@ -2377,14 +2377,20 @@ func (s *ConfigGeneratorService) defaultBypassRules() ([]map[string]interface{},
 	customProcesses, _, targetCIDRs, sourceCIDRs, domainSuffixes := trafficBypassValues(bypassSettings)
 	processNames = appendUniqueStrings(processNames, customProcesses...)
 
-	rules := []map[string]interface{}{
-		{
+	var rules []map[string]interface{}
+	if autoRedirect {
+		rules = append(rules, map[string]interface{}{
 			"process_name": processNames,
 			"inbound":      []string{"tun-in"},
 			"action":       "bypass",
-			"outbound":     "direct",
-		},
+		})
 	}
+	rules = append(rules, map[string]interface{}{
+		"process_name": processNames,
+		"inbound":      []string{"tun-in"},
+		"action":       "bypass",
+		"outbound":     "direct",
+	})
 
 	if len(targetCIDRs) > 0 {
 		rules = append(rules, map[string]interface{}{
@@ -3347,6 +3353,14 @@ func (s *ConfigGeneratorService) generateInbounds(listen string, port int, tunIP
 		return nil, fmt.Errorf("加载流量排除设置失败: %w", err)
 	}
 	_, excludedInterfaces, excludedCIDRs, _, _ := trafficBypassValues(bypassSettings)
+	if mode != "mixed" {
+		nodes, err := s.store.ListEnabledNodes()
+		if err != nil {
+			return nil, fmt.Errorf("加载节点服务器路由排除地址失败: %w", err)
+		}
+		_, nodeIPCIDRs := nodeServerBypassTargets(nodes)
+		excludedCIDRs = appendUniqueStrings(excludedCIDRs, nodeIPCIDRs...)
+	}
 	var mixedInbound map[string]interface{}
 	if mode != "tun" {
 		authSettings, err := s.store.GetMixedInboundSettings()
