@@ -227,5 +227,19 @@ func (s *Store) PrepareSimpleSetup() error {
 			return err
 		}
 	}
+	options := model.DefaultSimpleSetupOptions()
+	var optionsJSON string
+	err = tx.QueryRow(`SELECT value FROM app_settings WHERE key = ?`, simpleSetupOptionsKey).Scan(&optionsJSON)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if err == nil {
+		if err := json.Unmarshal([]byte(optionsJSON), options); err != nil {
+			return err
+		}
+	}
+	if err := applySimpleSetupOptionsTx(tx, options); err != nil {
+		return err
+	}
 	return tx.Commit()
 }

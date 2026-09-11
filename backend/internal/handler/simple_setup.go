@@ -36,3 +36,25 @@ func (h *SimpleSetupHandler) Start(c *gin.Context) {
 	}
 	c.JSON(http.StatusAccepted, status)
 }
+
+func (h *SimpleSetupHandler) Options(c *gin.Context) {
+	options, err := h.svc.Options()
+	if err != nil {
+		c.JSON(http.StatusConflict, model.ErrorResponse{Error: model.APIError{Code: "SETUP_OPTIONS_FAILED", Message: err.Error()}})
+		return
+	}
+	c.JSON(http.StatusOK, options)
+}
+
+func (h *SimpleSetupHandler) UpdateOptions(c *gin.Context) {
+	options := model.DefaultSimpleSetupOptions()
+	if err := c.ShouldBindJSON(options); err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "INVALID_REQUEST", Message: "配置选项格式无效"}})
+		return
+	}
+	if err := h.svc.UpdateOptions(options); err != nil {
+		c.JSON(http.StatusConflict, model.ErrorResponse{Error: model.APIError{Code: "SETUP_OPTIONS_FAILED", Message: err.Error()}})
+		return
+	}
+	c.JSON(http.StatusOK, options)
+}

@@ -1,0 +1,99 @@
+.simple-shell {
+  background: var(--app-bg-image);
+}
+.simple-shell .simple-tabs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border-default);
+}
+.simple-shell .simple-tab {
+  flex: 0 0 auto;
+  padding: 14px 18px;
+  border-bottom: 3px solid transparent;
+  color: var(--text-secondary);
+  font-size: 14px;
+  white-space: nowrap;
+}
+.simple-shell .simple-tab-active {
+  border-color: var(--color-primary);
+  color: var(--color-primary-hover);
+  font-weight: 600;
+}
+.simple-shell .simple-tab:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -4px;
+}
+.simple-shell .simple-details {
+  padding: 18px;
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+}
+.simple-shell .simple-details summary {
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+}
+.simple-shell .simple-checkbox {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--color-primary);
+}
+.simple-shell .simple-stat {
+  padding: 16px;
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+}
+.simple-shell .simple-stat span {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.simple-shell .simple-stat strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 16px;
+  font-weight: 500;
+}
+.simple-shell .simple-card {
+  padding: 28px;
+  border: 1px solid var(--border-default);
+  border-radius: 18px;
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-card);
+}
+.simple-shell .simple-alert {
+  padding: 16px;
+  border-radius: 12px;
+  background: var(--color-warning-bg);
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.simple-shell .simple-input {
+  min-height: 48px;
+  padding: 10px 14px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--bg-base);
+  color: var(--text-primary);
+}
+.simple-shell .simple-input:focus-visible,
+.simple-shell .simple-theme:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 3px;
+}
+.simple-shell .simple-theme {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border: 1px solid var(--border-default);
+  border-radius: 50%;
+}
+@media (max-width: 480px) {
+  .simple-shell .simple-card {
+    padding: 20px;
+  }
+}

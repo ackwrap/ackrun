@@ -66,6 +66,7 @@ func (svc *SimpleSetupService) Status() (*model.SimpleSetupStatus, error) {
 		return nil, err
 	}
 	state.CanRetry = subscription != nil && !state.Configured && !state.HasExistingConfig
+	state.OptionsLocked = marker == "applied"
 	if (state.Status == "idle" || state.Status == "succeeded") && state.Configured {
 		state.Status, state.Stage = "succeeded", "已完成一键配置"
 	} else if (state.Status == "idle" || state.Status == "succeeded") && marker != "" {

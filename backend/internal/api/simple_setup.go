@@ -14,11 +14,13 @@ func RegisterSimpleSetupRoutes(r *gin.Engine, svc *service.SimpleSetupService) {
 	h := handler.NewSimpleSetupHandler(svc)
 	r.GET("/api/v1/setup", h.Status)
 	r.POST("/api/v1/setup", h.Start)
+	r.GET("/api/v1/setup/options", h.Options)
+	r.PUT("/api/v1/setup/options", h.UpdateOptions)
 }
 
 func SimpleSetupMutationGuard(svc *service.SimpleSetupService) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if !strings.HasPrefix(c.Request.URL.Path, "/api/v1/") || c.Request.URL.Path == "/api/v1/setup" || c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead || c.Request.Method == http.MethodOptions {
+		if !strings.HasPrefix(c.Request.URL.Path, "/api/v1/") || c.Request.URL.Path == "/api/v1/setup" || c.Request.URL.Path == "/api/v1/setup/options" || c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead || c.Request.Method == http.MethodOptions {
 			c.Next()
 			return
 		}
