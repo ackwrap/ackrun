@@ -5,9 +5,11 @@ description: Investigate or maintain Ackwrap's sing-box-wrap patch stack, upstre
 
 # Core maintenance
 
-Read `sing-box-wrap/AGENTS.md`, its `README.md` and the affected patch metadata
-before choosing a workflow. Paths below are relative to the Ackwrap root unless
-the command specifies another working directory.
+Use this workflow for core investigation, patch maintenance or upstream updates.
+Read `sing-box-wrap/AGENTS.md`, then the relevant sections of its `README.md`
+and affected patch metadata. Paths below are relative to the Ackwrap root unless
+the command specifies another working directory. Shared authorization, branch,
+commit and data rules live in [AGENTS.md](../../../AGENTS.md).
 
 ## Establish the boundary
 
@@ -15,9 +17,11 @@ the command specifies another working directory.
   wrapper/core file, preparing `.work/`, or changing its checkout requires the
   user's explicit core authorization. Existing authorization remains valid within
   its stated scope; do not ask again for already-authorized steps.
-- If mutation is needed but unauthorized, identify the reason, target files,
-  behavioral impact and viable parent-only alternative. Finish independent parent
-  work before requesting that decision. Do not interpret this skill as approval.
+- If mutation is needed but unauthorized, finish read-only diagnosis and independent
+  parent work first. Present the target files, behavioral impact and any viable
+  parent-only alternative, citing this boundary when requesting authorization.
+  A request to investigate or audit remains read-only; do not prepare `.work/`
+  merely to make an unauthorized change reviewable.
 - Record parent and wrapper branches, HEADs, status and parent gitlink diff.
   Check the nested official submodule status too. Follow the root branch and
   dirty-worktree protections before any checkout, merge or update.
@@ -40,6 +44,8 @@ the command specifies another working directory.
 
 ## Verify and deliver
 
+- For read-only investigation, report the inspected commits, evidence and limits;
+  the build and mutation steps below apply only to authorized maintenance.
 - Recreate the patched source from clean inputs. In the prepared tree, verify
   `go mod tidy` leaves `go.mod`/`go.sum` unchanged, then run `make build` and
   `go build ./cmd/sing-box`. Run affected tests required by the wrapper's current
@@ -49,3 +55,6 @@ the command specifies another working directory.
   Verify any newly pinned nested commit is also reachable by a clean clone.
 - After the operation, compare wrapper HEAD, statuses, patch list and key files
   with the intended result. Report the verified commits and any untested behavior.
+- If publishing the wrapper commit is not authorized, leave the parent's gitlink
+  unchanged and report the remaining step. Local verification is not evidence
+  that another checkout can fetch an unpublished commit.

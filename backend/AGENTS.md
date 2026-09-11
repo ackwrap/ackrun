@@ -1,7 +1,8 @@
 # Backend contracts
 
-Read this file before changing backend behavior. Dependency versions are defined
-by `go.mod` and `go.sum`; API routes and schemas are defined by the source.
+This file adds backend contracts to the [root instructions](../AGENTS.md).
+Dependency versions are defined by `go.mod` and `go.sum`; API routes and schemas
+are defined by the source. Read only the implementation relevant to the task.
 
 ## Architecture
 
@@ -36,8 +37,8 @@ by `go.mod` and `go.sum`; API routes and schemas are defined by the source.
 
 ## Subscriptions and nodes
 
-- Support Clash YAML `proxies`, sing-box JSON `outbounds`, plain URI lists and
-  base64 URI lists. Fetch with the saved user agent and sync timeout.
+- Preserve the formats supported by the existing parser pipeline. Fetch with
+  the saved user agent and sync timeout.
 - Parse, apply enabled backend filters, then write. Zero parsed nodes or zero
   remaining nodes is a failed sync that preserves the previous nodes. Validate
   Go regular expressions on filter writes; previews use the same backend pipeline.
@@ -53,11 +54,11 @@ by `go.mod` and `go.sum`; API routes and schemas are defined by the source.
 - Maintain cron jobs on create/update/delete. Use `cron.WithSeconds()` for the
   existing six-field expressions, daily time and weekly weekday, and the configured
   `ACKWRAP_TIMEZONE`. Creation and URL changes trigger an asynchronous sync.
-- `hysteria/hysteria2/tuic/wireguard` use the core `/proxies/:tag/delay` API and
-  require loading into the active config. Missing nodes fail explicitly without
-  falling back to TCPing. Other node probes use a five-second TCP dial with
-  `net.JoinHostPort` for IPv6 support. Success stores latency and `available`;
-  failure stores zero and `unavailable`. TCPing proves only TCP reachability.
+- Preserve the distinction between core delay probes and TCP probes. Determine
+  protocol selection from the current probe implementation. Core probes require
+  nodes in the active config; missing nodes fail without falling back to TCPing.
+  TCP probes use `net.JoinHostPort` for IPv6 and prove only TCP reachability.
+  Success stores latency and `available`; failure stores zero and `unavailable`.
 
 ## Routing and core configuration
 
@@ -88,6 +89,7 @@ by `go.mod` and `go.sum`; API routes and schemas are defined by the source.
 
 ## Verification
 
-Use focused tests during implementation, then run `go build ./...`,
-`go test ./...` and `go vet ./...` here once for the completed backend change.
-Pure changes to this instruction file do not require application builds.
+Follow the [root verification matrix](../AGENTS.md#验证). Choose focused tests
+for changed contracts, especially sync failure preserving nodes, UID inheritance,
+migrations preserving data, and invalid configuration preserving the active file.
+Exercise only the cases affected by the task; this is not an additional full-suite gate.

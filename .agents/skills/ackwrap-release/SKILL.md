@@ -5,9 +5,16 @@ description: Build or audit Ackwrap release artifacts, OpenWrt IPK packaging, or
 
 # Release workflow
 
-Read `build.py` for build mechanics, `.github/workflows/build-openwrt.yml` for
-CI, and `build_release.py` only when dispatching a release. Commands below run
-from the repository root. Apply the root branch and artifact protections.
+Choose the workflow from the requested outcome: audit, local artifact build,
+CI change or publication. An audit stays read-only; a local build does not imply
+publication. Commands below run from the repository root. Shared branch,
+commit and artifact rules live in [AGENTS.md](../../../AGENTS.md).
+
+Read only the relevant entrypoints:
+
+- `build.py` for local build and packaging mechanics; `openwrt/` for package files.
+- `.github/workflows/build-openwrt.yml` for CI changes or release gate checks.
+- `build_release.py` and the workflow before dispatching a release.
 
 ## Local build
 
@@ -37,8 +44,11 @@ from the repository root. Apply the root branch and artifact protections.
 - Validate workflow structure and embedded shell when changing CI. Exercise the
   affected build path locally when feasible. Distinguish local verification from
   a successful GitHub-hosted run; never dispatch a release just to validate YAML.
-- Publication needs explicit release authorization. Resolve the version, commit
-  and expected assets first; `build_release.py` dispatches on `main` and may publish.
+- Publication needs explicit release authorization; reuse authorization already
+  given for the same scope. Prepare authorized checks and resolve the version,
+  commit and expected assets before asking for any missing publication approval.
+  Cite this boundary when approval is required. `build_release.py` dispatches on
+  `main` and may publish.
   Preserve the existing checks for a tag pointing elsewhere and an existing release;
   do not overwrite published assets or move a tag as a routine retry.
 - Check final artifact paths and report build/check results. Keep `dist/` and
