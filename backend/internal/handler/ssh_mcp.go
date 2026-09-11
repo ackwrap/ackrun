@@ -7,7 +7,6 @@ import (
 	"net/netip"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -19,6 +18,7 @@ import (
 
 type SSHMCPHandler struct {
 	service   *service.SSHMCPService
+	hosts     *service.SSHHostService
 	transport http.Handler
 	requests  chan struct{}
 }
@@ -26,7 +26,7 @@ type SSHMCPHandler struct {
 func NewSSHMCPHandler(settings *service.SSHMCPService, hosts *service.SSHHostService) *SSHMCPHandler {
 	server := mcpserver.NewSSHServer(hosts)
 	transport := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
-	return &SSHMCPHandler{service: settings, transport: transport, requests: make(chan struct{}, 16)}
+	return &SSHMCPHandler{service: settings, hosts: hosts, transport: transport, requests: make(chan struct{}, 16)}
 }
 
 func (h *SSHMCPHandler) GetSettings(c *gin.Context) {
@@ -60,6 +60,13 @@ func (h *SSHMCPHandler) UpdateSettings(c *gin.Context) {
 }
 
 func (h *SSHMCPHandler) ServeHTTP(c *gin.Context) {
+	h.withAuthorizedRequest(c, func() {
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 2<<20)
+		h.transport.ServeHTTP(c.Writer, c.Request)
+	})
+}
+
+func (h *SSHMCPHandler) withAuthorizedRequest(c *gin.Context, run func()) {
 	c.Header("Cache-Control", "no-store")
 	c.Header("X-Content-Type-Options", "nosniff")
 	peer, _, err := net.SplitHostPort(c.Request.RemoteAddr)
@@ -103,10 +110,10 @@ func (h *SSHMCPHandler) ServeHTTP(c *gin.Context) {
 		writeMCPError(c, http.StatusTooManyRequests, "SSH_MCP_BUSY", "MCP 并发请求已达上限，请稍后重试")
 		return
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), service.SSHMCPTransferTimeout)
 	defer cancel()
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 2<<20)
-	h.transport.ServeHTTP(c.Writer, c.Request.WithContext(ctx))
+	c.Request = c.Request.WithContext(ctx)
+	run()
 }
 
 func mcpLANAddress(host string) bool {

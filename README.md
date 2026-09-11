@@ -75,7 +75,22 @@ The service is disabled by default. Each request requires the dedicated MCP bear
 
 Available tools: `ssh_list_servers`, `ssh_list_credentials` (metadata only), `ssh_add_server`, `ssh_update_server`, `ssh_delete_server`, `ssh_test_connection`, `ssh_exec`, `ssh_exec_multi`, `ssh_read_file`, `ssh_write_file`, `ssh_upload`, `ssh_download`, `ssh_list_dir`, and `ssh_stat`. Hosts are addressed by `host_id`, and host creation references an existing `credential_id`. Host updates take a complete `config` object. Jump chains from ssh-mcp2 are not imported; Ackwrap's saved direct or node-exposure connection paths and Host Key verification remain authoritative. Confirm unknown or changed Host Keys in the host page.
 
-Command timeout defaults to 30 seconds (maximum 600), with stdout and stderr each capped at 1 MiB and truncation reported. Batch execution accepts up to 10 hosts. File transfers are limited to 1 MiB: read/write use UTF-8, while download/upload exchange Base64 content over HTTP. Paths refer to the remote SSH host, not the AI client's filesystem. File replacement requires `overwrite: true` and SFTP atomic-rename support. Directory results return at most 1000 entries and indicate truncation. Operation logs record tool names, host IDs and results without command text, file content or credentials.
+Command timeout defaults to 30 seconds (maximum 600), with stdout and stderr each capped at 1 MiB and truncation reported. Batch execution accepts up to 10 hosts. Directory results return at most 1000 entries and indicate truncation. Operation logs record tool names, host IDs and results without command text, file content or credentials.
+
+Large files stream between HTTP and SFTP with no total file-size cap, a bounded copy buffer, and no intermediate file on Ackwrap. Transfers have a one-hour timeout and share SSH session limits; disk space and client timeouts still apply. The 2 MiB MCP JSON request limit applies to control messages only. UTF-8 `ssh_read_file` / `ssh_write_file` and legacy inline Base64 remain limited to 1 MiB.
+
+- `ssh_upload` with `host_id`, remote `path`, and `source_url` downloads an HTTP(S) source directly into SFTP. The MCP token is never forwarded to that source. Optional `sha256` verifies the completed upload.
+- For a file on the AI client's computer, call `ssh_upload` with `host_id` and `path` to obtain `method`, `endpoint_path`, and headers, then stream the file using a local HTTP/file tool. A `status: ready` result means no bytes have been transferred yet. Ackwrap cannot open a Windows/local path on the client's computer.
+- `ssh_download` returns the corresponding HTTP GET descriptor. Save that response with a local HTTP/file tool. `inline: true` retains the small-file Base64 response; upload's legacy `content` accepts small Base64 files only.
+
+The transfer endpoint is `PUT` / `GET /mcp/ssh/files/<host_id>` on the same origin as MCP. Both require the same MCP Bearer token and LAN restrictions, with the remote path in `X-SSH-Path`. Upload accepts `X-SSH-Overwrite: true` and optional `X-SSH-SHA256`. Send raw file bytes, not JSON or multipart form data; chunked uploads without Content-Length are supported. For example, with the token already in `MCP_TOKEN`:
+
+```sh
+curl --fail-with-body -H "Authorization: Bearer $MCP_TOKEN" -H "X-SSH-Path: /tmp/package.ipk" --upload-file ./package.ipk http://192.168.1.1:8080/mcp/ssh/files/1
+curl --fail -H "Authorization: Bearer $MCP_TOKEN" -H "X-SSH-Path: /tmp/package.ipk" --output ./package.ipk http://192.168.1.1:8080/mcp/ssh/files/1
+```
+
+Uploads write a remote temporary file, verify the received length when provided and optional SHA-256, then publish it. Failure before publication preserves the destination. Replacement requires `overwrite: true` and SFTP `posix-rename@openssh.com`; creating without overwrite requires `hardlink@openssh.com` to avoid overwriting a concurrently created file. Unsupported servers fail before file data is read. Temporary files are removed on failure when the SSH connection remains available; a broken connection may leave a hidden `.ackwrap-mcp-*` file in the destination directory. Upload success returns byte count and SHA-256; interrupted downloads fail with an incomplete HTTP body.
 
 ## How It Works
 

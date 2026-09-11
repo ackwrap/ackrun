@@ -11,6 +11,8 @@ func RegisterSSHMCPRoutes(router *gin.Engine, settings *service.SSHMCPService, h
 	h := handler.NewSSHMCPHandler(settings, hosts)
 	router.GET("/api/v1/advanced/ssh/mcp/settings", h.GetSettings)
 	router.PUT("/api/v1/advanced/ssh/mcp/settings", h.UpdateSettings)
+	router.PUT(service.SSHMCPEndpoint+"/files/:hostID", h.TransferFile)
+	router.GET(service.SSHMCPEndpoint+"/files/:hostID", h.TransferFile)
 	for _, endpoint := range []string{service.SSHMCPEndpoint, service.SSHMCPEndpoint + "/"} {
 		router.GET(endpoint, h.ServeHTTP)
 		router.POST(endpoint, h.ServeHTTP)

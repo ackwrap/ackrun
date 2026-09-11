@@ -277,7 +277,8 @@ onMounted(load);
           <div>
             <p class="font-medium">文件操作</p>
             <p class="mt-1 text-xs leading-6 text-[var(--text-secondary)]">
-              文本读写、Base64 上传下载、目录与文件信息，单文件上限 1 MiB。
+              大文件通过 HTTP 与 SFTP 流式上传下载，也可从 URL
+              直接上传，不设文件大小上限。内联文本读写上限 1 MiB。
             </p>
           </div>
         </div>

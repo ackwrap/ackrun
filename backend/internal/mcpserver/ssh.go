@@ -19,7 +19,7 @@ type hostInput struct {
 
 func NewSSHServer(svc *service.SSHHostService) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "ackwrap-ssh", Version: "1.0.0"}, &mcp.ServerOptions{
-		Instructions: "Operate SSH hosts saved in Ackwrap. Use host_id from ssh_list_servers. Existing credentials and connection paths are reused. Unknown or changed host keys must be confirmed by the user in Ackwrap. File paths always refer to the remote SSH host, never to the MCP client's computer.",
+		Instructions: "Operate SSH hosts saved in Ackwrap. Use host_id from ssh_list_servers. Existing credentials and connection paths are reused. Unknown or changed host keys must be confirmed by the user in Ackwrap. File paths always refer to the remote SSH host, never to the MCP client's computer. For large file upload, supply source_url or call ssh_upload to obtain an HTTP PUT endpoint, then use a local HTTP/file tool to stream the file with the same MCP bearer token. For download, call ssh_download and save its HTTP GET response with a local HTTP/file tool. A ready response only prepares a transfer, not completes it. Never encode deployment packages as inline base64.",
 	})
 	addTool(server, "ssh_list_servers", "列出 Ackwrap SSH 主机，不返回密码或私钥。", func(_ context.Context, _ struct{}) (any, error) {
 		return svc.ListHosts()
@@ -70,10 +70,9 @@ func NewSSHServer(svc *service.SSHHostService) *mcp.Server {
 		}
 		return results, nil
 	})
-	for _, action := range []string{"read_file", "download", "list_dir", "stat"} {
+	for _, action := range []string{"read_file", "list_dir", "stat"} {
 		descriptions := map[string]string{
 			"read_file": "读取远程 UTF-8 文本，最大 1 MiB。",
-			"download":  "下载远程文件并返回 Base64 内容，最大 1 MiB，不写入 Ackwrap 本地文件。",
 			"list_dir":  "列出远程目录，最多返回 1000 项，更多时标记 truncated。",
 			"stat":      "读取远程文件大小、权限和修改时间。",
 		}
@@ -81,16 +80,19 @@ func NewSSHServer(svc *service.SSHHostService) *mcp.Server {
 			return svc.ReadMCPFile(ctx, input, action)
 		})
 	}
-	for _, binary := range []bool{false, true} {
-		name, description := "ssh_write_file", "写入远程 UTF-8 文本，最大 1 MiB；覆盖已有文件需要 overwrite=true。"
-		if binary {
-			name, description = "ssh_upload", "将 content 中的 Base64 解码后上传到远程路径，最大 1 MiB；覆盖需 overwrite=true。"
+	addTool(server, "ssh_write_file", "写入远程 UTF-8 文本，最大 1 MiB；覆盖已有文件需要 overwrite=true。", func(ctx context.Context, input model.SSHMCPWriteRequest) (any, error) {
+		err := svc.WriteMCPFile(ctx, input, false)
+		return map[string]any{"success": err == nil}, err
+	})
+	addTool(server, "ssh_upload", "流式上传大文件，无总大小限制。提供 source_url 可直接下载并传到 SSH 主机；省略则返回 HTTP PUT 地址，由客户端以原始字节上传本地文件，需使用同一个 MCP Bearer Token。ready 仅表示上传准备就绪。覆盖需 overwrite=true，可传 sha256 校验。content 仅兼容小文件 Base64。", func(ctx context.Context, input model.SSHMCPUploadRequest) (any, error) {
+		return svc.UploadMCP(ctx, input)
+	})
+	addTool(server, "ssh_download", "返回大文件流式 HTTP GET 地址，无总大小限制；客户端需使用同一个 MCP Bearer Token 将响应保存到本地。ready 不表示已下载。仅小文件可用 inline=true 返回 Base64（最大 1 MiB）。", func(ctx context.Context, input model.SSHMCPDownloadRequest) (any, error) {
+		if input.Inline {
+			return svc.ReadMCPFile(ctx, model.SSHMCPFileRequest{HostID: input.HostID, Path: input.Path}, "download")
 		}
-		addTool(server, name, description, func(ctx context.Context, input model.SSHMCPWriteRequest) (any, error) {
-			err := svc.WriteMCPFile(ctx, input, binary)
-			return map[string]any{"success": err == nil}, err
-		})
-	}
+		return svc.PrepareMCPTransfer(model.SSHMCPTransferRequest{HostID: input.HostID, Path: input.Path}, false)
+	})
 	return server
 }
 

@@ -38,3 +38,28 @@ type SSHMCPWriteRequest struct {
 	Content   string `json:"content" jsonschema:"UTF-8 text for ssh_write_file or base64 bytes for ssh_upload; maximum 1 MiB decoded"`
 	Overwrite bool   `json:"overwrite,omitempty" jsonschema:"Allow replacing an existing regular file; default false"`
 }
+
+type SSHMCPTransferRequest struct {
+	HostID    int64  `json:"host_id"`
+	Path      string `json:"path" jsonschema:"Remote destination for upload or source for download"`
+	Overwrite bool   `json:"overwrite,omitempty" jsonschema:"Explicitly allow replacing an existing regular file"`
+	SHA256    string `json:"sha256,omitempty" jsonschema:"Optional expected SHA-256 hex digest; checked before publishing an upload"`
+}
+
+type SSHMCPUploadRequest struct {
+	SSHMCPTransferRequest
+	SourceURL string  `json:"source_url,omitempty" jsonschema:"HTTP(S) download URL to stream directly to the SSH host; omit to obtain a binary HTTP PUT endpoint for a file on the client's computer"`
+	Content   *string `json:"content,omitempty" jsonschema:"Legacy inline base64 for small files only; use source_url or the returned HTTP endpoint for deployment packages"`
+}
+
+type SSHMCPDownloadRequest struct {
+	HostID int64  `json:"host_id"`
+	Path   string `json:"path"`
+	Inline bool   `json:"inline,omitempty" jsonschema:"Legacy inline base64 for small files; default false returns a streaming HTTP GET endpoint"`
+}
+
+type SSHMCPTransferResult struct {
+	Success bool   `json:"success"`
+	Bytes   int64  `json:"bytes"`
+	SHA256  string `json:"sha256"`
+}

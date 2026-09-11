@@ -66,23 +66,30 @@ func TestSSHMCPHTTPBoundary(t *testing.T) {
 		{name: "query token", peer: "192.168.1.42:50000", host: "192.168.1.1:8080", query: "?token=synthetic", status: 400},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			request := httptest.NewRequest(http.MethodGet, "http://"+test.host+service.SSHMCPEndpoint+test.query, nil)
-			request.RemoteAddr = test.peer
-			request.Header.Set("Accept", "text/event-stream")
-			request.AddCookie(&http.Cookie{Name: apiTokenCookie, Value: "test-admin-token"})
-			if test.auth != "" {
-				request.Header.Set("Authorization", "Bearer "+test.auth)
-			}
-			if test.origin != "" {
-				request.Header.Set("Origin", test.origin)
-			}
-			if test.forwarded != "" {
-				request.Header.Set("X-Forwarded-For", test.forwarded)
-			}
-			response := httptest.NewRecorder()
-			router.ServeHTTP(response, request)
-			if response.Code != test.status {
-				t.Fatalf("status = %d, want %d: %s", response.Code, test.status, response.Body.String())
+			for _, endpoint := range []string{service.SSHMCPEndpoint, service.SSHMCPEndpoint + "/files/99999"} {
+				request := httptest.NewRequest(http.MethodGet, "http://"+test.host+endpoint+test.query, nil)
+				request.RemoteAddr = test.peer
+				request.Header.Set("X-SSH-Path", "test.bin")
+				request.Header.Set("Accept", "text/event-stream")
+				request.AddCookie(&http.Cookie{Name: apiTokenCookie, Value: "test-admin-token"})
+				if test.auth != "" {
+					request.Header.Set("Authorization", "Bearer "+test.auth)
+				}
+				if test.origin != "" {
+					request.Header.Set("Origin", test.origin)
+				}
+				if test.forwarded != "" {
+					request.Header.Set("X-Forwarded-For", test.forwarded)
+				}
+				response := httptest.NewRecorder()
+				router.ServeHTTP(response, request)
+				want := test.status
+				if endpoint != service.SSHMCPEndpoint && want == http.StatusMethodNotAllowed {
+					want = http.StatusNotFound
+				}
+				if response.Code != want {
+					t.Fatalf("%s status = %d, want %d: %s", endpoint, response.Code, want, response.Body.String())
+				}
 			}
 		})
 	}
