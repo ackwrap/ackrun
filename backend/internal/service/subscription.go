@@ -1,9 +1,11 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -263,6 +265,10 @@ func (svc *SubscriptionService) SyncAll() (*model.ActionResponse, error) {
 }
 
 func (svc *SubscriptionService) runSync(id int64) {
+	svc.runSyncWithReconcile(id, true)
+}
+
+func (svc *SubscriptionService) runSyncWithReconcile(id int64, reconcile bool) {
 	releaseConfigUpdate := svc.store.HoldConfigUpdate()
 	defer releaseConfigUpdate()
 	if !svc.beginSync(id) {
@@ -415,7 +421,7 @@ func (svc *SubscriptionService) runSync(id int64) {
 	} else {
 		svc.broadcastSubscription(updated, "updated", 100)
 	}
-	if hasChanges && svc.reconciler != nil {
+	if hasChanges && reconcile && svc.reconciler != nil {
 		svc.reconciler.Trigger("subscription.sync")
 	}
 }
@@ -613,6 +619,10 @@ func (svc *SubscriptionService) fetchAndParse(rawURL string, userAgent string, t
 	req.Header.Set("User-Agent", userAgent)
 	resp, err := client.Do(req)
 	if err != nil {
+		var requestErr *url.Error
+		if errors.As(err, &requestErr) {
+			return nil, fmt.Errorf("subscription request failed: %w", requestErr.Err)
+		}
 		return nil, err
 	}
 	defer resp.Body.Close()

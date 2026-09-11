@@ -18,6 +18,7 @@ import {
   Route,
   ChevronDown,
   SquareTerminal,
+  Sparkles,
 } from "lucide-vue-next";
 const props = withDefaults(
   defineProps<{ collapsed: boolean; mobileOpen?: boolean }>(),
@@ -79,6 +80,16 @@ function toggleAdvanced() {
       >
     </div>
     <nav class="flex-1 space-y-0.5 overflow-y-auto px-4 py-5">
+      <RouterLink
+        to="/simple"
+        title="切换简易模式"
+        class="mb-3 flex min-h-10 items-center gap-3 rounded-[var(--radius-lg)] border border-[var(--border-default)] px-4 text-[var(--color-primary-hover)]"
+        :class="collapsed && 'lg:justify-center lg:px-0'"
+        @click="$emit('close')"
+      >
+        <Sparkles :size="18" />
+        <span :class="collapsed ? 'lg:hidden' : ''">简易模式</span>
+      </RouterLink>
       <RouterLink
         v-for="[label, icon, path] in items"
         :key="path"
