@@ -54,6 +54,29 @@ sing-box is powerful, but a production-sized JSON configuration is not pleasant 
 - **Operations**: core lifecycle control, WebSocket events, logs, connections, traffic, diagnostics, and update checks.
 - **Custom runtime**: integration with [ackwrap/sing-box-wrap](https://github.com/ackwrap/sing-box-wrap), including Ackwrap-specific VLESS encryption support.
 
+## SSH MCP over HTTP
+
+Open **SSH Hosts > MCP Configuration** to enable the built-in MCP service and generate a dedicated token. No separate ssh-mcp2 process is required. The endpoint is `/mcp/ssh` on Ackwrap's existing HTTP port. A client configuration looks like:
+
+```json
+{
+  "mcpServers": {
+    "ackwrap-ssh": {
+      "url": "http://192.168.1.1:8080/mcp/ssh",
+      "headers": { "Authorization": "Bearer <MCP_TOKEN>" }
+    }
+  }
+}
+```
+
+Replace the example address with Ackwrap's LAN IP. The page can copy the complete configuration when a token is generated; later visits show a template. Only a token hash is stored. Token rotation rejects the previous token on subsequent requests, and disabling MCP rejects new requests. Already running operations may finish within their timeout.
+
+The service is disabled by default. Each request requires the dedicated MCP bearer token, including requests from localhost. The management API token and browser cookies cannot authenticate MCP requests. Direct peers must use loopback, private IPv4/IPv6, or link-local addresses; public peers, public/domain Host headers, foreign Origins, query parameters and forwarded requests are rejected. Use the LAN IP directly. HTTP provides no transport encryption, so use this endpoint only on a trusted LAN; do not forward it through a public proxy or router port mapping.
+
+Available tools: `ssh_list_servers`, `ssh_list_credentials` (metadata only), `ssh_add_server`, `ssh_update_server`, `ssh_delete_server`, `ssh_test_connection`, `ssh_exec`, `ssh_exec_multi`, `ssh_read_file`, `ssh_write_file`, `ssh_upload`, `ssh_download`, `ssh_list_dir`, and `ssh_stat`. Hosts are addressed by `host_id`, and host creation references an existing `credential_id`. Host updates take a complete `config` object. Jump chains from ssh-mcp2 are not imported; Ackwrap's saved direct or node-exposure connection paths and Host Key verification remain authoritative. Confirm unknown or changed Host Keys in the host page.
+
+Command timeout defaults to 30 seconds (maximum 600), with stdout and stderr each capped at 1 MiB and truncation reported. Batch execution accepts up to 10 hosts. File transfers are limited to 1 MiB: read/write use UTF-8, while download/upload exchange Base64 content over HTTP. Paths refer to the remote SSH host, not the AI client's filesystem. File replacement requires `overwrite: true` and SFTP atomic-rename support. Directory results return at most 1000 entries and indicate truncation. Operation logs record tool names, host IDs and results without command text, file content or credentials.
+
 ## How It Works
 
 ```mermaid

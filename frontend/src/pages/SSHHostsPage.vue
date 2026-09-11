@@ -11,6 +11,7 @@ import {
   Fingerprint,
   KeyRound,
   Laptop,
+  Plug,
   Pencil,
   Plus,
   Share2,
@@ -46,13 +47,14 @@ import SSHSingboxDeployModal from "./ssh/SSHSingboxDeployModal.vue";
 import SSHCredentialFormModal from "./ssh/SSHCredentialFormModal.vue";
 import SSHHostShareModal from "./ssh/SSHHostShareModal.vue";
 import SSHHostTable from "./ssh/SSHHostTable.vue";
+import SSHMCPPanel from "./ssh/SSHMCPPanel.vue";
 import { useSSHHostDetails } from "./ssh/useSSHHostDetails";
 
 const SSHTerminalModal = defineAsyncComponent(
   () => import("./ssh/SSHTerminalModal.vue"),
 );
 
-type PageTab = "hosts" | "credentials";
+type PageTab = "hosts" | "credentials" | "mcp";
 interface CredentialForm {
   name: string;
   auth_type: SSHCredentialAuthType;
@@ -455,19 +457,21 @@ onBeforeUnmount(() => {
   disposeDetails();
   const current = quickShell.value;
   quickShell.value = null;
-  if (current) void sshApi.closeSession(current.session.session_id).catch(() => {});
+  if (current)
+    void sshApi.closeSession(current.session.session_id).catch(() => {});
 });
 </script>
 
 <template>
   <div class="space-y-5">
-    <PageHeader
-      title="SSH 主机"
-    >
+    <PageHeader title="SSH 主机">
       <template #actions>
         <Button
           v-if="tab === 'hosts'"
-          @click="sharingHosts = []; shareOpen = true"
+          @click="
+            sharingHosts = [];
+            shareOpen = true;
+          "
         >
           <template #icon><Upload :size="14" /></template>导入主机
         </Button>
@@ -485,7 +489,11 @@ onBeforeUnmount(() => {
         >
           <template #icon><Plus :size="14" /></template>新增主机
         </Button>
-        <Button v-else variant="primary" @click="openCreateCredential()">
+        <Button
+          v-else-if="tab === 'credentials'"
+          variant="primary"
+          @click="openCreateCredential()"
+        >
           <template #icon><Plus :size="14" /></template>新增凭据
         </Button>
       </template>
@@ -500,6 +508,7 @@ onBeforeUnmount(() => {
         v-for="item in [
           { id: 'hosts', label: '主机', icon: Laptop },
           { id: 'credentials', label: '凭据', icon: KeyRound },
+          { id: 'mcp', label: 'MCP 配置', icon: Plug },
         ] as const"
         :key="item.id"
         class="relative inline-flex h-11 items-center gap-2 px-4 text-sm font-medium"
@@ -536,10 +545,15 @@ onBeforeUnmount(() => {
       @details="openDetails"
       @deploy-singbox="openSingboxDeploy"
       @edit="openEditHost"
-      @share="sharingHosts = [$event]; shareOpen = true"
+      @share="
+        sharingHosts = [$event];
+        shareOpen = true;
+      "
       @delete="deletingHost = $event"
       @show-host-key="showHostKey"
     />
+
+    <SSHMCPPanel v-else-if="tab === 'mcp'" />
 
     <Card v-else padding="none">
       <div

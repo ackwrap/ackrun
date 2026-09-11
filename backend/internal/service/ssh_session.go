@@ -232,6 +232,9 @@ func (svc *SSHHostService) Close() {
 		ids = append(ids, id)
 	}
 	svc.closed = true
+	for _, cancel := range svc.mcpCancels {
+		cancel()
+	}
 	svc.sessionMu.Unlock()
 	svc.singboxDeployMu.Lock()
 	deployCancels := make([]context.CancelFunc, 0, len(svc.singboxDeployCancels))

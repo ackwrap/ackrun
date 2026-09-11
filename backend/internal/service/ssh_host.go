@@ -63,6 +63,7 @@ type SSHHostService struct {
 	pendingByHost   map[int64]int
 	realtime        *RealtimeService
 	closed          bool
+	mcpCancels      map[context.Context]context.CancelFunc
 
 	sftpTextLockMu sync.Mutex
 	sftpTextLocks  map[string]*sshSFTPTextLock

@@ -179,6 +179,7 @@ func New(options Options) (*Application, error) {
 	router.Use(api.SecurityMiddleware(options.APIToken))
 	router.Use(api.SimpleSetupMutationGuard(simpleSetupSvc))
 	api.RegisterSimpleSetupRoutes(router, simpleSetupSvc)
+	api.RegisterSSHMCPRoutes(router, service.NewSSHMCPService(db), sshHostSvc)
 	api.RegisterRoutes(router, runtimeSvc, installerSvc, singboxSvc, configSvc, settingsSvc, subscriptionSvc, nodeSvc, nodeExposureSvc, routeRuleSvc, proxyCollectionSvc, configGenSvc, realtimeSvc, coreLogSvc, dnsSvc, nodeGroupSvc, reconcileSvc, coreRestartSvc, appUpdateSvc, dashboardSvc, advancedSvc, alertSvc, sshHostSvc)
 	if err := registerWebUI(router); err != nil {
 		reconcileSvc.Close()

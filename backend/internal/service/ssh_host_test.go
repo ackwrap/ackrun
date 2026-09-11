@@ -384,6 +384,7 @@ func TestSSHSessionTerminationPreventsAttachCommit(t *testing.T) {
 }
 
 type testSSHServer struct {
+	exec          func(ssh.Channel, string)
 	listener      net.Listener
 	config        *ssh.ServerConfig
 	hostKey       ssh.PublicKey
@@ -408,6 +409,7 @@ func newSFTPTestSSHServer(t *testing.T, password, root string) *testSSHServer {
 }
 
 type testSSHServerOptions struct {
+	exec      func(ssh.Channel, string)
 	password  string
 	publicKey ssh.PublicKey
 	echoShell bool
@@ -440,6 +442,7 @@ func newConfiguredTestSSHServer(t *testing.T, options testSSHServerOptions) *tes
 		t.Fatal(err)
 	}
 	server := &testSSHServer{
+		exec:     options.exec,
 		listener: listener, config: config, hostKey: signer.PublicKey(),
 		echoShell: options.echoShell, sftpRoot: options.sftpRoot, done: make(chan struct{}),
 	}
@@ -517,6 +520,16 @@ func (server *testSSHServer) serveConnection(conn net.Conn) {
 			defer accepted.Close()
 			var shellOnce sync.Once
 			for request := range requests {
+				if request.Type == "exec" && server.exec != nil {
+					var payload struct{ Command string }
+					if err := ssh.Unmarshal(request.Payload, &payload); err != nil {
+						_ = request.Reply(false, nil)
+						return
+					}
+					_ = request.Reply(true, nil)
+					server.exec(accepted, payload.Command)
+					return
+				}
 				supported := request.Type == "pty-req" || request.Type == "shell" || request.Type == "window-change"
 				if request.Type == "subsystem" {
 					var payload struct{ Name string }
