@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { Clock3, Cpu, Menu, Moon, Sun } from "lucide-vue-next";
+import { Clock3, Cpu, Menu, Moon, Sparkles, Sun } from "lucide-vue-next";
 import Sidebar from "./Sidebar.vue";
 import PageSkeleton from "./PageSkeleton.vue";
 import ErrorBoundary from "./ErrorBoundary.vue";
@@ -148,6 +148,14 @@ onBeforeUnmount(() => {
               coreRuntimeDuration
             }}</span>
           </div>
+          <RouterLink
+            to="/simple"
+            title="切换简易模式"
+            aria-label="切换简易模式"
+            class="inline-flex h-9 shrink-0 items-center gap-2 whitespace-nowrap rounded-full border border-[var(--border-default)] bg-[var(--button-secondary-bg)] px-3 text-xs"
+          >
+            <Sparkles :size="15" aria-hidden="true" />简易
+          </RouterLink>
           <button
             class="inline-flex h-9 items-center gap-2 rounded-full border border-[var(--border-default)] bg-[var(--button-secondary-bg)] px-3 text-xs"
             @click="theme = theme === 'dark' ? 'light' : 'dark'"
