@@ -22,10 +22,30 @@ end
 
 local m = Map("ackwrap", translate("Ackwrap"))
 m.description = translate("Ackwrap 提供 sing-box 配置、订阅、规则与运行管理 Web 界面。")
+m.apply_on_parse = false
+local repair_requested = false
+
+local function show_action_result(output, fallback)
+	local marker, message = trim(output):match("^([^\n]+)\n?(.*)$")
+	message = trim(message)
+	if marker == "OK" or marker == "ERROR" then
+		m.message = message ~= "" and message or fallback
+	else
+		m.message = fallback
+	end
+end
+
+function m.on_after_apply()
+	if repair_requested then return end
+	show_action_result(sys.exec("/etc/init.d/ackwrap apply_settings 2>&1"),
+		translate("应用失败：未收到有效执行结果，请检查系统日志。"))
+end
 
 local status = m:section(SimpleSection, translate("状态"))
 status.template = "ackwrap/status"
-status.running = (sys.call("pidof ackwrap >/dev/null") == 0)
+function m.on_init()
+	status.running = (sys.call("pidof /usr/bin/ackwrap >/dev/null 2>&1") == 0)
+end
 status.url = dispatcher.build_url("admin", "services", "ackwrap", "open")
 
 local settings = m:section(TypedSection, "ackwrap", translate("设置"))
@@ -34,6 +54,7 @@ settings.anonymous = true
 local enabled = settings:option(Flag, "enabled", translate("启用"))
 enabled.default = enabled.enabled
 enabled.rmempty = false
+enabled.description = translate("勾选后点击“保存并应用”启动服务；仅点击“保存”不会启动。")
 
 local listen_port = settings:option(Value, "port", translate("监听端口"))
 listen_port.datatype = "range(1,65535)"
@@ -75,16 +96,10 @@ network_repair.inputtitle = translate("立即修复")
 network_repair.inputstyle = "apply"
 network_repair.description = translate("立即执行强制修复：停止 Ackwrap 和 sing-box，清理残留的 DNS 接管、策略路由及防火墙规则。断电导致记录缺失或损坏也可清理；完成后可重新启动服务。")
 function network_repair.write()
-	local output = trim(sys.exec("/etc/init.d/ackwrap network_repair --force 2>&1"))
-	local marker, message = output:match("^([^\n]+)\n?(.*)$")
-	message = trim(message)
-	if marker == "OK" then
-		m.message = message ~= "" and message or translate("网络修复完成。")
-	elseif marker == "ERROR" then
-		m.message = message ~= "" and message or translate("网络修复失败，请检查系统日志。")
-	else
-		m.message = translate("网络修复失败：未收到有效执行结果。")
-	end
+	if repair_requested then return end
+	repair_requested = true
+	show_action_result(sys.exec("/etc/init.d/ackwrap network_repair --force 2>&1"),
+		translate("网络修复失败：未收到有效执行结果，请检查系统日志。"))
 end
 
 return m

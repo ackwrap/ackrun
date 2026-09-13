@@ -3,8 +3,8 @@
 USE_PROCD=1
 START=95
 STOP=10
-EXTRA_COMMANDS="network_repair"
-EXTRA_HELP="\tnetwork_repair [--force]\tRestore DNS and network state; --force stops services and clears sing-box remnants"
+EXTRA_COMMANDS="network_repair apply_settings"
+EXTRA_HELP="\tnetwork_repair [--force]\tRestore DNS and network state; --force stops services and clears sing-box remnants\n\tapply_settings\tApply saved settings and verify the service state"
 
 generate_token() {
 	local token
@@ -72,6 +72,36 @@ reload_service() {
 	start
 }
 
+apply_settings() {
+	local enabled attempts running
+	config_load ackwrap
+	config_get_bool enabled main enabled 1
+	if ! reload_service >/dev/null 2>&1; then
+		echo "ERROR"
+		echo "应用失败：无法启动 Ackwrap，请检查端口、Token 和系统日志。"
+		return 1
+	fi
+	attempts=0
+	while [ "$attempts" -lt 10 ]; do
+		running=0
+		pidof /usr/bin/ackwrap >/dev/null 2>&1 && running=1
+		if [ "$running" -eq "$enabled" ]; then
+			echo "OK"
+			if [ "$enabled" -eq 1 ]; then
+				echo "设置已应用，Ackwrap 已启动。"
+			else
+				echo "设置已应用，Ackwrap 已停止。"
+			fi
+			return 0
+		fi
+		attempts=$((attempts + 1))
+		sleep 1
+	done
+	echo "ERROR"
+	echo "设置已保存，但 Ackwrap 未达到预期运行状态，请检查系统日志。"
+	return 1
+}
+
 network_repair() {
 	local data_dir status output message force_arg attempts
 	force_arg=""
@@ -87,10 +117,11 @@ network_repair() {
 	if [ -n "$force_arg" ]; then
 		stop >/dev/null 2>&1
 		attempts=0
-		while pidof ackwrap >/dev/null 2>&1; do
+		# The init script is also named ackwrap; match only the daemon executable.
+		while pidof /usr/bin/ackwrap >/dev/null 2>&1; do
 			attempts=$((attempts + 1))
 			if [ "$attempts" -ge 20 ]; then
-				killall -KILL ackwrap >/dev/null 2>&1
+				killall -KILL /usr/bin/ackwrap >/dev/null 2>&1
 				break
 			fi
 			sleep 1

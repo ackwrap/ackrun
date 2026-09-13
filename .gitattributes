@@ -1,0 +1,4 @@
+/openwrt/core/etc/init.d/* text eol=lf
+/openwrt/core/etc/uci-defaults/* text eol=lf
+/openwrt/luci/etc/uci-defaults/* text eol=lf
+/openwrt/control/*/* text eol=lf

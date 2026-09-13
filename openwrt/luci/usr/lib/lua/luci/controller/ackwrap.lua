@@ -27,7 +27,7 @@ function action_status()
 	local http = require "luci.http"
 	http.prepare_content("application/json")
 	http.write_json({
-		running = (sys.call("pidof ackwrap >/dev/null") == 0),
+		running = (sys.call("pidof /usr/bin/ackwrap >/dev/null 2>&1") == 0),
 		url = require("luci.dispatcher").build_url("admin", "services", "ackwrap", "open")
 	})
 end
