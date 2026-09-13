@@ -161,7 +161,11 @@ func cleanupPlatformSingboxState(statePath string) (platformCleanupResult, error
 }
 
 func linuxSingboxProcessRunning() (bool, error) {
-	entries, err := os.ReadDir("/proc")
+	return linuxSingboxProcessRunningAt("/proc")
+}
+
+func linuxSingboxProcessRunningAt(procRoot string) (bool, error) {
+	entries, err := os.ReadDir(procRoot)
 	if err != nil {
 		return false, fmt.Errorf("read /proc: %w", err)
 	}
@@ -172,7 +176,7 @@ func linuxSingboxProcessRunning() (bool, error) {
 		if _, err := strconv.Atoi(entry.Name()); err != nil {
 			continue
 		}
-		commPath := filepath.Join("/proc", entry.Name(), "comm")
+		commPath := filepath.Join(procRoot, entry.Name(), "comm")
 		name, err := os.ReadFile(commPath)
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -181,6 +185,23 @@ func linuxSingboxProcessRunning() (bool, error) {
 			return false, fmt.Errorf("read process identity %s: %w", commPath, err)
 		}
 		if strings.TrimSpace(string(name)) == "sing-box" {
+			status, err := os.ReadFile(filepath.Join(procRoot, entry.Name(), "status"))
+			if os.IsNotExist(err) {
+				continue
+			}
+			if err != nil {
+				return false, fmt.Errorf("read sing-box process status: %w", err)
+			}
+			exited := false
+			for _, line := range strings.Split(string(status), "\n") {
+				fields := strings.Fields(line)
+				if len(fields) > 1 && fields[0] == "State:" && (fields[1] == "Z" || fields[1] == "X") {
+					exited = true
+				}
+			}
+			if exited {
+				continue
+			}
 			return true, nil
 		}
 	}

@@ -73,9 +73,9 @@ logger.default = logger.enabled
 local network_repair = settings:option(Button, "_network_repair", translate("网络修复"))
 network_repair.inputtitle = translate("立即修复")
 network_repair.inputstyle = "apply"
-network_repair.description = translate("核心异常停止后，恢复 Ackwrap 接管的 DNS、路由和防火墙状态。检测到 sing-box 核心仍在运行时将拒绝修复。")
+network_repair.description = translate("立即执行强制修复：停止 Ackwrap 和 sing-box，清理残留的 DNS 接管、策略路由及防火墙规则。断电导致记录缺失或损坏也可清理；完成后可重新启动服务。")
 function network_repair.write()
-	local output = trim(sys.exec("/etc/init.d/ackwrap network_repair 2>&1"))
+	local output = trim(sys.exec("/etc/init.d/ackwrap network_repair --force 2>&1"))
 	local marker, message = output:match("^([^\n]+)\n?(.*)$")
 	message = trim(message)
 	if marker == "OK" then

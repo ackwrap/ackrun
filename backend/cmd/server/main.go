@@ -54,17 +54,18 @@ func loadServerConfig() (serverConfig, error) {
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "network-repair" {
-		if len(os.Args) != 2 {
-			fmt.Fprintln(os.Stderr, "网络修复失败：network-repair 不接受额外参数")
+		force := len(os.Args) == 3 && os.Args[2] == "--force"
+		if len(os.Args) != 2 && !force {
+			fmt.Fprintln(os.Stderr, "用法：ackwrap network-repair [--force]")
 			os.Exit(1)
 		}
-		message, err := service.RepairNetwork(paths.Default())
+		message, err := service.RepairNetwork(paths.Default(), force)
 		if err != nil {
 			if errors.Is(err, service.ErrNetworkRepairCoreRunning) {
-				fmt.Fprintf(os.Stderr, "网络修复失败：%v\n", err)
+				fmt.Fprintf(os.Stderr, "网络修复失败：%s\n", strings.Join(strings.Fields(err.Error()), " "))
 				os.Exit(2)
 			} else {
-				fmt.Fprintln(os.Stderr, "网络修复失败：未能安全恢复 Ackwrap 网络状态，请检查系统日志。")
+				fmt.Fprintf(os.Stderr, "网络修复失败：%s\n", strings.Join(strings.Fields(err.Error()), " "))
 			}
 			os.Exit(1)
 		}

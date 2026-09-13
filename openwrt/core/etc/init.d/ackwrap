@@ -4,7 +4,7 @@ USE_PROCD=1
 START=95
 STOP=10
 EXTRA_COMMANDS="network_repair"
-EXTRA_HELP="\tnetwork_repair\tSafely restore Ackwrap-owned DNS and network state"
+EXTRA_HELP="\tnetwork_repair [--force]\tRestore DNS and network state; --force stops services and clears sing-box remnants"
 
 generate_token() {
 	local token
@@ -73,21 +73,43 @@ reload_service() {
 }
 
 network_repair() {
-	local data_dir status
-	if pidof sing-box >/dev/null 2>&1; then
+	local data_dir status output message force_arg attempts
+	force_arg=""
+	case "$*" in
+		"") ;;
+		--force) force_arg="--force" ;;
+		*)
+			echo "ERROR"
+			echo "用法：/etc/init.d/ackwrap network_repair [--force]"
+			return 1
+			;;
+	esac
+	if [ -n "$force_arg" ]; then
+		stop >/dev/null 2>&1
+		attempts=0
+		while pidof ackwrap >/dev/null 2>&1; do
+			attempts=$((attempts + 1))
+			if [ "$attempts" -ge 20 ]; then
+				killall -KILL ackwrap >/dev/null 2>&1
+				break
+			fi
+			sleep 1
+		done
+	elif pidof sing-box >/dev/null 2>&1; then
 		echo "ERROR"
 		echo "网络修复失败：sing-box 核心正在运行，请先停止核心后再执行网络修复。"
 		return 2
 	fi
 	config_load ackwrap
 	config_get data_dir main data_dir /etc/ackwrap
-	ACKWRAP_DATA_DIR="$data_dir" ACKWRAP_BINARY_DIR="$data_dir/bin" /usr/bin/ackwrap network-repair >/dev/null 2>&1
+	output="$(ACKWRAP_DATA_DIR="$data_dir" ACKWRAP_BINARY_DIR="$data_dir/bin" /usr/bin/ackwrap network-repair $force_arg 2>&1)"
 	status=$?
+	message="$(printf '%s\n' "$output" | tail -n 1)"
 	case "$status" in
 		0)
 			logger -t ackwrap-network-repair "network repair completed"
 			echo "OK"
-			echo "网络修复完成：已检查并恢复 Ackwrap 接管的网络状态。"
+			echo "${message:-网络修复完成：已检查并恢复 Ackwrap 接管的网络状态。}"
 			;;
 		2)
 			logger -t ackwrap-network-repair "network repair rejected because sing-box is running"
@@ -95,9 +117,9 @@ network_repair() {
 			echo "网络修复失败：sing-box 核心正在运行，请先停止核心后再执行网络修复。"
 			;;
 		*)
-			logger -t ackwrap-network-repair "network repair failed"
+			logger -t ackwrap-network-repair "network repair failed: $message"
 			echo "ERROR"
-			echo "网络修复失败：未能安全恢复 Ackwrap 网络状态，请检查系统日志。"
+			echo "${message:-网络修复失败，请检查系统日志。}"
 			;;
 	esac
 	return "$status"

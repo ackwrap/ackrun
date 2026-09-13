@@ -528,7 +528,7 @@ func (svc *SingboxService) RecoverStaleState() error {
 }
 
 func (svc *SingboxService) recoverStoppedState(forceDNS, rejectRunning bool) error {
-	recovery, err := svc.recoverStoppedStateDetailed(forceDNS)
+	recovery, err := svc.recoverStoppedStateDetailed(forceDNS, false)
 	if err != nil {
 		return err
 	}
@@ -544,8 +544,12 @@ type stoppedStateRecovery struct {
 	DNSMasqRestored bool
 }
 
-func (svc *SingboxService) recoverStoppedStateDetailed(forceDNS bool) (stoppedStateRecovery, error) {
-	result, cleanupErr := cleanupPlatformSingboxState(svc.routeTableStatePath())
+func (svc *SingboxService) recoverStoppedStateDetailed(forceDNS, forceCleanup bool) (stoppedStateRecovery, error) {
+	cleanup := cleanupPlatformSingboxState
+	if forceCleanup {
+		cleanup = forceCleanupPlatformSingboxState
+	}
+	result, cleanupErr := cleanup(svc.routeTableStatePath())
 	if result.ProcessRunning {
 		logging.Info("core.cleanup", "skipping stale-state cleanup because a sing-box process is running")
 		return stoppedStateRecovery{ProcessRunning: true}, nil

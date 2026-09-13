@@ -255,6 +255,12 @@ func TestIsQualifiedDomain(t *testing.T) {
 }
 
 func TestRouteRuleServicePreviewRuleSubscriptions(t *testing.T) {
+	payload := testBinaryRuleSet(t, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(payload)
+	}))
+	defer upstream.Close()
+
 	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -262,10 +268,11 @@ func TestRouteRuleServicePreviewRuleSubscriptions(t *testing.T) {
 	defer db.Close()
 
 	svc := newTestRouteRuleService(t, db)
-	created, err := svc.CreateSubscription(&model.RouteRuleSubscriptionRequest{Name: "GeoSite CN", Enabled: true, URL: "https://example.com/geosite-cn.srs", Format: "binary", UseProxy: true})
+	created, err := svc.CreateSubscription(&model.RouteRuleSubscriptionRequest{Name: "GeoSite CN", Enabled: true, URL: upstream.URL + "/geosite-cn.srs", Format: "binary", UseProxy: true})
 	if err != nil {
 		t.Fatalf("create rule subscription: %v", err)
 	}
+	defer waitForTestRuleSubscriptionSync(t, db, created.ID)
 	if created.Tag == "" {
 		t.Fatalf("expected generated tag: %+v", created)
 	}
@@ -306,6 +313,11 @@ func TestRouteRuleSubscriptionValidation(t *testing.T) {
 }
 
 func TestRouteRuleSubscriptionAutoDetectsClashYAML(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("payload:\n  - DOMAIN-SUFFIX,example.com\n"))
+	}))
+	defer upstream.Close()
+
 	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -313,10 +325,11 @@ func TestRouteRuleSubscriptionAutoDetectsClashYAML(t *testing.T) {
 	defer db.Close()
 
 	svc := newTestRouteRuleService(t, db)
-	created, err := svc.CreateSubscription(&model.RouteRuleSubscriptionRequest{Name: "Other AI", Enabled: true, URL: "https://gh-proxy.com/https://raw.githubusercontent.com/g2x-cmd/rules/refs/heads/main/Providers/OtherAI.yml", Format: "auto"})
+	created, err := svc.CreateSubscription(&model.RouteRuleSubscriptionRequest{Name: "Other AI", Enabled: true, URL: upstream.URL + "/OtherAI.yml", Format: "auto"})
 	if err != nil {
 		t.Fatalf("create rule subscription: %v", err)
 	}
+	defer waitForTestRuleSubscriptionSync(t, db, created.ID)
 	if created.Format != "clash" {
 		t.Fatalf("expected clash format, got %+v", created)
 	}
@@ -334,6 +347,29 @@ func TestRouteRuleSubscriptionAutoDetectsClashYAML(t *testing.T) {
 	if ruleSet["format"] != "source" || ruleSet["url"] != expectedURL {
 		t.Fatalf("unexpected converted rule set preview: %+v", ruleSet)
 	}
+}
+
+// Creation starts a background sync; let it finish before closing the database
+// and removing temporary files, including when a preview assertion fails.
+func waitForTestRuleSubscriptionSync(t *testing.T, db *store.Store, id int64) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		item, err := db.GetRouteRuleSubscription(id)
+		if err != nil {
+			t.Errorf("read subscription sync result: %v", err)
+			return
+		}
+		if item != nil && item.SyncStatus == "updated" {
+			return
+		}
+		if item != nil && item.SyncStatus == "failed" {
+			t.Errorf("fixture subscription sync failed: %s", item.SyncError)
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Error("fixture subscription sync did not finish before cleanup")
 }
 
 func TestRouteRuleSubscriptionContentConvertsClashYAML(t *testing.T) {
