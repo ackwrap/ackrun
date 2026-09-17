@@ -63,16 +63,6 @@ function assetFormat(item: GeoAsset) {
   const extension = path.match(/\.([^./\\]+)$/)?.[1];
   return extension ? `${item.type}.${extension.toLowerCase()}` : item.type;
 }
-function assetProjectURL(item: GeoAsset) {
-  if (item.source === "loyalsoldier") {
-    return item.type === "geoip"
-      ? "https://github.com/Loyalsoldier/geoip"
-      : "https://github.com/Loyalsoldier/v2ray-rules-dat";
-  }
-  return item.type === "geoip"
-    ? "https://github.com/SagerNet/sing-geoip"
-    : "https://github.com/SagerNet/sing-geosite";
-}
 function formatUpdatedAt(value: number) {
   if (!value) return "尚未更新";
   const timestamp = value < 1_000_000_000_000 ? value * 1000 : value;
@@ -169,15 +159,6 @@ async function lookupTag(offset = 0) {
                     : x.sync_status
                 }}
               </span>
-            </div>
-            <div class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs">
-              <a
-                :href="assetProjectURL(x)"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="text-[var(--color-primary)] underline underline-offset-2"
-                >上游项目</a
-              >
             </div>
           </div>
           <div class="flex shrink-0 gap-2">
