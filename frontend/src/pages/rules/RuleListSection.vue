@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Eye, Plus, Share2, Trash2, Upload } from "lucide-vue-next";
+import FlagText from "@/components/ui/FlagText.vue";
 import OrderButtons from "@/components/ui/OrderButtons.vue";
 import type { RouteRule, RouteRuleSubscription } from "@/services/types";
 const props = defineProps<{
@@ -158,10 +159,10 @@ function actionLabel(rule: RouteRule) {
               </div>
             </td>
             <td>
-              <span class="font-medium text-[var(--text-primary)]">{{
-                isFinalStrategy(r) ? "最终策略" : r.name
-              }}</span
-              ><small
+              <FlagText
+                class="font-medium text-[var(--text-primary)]"
+                :text="isFinalStrategy(r) ? '最终策略' : r.name"
+              /><small
                 v-if="r.is_system"
                 class="ml-2 rounded-full bg-[var(--button-primary-bg)] px-2 py-0.5 text-[10px] text-[var(--button-primary-text)]"
                 >系统默认</small
