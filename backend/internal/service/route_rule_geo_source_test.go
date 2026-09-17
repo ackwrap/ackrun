@@ -175,7 +175,7 @@ func TestLoyalsoldierSourcePinsPreviewRouteAndDNSButNotSubscriptions(t *testing.
 				continue
 			}
 			u, err := url.Parse(set["url"].(string))
-			if err != nil || set["format"] != "source" || u.Query().Get("source") != "loyalsoldier" || !validGeoAssetVersion(u.Query().Get("version")) {
+			if err != nil || set["format"] != "binary" || u.Query().Get("format") != "binary" || u.Query().Get("source") != "loyalsoldier" || !validGeoAssetVersion(u.Query().Get("version")) {
 				t.Fatalf("un-pinned %s rule set: %+v", name, set)
 			}
 			foundIP = foundIP || set["tag"] == "geoip-telegram"

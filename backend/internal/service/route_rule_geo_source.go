@@ -450,17 +450,25 @@ func applyGeneratedGeoSource(db *store.Store, ruleSets []map[string]any) error {
 		query := parsed.Query()
 		query.Set("source", settings.GeoSource)
 		query.Set("version", version)
+		query.Set("format", "binary")
 		parsed.RawQuery = query.Encode()
 		ruleSet["url"] = parsed.String()
-		ruleSet["format"] = "source"
+		ruleSet["format"] = "binary"
 	}
 	return nil
 }
 
-func (svc *RouteRuleService) GeneratedGeoRuleSetContentForSource(ctx context.Context, tag, source, version string) ([]byte, string, error) {
+func (svc *RouteRuleService) GeneratedGeoRuleSetContentForSource(ctx context.Context, tag, source, version string, requestedFormat ...string) ([]byte, string, error) {
 	source, err := model.NormalizeGeoSource(source)
 	if err != nil {
 		return nil, "", err
+	}
+	format := ""
+	if len(requestedFormat) > 0 {
+		format = requestedFormat[0]
+	}
+	if format != "" && format != "source" && format != "binary" {
+		return nil, "", fmt.Errorf("unsupported generated geo rule-set format: %s", format)
 	}
 	if source == model.GeoSourceSagerNet {
 		return svc.GeneratedGeoRuleSetContentContext(ctx, tag)
@@ -468,6 +476,9 @@ func (svc *RouteRuleService) GeneratedGeoRuleSetContentForSource(ctx context.Con
 	tag = strings.ToLower(strings.TrimSpace(tag))
 	if !isGeneratedGeoRuleSetTag(tag) {
 		return nil, "", fmt.Errorf("invalid generated geo rule set tag")
+	}
+	if format == "binary" && strings.HasPrefix(tag, "geoip-") {
+		return svc.loyalsoldierGeoIPRuleSetContent(ctx, tag)
 	}
 	if svc.paths == nil || svc.paths.GeoDir == "" || svc.paths.RulesDir == "" {
 		return nil, "", fmt.Errorf("geo directories are not configured")
@@ -510,6 +521,11 @@ func (svc *RouteRuleService) GeneratedGeoRuleSetContentForSource(ctx context.Con
 		return nil, "", err
 	}
 	cacheDir := filepath.Join(svc.paths.RulesDir, "geo", source, version)
+	if format == "binary" {
+		return svc.compiledGeoRuleSetContent(ctx, tag, kind, code, path, cacheDir)
+	}
+	// Previously generated configurations requested JSON without a format
+	// parameter. Keep those URLs usable until the new binary config is applied.
 	cachePath := filepath.Join(cacheDir, tag+".json")
 	if data, err := os.ReadFile(cachePath); err == nil && json.Valid(data) {
 		return data, "application/json; charset=utf-8", nil

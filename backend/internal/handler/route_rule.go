@@ -245,7 +245,7 @@ func (h *RouteRuleHandler) SubscriptionContent(c *gin.Context) {
 }
 
 func (h *RouteRuleHandler) GeneratedGeoRuleSetContent(c *gin.Context) {
-	data, contentType, err := h.svc.GeneratedGeoRuleSetContentForSource(c.Request.Context(), c.Param("tag"), c.Query("source"), c.Query("version"))
+	data, contentType, err := h.svc.GeneratedGeoRuleSetContentForSource(c.Request.Context(), c.Param("tag"), c.Query("source"), c.Query("version"), c.Query("format"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "GEO_RULE_SET_CONTENT_FAILED", Message: err.Error()}})
 		return

@@ -85,6 +85,7 @@ type RouteRuleService struct {
 	cacheMu          sync.Mutex
 	cacheLocks       map[string]*sync.Mutex
 	ruleSetValidator func(context.Context, string) error
+	ruleSetCompiler  func(context.Context, []byte, string) error
 }
 
 func NewRouteRuleService(s *store.Store, p *paths.Paths, rt *RealtimeService) *RouteRuleService {
@@ -1419,19 +1420,26 @@ func (svc *RouteRuleService) generatedGeoRuleSetContent(tag, upstreamURL string)
 }
 
 func (svc *RouteRuleService) generatedGeoRuleSetContentContext(ctx context.Context, tag, upstreamURL string) ([]byte, string, error) {
+	if svc.paths == nil || svc.paths.RulesDir == "" {
+		return nil, "", fmt.Errorf("rules directory is not configured")
+	}
+	return svc.cachedGeneratedGeoRuleSetContentContext(ctx, tag, upstreamURL, filepath.Join(svc.paths.RulesDir, "geo"))
+}
+
+// cacheDir is chosen by the source-specific caller, never by a request parameter.
+func (svc *RouteRuleService) cachedGeneratedGeoRuleSetContentContext(ctx context.Context, tag, upstreamURL, cacheDir string) ([]byte, string, error) {
 	tag = strings.ToLower(strings.TrimSpace(tag))
 	if !isGeneratedGeoRuleSetTag(tag) {
 		return nil, "", fmt.Errorf("invalid generated geo rule set tag")
 	}
-	if svc.paths == nil || svc.paths.RulesDir == "" {
+	if strings.TrimSpace(cacheDir) == "" {
 		return nil, "", fmt.Errorf("rules directory is not configured")
 	}
 
-	unlock := svc.lockGeneratedGeoRuleSet(tag)
+	cachePath := filepath.Join(cacheDir, tag+".srs")
+	unlock := svc.lockGeneratedGeoRuleSet(cachePath)
 	defer unlock()
 
-	cacheDir := filepath.Join(svc.paths.RulesDir, "geo")
-	cachePath := filepath.Join(cacheDir, tag+".srs")
 	cachedData, cacheErr := os.ReadFile(cachePath)
 	if cacheErr != nil && !os.IsNotExist(cacheErr) {
 		return nil, "", fmt.Errorf("read generated geo rule set cache: %w", cacheErr)
