@@ -135,11 +135,6 @@ async function lookupTag(offset = 0) {
         {{ syncing ? `更新中 ${activeSyncProgress}%` : "更新全部 Geo" }}
       </button>
     </header>
-    <p class="mb-4 text-xs leading-5 text-[var(--text-secondary)]">
-      默认使用 SagerNet，可在“设置 → 其他开关”切换来源。选择 Loyalsoldier
-      时，缺少的同名分类自动使用
-      SagerNet，两边都没有则报错；独立规则订阅不受影响。
-    </p>
     <div class="grid gap-3 lg:grid-cols-2">
       <article
         v-for="x in geoAssets"
@@ -182,14 +177,6 @@ async function lookupTag(offset = 0) {
                 rel="noopener noreferrer"
                 class="text-[var(--color-primary)] underline underline-offset-2"
                 >上游项目</a
-              >
-              <a
-                :href="x.url"
-                :title="x.url"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="text-[var(--color-primary)] underline underline-offset-2"
-                >查询数据库（{{ assetFormat(x) }}）</a
               >
             </div>
           </div>
