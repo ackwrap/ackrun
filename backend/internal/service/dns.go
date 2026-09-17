@@ -303,7 +303,17 @@ func (svc *DNSService) validateDNSRuleRequest(req *model.DNSRuleRequest) error {
 	if dnsRuleHasOutboundCondition(req.Conditions) {
 		return fmt.Errorf("DNS 规则不再支持 outbound 条件，请通过 DNS Server detour 配置真实查询出口")
 	}
-	return svc.rejectFakeIPServerReference(req.Server)
+	if err := svc.rejectFakeIPServerReference(req.Server); err != nil {
+		return err
+	}
+	values := dnsRuleStringConditions(req.Conditions, "geosite")
+	if len(values) > 0 {
+		rules := NewRouteRuleService(svc.store, svc.paths, nil)
+		if handled, err := rules.validateLoyalsoldierCategories("geosite", values); handled {
+			return err
+		}
+	}
+	return nil
 }
 
 func (svc *DNSService) rejectFakeIPServerReference(tag string) error {

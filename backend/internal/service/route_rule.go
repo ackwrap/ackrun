@@ -490,7 +490,7 @@ func (svc *RouteRuleService) PreviewWithBaseURL(baseURL string) (*model.RouteRul
 		}
 	}
 	rules = append(bypassRules, rules...)
-	if err := applyGeneratedGeoSource(svc.store, ruleSets); err != nil {
+	if err := applyGeneratedGeoSource(svc.store, svc.paths, ruleSets); err != nil {
 		return nil, err
 	}
 	return &model.RouteRulePreviewResponse{Rules: rules, RuleSets: ruleSets, Final: finalOutbound}, nil
@@ -773,6 +773,7 @@ func (svc *RouteRuleService) GeoLookup(target string, dnsServer string) (*model.
 		}
 	}
 
+	svc.appendFallbackGeoLookup(resp, assets)
 	if resp.Message == "" {
 		resp.Message = "查询完成"
 	}
@@ -833,7 +834,7 @@ func (svc *RouteRuleService) GeoTags(assetType string, query string, limit int) 
 	}
 
 	tags, ready, err := svc.loadGeoTags(assetType)
-	if err != nil {
+	if err != nil && !ready {
 		return nil, err
 	}
 	resp := &model.GeoTagsResponse{Type: assetType, Tags: []string{}, Ready: ready}
@@ -852,6 +853,13 @@ func (svc *RouteRuleService) GeoTags(assetType string, query string, limit int) 
 		}
 	}
 	resp.Message = "查询完成"
+	if err != nil {
+		resp.Message = "Loyalsoldier 分类已加载；SagerNet 回退分类暂不可用: " + err.Error()
+		return resp, nil
+	}
+	if asset, err := svc.selectedGeoAsset(assetType); err == nil && asset.Source == model.GeoSourceLoyalsoldier {
+		resp.Message = "Loyalsoldier 优先；列表包含缺失分类的 SagerNet 回退项"
+	}
 	return resp, nil
 }
 
@@ -875,6 +883,23 @@ func (svc *RouteRuleService) GeoDomains(tag string, limit int, offset int) (*mod
 	if !ready {
 		resp.Message = "geosite 数据库未就绪"
 		return resp, nil
+	}
+	fallback := false
+	asset, err := svc.selectedGeoAsset("geosite")
+	if err != nil {
+		return nil, err
+	}
+	if asset.Source == model.GeoSourceLoyalsoldier {
+		catalog, err := svc.geoCategoryCatalog([]model.GeoAsset{asset})
+		if err != nil {
+			return nil, err
+		}
+		selected, err := catalog.resolve(generatedGeoRuleSetTag("geosite", tag))
+		if err != nil {
+			return nil, err
+		}
+		geositePath = selected.path
+		fallback = selected.source == model.GeoSourceSagerNet
 	}
 
 	reader, codes, err := geoquery.OpenGeosite(geositePath)
@@ -917,6 +942,9 @@ func (svc *RouteRuleService) GeoDomains(tag string, limit int, offset int) (*mod
 		resp.Items = append(resp.Items, model.GeoDomainItem{Type: geositeItemTypeLabel(item.Type), Value: item.Value})
 	}
 	resp.Message = "查询完成"
+	if fallback {
+		resp.Message = "Loyalsoldier 缺少该分类，已回退到 SagerNet 同名分类"
+	}
 	return resp, nil
 }
 
@@ -953,20 +981,14 @@ func (svc *RouteRuleService) geositePath() (string, bool, error) {
 }
 
 func (svc *RouteRuleService) loadGeoTags(assetType string) ([]string, bool, error) {
+	asset, err := svc.selectedGeoAsset(assetType)
+	if err != nil {
+		return nil, false, err
+	}
+	if asset.Source == model.GeoSourceLoyalsoldier {
+		return svc.loyalsoldierGeoTags(assetType)
+	}
 	if assetType == "geoip" {
-		assets, err := svc.store.ListGeoAssets()
-		if err != nil {
-			return nil, false, err
-		}
-		for _, asset := range assets {
-			if asset.Type == "geoip" && asset.Source == model.GeoSourceLoyalsoldier {
-				if !asset.Available {
-					return []string{}, false, nil
-				}
-				codes, err := geoAssetCodes(asset.Type, asset.LocalPath)
-				return codes, err == nil, err
-			}
-		}
 		codes := make([]string, 0, len(geoIPCodeSet))
 		for code := range geoIPCodeSet {
 			codes = append(codes, code)
@@ -1153,6 +1175,18 @@ func (svc *RouteRuleService) runGeoAssetSync(id int64) {
 	localPath, err := svc.fetchAndCacheGeoAsset(item, func(progress float64) {
 		svc.broadcastGeoSync(id, "syncing", progress, "")
 	})
+	if err == nil && item.Source == model.GeoSourceLoyalsoldier {
+		var assets []model.GeoAsset
+		assets, err = svc.store.ListGeoAssets()
+		if err == nil {
+			for i := range assets {
+				if assets[i].ID == item.ID {
+					assets[i].LocalPath = localPath
+				}
+			}
+			err = svc.validateGeoSourceCategories(assets)
+		}
+	}
 	if err != nil {
 		logging.Error("geo.sync", "sync geo asset %d failed: %v", id, err)
 		if applied, _ := svc.store.SetGeoAssetSyncStateIfCurrent(item, "failed", err.Error()); applied {
@@ -1690,6 +1724,9 @@ func (svc *RouteRuleService) validateGeoSiteRuleValues(ruleType string, values [
 	}
 	if len(geositeValues) == 0 {
 		return nil
+	}
+	if handled, err := svc.validateLoyalsoldierCategories("geosite", geositeValues); handled {
+		return err
 	}
 	codes, ready, err := svc.loadGeoTags("geosite")
 	if err != nil {

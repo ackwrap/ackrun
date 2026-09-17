@@ -19,9 +19,11 @@ const p = defineProps<{ geoAssets: GeoAsset[]; syncing: boolean }>(),
   dns = ref("aliyun-doh"),
   result = ref<GeoLookupResponse | null>(null),
   error = ref(""),
+  lookingUp = ref(false),
   tag = ref(""),
   tags = ref<GeoDomainsResponse | null>(null),
   tagError = ref(""),
+  lookingUpTag = ref(false),
   drafts = ref<Record<number, GeoAssetRequest>>({}),
   editing = ref<number | null>(null);
 const activeSyncProgress = computed(() =>
@@ -61,12 +63,25 @@ function assetFormat(item: GeoAsset) {
   const extension = path.match(/\.([^./\\]+)$/)?.[1];
   return extension ? `${item.type}.${extension.toLowerCase()}` : item.type;
 }
+function assetProjectURL(item: GeoAsset) {
+  if (item.source === "loyalsoldier") {
+    return item.type === "geoip"
+      ? "https://github.com/Loyalsoldier/geoip"
+      : "https://github.com/Loyalsoldier/v2ray-rules-dat";
+  }
+  return item.type === "geoip"
+    ? "https://github.com/SagerNet/sing-geoip"
+    : "https://github.com/SagerNet/sing-geosite";
+}
 function formatUpdatedAt(value: number) {
   if (!value) return "尚未更新";
   const timestamp = value < 1_000_000_000_000 ? value * 1000 : value;
   return new Date(timestamp).toLocaleString();
 }
 async function lookup() {
+  if (lookingUp.value) return;
+  lookingUp.value = true;
+  result.value = null;
   try {
     error.value = "";
     if (!p.geoAssets.some((x) => x.type === "geoip" && x.available)) {
@@ -76,9 +91,13 @@ async function lookup() {
     result.value = await api.lookupGeo(target.value.trim(), dns.value);
   } catch (e: any) {
     error.value = e.message;
+  } finally {
+    lookingUp.value = false;
   }
 }
 async function lookupTag(offset = 0) {
+  if (lookingUpTag.value) return;
+  lookingUpTag.value = true;
   try {
     tagError.value = "";
     if (!p.geoAssets.some((x) => x.type === "geosite" && x.available)) {
@@ -88,6 +107,9 @@ async function lookupTag(offset = 0) {
     tags.value = await api.lookupGeositeDomains(tag.value.trim(), 100, offset);
   } catch (e: any) {
     tagError.value = e.message;
+  } finally {
+    if (tagError.value) tags.value = null;
+    lookingUpTag.value = false;
   }
 }
 </script>
@@ -100,8 +122,9 @@ async function lookupTag(offset = 0) {
         <h3 class="flex items-center gap-2 font-semibold">
           <Database :size="17" /> Geo 数据库
         </h3>
-        <p class="mt-1 text-xs text-[var(--text-secondary)]">
-          管理 GeoIP 与 GeoSite 数据，并提供域名和标签查询。
+        <p class="mt-1 text-xs leading-5 text-[var(--text-secondary)]">
+          在分流规则中选择 GeoIP / GeoSite
+          分类，此处可更新数据库并查询分类内容。
         </p>
       </div>
       <button
@@ -112,6 +135,11 @@ async function lookupTag(offset = 0) {
         {{ syncing ? `更新中 ${activeSyncProgress}%` : "更新全部 Geo" }}
       </button>
     </header>
+    <p class="mb-4 text-xs leading-5 text-[var(--text-secondary)]">
+      默认使用 SagerNet，可在“设置 → 其他开关”切换来源。选择 Loyalsoldier
+      时，缺少的同名分类自动使用
+      SagerNet，两边都没有则报错；独立规则订阅不受影响。
+    </p>
     <div class="grid gap-3 lg:grid-cols-2">
       <article
         v-for="x in geoAssets"
@@ -147,12 +175,23 @@ async function lookupTag(offset = 0) {
                 }}
               </span>
             </div>
-            <small
-              class="mt-1 block truncate text-[var(--text-tertiary)]"
-              :title="x.url"
-            >
-              {{ x.url }}
-            </small>
+            <div class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs">
+              <a
+                :href="assetProjectURL(x)"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="text-[var(--color-primary)] underline underline-offset-2"
+                >上游项目</a
+              >
+              <a
+                :href="x.url"
+                :title="x.url"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="text-[var(--color-primary)] underline underline-offset-2"
+                >查询数据库（{{ assetFormat(x) }}）</a
+              >
+            </div>
           </div>
           <div class="flex shrink-0 gap-2">
             <button
@@ -174,6 +213,13 @@ async function lookupTag(offset = 0) {
             </button>
           </div>
         </div>
+        <p class="mt-3 text-xs leading-5 text-[var(--text-tertiary)]">
+          {{
+            x.source === "loyalsoldier" && x.type === "geosite"
+              ? "GeoSite 分类由 DAT 数据库转换为 SRS，用于核心分流。"
+              : "分类分流使用上游提供的 SRS；查询数据库用于分类选择与内容查询。"
+          }}
+        </p>
         <p v-if="x.sync_error" class="mt-2 text-xs text-red-400">
           {{ x.sync_error }}
         </p>
@@ -213,11 +259,11 @@ async function lookupTag(offset = 0) {
             </select>
             <button
               class="aw-action-button aw-action-neutral"
-              :disabled="!x.available"
+              :disabled="!x.available || lookingUp"
               :title="x.available ? '查询 GeoIP' : '数据库文件不存在，请先更新'"
               @click="lookup"
             >
-              查询
+              {{ lookingUp ? "查询中…" : "查询" }}
             </button>
           </div>
           <p
@@ -226,7 +272,13 @@ async function lookupTag(offset = 0) {
           >
             数据库文件不存在，请先点击“更新”后查询。
           </p>
-          <p v-if="error" class="mt-2 text-xs text-red-400">{{ error }}</p>
+          <p
+            v-if="error"
+            role="alert"
+            class="mt-2 text-xs text-[var(--color-error)]"
+          >
+            {{ error }}
+          </p>
         </div>
         <div
           v-else-if="x.type === 'geosite'"
@@ -241,13 +293,13 @@ async function lookupTag(offset = 0) {
             />
             <button
               class="aw-action-button aw-action-neutral"
-              :disabled="!x.available"
+              :disabled="!x.available || lookingUpTag"
               :title="
                 x.available ? '反查 GeoSite 条目' : '数据库文件不存在，请先更新'
               "
               @click="lookupTag()"
             >
-              反查条目
+              {{ lookingUpTag ? "查询中…" : "反查条目" }}
             </button>
           </div>
           <p
@@ -259,7 +311,11 @@ async function lookupTag(offset = 0) {
           <p class="mt-2 text-xs text-[var(--text-tertiary)]">
             查询标签包含的域名、CIDR 或关联条目。
           </p>
-          <p v-if="tagError" class="mt-2 text-xs text-red-400">
+          <p
+            v-if="tagError"
+            role="alert"
+            class="mt-2 text-xs text-[var(--color-error)]"
+          >
             {{ tagError }}
           </p>
         </div>
@@ -421,11 +477,19 @@ async function lookupTag(offset = 0) {
       @close="tags = null"
     >
       <template v-if="tags">
+        <p
+          v-if="tags.message && tags.message !== '查询完成'"
+          role="status"
+          class="mb-3 rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--bg-base)] px-3 py-2 text-xs text-[var(--text-secondary)]"
+        >
+          {{ tags.message }}
+        </p>
         <div v-if="tags.suggestions.length" class="mb-3 flex flex-wrap gap-2">
           <button
             v-for="s in tags.suggestions"
             :key="s"
             class="aw-filter-chip"
+            :disabled="lookingUpTag"
             @click="
               tag = s;
               lookupTag();
@@ -450,14 +514,16 @@ async function lookupTag(offset = 0) {
       <template #footer>
         <button
           class="aw-action-button aw-action-neutral"
-          :disabled="!tags?.offset"
+          :disabled="lookingUpTag || !tags?.offset"
           @click="lookupTag(Math.max(0, tags!.offset - tags!.limit))"
         >
           上一页
         </button>
         <button
           class="aw-action-button aw-action-neutral"
-          :disabled="!tags || tags.offset + tags.limit >= tags.total"
+          :disabled="
+            lookingUpTag || !tags || tags.offset + tags.limit >= tags.total
+          "
           @click="lookupTag(tags!.offset + tags!.limit)"
         >
           下一页

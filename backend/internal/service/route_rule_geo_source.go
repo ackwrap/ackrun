@@ -18,6 +18,7 @@ import (
 	"github.com/ackwrap/ackrun/internal/geoquery"
 	"github.com/ackwrap/ackrun/internal/logging"
 	"github.com/ackwrap/ackrun/internal/model"
+	"github.com/ackwrap/ackrun/internal/paths"
 	"github.com/ackwrap/ackrun/internal/store"
 )
 
@@ -40,6 +41,9 @@ func (svc *RouteRuleService) validateGeoIPRuleValues(kind string, values []strin
 	}
 	if len(wanted) == 0 {
 		return nil
+	}
+	if handled, err := svc.validateLoyalsoldierCategories("geoip", wanted); handled {
+		return err
 	}
 	codes, ready, err := svc.loadGeoTags("geoip")
 	if err != nil {
@@ -88,11 +92,11 @@ func (svc *RouteRuleService) PrepareGeoSource(source string) ([]model.GeoAsset, 
 	return assets, nil
 }
 
-func (svc *RouteRuleService) validateGeoSourceCategories(assets []model.GeoAsset) error {
+func (svc *RouteRuleService) requiredGeneratedGeoCategories() (map[string]bool, error) {
 	wanted := map[string]bool{}
 	rules, err := svc.store.ListRouteRules()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	add := func(kind string, values []string) {
 		if kind == "geoip" || kind == "geosite" {
@@ -109,7 +113,7 @@ func (svc *RouteRuleService) validateGeoSourceCategories(assets []model.GeoAsset
 		if rule.RuleType == "mixed" {
 			values, err := parseMixedRouteRuleValues(rule.Values)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			for _, value := range values {
 				add(value.RuleType, []string{value.Value})
@@ -118,46 +122,45 @@ func (svc *RouteRuleService) validateGeoSourceCategories(assets []model.GeoAsset
 	}
 	dnsRules, err := svc.store.ListDNSRules()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, rule := range dnsRules {
 		if rule.Enabled {
 			add("geosite", dnsRuleStringConditions(decodeDNSRuleConditions(rule.ConditionsJSON), "geosite"))
 		}
 	}
-	available := map[string]bool{}
 	subscriptions, err := svc.store.ListRouteRuleSubscriptions()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, subscription := range subscriptions {
 		if subscription.Enabled {
 			// Preview and config generation give explicitly subscribed sets
 			// ownership of their tags before adding generated Geo sets.
-			available[subscription.Tag] = true
+			delete(wanted, subscription.Tag)
 		}
 	}
-	for _, asset := range assets {
-		codes, err := geoAssetCodes(asset.Type, asset.LocalPath)
-		if err != nil {
-			return err
-		}
-		for _, code := range codes {
-			available[generatedGeoRuleSetTag(asset.Type, code)] = true
-		}
-		if asset.Type == "geoip" && asset.Source == model.GeoSourceSagerNet {
-			available["geoip-private"] = true // SagerNet publishes this SRS separately.
-		}
+	return wanted, nil
+}
+
+func (svc *RouteRuleService) validateGeoSourceCategories(assets []model.GeoAsset) error {
+	wanted, err := svc.requiredGeneratedGeoCategories()
+	if err != nil {
+		return err
+	}
+	catalog, err := svc.geoCategoryCatalog(assets)
+	if err != nil {
+		return err
 	}
 	var missing []string
 	for tag := range wanted {
-		if !available[tag] {
-			missing = append(missing, tag)
+		if _, err := catalog.resolve(tag); err != nil {
+			missing = append(missing, err.Error())
 		}
 	}
 	if len(missing) > 0 {
 		sort.Strings(missing)
-		return fmt.Errorf("目标 Geo 来源缺少已启用规则使用的分类: %s；原来源未更改", strings.Join(missing, ", "))
+		return fmt.Errorf("已启用规则的 Geo 分类不可用: %s；原来源及有效数据未更改", strings.Join(missing, "; "))
 	}
 	return nil
 }
@@ -420,13 +423,19 @@ func validGeoAssetVersion(version string) bool {
 	return err == nil
 }
 
-// Pin the source in the URL so the core cannot restore another provider's cached set.
-func applyGeneratedGeoSource(db *store.Store, ruleSets []map[string]any) error {
+// Pin the source policy in the URL. The content endpoint may use SagerNet only
+// when the requested category does not exist in Loyalsoldier.
+func applyGeneratedGeoSource(db *store.Store, p *paths.Paths, ruleSets []map[string]any) error {
 	settings, err := db.GetGeneralSettings()
 	if err != nil || settings.GeoSource != model.GeoSourceLoyalsoldier {
 		return err
 	}
 	assets, err := db.ListGeoAssets()
+	if err != nil {
+		return err
+	}
+	svc := NewRouteRuleService(db, p, nil)
+	catalog, err := svc.geoCategoryCatalog(assets)
 	if err != nil {
 		return err
 	}
@@ -437,6 +446,9 @@ func applyGeneratedGeoSource(db *store.Store, ruleSets []map[string]any) error {
 			continue // Independent rule subscriptions retain their own source and format.
 		}
 		tag, _ := ruleSet["tag"].(string)
+		if _, err := catalog.resolve(tag); err != nil {
+			return err
+		}
 		kind, _, _ := strings.Cut(tag, "-")
 		version := ""
 		for _, asset := range assets {
@@ -477,9 +489,6 @@ func (svc *RouteRuleService) GeneratedGeoRuleSetContentForSource(ctx context.Con
 	if !isGeneratedGeoRuleSetTag(tag) {
 		return nil, "", fmt.Errorf("invalid generated geo rule set tag")
 	}
-	if format == "binary" && strings.HasPrefix(tag, "geoip-") {
-		return svc.loyalsoldierGeoIPRuleSetContent(ctx, tag)
-	}
 	if svc.paths == nil || svc.paths.GeoDir == "" || svc.paths.RulesDir == "" {
 		return nil, "", fmt.Errorf("geo directories are not configured")
 	}
@@ -519,6 +528,35 @@ func (svc *RouteRuleService) GeneratedGeoRuleSetContentForSource(ctx context.Con
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, "", err
+	}
+	asset := model.GeoAsset{Type: kind, Source: source, LocalPath: path}
+	for _, current := range assets {
+		if current.Type == kind {
+			asset.UseProxy = current.UseProxy
+		}
+	}
+	catalog, err := svc.geoCategoryCatalog([]model.GeoAsset{asset})
+	if err != nil {
+		return nil, "", err
+	}
+	selected, err := catalog.resolve(tag)
+	if err != nil {
+		return nil, "", err
+	}
+	if selected.source == model.GeoSourceSagerNet {
+		logging.Info("geo.fallback", "提供 SagerNet 回退规则集: %s", tag)
+		if format == "binary" {
+			return svc.GeneratedGeoRuleSetContentContext(ctx, tag)
+		}
+		if kind == "geoip" && code == "private" {
+			data, err := svc.sagerNetPrivateRuleSetSource(ctx)
+			return data, "application/json; charset=utf-8", err
+		}
+		data, err := geoDatabaseRuleSetSource(kind, code, selected.path)
+		return data, "application/json; charset=utf-8", err
+	}
+	if format == "binary" && kind == "geoip" {
+		return svc.loyalsoldierGeoIPRuleSetContent(ctx, tag)
 	}
 	cacheDir := filepath.Join(svc.paths.RulesDir, "geo", source, version)
 	if format == "binary" {

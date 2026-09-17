@@ -189,6 +189,7 @@ func TestGeoSourceValidationHonorsEnabledSubscriptionTag(t *testing.T) {
 	for _, enabled := range []bool{true, false} {
 		t.Run(map[bool]string{true: "enabled", false: "disabled"}[enabled], func(t *testing.T) {
 			svc, db := geoSourceTestService(t)
+			geoSourceTestMirror(t, db)
 			if _, err := db.CreateRouteRule(&model.RouteRuleRequest{Name: "Custom", Enabled: true, RuleType: "geoip", Values: []string{"external"}, Outbound: "direct"}); err != nil {
 				t.Fatal(err)
 			}

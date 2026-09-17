@@ -79,6 +79,10 @@ func geoSourceTestMirror(t *testing.T, db *store.Store) {
 			_, _ = w.Write(geoTestIPDAT())
 		case "/https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite.dat":
 			_, _ = w.Write(geoTestSiteDAT())
+		case "/https://github.com/SagerNet/sing-geosite/releases/latest/download/geosite.db":
+			_, _ = w.Write(geoTestSiteDAT())
+		case "/https://github.com/SagerNet/sing-geoip/releases/latest/download/geoip.db":
+			_, _ = w.Write(geoTestIPDAT())
 		default:
 			t.Errorf("unexpected download: %s", r.URL.Path)
 			http.NotFound(w, r)

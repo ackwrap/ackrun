@@ -75,11 +75,11 @@ async function searchGeoTags(ruleType: string, query: string) {
     const response = await api.getGeoTags(ruleType, query.trim());
     if (requestID !== geoTagRequest[ruleType]) return;
     geoTagOptions.value[ruleType] = response.tags;
-    geoTagMessage.value[ruleType] = response.ready
-      ? response.tags.length
-        ? ""
-        : "未找到匹配分类"
-      : response.message;
+    const message = response.message === "查询完成" ? "" : response.message;
+    geoTagMessage.value[ruleType] =
+      response.ready && !response.tags.length
+        ? ["未找到匹配分类", message].filter(Boolean).join("；")
+        : message;
   } catch (error: any) {
     if (requestID !== geoTagRequest[ruleType]) return;
     geoTagOptions.value[ruleType] = [];
@@ -447,8 +447,8 @@ onBeforeUnmount(() => {
               v-if="!isFinalStrategy && outbound === 'bypass'"
               class="mt-1.5 block text-[11px] font-normal text-[var(--text-tertiary)]"
             >
-              Linux TUN auto_redirect
-              下仅在目标仍为 IP 且条件已可判定时优先绕过代理；GeoSite/域名依赖已有 DNS
+              Linux TUN auto_redirect 下仅在目标仍为 IP
+              且条件已可判定时优先绕过代理；GeoSite/域名依赖已有 DNS
               映射，其他模式不提供同等保证。
             </span>
           </label>

@@ -170,10 +170,10 @@ onMounted(load);
         id="geo-source-description"
         class="mt-2 text-xs leading-5 text-[var(--text-secondary)]"
       >
-        全局切换 GeoIP / GeoSite 分流和查询来源，Loyalsoldier 使用 geoip 与
-        v2ray-rules-dat
-        数据。下载并校验成功后才会切换，失败保留原来源；切换将替换 Geo
-        下载地址，不影响独立规则订阅。运行中的核心需按现有配置应用流程生效。
+        默认使用 SagerNet。选择 Loyalsoldier 后优先使用其 GeoIP / GeoSite
+        分类，缺少同名分类时自动使用 SagerNet；两边都不存在时会明确报错。
+        下载并校验成功后才会切换，失败保留原来源；独立规则订阅不受影响。
+        运行中的核心需按现有配置应用流程生效。
       </p>
       <p
         v-if="savingGeoSource"

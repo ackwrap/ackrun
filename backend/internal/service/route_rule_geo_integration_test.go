@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -99,6 +100,52 @@ func TestGeoSourceRealDataCompatibility(t *testing.T) {
 			t.Fatalf("native %s compile: %s: %v", kind, output, err)
 		}
 		t.Logf("native %s: %d categories, CN conversion and core compilation passed", kind, len(codes))
+		if kind == "geosite" {
+			primaryCodes, err := geoAssetCodes(kind, filepath.Join(dir, kind+".dat"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			primary := make(map[string]bool, len(primaryCodes))
+			for _, code := range primaryCodes {
+				primary[code] = true
+			}
+			for _, code := range codes {
+				if primary[code] {
+					continue
+				}
+				database, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := svc.cacheGeoDatabase(&model.GeoAsset{Type: kind, Source: model.GeoSourceSagerNet}, database); err != nil {
+					t.Fatal(err)
+				}
+				tag := generatedGeoRuleSetTag(kind, code)
+				source, err := geoDatabaseRuleSetSource(kind, code, path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				binaryPath := filepath.Join(svc.paths.RulesDir, "geo", tag+".srs")
+				if err := os.MkdirAll(filepath.Dir(binaryPath), 0755); err != nil {
+					t.Fatal(err)
+				}
+				if err := svc.compileGeoRuleSet(ctx, source, binaryPath); err != nil {
+					t.Fatal(err)
+				}
+				binary, contentType, err := svc.GeneratedGeoRuleSetContentForSource(ctx, tag, model.GeoSourceLoyalsoldier, "", "binary")
+				if err != nil || contentType != "application/octet-stream" || len(binary) == 0 {
+					t.Fatalf("real fallback binary: %s %v", contentType, err)
+				}
+				legacy, contentType, err := svc.GeneratedGeoRuleSetContentForSource(ctx, tag, model.GeoSourceLoyalsoldier, "")
+				if err != nil || contentType != "application/json; charset=utf-8" || !bytes.Equal(legacy, source) {
+					t.Fatalf("real fallback JSON: %s %v", contentType, err)
+				}
+				ruleSets = append(ruleSets, map[string]any{"type": "local", "tag": tag, "format": "binary", "path": binaryPath})
+				routeRules = append(routeRules, map[string]any{"rule_set": []string{tag}, "action": "route", "outbound": "direct"})
+				t.Logf("real SagerNet-only category %s: binary and legacy JSON fallback passed", tag)
+				break
+			}
+		}
 	}
 	for kind, samples := range map[string][]string{
 		"geoip":   {"cn", "private", "telegram"},
