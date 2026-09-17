@@ -26,33 +26,41 @@ const p = defineProps<{ geoAssets: GeoAsset[]; syncing: boolean }>(),
   editing = ref<number | null>(null);
 const activeSyncProgress = computed(() =>
   Math.round(
-    p.geoAssets.find((item) => item.sync_status === "syncing")?.sync_progress || 0,
+    p.geoAssets.find((item) => item.sync_status === "syncing")?.sync_progress ||
+      0,
   ),
 );
 watch(
-  () => p.geoAssets,
-  (a) =>
-    a.forEach(
-      (x) =>
-        (drafts.value[x.id] ??= {
-          url: x.url,
+  [() => p.geoAssets, editing],
+  ([a]) =>
+    a.forEach((x) => {
+      if (editing.value !== x.id || !drafts.value[x.id]) {
+        drafts.value[x.id] = {
           use_proxy: x.use_proxy,
           sync_mode: x.sync_mode || "off",
           sync_time: x.sync_time || "03:30:00",
           sync_weekday: x.sync_weekday || 0,
-        }),
-    ),
+        };
+      }
+    }),
   { immediate: true },
 );
 const asset = computed(() => p.geoAssets.find((x) => x.id === editing.value));
 const tagResultTitle = computed(() =>
-  tags.value ? `${tags.value.tag} · 共 ${tags.value.total} 条` : "GeoSite 反查结果",
+  tags.value
+    ? `${tags.value.tag} · 共 ${tags.value.total} 条`
+    : "GeoSite 反查结果",
 );
 const geoLookupResultTitle = computed(() =>
   result.value?.target
     ? `Geo 查询结果 · ${result.value.target}`
     : "GeoIP 查询结果",
 );
+function assetFormat(item: GeoAsset) {
+  const path = item.local_path || item.url.split(/[?#]/)[0];
+  const extension = path.match(/\.([^./\\]+)$/)?.[1];
+  return extension ? `${item.type}.${extension.toLowerCase()}` : item.type;
+}
 function formatUpdatedAt(value: number) {
   if (!value) return "尚未更新";
   const timestamp = value < 1_000_000_000_000 ? value * 1000 : value;
@@ -117,7 +125,10 @@ async function lookupTag(offset = 0) {
               <span
                 class="rounded-full bg-[var(--button-secondary-bg)] px-2 py-0.5 text-[11px] text-[var(--text-secondary)]"
               >
-                {{ x.type }}.db
+                {{ assetFormat(x) }}
+              </span>
+              <span class="text-[11px] text-[var(--text-secondary)]">
+                {{ x.source === "loyalsoldier" ? "Loyalsoldier" : "SagerNet" }}
               </span>
               <span
                 class="text-[11px]"
@@ -209,7 +220,10 @@ async function lookupTag(offset = 0) {
               查询
             </button>
           </div>
-          <p v-if="!x.available" class="mt-2 text-xs text-[var(--text-tertiary)]">
+          <p
+            v-if="!x.available"
+            class="mt-2 text-xs text-[var(--text-tertiary)]"
+          >
             数据库文件不存在，请先点击“更新”后查询。
           </p>
           <p v-if="error" class="mt-2 text-xs text-red-400">{{ error }}</p>
@@ -228,13 +242,18 @@ async function lookupTag(offset = 0) {
             <button
               class="aw-action-button aw-action-neutral"
               :disabled="!x.available"
-              :title="x.available ? '反查 GeoSite 条目' : '数据库文件不存在，请先更新'"
+              :title="
+                x.available ? '反查 GeoSite 条目' : '数据库文件不存在，请先更新'
+              "
               @click="lookupTag()"
             >
               反查条目
             </button>
           </div>
-          <p v-if="!x.available" class="mt-2 text-xs text-[var(--text-tertiary)]">
+          <p
+            v-if="!x.available"
+            class="mt-2 text-xs text-[var(--text-tertiary)]"
+          >
             数据库文件不存在，请先点击“更新”后反查。
           </p>
           <p class="mt-2 text-xs text-[var(--text-tertiary)]">
@@ -258,7 +277,9 @@ async function lookupTag(offset = 0) {
             class="rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--bg-base)] p-3"
           >
             <small class="text-[var(--text-tertiary)]">查询目标</small>
-            <strong class="mt-1 block break-all text-sm">{{ result.target }}</strong>
+            <strong class="mt-1 block break-all text-sm">{{
+              result.target
+            }}</strong>
           </div>
           <div
             class="rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--bg-base)] p-3"
@@ -273,7 +294,9 @@ async function lookupTag(offset = 0) {
           >
             <small class="text-[var(--text-tertiary)]">DNS 解析</small>
             <strong class="mt-1 block truncate text-sm">
-              {{ result.target_type === "domain" ? result.dns_server : "无需解析" }}
+              {{
+                result.target_type === "domain" ? result.dns_server : "无需解析"
+              }}
             </strong>
           </div>
         </div>
@@ -289,10 +312,15 @@ async function lookupTag(offset = 0) {
               {{ ip }}
             </span>
           </div>
-          <p v-else class="text-xs text-[var(--text-tertiary)]">未解析到 IP 地址</p>
+          <p v-else class="text-xs text-[var(--text-tertiary)]">
+            未解析到 IP 地址
+          </p>
         </section>
 
-        <div class="grid gap-3" :class="result.target_type === 'domain' ? 'sm:grid-cols-2' : ''">
+        <div
+          class="grid gap-3"
+          :class="result.target_type === 'domain' ? 'sm:grid-cols-2' : ''"
+        >
           <section
             class="rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--bg-base)] p-4"
           >
@@ -311,7 +339,9 @@ async function lookupTag(offset = 0) {
                 {{ match }}
               </div>
             </div>
-            <p v-else class="text-xs text-[var(--text-tertiary)]">暂无匹配结果</p>
+            <p v-else class="text-xs text-[var(--text-tertiary)]">
+              暂无匹配结果
+            </p>
           </section>
 
           <section
@@ -324,7 +354,10 @@ async function lookupTag(offset = 0) {
                 {{ result.geosite_matches.length }} 条
               </span>
             </div>
-            <div v-if="result.geosite_matches.length" class="flex flex-wrap gap-2">
+            <div
+              v-if="result.geosite_matches.length"
+              class="flex flex-wrap gap-2"
+            >
               <span
                 v-for="match in result.geosite_matches"
                 :key="match"
@@ -333,7 +366,9 @@ async function lookupTag(offset = 0) {
                 {{ match }}
               </span>
             </div>
-            <p v-else class="text-xs text-[var(--text-tertiary)]">暂无匹配结果</p>
+            <p v-else class="text-xs text-[var(--text-tertiary)]">
+              暂无匹配结果
+            </p>
           </section>
         </div>
 
@@ -413,20 +448,20 @@ async function lookupTag(offset = 0) {
         </div>
       </template>
       <template #footer>
-          <button
-            class="aw-action-button aw-action-neutral"
-            :disabled="!tags?.offset"
-            @click="lookupTag(Math.max(0, tags!.offset - tags!.limit))"
-          >
-            上一页
-          </button>
-          <button
-            class="aw-action-button aw-action-neutral"
-            :disabled="!tags || tags.offset + tags.limit >= tags.total"
-            @click="lookupTag(tags!.offset + tags!.limit)"
-          >
-            下一页
-          </button>
+        <button
+          class="aw-action-button aw-action-neutral"
+          :disabled="!tags?.offset"
+          @click="lookupTag(Math.max(0, tags!.offset - tags!.limit))"
+        >
+          上一页
+        </button>
+        <button
+          class="aw-action-button aw-action-neutral"
+          :disabled="!tags || tags.offset + tags.limit >= tags.total"
+          @click="lookupTag(tags!.offset + tags!.limit)"
+        >
+          下一页
+        </button>
       </template>
     </Modal>
     <div v-if="asset" class="aw-modal-backdrop">
@@ -472,7 +507,9 @@ async function lookupTag(offset = 0) {
           <button
             class="aw-action-button aw-action-success"
             @click="
-              $emit('update', asset!, drafts[asset!.id]);
+              $emit('update', asset!, {
+                ...drafts[asset!.id],
+              });
               editing = null;
             "
           >

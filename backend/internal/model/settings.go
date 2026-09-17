@@ -38,14 +38,16 @@ type ConnectivitySettings struct {
 
 // GeneralSettings contains application-level behavior switches.
 type GeneralSettings struct {
-	AutoStartCore            bool `json:"auto_start_core"`
-	DNSMasqTakeoverEnabled   bool `json:"dnsmasq_takeover_enabled"`
-	DNSMasqTakeoverSupported bool `json:"dnsmasq_takeover_supported"`
+	GeoSource                string `json:"geo_source"`
+	AutoStartCore            bool   `json:"auto_start_core"`
+	DNSMasqTakeoverEnabled   bool   `json:"dnsmasq_takeover_enabled"`
+	DNSMasqTakeoverSupported bool   `json:"dnsmasq_takeover_supported"`
 }
 
 type GeneralSettingsRequest struct {
-	AutoStartCore          *bool `json:"auto_start_core"`
-	DNSMasqTakeoverEnabled *bool `json:"dnsmasq_takeover_enabled"`
+	GeoSource              *string `json:"geo_source"`
+	AutoStartCore          *bool   `json:"auto_start_core"`
+	DNSMasqTakeoverEnabled *bool   `json:"dnsmasq_takeover_enabled"`
 }
 
 // NTPSettings NTP 时间同步设置

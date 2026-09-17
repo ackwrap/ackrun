@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ackwrap/ackrun/internal/model"
@@ -312,8 +313,8 @@ func (s *Store) SetNTPSettings(req *model.NTPSettings) error {
 }
 
 func (s *Store) GetGeneralSettings() (*model.GeneralSettings, error) {
-	settings := &model.GeneralSettings{AutoStartCore: true, DNSMasqTakeoverEnabled: true}
-	rows, err := s.db.Query(`SELECT key, value FROM app_settings WHERE key IN ('general.auto_start_core', 'general.dnsmasq_takeover_enabled')`)
+	settings := &model.GeneralSettings{AutoStartCore: true, DNSMasqTakeoverEnabled: true, GeoSource: model.GeoSourceSagerNet}
+	rows, err := s.db.Query(`SELECT key, value FROM app_settings WHERE key IN ('general.auto_start_core', 'general.dnsmasq_takeover_enabled', 'general.geo_source')`)
 	if err != nil {
 		return nil, err
 	}
@@ -328,6 +329,11 @@ func (s *Store) GetGeneralSettings() (*model.GeneralSettings, error) {
 			settings.AutoStartCore = value != "false"
 		case "general.dnsmasq_takeover_enabled":
 			settings.DNSMasqTakeoverEnabled = value != "false"
+		case "general.geo_source":
+			settings.GeoSource, err = model.NormalizeGeoSource(value)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -337,25 +343,99 @@ func (s *Store) GetGeneralSettings() (*model.GeneralSettings, error) {
 }
 
 func (s *Store) SetGeneralSettings(settings *model.GeneralSettings) error {
+	return s.setGeneralSettingsWithGeoAssets(settings, nil, false)
+}
+
+// SetGeneralSettingsWithGeoAssets publishes both prepared databases and the
+// selected source together, keeping each asset's existing download schedule.
+func (s *Store) SetGeneralSettingsWithGeoAssets(settings *model.GeneralSettings, assets []model.GeoAsset) error {
+	return s.setGeneralSettingsWithGeoAssets(settings, assets, false)
+}
+
+// RestoreGeneralSettingsWithGeoAssets restores the exact resource snapshot if
+// applying another general setting fails after a source change was committed.
+func (s *Store) RestoreGeneralSettingsWithGeoAssets(settings *model.GeneralSettings, assets []model.GeoAsset) error {
+	return s.setGeneralSettingsWithGeoAssets(settings, assets, true)
+}
+
+func (s *Store) setGeneralSettingsWithGeoAssets(settings *model.GeneralSettings, assets []model.GeoAsset, restore bool) error {
+	if settings == nil {
+		return fmt.Errorf("通用设置不能为空")
+	}
+	if assets != nil && len(assets) != 2 {
+		return fmt.Errorf("切换 Geo 来源需要同时准备 GeoIP 和 GeoSite")
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	var currentSource string
+	err = tx.QueryRow(`SELECT value FROM app_settings WHERE key = 'general.geo_source'`).Scan(&currentSource)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	currentSource, err = model.NormalizeGeoSource(currentSource)
+	if err != nil {
+		return err
+	}
+	source := currentSource
+	if strings.TrimSpace(settings.GeoSource) != "" {
+		source, err = model.NormalizeGeoSource(settings.GeoSource)
+		if err != nil {
+			return err
+		}
+	}
+	if source != currentSource && assets == nil {
+		return fmt.Errorf("切换 Geo 来源需要同时准备 GeoIP 和 GeoSite")
+	}
+	if assets != nil {
+		seen := make(map[string]bool, 2)
+		for _, item := range assets {
+			itemSource, err := model.NormalizeGeoSource(item.Source)
+			if err != nil || itemSource != source || (item.Type != "geoip" && item.Type != "geosite") || seen[item.Type] || strings.TrimSpace(item.URL) == "" || (!restore && strings.TrimSpace(item.LocalPath) == "") {
+				return fmt.Errorf("Geo 资源来源、类型或本地文件无效")
+			}
+			seen[item.Type] = true
+		}
+		assetNow := time.Now().UnixMilli()
+		for _, item := range defaultGeoAssets {
+			if _, err := tx.Exec(`INSERT INTO geo_assets (name, type, source, url, use_proxy, sync_mode, sync_time, sync_weekday, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?, 0, ?, ?) ON CONFLICT(type) DO NOTHING`, item.Name, item.Type, currentSource, model.GeoSourceAssetURL(currentSource, item.Type), item.SyncMode, item.SyncTime, assetNow, assetNow); err != nil {
+				return err
+			}
+		}
+		for _, item := range assets {
+			status, syncError := "updated", ""
+			lastSyncAt, cachedUpdatedAt, updatedAt := assetNow, assetNow, assetNow
+			if restore {
+				status, syncError = item.SyncStatus, item.SyncError
+				lastSyncAt, cachedUpdatedAt, updatedAt = item.LastSyncAt, item.CachedUpdatedAt, item.UpdatedAt
+			}
+			result, err := tx.Exec(`UPDATE geo_assets SET source = ?, url = ?, local_path = ?, sync_status = ?, sync_error = ?, last_sync_at = ?, cached_updated_at = ?, updated_at = ? WHERE type = ? AND (? = 0 OR id = ?)`, source, item.URL, item.LocalPath, status, syncError, lastSyncAt, cachedUpdatedAt, updatedAt, item.Type, item.ID, item.ID)
+			changed, err := geoAssetChanged(result, err)
+			if err != nil {
+				return err
+			}
+			if !changed {
+				return fmt.Errorf("Geo 资源在切换来源前已变更，请重试")
+			}
+		}
+	}
 	now := time.Now().Unix()
 	values := []struct {
 		key   string
-		value bool
+		value string
 	}{
-		{key: "general.auto_start_core", value: settings.AutoStartCore},
-		{key: "general.dnsmasq_takeover_enabled", value: settings.DNSMasqTakeoverEnabled},
+		{key: "general.auto_start_core", value: strconv.FormatBool(settings.AutoStartCore)},
+		{key: "general.dnsmasq_takeover_enabled", value: strconv.FormatBool(settings.DNSMasqTakeoverEnabled)},
+		{key: "general.geo_source", value: source},
 	}
 	for _, item := range values {
 		if _, err := tx.Exec(`
 			INSERT INTO app_settings (key, value, updated_at)
 			VALUES (?, ?, ?)
 			ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-		`, item.key, strconv.FormatBool(item.value), now); err != nil {
+		`, item.key, item.value, now); err != nil {
 			return err
 		}
 	}

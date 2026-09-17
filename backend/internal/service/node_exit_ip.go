@@ -180,7 +180,11 @@ func (svc *NodeService) lookupLocalExitGeo(ip net.IP) (traceroute.GeoData, error
 		if countryCode == "unknown" {
 			return traceroute.GeoData{}, errors.New("本地 GeoIP 数据库未匹配到归属")
 		}
-		return traceroute.GeoDataFromCountryCode(countryCode, "geoip.db（本地回退）"), nil
+		source := "geoip.db（本地回退）"
+		if asset.Source == model.GeoSourceLoyalsoldier {
+			source = "Loyalsoldier GeoIP（本地回退）"
+		}
+		return traceroute.GeoDataFromCountryCode(countryCode, source), nil
 	}
 	return traceroute.GeoData{}, errors.New("本地 GeoIP 数据库不可用，请先在规则管理中同步 GeoIP")
 }

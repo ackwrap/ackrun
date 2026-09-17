@@ -274,14 +274,20 @@ export interface NTPSettingsResponse {
   detour: string;
 }
 
+export type GeoSource = "sagernet" | "loyalsoldier";
+
 export interface GeneralSettings {
   auto_start_core: boolean;
   dnsmasq_takeover_enabled: boolean;
   dnsmasq_takeover_supported: boolean;
+  geo_source: GeoSource;
 }
 
 export type GeneralSettingsUpdate = Partial<
-  Pick<GeneralSettings, "auto_start_core" | "dnsmasq_takeover_enabled">
+  Pick<
+    GeneralSettings,
+    "auto_start_core" | "dnsmasq_takeover_enabled" | "geo_source"
+  >
 >;
 
 export interface MixedInboundSettings {
@@ -719,6 +725,7 @@ export interface GeoAsset {
   id: number;
   name: string;
   type: string;
+  source: GeoSource;
   url: string;
   use_proxy: boolean;
   sync_mode: string;
@@ -736,7 +743,7 @@ export interface GeoAsset {
 }
 
 export interface GeoAssetRequest {
-  url: string;
+  url?: string;
   use_proxy: boolean;
   sync_mode: string;
   sync_time: string;

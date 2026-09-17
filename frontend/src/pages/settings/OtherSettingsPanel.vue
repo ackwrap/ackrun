@@ -2,6 +2,7 @@
 import { onMounted, ref } from "vue";
 import { SlidersHorizontal } from "lucide-vue-next";
 import { api } from "@/services/api";
+import type { GeoSource } from "@/services/types";
 
 const emit = defineEmits<{
   notify: [message: string, type?: "success" | "error" | "info"];
@@ -9,8 +10,11 @@ const emit = defineEmits<{
 const autoStartCore = ref(true);
 const dnsmasqTakeoverEnabled = ref(true);
 const dnsmasqTakeoverSupported = ref(false);
+const geoSource = ref<GeoSource>("sagernet");
+const savedGeoSource = ref<GeoSource>("sagernet");
 const loading = ref(true);
 const saving = ref(false);
+const savingGeoSource = ref(false);
 const available = ref(false);
 
 async function load() {
@@ -20,7 +24,10 @@ async function load() {
     const settings = await api.getGeneralSettings();
     autoStartCore.value = settings.auto_start_core !== false;
     dnsmasqTakeoverEnabled.value = settings.dnsmasq_takeover_enabled !== false;
-    dnsmasqTakeoverSupported.value = settings.dnsmasq_takeover_supported === true;
+    dnsmasqTakeoverSupported.value =
+      settings.dnsmasq_takeover_supported === true;
+    geoSource.value = settings.geo_source || "sagernet";
+    savedGeoSource.value = geoSource.value;
     available.value = true;
   } catch (cause: any) {
     emit("notify", `其他开关加载失败: ${cause.message}`, "error");
@@ -30,9 +37,10 @@ async function load() {
 }
 
 async function saveSetting(kind: "autoStart" | "dnsmasq") {
-  if (saving.value) return;
+  if (loading.value || saving.value || !available.value) return;
   saving.value = true;
-  const next = kind === "autoStart" ? autoStartCore.value : dnsmasqTakeoverEnabled.value;
+  const next =
+    kind === "autoStart" ? autoStartCore.value : dnsmasqTakeoverEnabled.value;
   try {
     await api.setGeneralSettings(
       kind === "autoStart"
@@ -56,6 +64,29 @@ async function saveSetting(kind: "autoStart" | "dnsmasq") {
     emit("notify", `其他开关保存失败: ${cause.message}`, "error");
   } finally {
     saving.value = false;
+  }
+}
+
+async function saveGeoSource() {
+  if (loading.value || saving.value || !available.value) return;
+  if (geoSource.value === savedGeoSource.value) return;
+  saving.value = true;
+  savingGeoSource.value = true;
+  const next = geoSource.value;
+  try {
+    await api.setGeneralSettings({ geo_source: next });
+    savedGeoSource.value = next;
+    emit(
+      "notify",
+      "Geo 来源已切换，配置将自动重新生成；请按现有流程应用到核心",
+      "success",
+    );
+  } catch (cause: any) {
+    geoSource.value = savedGeoSource.value;
+    emit("notify", `Geo 数据来源切换失败: ${cause.message}`, "error");
+  } finally {
+    saving.value = false;
+    savingGeoSource.value = false;
   }
 }
 
@@ -94,12 +125,16 @@ onMounted(load);
     </label>
     <label
       class="mt-3 flex cursor-pointer items-center justify-between gap-4 rounded-[var(--radius-lg)] border border-[var(--border-light)] bg-[var(--bg-base)] px-4 py-3"
-      :class="(loading || saving || !available || !dnsmasqTakeoverSupported) && 'cursor-wait opacity-70'"
+      :class="
+        (loading || saving || !available || !dnsmasqTakeoverSupported) &&
+        'cursor-wait opacity-70'
+      "
     >
       <span class="min-w-0">
         <span class="block text-sm font-medium">接管 OpenWrt dnsmasq 上游</span>
         <span class="mt-1 block text-xs leading-5 text-[var(--text-secondary)]">
-          TUN 模式下将 dnsmasq 转发到本机 sing-box DNS 端口；停止核心时自动恢复。切换前请先停止核心。
+          TUN 模式下将 dnsmasq 转发到本机 sing-box DNS
+          端口；停止核心时自动恢复。切换前请先停止核心。
         </span>
       </span>
       <input
@@ -110,5 +145,43 @@ onMounted(load);
         @change="saveSetting('dnsmasq')"
       />
     </label>
+    <div
+      class="mt-3 rounded-[var(--radius-lg)] border border-[var(--border-light)] bg-[var(--bg-base)] px-4 py-3"
+      :class="(loading || saving || !available) && 'opacity-70'"
+    >
+      <label
+        for="geo-source"
+        class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
+      >
+        <span class="shrink-0 text-sm font-medium">Geo 数据来源</span>
+        <select
+          id="geo-source"
+          v-model="geoSource"
+          class="w-full sm:max-w-52"
+          :disabled="loading || saving || !available"
+          aria-describedby="geo-source-description"
+          @change="saveGeoSource"
+        >
+          <option value="sagernet">SagerNet（默认）</option>
+          <option value="loyalsoldier">Loyalsoldier</option>
+        </select>
+      </label>
+      <p
+        id="geo-source-description"
+        class="mt-2 text-xs leading-5 text-[var(--text-secondary)]"
+      >
+        全局切换 GeoIP / GeoSite 分流和查询来源，Loyalsoldier 使用 geoip 与
+        v2ray-rules-dat
+        数据。下载并校验成功后才会切换，失败保留原来源；切换将替换 Geo
+        下载地址，不影响独立规则订阅。运行中的核心需按现有配置应用流程生效。
+      </p>
+      <p
+        v-if="savingGeoSource"
+        role="status"
+        class="mt-2 text-xs leading-5 text-[var(--color-primary)]"
+      >
+        正在下载并校验 Geo 数据，请稍候…
+      </p>
+    </div>
   </section>
 </template>

@@ -149,6 +149,7 @@ func (s *Store) migrate() error {
 			created_at INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL
 		)`,
+		`ALTER TABLE geo_assets ADD COLUMN source TEXT NOT NULL DEFAULT 'sagernet'`,
 		`CREATE TABLE IF NOT EXISTS proxy_collections (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			name TEXT NOT NULL,
@@ -674,6 +675,7 @@ func (s *Store) dedupeNodeGroupsByName() error {
 func isDuplicateColumnMigration(m string) bool {
 	switch m {
 	case `ALTER TABLE subscriptions ADD COLUMN user_agent TEXT NOT NULL DEFAULT 'clash-meta/2.4.0'`,
+		`ALTER TABLE geo_assets ADD COLUMN source TEXT NOT NULL DEFAULT 'sagernet'`,
 		`ALTER TABLE subscriptions ADD COLUMN sync_interval_minutes INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE subscriptions ADD COLUMN sync_mode TEXT NOT NULL DEFAULT 'off'`,
 		`ALTER TABLE subscriptions ADD COLUMN sync_time TEXT NOT NULL DEFAULT ''`,

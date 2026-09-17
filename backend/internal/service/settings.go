@@ -27,6 +27,11 @@ type SettingsService struct {
 	dashboardsDir            string
 	mixedInboundMu           sync.Mutex
 	generalSettingsMu        sync.Mutex
+	geoSourcePreparer        geoSourcePreparer
+}
+
+type geoSourcePreparer interface {
+	PrepareGeoSource(string) ([]model.GeoAsset, error)
 }
 
 type modeConfigGenerator interface {
@@ -37,6 +42,7 @@ var ErrModeChangeWhileRunning = errors.New("核心运行时不能切换模式，
 var ErrConnectivitySettingsInvalid = errors.New("连通性测速设置无效")
 var ErrTrafficBypassSettingsInvalid = errors.New("流量排除设置无效")
 var ErrMixedInboundSettingsInvalid = errors.New("Mixed 代理认证设置无效")
+var ErrGeoSourceSettingsInvalid = errors.New("Geo 来源设置无效")
 
 func NewSettingsService(s *store.Store) *SettingsService {
 	return &SettingsService{store: s}
@@ -49,6 +55,10 @@ func (svc *SettingsService) SetModeDependencies(singbox *SingboxService, generat
 
 func (svc *SettingsService) SetConnectivitySettingsHook(hook func()) {
 	svc.connectivitySettingsHook = hook
+}
+
+func (svc *SettingsService) SetGeoSourcePreparer(preparer geoSourcePreparer) {
+	svc.geoSourcePreparer = preparer
 }
 
 func (svc *SettingsService) SetDashboardsDir(dir string) {
@@ -230,14 +240,42 @@ func (svc *SettingsService) SetGeneralSettings(req *model.GeneralSettingsRequest
 	if req.DNSMasqTakeoverEnabled != nil {
 		next.DNSMasqTakeoverEnabled = *req.DNSMasqTakeoverEnabled
 	}
+	if req.GeoSource != nil {
+		next.GeoSource, err = model.NormalizeGeoSource(*req.GeoSource)
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrGeoSourceSettingsInvalid, err)
+		}
+	}
+	geoSourceChanged := previous.GeoSource != next.GeoSource
 	takeoverChanged := previous.DNSMasqTakeoverEnabled != next.DNSMasqTakeoverEnabled
 	if takeoverChanged && svc.singbox != nil && svc.singbox.IsRunning() {
 		return errors.New("核心运行时不能切换 dnsmasq 接管，请先停止核心")
 	}
-	if err := svc.store.SetGeneralSettings(&next); err != nil {
+	var previousAssets, preparedAssets []model.GeoAsset
+	if geoSourceChanged {
+		if svc.geoSourcePreparer == nil {
+			return errors.New("Geo 来源准备服务不可用")
+		}
+		previousAssets, err = svc.store.ListGeoAssets()
+		if err != nil {
+			return err
+		}
+		logging.Info("settings.geo_source", "正在准备 Geo 来源: %s", next.GeoSource)
+		preparedAssets, err = svc.geoSourcePreparer.PrepareGeoSource(next.GeoSource)
+		if err != nil {
+			logging.Error("settings.geo_source", "准备 Geo 来源 %s 失败: %v", next.GeoSource, err)
+			return fmt.Errorf("切换 Geo 来源失败，已保留原设置和数据库: %w", err)
+		}
+		// A successful preparer must supply both databases; nil must not fall
+		// through to the ordinary partial-settings path.
+		if len(preparedAssets) != 2 {
+			return errors.New("切换 Geo 来源失败，GeoIP 和 GeoSite 未同时准备完成")
+		}
+	}
+	if err := svc.store.SetGeneralSettingsWithGeoAssets(&next, preparedAssets); err != nil {
 		return err
 	}
-	logging.Info("settings.update", "通用设置已更新，核心自动启动: %t，dnsmasq 接管: %t", next.AutoStartCore, next.DNSMasqTakeoverEnabled)
+	logging.Info("settings.update", "通用设置已更新，核心自动启动: %t，dnsmasq 接管: %t，Geo 来源: %s", next.AutoStartCore, next.DNSMasqTakeoverEnabled, next.GeoSource)
 	if !takeoverChanged || svc.configGenerator == nil || svc.singbox == nil || !svc.singbox.IsInstalledAndConfigured() {
 		return nil
 	}
@@ -248,7 +286,13 @@ func (svc *SettingsService) SetGeneralSettings(req *model.GeneralSettingsRequest
 	if err == nil {
 		return nil
 	}
-	if rollbackErr := svc.store.SetGeneralSettings(previous); rollbackErr != nil {
+	var rollbackErr error
+	if geoSourceChanged {
+		rollbackErr = svc.store.RestoreGeneralSettingsWithGeoAssets(previous, previousAssets)
+	} else {
+		rollbackErr = svc.store.SetGeneralSettings(previous)
+	}
+	if rollbackErr != nil {
 		return fmt.Errorf("应用 dnsmasq 接管设置失败: %v；回滚设置也失败: %w", err, rollbackErr)
 	}
 	return fmt.Errorf("应用 dnsmasq 接管设置失败，已回滚: %w", err)

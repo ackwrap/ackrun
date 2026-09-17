@@ -872,7 +872,7 @@ func TestGeneratedGeoRuleSetContentUsesConfiguredMirror(t *testing.T) {
 }
 
 func TestGeoAssetSyncUsesConfiguredAcceleration(t *testing.T) {
-	payload := []byte("geo-database")
+	payload := geoTestIPDAT()
 	requests := 0
 	mirror := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++

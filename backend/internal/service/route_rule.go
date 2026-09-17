@@ -489,6 +489,9 @@ func (svc *RouteRuleService) PreviewWithBaseURL(baseURL string) (*model.RouteRul
 		}
 	}
 	rules = append(bypassRules, rules...)
+	if err := applyGeneratedGeoSource(svc.store, ruleSets); err != nil {
+		return nil, err
+	}
 	return &model.RouteRulePreviewResponse{Rules: rules, RuleSets: ruleSets, Final: finalOutbound}, nil
 }
 
@@ -607,12 +610,28 @@ func (svc *RouteRuleService) ListGeoAssets() ([]model.GeoAsset, error) {
 }
 
 func (svc *RouteRuleService) UpdateGeoAsset(id int64, req *model.GeoAssetRequest) (*model.GeoAsset, error) {
-	if err := validateGeoAssetRequest(req); err != nil {
+	old, err := svc.store.GetGeoAsset(id)
+	if err != nil {
 		return nil, err
 	}
+	if old == nil {
+		return nil, fmt.Errorf("geo asset not found")
+	}
+	normalized := *req
+	preserveURL := strings.TrimSpace(normalized.URL) == ""
+	if preserveURL {
+		normalized.URL = old.URL
+	}
+	if err := validateGeoAssetRequest(&normalized); err != nil {
+		return nil, err
+	}
+	if preserveURL {
+		// Leave the address untouched in SQL, even if the source changed after
+		// this read while an older settings dialog was being saved.
+		normalized.URL = ""
+	}
 	logging.Info("geo.update", "updating geo asset: %d", id)
-	old, _ := svc.store.GetGeoAsset(id)
-	item, err := svc.store.UpdateGeoAsset(id, req)
+	item, err := svc.store.UpdateGeoAsset(id, &normalized)
 	if err != nil {
 		return nil, err
 	}
@@ -620,7 +639,7 @@ func (svc *RouteRuleService) UpdateGeoAsset(id int64, req *model.GeoAssetRequest
 		return nil, fmt.Errorf("geo asset not found")
 	}
 	svc.refreshGeoAssetJob(id)
-	if old == nil || old.URL != item.URL || old.UseProxy != item.UseProxy {
+	if old.URL != item.URL || old.UseProxy != item.UseProxy {
 		go svc.runGeoAssetSync(id)
 	}
 	return item, nil
@@ -740,8 +759,11 @@ func (svc *RouteRuleService) GeoLookup(target string, dnsServer string) (*model.
 					continue
 				}
 				addr = addr.Unmap()
-				code := reader.Lookup(addr)
-				entry := ip + " => " + code
+				codes := reader.LookupCodes(addr)
+				if len(codes) == 0 {
+					codes = []string{"unknown"}
+				}
+				entry := ip + " => " + strings.Join(codes, ", ")
 				if !seen[entry] {
 					seen[entry] = true
 					resp.GeoIPMatches = append(resp.GeoIPMatches, entry)
@@ -931,7 +953,25 @@ func (svc *RouteRuleService) geositePath() (string, bool, error) {
 
 func (svc *RouteRuleService) loadGeoTags(assetType string) ([]string, bool, error) {
 	if assetType == "geoip" {
-		return []string{"private", "cn", "hk", "mo", "tw", "us", "jp", "sg", "kr", "de", "fr", "gb", "ru", "in", "br", "au", "ca"}, true, nil
+		assets, err := svc.store.ListGeoAssets()
+		if err != nil {
+			return nil, false, err
+		}
+		for _, asset := range assets {
+			if asset.Type == "geoip" && asset.Source == model.GeoSourceLoyalsoldier {
+				if !asset.Available {
+					return []string{}, false, nil
+				}
+				codes, err := geoAssetCodes(asset.Type, asset.LocalPath)
+				return codes, err == nil, err
+			}
+		}
+		codes := make([]string, 0, len(geoIPCodeSet))
+		for code := range geoIPCodeSet {
+			codes = append(codes, code)
+		}
+		sort.Strings(codes)
+		return codes, true, nil
 	}
 	geositePath, ready, err := svc.geositePath()
 	if err != nil {
@@ -1097,15 +1137,14 @@ func appendLookupMessage(current string, next string) string {
 }
 
 func (svc *RouteRuleService) runGeoAssetSync(id int64) {
+	unlock := svc.lockGeneratedGeoRuleSet(fmt.Sprintf("asset/%d", id))
+	defer unlock()
 	item, err := svc.store.GetGeoAsset(id)
 	if err != nil || item == nil {
 		logging.Error("geo.sync", "get geo asset %d failed: %v", id, err)
 		return
 	}
-	if item.SyncStatus == "syncing" {
-		return
-	}
-	if err := svc.store.SetGeoAssetSyncState(id, "syncing", ""); err != nil {
+	if applied, err := svc.store.SetGeoAssetSyncStateIfCurrent(item, "syncing", ""); err != nil || !applied {
 		logging.Error("geo.sync", "set geo sync state failed: %v", err)
 		return
 	}
@@ -1115,14 +1154,18 @@ func (svc *RouteRuleService) runGeoAssetSync(id int64) {
 	})
 	if err != nil {
 		logging.Error("geo.sync", "sync geo asset %d failed: %v", id, err)
-		_ = svc.store.SetGeoAssetSyncState(id, "failed", err.Error())
-		svc.broadcastGeoSync(id, "failed", 0, err.Error())
+		if applied, _ := svc.store.SetGeoAssetSyncStateIfCurrent(item, "failed", err.Error()); applied {
+			svc.broadcastGeoSync(id, "failed", 0, err.Error())
+		}
 		return
 	}
-	if _, err := svc.store.UpdateGeoAssetSyncResult(id, localPath); err != nil {
+	if applied, err := svc.store.UpdateGeoAssetSyncResultIfCurrent(item, localPath); err != nil {
 		logging.Error("geo.sync", "update geo sync result failed: %v", err)
-		_ = svc.store.SetGeoAssetSyncState(id, "failed", err.Error())
+		_, _ = svc.store.SetGeoAssetSyncStateIfCurrent(item, "failed", err.Error())
 		svc.broadcastGeoSync(id, "failed", 0, err.Error())
+		return
+	} else if !applied {
+		logging.Info("geo.sync", "Geo 来源或下载设置已变更，忽略旧下载结果: %d", id)
 		return
 	}
 	svc.broadcastGeoSync(id, "updated", 100, "")
@@ -1173,7 +1216,7 @@ func (svc *RouteRuleService) fetchAndCacheGeoAsset(item *model.GeoAsset, reportP
 		if reportProgress != nil {
 			reportProgress(float64(5 + index*5))
 		}
-		body, err = fetchRouteRuleSubscriptionContentWithClientProgress(client, attempt.url, func(read, total int64) {
+		body, _, err = fetchRouteRuleContentWithLimit(context.Background(), client, attempt.url, func(read, total int64) {
 			progress := 20
 			if total > 0 {
 				progress = 10 + int(float64(read)*75/float64(total))
@@ -1185,7 +1228,7 @@ func (svc *RouteRuleService) fetchAndCacheGeoAsset(item *model.GeoAsset, reportP
 				lastProgress = progress
 				reportProgress(float64(progress))
 			}
-		})
+		}, geoDatabaseMaxSize)
 		if err == nil {
 			break
 		}
@@ -1198,12 +1241,9 @@ func (svc *RouteRuleService) fetchAndCacheGeoAsset(item *model.GeoAsset, reportP
 	if reportProgress != nil {
 		reportProgress(90)
 	}
-	localPath := filepath.Join(svc.paths.GeoDir, item.Type+".db")
-	if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
-		return "", fmt.Errorf("create geo dir: %w", err)
-	}
-	if err := os.WriteFile(localPath, body, 0644); err != nil {
-		return "", fmt.Errorf("write geo database: %w", err)
+	localPath, err := svc.cacheGeoDatabase(item, body)
+	if err != nil {
+		return "", err
 	}
 	if reportProgress != nil {
 		reportProgress(95)
@@ -1529,6 +1569,9 @@ func (svc *RouteRuleService) validateRouteRule(req *model.RouteRuleRequest) erro
 	if err := validateRouteRule(req); err != nil {
 		return err
 	}
+	if err := svc.validateGeoIPRuleValues(req.RuleType, req.Values); err != nil {
+		return err
+	}
 	return svc.validateGeoSiteRuleValues(req.RuleType, req.Values)
 }
 
@@ -1808,6 +1851,10 @@ func fetchRouteRuleSubscriptionContentWithClientContextProgress(ctx context.Cont
 }
 
 func fetchRouteRuleSubscriptionContentOnce(ctx context.Context, client *http.Client, rawURL string, progress func(read, total int64)) ([]byte, bool, error) {
+	return fetchRouteRuleContentWithLimit(ctx, client, rawURL, progress, routeRuleSubscriptionContentMaxSize)
+}
+
+func fetchRouteRuleContentWithLimit(ctx context.Context, client *http.Client, rawURL string, progress func(read, total int64), maxSize int64) ([]byte, bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, false, fmt.Errorf("create rule subscription request: %w", err)
@@ -1822,7 +1869,7 @@ func fetchRouteRuleSubscriptionContentOnce(ctx context.Context, client *http.Cli
 		retry := resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
 		return nil, retry, fmt.Errorf("fetch rule subscription failed: http %d", resp.StatusCode)
 	}
-	reader := io.Reader(io.LimitReader(resp.Body, routeRuleSubscriptionContentMaxSize+1))
+	reader := io.Reader(io.LimitReader(resp.Body, maxSize+1))
 	if progress != nil {
 		reader = &downloadProgressReader{Reader: reader, total: resp.ContentLength, report: progress}
 	}
@@ -1833,8 +1880,8 @@ func fetchRouteRuleSubscriptionContentOnce(ctx context.Context, client *http.Cli
 	if len(data) == 0 {
 		return nil, true, fmt.Errorf("rule subscription response is empty")
 	}
-	if int64(len(data)) > routeRuleSubscriptionContentMaxSize {
-		return nil, false, fmt.Errorf("rule subscription response exceeds %d bytes", routeRuleSubscriptionContentMaxSize)
+	if int64(len(data)) > maxSize {
+		return nil, false, fmt.Errorf("rule subscription response exceeds %d bytes", maxSize)
 	}
 	return data, false, nil
 }

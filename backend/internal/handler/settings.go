@@ -189,6 +189,12 @@ func (h *SettingsHandler) SetGeneralSettings(c *gin.Context) {
 		return
 	}
 	if err := h.svc.SetGeneralSettings(&req); err != nil {
+		if errors.Is(err, service.ErrGeoSourceSettingsInvalid) {
+			c.JSON(http.StatusBadRequest, model.ErrorResponse{
+				Error: model.APIError{Code: "SETTINGS_INVALID", Message: err.Error()},
+			})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
 			Error: model.APIError{Code: "SETTINGS_SAVE_FAILED", Message: err.Error()},
 		})

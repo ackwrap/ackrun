@@ -1,15 +1,14 @@
 package geoquery
 
 import (
-	"bufio"
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
-	"sync"
-	"sync/atomic"
 )
 
 type GeositeItemType = uint8
@@ -27,12 +26,12 @@ type GeositeItem struct {
 }
 
 type GeositeReader struct {
-	access         sync.Mutex
-	reader         io.ReadSeeker
-	bufferedReader *bufio.Reader
-	metadataIndex  int64
-	domainIndex    map[string]int
-	domainLength   map[string]int
+	closer        io.Closer
+	data          []byte
+	metadataIndex int
+	domainIndex   map[string]int
+	domainLength  map[string]int
+	datItems      map[string][]GeositeItem
 }
 
 func OpenGeosite(path string) (*GeositeReader, []string, error) {
@@ -49,20 +48,36 @@ func OpenGeosite(path string) (*GeositeReader, []string, error) {
 }
 
 func NewGeositeReader(readSeeker io.ReadSeeker) (*GeositeReader, []string, error) {
-	reader := &GeositeReader{reader: readSeeker}
-	if err := reader.readMetadata(); err != nil {
+	data, err := readDatabase(readSeeker)
+	if err != nil {
 		return nil, nil, err
 	}
-	codes := make([]string, 0, len(reader.domainIndex))
-	for code := range reader.domainIndex {
-		codes = append(codes, code)
+	reader := &GeositeReader{data: data}
+	reader.closer, _ = readSeeker.(io.Closer)
+	var codes []string
+	if data[0] == 0 {
+		if err := reader.readMetadata(); err != nil {
+			return nil, nil, err
+		}
+		for code := range reader.domainIndex {
+			codes = append(codes, code)
+		}
+	} else {
+		reader.datItems, err = parseGeositeDAT(data)
+		if err != nil {
+			return nil, nil, err
+		}
+		reader.data = nil
+		for code := range reader.datItems {
+			codes = append(codes, code)
+		}
 	}
+	slices.Sort(codes)
 	return reader, codes, nil
 }
 
 func (r *GeositeReader) readMetadata() error {
-	counter := &readCounter{Reader: r.reader}
-	reader := bufio.NewReader(counter)
+	reader := bytes.NewReader(r.data)
 	version, err := reader.ReadByte()
 	if err != nil {
 		return err
@@ -73,6 +88,9 @@ func (r *GeositeReader) readMetadata() error {
 	entryLength, err := binary.ReadUvarint(reader)
 	if err != nil {
 		return err
+	}
+	if entryLength > uint64(reader.Len()/3) {
+		return fmt.Errorf("invalid geosite metadata entry count")
 	}
 	domainIndex := make(map[string]int)
 	domainLength := make(map[string]int)
@@ -89,75 +107,75 @@ func (r *GeositeReader) readMetadata() error {
 		if err != nil {
 			return err
 		}
+		if codeIndex > uint64(len(r.data)) || codeLength > uint64(len(r.data)/2) {
+			return fmt.Errorf("invalid geosite metadata offset or length")
+		}
+		if _, exists := domainIndex[code]; exists {
+			return fmt.Errorf("duplicate geosite code %q", code)
+		}
 		domainIndex[code] = int(codeIndex)
 		domainLength[code] = int(codeLength)
 	}
 	r.domainIndex = domainIndex
 	r.domainLength = domainLength
-	r.metadataIndex = counter.count - int64(reader.Buffered())
-	r.bufferedReader = reader
+	r.metadataIndex = len(r.data) - reader.Len()
+	for code, offset := range domainIndex {
+		if offset > reader.Len() || domainLength[code] > (reader.Len()-offset)/2 {
+			return fmt.Errorf("invalid geosite data offset or length for %q", code)
+		}
+	}
 	return nil
 }
 
 func (r *GeositeReader) Read(code string) ([]GeositeItem, error) {
-	r.access.Lock()
-	defer r.access.Unlock()
+	if r.datItems != nil {
+		items, exists := r.datItems[strings.ToLower(code)]
+		if !exists {
+			return nil, fmt.Errorf("geosite code %q not exists", code)
+		}
+		return slices.Clone(items), nil
+	}
 	index, exists := r.domainIndex[code]
 	if !exists {
 		return nil, fmt.Errorf("geosite code %q not exists", code)
 	}
-	if _, err := r.reader.Seek(r.metadataIndex+int64(index), io.SeekStart); err != nil {
-		return nil, err
-	}
-	r.bufferedReader.Reset(r.reader)
-	items := make([]GeositeItem, r.domainLength[code])
-	for i := range items {
-		typeByte, err := r.bufferedReader.ReadByte()
+	reader := bytes.NewReader(r.data[r.metadataIndex+index:])
+	var items []GeositeItem
+	for range r.domainLength[code] {
+		typeByte, err := reader.ReadByte()
 		if err != nil {
 			return nil, err
 		}
-		items[i].Type = GeositeItemType(typeByte)
-		items[i].Value, err = readString(r.bufferedReader)
+		if typeByte > GeositeRuleTypeDomainRegex {
+			return nil, fmt.Errorf("unsupported geosite item type %d", typeByte)
+		}
+		value, err := readString(reader)
 		if err != nil {
 			return nil, err
 		}
+		items = append(items, GeositeItem{Type: typeByte, Value: value})
 	}
 	return items, nil
 }
 
 func (r *GeositeReader) Close() error {
-	if closer, ok := r.reader.(io.Closer); ok {
-		return closer.Close()
+	if r.closer != nil {
+		return r.closer.Close()
 	}
 	return nil
 }
 
-type readCounter struct {
-	io.Reader
-	count int64
-}
-
-func (r *readCounter) Read(p []byte) (n int, err error) {
-	n, err = r.Reader.Read(p)
-	if n > 0 {
-		atomic.AddInt64(&r.count, int64(n))
-	}
-	return
-}
-
-func readString(reader io.ByteReader) (string, error) {
+func readString(reader *bytes.Reader) (string, error) {
 	length, err := binary.ReadUvarint(reader)
 	if err != nil {
 		return "", err
 	}
-	bytes := make([]byte, length)
-	for i := range bytes {
-		bytes[i], err = reader.ReadByte()
-		if err != nil {
-			return "", err
-		}
+	if length > uint64(reader.Len()) {
+		return "", io.ErrUnexpectedEOF
 	}
-	return string(bytes), nil
+	data := make([]byte, int(length))
+	_, err = io.ReadFull(reader, data)
+	return string(data), err
 }
 
 type GeositeMatcher struct {
@@ -190,7 +208,13 @@ func (m *GeositeMatcher) Match(domain string) string {
 		return "domain=" + domain
 	}
 	for _, suffix := range m.suffixList {
-		if strings.HasSuffix(domain, suffix) {
+		// A leading dot in the legacy DB denotes subdomains only. A root
+		// domain from DAT includes the apex as well as dot-delimited children.
+		matches := strings.HasSuffix(domain, suffix)
+		if !strings.HasPrefix(suffix, ".") {
+			matches = domain == suffix || strings.HasSuffix(domain, "."+suffix)
+		}
+		if matches {
 			return "domain_suffix=" + suffix
 		}
 	}

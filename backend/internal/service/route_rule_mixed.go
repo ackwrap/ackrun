@@ -182,9 +182,6 @@ func validateGeoIPValues(values []string) error {
 		if !geoIPCodePattern.MatchString(value) {
 			return fmt.Errorf("invalid geoip code: %s", raw)
 		}
-		if !geoIPCodeSet[value] {
-			return fmt.Errorf("geoip code 不存在或不支持: %s", raw)
-		}
 	}
 	return nil
 }

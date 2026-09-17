@@ -242,6 +242,10 @@ func (svc *SimpleSetupService) run(ctx context.Context, rawURL string) (runErr e
 			return err
 		}
 		seen := map[string]bool{}
+		general, err := svc.store.GetGeneralSettings()
+		if err != nil {
+			return err
+		}
 		for _, rule := range rules {
 			if !rule.Enabled {
 				continue
@@ -266,7 +270,7 @@ func (svc *SimpleSetupService) run(ctx context.Context, rawURL string) (runErr e
 					continue
 				}
 				seen[tag] = true
-				if _, _, err := svc.rules.GeneratedGeoRuleSetContentContext(ctx, tag); err != nil {
+				if _, _, err := svc.rules.GeneratedGeoRuleSetContentForSource(ctx, tag, general.GeoSource, ""); err != nil {
 					return fmt.Errorf("规则 %s 下载或校验失败，请检查网络后重试", tag)
 				}
 			}

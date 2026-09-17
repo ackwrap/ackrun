@@ -109,6 +109,7 @@ type GeoAsset struct {
 	ID              int64  `json:"id"`
 	Name            string `json:"name"`
 	Type            string `json:"type"`
+	Source          string `json:"source"`
 	URL             string `json:"url"`
 	UseProxy        bool   `json:"use_proxy"`
 	SyncMode        string `json:"sync_mode"`
@@ -125,7 +126,7 @@ type GeoAsset struct {
 }
 
 type GeoAssetRequest struct {
-	URL         string `json:"url" binding:"required"`
+	URL         string `json:"url,omitempty"`
 	UseProxy    bool   `json:"use_proxy"`
 	SyncMode    string `json:"sync_mode"`
 	SyncTime    string `json:"sync_time"`

@@ -2338,6 +2338,9 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 		}
 	}
 
+	if err := applyGeneratedGeoSource(s.store, ruleSets); err != nil {
+		return nil, err
+	}
 	route["rules"] = routeRules
 	route["rule_set"] = ruleSets
 
