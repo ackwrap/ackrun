@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -78,6 +79,16 @@ var managedIPRuleSpecs = []managedIPRuleSpec{
 	{id: "input_mark", priority: 9001, line: "from all fwmark 0x2023 lookup 2022", delete: []string{"rule", "del", "priority", "9001", "from", "all", "fwmark", "0x2023", "lookup", singboxRouteTable}},
 	{id: "redirect_nop", priority: 9002, line: "from all nop", delete: []string{"rule", "del", "priority", "9002", "from", "all", "type", "nop"}},
 	{id: "fallback", priority: 32768, line: "from all lookup 2022", delete: []string{"rule", "del", "priority", "32768", "from", "all", "lookup", singboxRouteTable}},
+	// Keep distinct persisted IDs so a format change after recording ownership
+	// cannot silently authorize deletion of a replacement rule.
+	{id: "output_mark_masked", priority: 9000, line: "from all fwmark 0x2024/0x2027 goto 9002", delete: []string{"rule", "del", "priority", "9000", "from", "all", "fwmark", "0x2024/0x2027", "goto", "9002"}},
+	{id: "input_mark_masked", priority: 9001, line: "from all fwmark 0x2023/0x2027 lookup 2022", delete: []string{"rule", "del", "priority", "9001", "from", "all", "fwmark", "0x2023/0x2027", "lookup", singboxRouteTable}},
+	{id: "fallback_masked", priority: 32768, line: "not from all fwmark 0x2024/0x2027 lookup 2022", delete: []string{"rule", "del", "priority", "32768", "not", "from", "all", "fwmark", "0x2024/0x2027", "lookup", singboxRouteTable}},
+}
+
+var managedIPRuleProfiles = [][]string{
+	{"output_mark", "input_mark", "redirect_nop", "fallback"},
+	{"output_mark_masked", "input_mark_masked", "redirect_nop", "fallback_masked"},
 }
 
 type ipRuleSnapshot struct {
@@ -173,7 +184,8 @@ func (snapshot ipRuleSnapshot) singboxTUNPriorityConflicts() []int {
 }
 
 func (snapshot ipRuleSnapshot) hasSingboxAutoRedirectSignature() bool {
-	return len(snapshot.managedRuleIDs()) == len(managedIPRuleSpecs)
+	ruleIDs := snapshot.managedRuleIDs()
+	return hasAllManagedIPRuleIDs(ruleIDs) && validateManagedIPRuleDeletions(snapshot, ruleIDs) == nil
 }
 
 func (snapshot ipRuleSnapshot) priorityOneLookupTables() []string {
@@ -399,7 +411,19 @@ func stringSlicesOverlap(left, right []string) bool {
 }
 
 func hasAllManagedIPRuleIDs(ruleIDs []string) bool {
-	return len(ruleIDs) == len(managedIPRuleSpecs)
+	for _, profile := range managedIPRuleProfiles {
+		if len(ruleIDs) != len(profile) {
+			continue
+		}
+		complete := true
+		for _, ruleID := range profile {
+			complete = complete && slices.Contains(ruleIDs, ruleID)
+		}
+		if complete {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeManagedIPRuleIDs(ruleIDs []string) ([]string, error) {
@@ -520,12 +544,20 @@ func derivePendingSingboxOwnership(state singboxRouteTableState, ipv4, ipv6 ipRu
 		if !expected {
 			return nil, nil, nil
 		}
+		if err := validateManagedIPRuleDeletions(snapshot, baselineRules); err != nil {
+			return nil, nil, fmt.Errorf("pre-start baseline changed: %w", err)
+		}
+		matchedPriorities := make(map[int]bool)
 		for _, spec := range managedIPRuleSpecs {
-			baselineHasRule := false
-			for _, ruleID := range baselineRules {
-				baselineHasRule = baselineHasRule || ruleID == spec.id
+			if snapshot.hasExactRule(spec.priority, spec.line) {
+				matchedPriorities[spec.priority] = true
 			}
-			if !baselineHasRule && len(snapshot.lines[spec.priority]) > 0 && !snapshot.hasExactRule(spec.priority, spec.line) {
+		}
+		for _, spec := range managedIPRuleSpecs {
+			if len(snapshot.lines[spec.priority]) > 1 {
+				return nil, nil, fmt.Errorf("reserved sing-box rule priority %d is shared", spec.priority)
+			}
+			if len(snapshot.lines[spec.priority]) > 0 && !matchedPriorities[spec.priority] {
 				return nil, nil, fmt.Errorf("reserved sing-box rule priority %d contains an unexpected replacement", spec.priority)
 			}
 		}
