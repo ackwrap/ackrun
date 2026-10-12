@@ -46,7 +46,14 @@ type SingboxService struct {
 	cachedVer          string
 	lastError          string
 	beforeStart        func() error
+	waitReady          func(context.Context) error
 	afterStart         func() error
+}
+
+type coreStartResult struct {
+	response        *model.ActionResponse
+	processExited   <-chan struct{}
+	dnsmasqTakeover bool
 }
 
 var (
@@ -57,10 +64,11 @@ func NewSingboxService(p *paths.Paths, rt *RealtimeService, logs *CoreLogService
 	return &SingboxService{paths: p, realtime: rt, coreLogs: logs, store: s, dnsmasq: newDNSMasqLifecycle(p), dnsmasqSupported: platformSupportsDNSMasqTakeover}
 }
 
-func (svc *SingboxService) SetStartHooks(beforeStart, afterStart func() error) {
+func (svc *SingboxService) SetStartHooks(beforeStart func() error, waitReady func(context.Context) error, afterStart func() error) {
 	svc.mu.Lock()
 	defer svc.mu.Unlock()
 	svc.beforeStart = beforeStart
+	svc.waitReady = waitReady
 	svc.afterStart = afterStart
 }
 
@@ -87,39 +95,76 @@ func (svc *SingboxService) prepareStartConfig() error {
 }
 
 func (svc *SingboxService) startAndSync() (*model.ActionResponse, error) {
-	response, err := svc.start()
+	started, err := svc.start()
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel := coreStartupContext(started.processExited)
+	defer cancel()
 	svc.mu.Lock()
+	waitReady := svc.waitReady
 	afterStart := svc.afterStart
 	svc.mu.Unlock()
-	if afterStart == nil {
-		return svc.markStarted(response)
-	}
-	if err := afterStart(); err != nil {
-		startErr := fmt.Errorf("核心运行时同步失败: %w", err)
-		svc.mu.Lock()
-		svc.lastError = startErr.Error()
-		svc.mu.Unlock()
-		logging.Error("core.start", "%v", startErr)
-		var stopErr error
-		if svc.IsRunning() {
-			_, stopErr = svc.stop("runtime synchronization failed")
+	logging.Info("core.start", "等待核心启动就绪，超时: %s", coreStartupReadinessTimeout)
+	if waitReady != nil {
+		if err := waitReady(ctx); err != nil {
+			return svc.failStartup(fmt.Errorf("核心启动就绪失败: %w", err), "startup readiness failed")
 		}
-		settleErr := svc.waitUntilStopped(12 * time.Second)
-		if stopErr != nil {
-			stopErr = fmt.Errorf("stop core after runtime sync failure: %w", stopErr)
-		}
-		svc.realtime.Broadcast("core.status", map[string]any{
-			"status": "error",
-			"pid":    0,
-			"error":  startErr.Error(),
-		})
-		svc.broadcastRuntimeStatus(model.RuntimeError, 0)
-		return nil, errors.Join(startErr, stopErr, settleErr)
 	}
-	return svc.markStarted(response)
+	if started.dnsmasqTakeover {
+		if err := activateDNSMasqAfterReady(ctx, func() error { return svc.activateDNSMasq(ctx) }, probeDNSInbound); err != nil {
+			startErr := fmt.Errorf("OpenWrt DNS 接管失败: %w", err)
+			logging.Error("dnsmasq.takeover", "%v", startErr)
+			return svc.failStartup(startErr, "DNS takeover failed")
+		}
+	}
+	if afterStart != nil {
+		if err := afterStart(); err != nil {
+			return svc.failStartup(fmt.Errorf("核心运行时同步失败: %w", err), "runtime synchronization failed")
+		}
+	}
+	return svc.markStarted(started.response)
+}
+
+func (svc *SingboxService) activateDNSMasq(ctx context.Context) error {
+	if svc.dnsmasq == nil {
+		return errors.New("dnsmasq 生命周期服务不可用")
+	}
+	// A process exit may race readiness. Keep activation serialized with exit
+	// cleanup so cleanup cannot restore DNS before activation has finished.
+	svc.networkLifecycleMu.Lock()
+	defer svc.networkLifecycleMu.Unlock()
+	releaseNetworkLock, err := acquireNetworkLifecycleFileLock(svc.paths.NetworkLifecycleLockPath())
+	if err != nil {
+		return err
+	}
+	defer releaseNetworkLock()
+	if cause := context.Cause(ctx); cause != nil {
+		return cause
+	}
+	return svc.dnsmasq.Activate()
+}
+
+func (svc *SingboxService) failStartup(startErr error, reason string) (*model.ActionResponse, error) {
+	svc.mu.Lock()
+	svc.lastError = startErr.Error()
+	svc.mu.Unlock()
+	logging.Error("core.start", "%v", startErr)
+	var stopErr error
+	if svc.IsRunning() {
+		_, stopErr = svc.stop(reason)
+	}
+	settleErr := svc.waitUntilStopped(12 * time.Second)
+	if stopErr != nil {
+		stopErr = fmt.Errorf("stop core after startup failure: %w", stopErr)
+	}
+	svc.realtime.Broadcast("core.status", map[string]any{
+		"status": "error",
+		"pid":    0,
+		"error":  startErr.Error(),
+	})
+	svc.broadcastRuntimeStatus(model.RuntimeError, 0)
+	return nil, errors.Join(startErr, stopErr, settleErr)
 }
 
 func (svc *SingboxService) markStarted(response *model.ActionResponse) (*model.ActionResponse, error) {
@@ -150,7 +195,7 @@ func (svc *SingboxService) waitUntilStopped(timeout time.Duration) error {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("sing-box did not settle after runtime sync failure (pid=%d)", pid)
+			return fmt.Errorf("sing-box did not settle after startup failure (pid=%d)", pid)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -195,7 +240,7 @@ func startIfConfigured(isRunning func() bool, binaryPath string, activeConfig fu
 	return start()
 }
 
-func (svc *SingboxService) start() (*model.ActionResponse, error) {
+func (svc *SingboxService) start() (*coreStartResult, error) {
 	svc.networkLifecycleMu.Lock()
 	defer svc.networkLifecycleMu.Unlock()
 	releaseNetworkLock, err := acquireNetworkLifecycleFileLock(svc.paths.NetworkLifecycleLockPath())
@@ -346,6 +391,7 @@ func (svc *SingboxService) start() (*model.ActionResponse, error) {
 		svc.mu.Lock()
 		intentionalStop := svc.cmd == cmd && svc.stopping
 		stopReason := svc.stopReason
+		lastError := svc.lastError
 		if svc.cmd == cmd {
 			svc.stopping = true
 			svc.pid = 0
@@ -355,7 +401,7 @@ func (svc *SingboxService) start() (*model.ActionResponse, error) {
 		}
 		svc.mu.Unlock()
 
-		statusMsg, runtimeStatus, errorMessage := coreExitState(err, intentionalStop, svc.lastError)
+		statusMsg, runtimeStatus, errorMessage := coreExitState(err, intentionalStop, lastError)
 		cleanupErr := svc.cleanupAfterProcessExit(networkLockErr)
 		if cleanupErr != nil {
 			statusMsg = "error"
@@ -389,22 +435,11 @@ func (svc *SingboxService) start() (*model.ActionResponse, error) {
 		done <- cleanupErr
 		close(done)
 	}()
-	if dnsmasqTakeover {
-		if err := waitForDNSInbound(processExited, 10*time.Second); err == nil && svc.dnsmasq != nil {
-			err = svc.dnsmasq.Activate()
-		} else if err == nil {
-			err = fmt.Errorf("dnsmasq 生命周期服务不可用")
-		}
-		if err != nil {
-			svc.lastError = "OpenWrt DNS 接管失败: " + err.Error()
-			logging.Error("dnsmasq.takeover", "%s", svc.lastError)
-			if shutdownErr := requestProcessShutdown(cmd.Process); shutdownErr != nil {
-				_ = cmd.Process.Kill()
-			}
-			return nil, errors.New(svc.lastError)
-		}
-	}
-	return &model.ActionResponse{Success: true, Message: "service started"}, nil
+	return &coreStartResult{
+		response:        &model.ActionResponse{Success: true, Message: "service started"},
+		processExited:   processExited,
+		dnsmasqTakeover: dnsmasqTakeover,
+	}, nil
 }
 
 func (svc *SingboxService) cleanupAfterProcessExit(networkLockErr error) error {

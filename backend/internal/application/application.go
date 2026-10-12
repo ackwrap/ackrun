@@ -160,7 +160,7 @@ func New(options Options) (*Application, error) {
 	advancedSvc := service.NewAdvancedRoutingService(db, nodeExposureRuntime, singboxSvc, realtimeSvc, coreAPIToken)
 	advancedSvc.SetAlertService(alertSvc)
 	subscriptionSvc.SetAlertService(alertSvc)
-	singboxSvc.SetStartHooks(configGenSvc.EnsureRuntimeAPIConfig, combineStartHooks(nodeExposureSvc.SyncRuntime, advancedSvc.SyncRuntime))
+	singboxSvc.SetStartHooks(configGenSvc.EnsureRuntimeAPIConfig, nodeExposureRuntime.WaitReady, combineStartHooks(nodeExposureSvc.SyncRuntime, advancedSvc.SyncRuntime))
 	settingsSvc.SetModeDependencies(singboxSvc, configGenSvc)
 	settingsSvc.SetConnectivitySettingsHook(proxyCollectionSvc.RefreshHealthCheckJobs)
 	reconcileSvc := service.NewConfigReconcileService(configGenSvc, realtimeSvc)

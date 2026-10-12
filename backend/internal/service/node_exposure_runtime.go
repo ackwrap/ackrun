@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -190,8 +191,10 @@ func singboxRuntimeAPIServiceConfig(secret string) map[string]interface{} {
 }
 
 func (c *NodeExposureRuntimeClient) Sync(items []model.NodeExposureWithNode) error {
-	if err := c.waitHealthy(5 * time.Second); err != nil {
-		return fmt.Errorf("等待核心运行时 API 就绪失败: %w", err)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := c.WaitReady(ctx); err != nil {
+		return err
 	}
 	activeIDs, err := c.listIDs()
 	if err != nil {
@@ -299,19 +302,15 @@ func (c *NodeExposureRuntimeClient) GetAccessEvents(after uint64, limit int) (Ru
 	return result, nil
 }
 
-func (c *NodeExposureRuntimeClient) waitHealthy(timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	var lastErr error
-	for {
-		_, lastErr = c.request(http.MethodGet, "/health", nil, http.StatusOK)
-		if lastErr == nil {
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return lastErr
-		}
-		time.Sleep(100 * time.Millisecond)
+func (c *NodeExposureRuntimeClient) WaitReady(ctx context.Context) error {
+	err := waitForCoreReadiness(ctx, func(ctx context.Context) error {
+		_, err := c.requestContext(ctx, http.MethodGet, "/health", nil, http.StatusOK)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("等待核心运行时 API 就绪失败: %w", err)
 	}
+	return nil
 }
 
 func (c *NodeExposureRuntimeClient) listIDs() (map[int64]bool, error) {
@@ -335,7 +334,11 @@ func (c *NodeExposureRuntimeClient) listIDs() (map[int64]bool, error) {
 }
 
 func (c *NodeExposureRuntimeClient) request(method, path string, content []byte, expectedStatuses ...int) ([]byte, error) {
-	request, err := http.NewRequest(method, c.baseURL+path, bytes.NewReader(content))
+	return c.requestContext(context.Background(), method, path, content, expectedStatuses...)
+}
+
+func (c *NodeExposureRuntimeClient) requestContext(ctx context.Context, method, path string, content []byte, expectedStatuses ...int) ([]byte, error) {
+	request, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, bytes.NewReader(content))
 	if err != nil {
 		return nil, err
 	}

@@ -1,7 +1,9 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,10 +11,75 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ackwrap/ackrun/internal/model"
 	"github.com/ackwrap/ackrun/internal/paths"
 )
+
+func TestCoreStartupWaitsPastLegacyRuntimeAPITimeout(t *testing.T) {
+	// Cold rule-set initialization can outlast the former five-second API wait.
+	readyAt := time.Now().Add(6 * time.Second)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		if time.Now().Before(readyAt) {
+			writer.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	client := NewNodeExposureRuntimeClient("startup-test-secret")
+	client.baseURL = server.URL
+	ctx, cancel := coreStartupContext(make(chan struct{}))
+	defer cancel()
+	if err := client.WaitReady(ctx); err != nil {
+		t.Fatalf("slow core was rejected before startup completed: %v", err)
+	}
+}
+
+func TestCoreStartupExitCancelsInFlightHealthRequest(t *testing.T) {
+	requestStarted := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		close(requestStarted)
+		<-request.Context().Done()
+	}))
+	defer server.Close()
+	client := NewNodeExposureRuntimeClient("startup-test-secret")
+	client.baseURL = server.URL
+	processExited := make(chan struct{})
+	ctx, cancel := coreStartupContext(processExited)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() { result <- client.WaitReady(ctx) }()
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("health request did not start")
+	}
+	close(processExited)
+	select {
+	case err := <-result:
+		if !errors.Is(err, errCoreExitedDuringStartup) {
+			t.Fatalf("readiness error = %v, want process exit", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("health request was not canceled after process exit")
+	}
+}
+
+func TestCoreHealthRequestHonorsStartupDeadline(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		<-request.Context().Done()
+	}))
+	defer server.Close()
+	client := NewNodeExposureRuntimeClient("startup-test-secret")
+	client.baseURL = server.URL
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if err := client.WaitReady(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("readiness error = %v, want startup deadline", err)
+	}
+}
 
 func TestLoadOrCreateCoreAPITokenPersistsProtectedSecret(t *testing.T) {
 	configDir := t.TempDir()

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -250,32 +251,27 @@ func newDNSMasqLifecycle(p *paths.Paths) dnsmasqLifecycle {
 	return newPlatformDNSMasqLifecycle(p)
 }
 
-func waitForDNSInbound(processExited <-chan struct{}, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	var lastErr error
-	for time.Now().Before(deadline) {
-		select {
-		case <-processExited:
-			return fmt.Errorf("sing-box 在本地 DNS 就绪前退出")
-		default:
-		}
-		if err := probeDNSInbound(); err == nil {
-			return nil
-		} else {
-			lastErr = err
-		}
-		time.Sleep(100 * time.Millisecond)
+func activateDNSMasqAfterReady(ctx context.Context, activate func() error, probe func(context.Context) error) error {
+	if err := waitForCoreReadiness(ctx, probe); err != nil {
+		return fmt.Errorf("等待本地 DNS 就绪失败: %w", err)
 	}
-	return fmt.Errorf("等待本地 DNS 端口就绪超时: %w", lastErr)
+	return activate()
 }
 
-func probeDNSInbound() error {
-	connection, err := net.DialTimeout("udp", fmt.Sprintf("127.0.0.1:%d", defaultDNSInboundPort), 500*time.Millisecond)
+func probeDNSInbound(ctx context.Context) error {
+	dialer := &net.Dialer{Timeout: 500 * time.Millisecond}
+	connection, err := dialer.DialContext(ctx, "udp", fmt.Sprintf("127.0.0.1:%d", defaultDNSInboundPort))
 	if err != nil {
 		return err
 	}
 	defer connection.Close()
-	if err := connection.SetDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+	stopCancellation := context.AfterFunc(ctx, func() { _ = connection.Close() })
+	defer stopCancellation()
+	deadline := time.Now().Add(500 * time.Millisecond)
+	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
+		deadline = contextDeadline
+	}
+	if err := connection.SetDeadline(deadline); err != nil {
 		return err
 	}
 	id := uint16(time.Now().UnixNano())

@@ -19,7 +19,7 @@ import (
 const (
 	linuxNetworkCommandTimeout = 3 * time.Second
 	linuxFW4CommandTimeout     = 15 * time.Second
-	ownershipRecordTimeout     = 30 * time.Second
+	ownershipRecordTimeout     = coreStartupReadinessTimeout
 	ownershipRecordInterval    = 100 * time.Millisecond
 )
 
