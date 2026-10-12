@@ -48,6 +48,9 @@ type SingboxService struct {
 	beforeStart        func() error
 	waitReady          func(context.Context) error
 	afterStart         func() error
+	transitionGuard    coreTransitionGuard
+	transitionHeld     bool // lifecycleMu: updates keep protection through rollback/DB commit
+	runningTUN         bool // lifecycleMu: capture old mode before config regeneration
 }
 
 type coreStartResult struct {
@@ -61,7 +64,7 @@ var (
 )
 
 func NewSingboxService(p *paths.Paths, rt *RealtimeService, logs *CoreLogService, s *store.Store) *SingboxService {
-	return &SingboxService{paths: p, realtime: rt, coreLogs: logs, store: s, dnsmasq: newDNSMasqLifecycle(p), dnsmasqSupported: platformSupportsDNSMasqTakeover}
+	return &SingboxService{paths: p, realtime: rt, coreLogs: logs, store: s, dnsmasq: newDNSMasqLifecycle(p), dnsmasqSupported: platformSupportsDNSMasqTakeover, transitionGuard: newCoreTransitionGuard(p)}
 }
 
 func (svc *SingboxService) SetStartHooks(beforeStart func() error, waitReady func(context.Context) error, afterStart func() error) {
@@ -172,6 +175,11 @@ func (svc *SingboxService) markStarted(response *model.ActionResponse) (*model.A
 	defer svc.mu.Unlock()
 	if !svc.isRunning() || svc.stopping {
 		return nil, errors.New("sing-box exited before startup completed")
+	}
+	if !svc.transitionHeld {
+		if err := svc.releaseCoreTransition(); err != nil {
+			return nil, err
+		}
 	}
 	pid := svc.pid
 	logging.Info("core.start", "sing-box started, pid=%d", pid)
@@ -349,6 +357,7 @@ func (svc *SingboxService) start(validateConfig func() (string, error)) (*coreSt
 		return nil, startErr
 	}
 	processStarted = true
+	svc.runningTUN = tunState.ManagesRoutes
 
 	svc.cmd = cmd
 	svc.pid = cmd.Process.Pid
@@ -482,6 +491,11 @@ func (svc *SingboxService) Stop() (*model.ActionResponse, error) {
 func (svc *SingboxService) Shutdown() (*model.ActionResponse, error) {
 	svc.lifecycleMu.Lock()
 	defer svc.lifecycleMu.Unlock()
+	if svc.IsRunning() {
+		if err := svc.protectCoreTransition(); err != nil {
+			return nil, err
+		}
+	}
 	return svc.stop("Ackwrap backend shutdown")
 }
 
@@ -638,6 +652,9 @@ func (svc *SingboxService) restartWithReason(reason string) (*model.ActionRespon
 
 func (svc *SingboxService) restart(reason string) (*model.ActionResponse, error) {
 	if _, err := svc.validateActiveConfig(); err != nil {
+		return nil, err
+	}
+	if err := svc.protectCoreTransition(); err != nil {
 		return nil, err
 	}
 	if _, err := svc.stop(reason); err != nil {

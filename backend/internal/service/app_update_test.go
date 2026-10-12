@@ -131,9 +131,44 @@ func TestDownloadAppUpdateAssetVerifiesDigest(t *testing.T) {
 type appUpdateCoreStub struct {
 	running    bool
 	startCalls int
+	protect    func() error
 }
 
 func (core *appUpdateCoreStub) IsRunning() bool { return core.running }
+
+func (core *appUpdateCoreStub) ProtectForAppUpdate() error {
+	if core.protect != nil {
+		return core.protect()
+	}
+	return nil
+}
+
+func TestAppUpdateProtectsNetworkBeforeDetachedInstaller(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprint(fail), func(t *testing.T) {
+			var calls []string
+			core := &appUpdateCoreStub{protect: func() error {
+				calls = append(calls, "protect")
+				if fail {
+					return errors.New("firewall unavailable")
+				}
+				return nil
+			}}
+			svc := &AppUpdateService{core: core, launchInstaller: func(string) error {
+				calls = append(calls, "launch")
+				return nil
+			}}
+			err := svc.launchProtectedInstaller("synthetic-installer.sh")
+			want := "protect,launch"
+			if fail {
+				want = "protect"
+			}
+			if (err != nil) != fail || strings.Join(calls, ",") != want {
+				t.Fatalf("err=%v calls=%v", err, calls)
+			}
+		})
+	}
+}
 
 func (core *appUpdateCoreStub) Start() (*model.ActionResponse, error) {
 	core.running = true

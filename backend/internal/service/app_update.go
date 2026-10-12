@@ -40,6 +40,7 @@ var (
 type appUpdateCore interface {
 	IsRunning() bool
 	Start() (*model.ActionResponse, error)
+	ProtectForAppUpdate() error
 }
 
 type appReleaseAsset struct {
@@ -207,7 +208,7 @@ func (svc *AppUpdateService) Install(ctx context.Context) (response *model.AppUp
 		os.Remove(restoreMarker)
 		return nil, err
 	}
-	if err := svc.launchInstaller(scriptPath); err != nil {
+	if err := svc.launchProtectedInstaller(scriptPath); err != nil {
 		os.Remove(scriptPath)
 		os.Remove(restoreMarker)
 		return nil, fmt.Errorf("启动 OpenWrt 更新安装失败: %w", err)
@@ -221,6 +222,15 @@ func (svc *AppUpdateService) Install(ctx context.Context) (response *model.AppUp
 		Message: "更新包已校验，正在安装；Ackwrap 将自动重启",
 		Version: release.Version,
 	}, nil
+}
+
+func (svc *AppUpdateService) launchProtectedInstaller(scriptPath string) error {
+	if svc.core != nil {
+		if err := svc.core.ProtectForAppUpdate(); err != nil {
+			return err
+		}
+	}
+	return svc.launchInstaller(scriptPath)
 }
 
 func (svc *AppUpdateService) beginUpdate() error {

@@ -40,9 +40,18 @@ func RepairNetwork(p *paths.Paths, force bool) (string, error) {
 		logging.Error("network.repair", "网络修复失败: %v", resultErr)
 		return "", resultErr
 	}
+	// Only an explicit force repair may opt back into direct networking without
+	// a ready core. Routine startup/exit cleanup must preserve leak protection.
+	if force {
+		if guard := newCoreTransitionGuard(p); guard != nil {
+			if err := guard.Disable(); err != nil {
+				return "", err
+			}
+		}
+	}
 	logging.Info("network.repair", "网络修复完成，已执行恢复: %t", recovery.NetworkCleaned || recovery.DNSMasqRestored)
 	if force {
-		message = "强制网络修复完成：已检查并清理 sing-box 网络残留，服务保持停止，可重新启动。"
+		message = "强制网络修复完成：已清理 sing-box 网络残留并解除防泄漏保护，服务保持停止，可重新启动。"
 	}
 	return message, nil
 }

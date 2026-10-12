@@ -78,7 +78,7 @@ func redactCoreCheckValues(message string, value interface{}) string {
 // The snapshot, core lifecycle and config-file locks use the same order as
 // config generation. Restart only the prepared config, never regenerate under
 // these locks. Backups are retained until readiness and the final DB migration.
-func (svc *InstallerService) installStagedUpdate(stagingDir string, files []stagedRuntimeFile, version string) error {
+func (svc *InstallerService) installStagedUpdate(stagingDir string, files []stagedRuntimeFile, version string) (resultErr error) {
 	releaseSnapshot := svc.store.HoldConfigSnapshot()
 	defer releaseSnapshot()
 	svc.mu.Lock()
@@ -131,10 +131,33 @@ func (svc *InstallerService) installStagedUpdate(stagingDir string, files []stag
 		return err
 	}
 	oldVersion := readSingboxVersion(svc.paths.BinaryPath)
+	if core != nil && svc.isCoreRunning() {
+		if err := core.protectCoreTransition(); err != nil {
+			return err
+		}
+	}
+	// Readiness alone is not the commit point: a later DB failure also stops
+	// the candidate again. Keep the firewall until the entire update or rollback
+	// is complete. Incomplete rollback leaves it in place across backend restarts.
+	safeToRelease := false
+	if core != nil {
+		core.transitionHeld = true
+		defer func() {
+			core.transitionHeld = false
+			if safeToRelease {
+				resultErr = errors.Join(resultErr, core.releaseCoreTransition())
+			}
+		}()
+	}
+	restorePrevious := func(wasRunning bool) error {
+		err := svc.restoreCoreAfterUpdate(wasRunning)
+		safeToRelease = err == nil && wasRunning
+		return err
+	}
 	wasRunning, err := svc.stopCoreForUpdate()
 	if err != nil {
 		if wasRunning && !svc.isCoreRunning() {
-			err = errors.Join(err, svc.restoreCoreAfterUpdate(true))
+			err = errors.Join(err, restorePrevious(true))
 		}
 		return fmt.Errorf("更新前停止核心失败: %w", err)
 	}
@@ -142,7 +165,7 @@ func (svc *InstallerService) installStagedUpdate(stagingDir string, files []stag
 	if err != nil {
 		var unsafe *runtimeInstallRollbackError
 		if !errors.As(err, &unsafe) {
-			err = errors.Join(err, svc.restoreCoreAfterUpdate(wasRunning))
+			err = errors.Join(err, restorePrevious(wasRunning))
 		}
 		return err
 	}
@@ -177,7 +200,7 @@ func (svc *InstallerService) installStagedUpdate(stagingDir string, files []stag
 			return &runtimeInstallRollbackError{err: errors.Join(cause, configErr, runtimeErr, errors.New("回滚不完整，未启动旧核心"))}
 		}
 		svc.setState(model.InstallExtracting, "restoring previous core", 0, oldVersion, "")
-		if err := svc.restoreCoreAfterUpdate(wasRunning); err != nil {
+		if err := restorePrevious(wasRunning); err != nil {
 			return errors.Join(cause, fmt.Errorf("文件已回滚，但旧核心恢复运行失败: %w", err))
 		}
 		logging.Info("installer.rollback", "旧核心、运行库和活动配置已恢复")
@@ -203,5 +226,6 @@ func (svc *InstallerService) installStagedUpdate(stagingDir string, files []stag
 	if _, err := svc.store.MigrateDNSIndependentCache(singboxSupportsDNSIndependentCache(version)); err != nil {
 		return rollback(fmt.Errorf("DNS 缓存设置迁移失败: %w", err))
 	}
+	safeToRelease = wasRunning
 	return nil
 }
