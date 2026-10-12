@@ -37,29 +37,39 @@ type InstallerService struct {
 	latestMu    sync.Mutex
 	latest      *singboxRelease
 	latestAt    time.Time
-	postInstall func(version string) error
-	coreRunning func() bool
-	stopCore    func() error
-	startCore   func() error
-	replaceFile func(source, target string) error
+	coreService *SingboxService
+	// Test seam for candidate execution; production always invokes the staged core.
+	candidateValidator func(binary, config, version string) error
+	coreRunning        func() bool
+	stopCore           func() error
+	startCore          func() error
+	replaceFile        func(source, target string) error
 }
 
 func NewInstallerService(s *store.Store, p *paths.Paths, rt *RealtimeService) *InstallerService {
 	return &InstallerService{store: s, paths: p, realtime: rt}
 }
 
-func (svc *InstallerService) SetPostInstallHook(hook func(version string) error) {
+func (svc *InstallerService) SetCoreUpdateService(core *SingboxService) {
 	svc.mu.Lock()
 	defer svc.mu.Unlock()
-	svc.postInstall = hook
-}
-
-func (svc *InstallerService) SetCoreUpdateHooks(isRunning func() bool, stop, start func() error) {
-	svc.mu.Lock()
-	defer svc.mu.Unlock()
-	svc.coreRunning = isRunning
-	svc.stopCore = stop
-	svc.startCore = start
+	svc.coreService = core
+	svc.coreRunning = core.IsRunning
+	// installStagedUpdate owns lifecycleMu throughout replacement and recovery.
+	svc.stopCore = func() error {
+		if core.IsRunning() {
+			if _, err := core.stop("core update"); err != nil {
+				return err
+			}
+		}
+		return core.waitUntilStopped(12 * time.Second)
+	}
+	svc.startCore = func() error {
+		// The candidate config is already prepared and validated. Do not regenerate
+		// it here: generation takes the same snapshot lock held by the update.
+		_, err := core.startAndSync(core.validateActiveConfigLocked)
+		return err
+	}
 }
 
 func (svc *InstallerService) GetStatus() (*model.InstallStateResponse, error) {
@@ -195,60 +205,23 @@ func (svc *InstallerService) runInstall() {
 		}
 	}
 
-	coreWasRunning, err := svc.stopCoreForUpdate()
-	if err != nil {
-		errMessage := fmt.Sprintf("stop running core before update failed: %v", err)
-		logging.Error("installer.extract", "%s", errMessage)
-		svc.setState(model.InstallFailed, "", 0, "", errMessage)
-		svc.broadcastStatus()
-		return
-	}
-
 	logging.Info("installer.extract", "extracting sing-box")
 	svc.setState(model.InstallExtracting, "extracting", 0, "", "")
 	svc.broadcastStatus()
 
-	if err := svc.extract(archivePath); err != nil {
-		errMessage := fmt.Sprintf("extract failed: %v", err)
-		var unsafeInstall *runtimeInstallRollbackError
-		if errors.As(err, &unsafeInstall) {
-			errMessage += "; core remains stopped because runtime file rollback failed"
-		} else if restartErr := svc.restoreCoreAfterUpdate(coreWasRunning); restartErr != nil {
-			errMessage += fmt.Sprintf("; restore previous core failed: %v", restartErr)
-		}
-		svc.setState(model.InstallFailed, "", 0, "", errMessage)
+	if err := svc.extractWithInstaller(archivePath, func(stagingDir string, files []stagedRuntimeFile) error {
+		return svc.installStagedUpdate(stagingDir, files, latestVersion)
+	}); err != nil {
+		errMessage := fmt.Sprintf("核心更新失败: %v", err)
+		logging.Error("installer.update", "%s", errMessage)
+		svc.setState(model.InstallFailed, "update failed", 0, readSingboxVersion(svc.paths.BinaryPath), errMessage)
 		svc.broadcastStatus()
 		return
 	}
-
-	migrationError := ""
-	svc.mu.Lock()
-	postInstall := svc.postInstall
-	svc.mu.Unlock()
-	if postInstall != nil {
-		if err := postInstall(latestVersion); err != nil {
-			migrationError = fmt.Sprintf("核心已安装，但配置兼容迁移失败: %v", err)
-			logging.Error("installer.migrate", "%s", migrationError)
-		}
-	}
-	if coreWasRunning {
-		// Publish the installed version before Start broadcasts runtime status.
-		svc.setState(model.InstallExtracting, "restarting updated core", 0, latestVersion, "")
-		svc.broadcastStatus()
-	}
-	if err := svc.restoreCoreAfterUpdate(coreWasRunning); err != nil {
-		restartError := fmt.Sprintf("核心已更新，但自动恢复运行失败: %v", err)
-		logging.Error("installer.restart", "%s", restartError)
-		if migrationError != "" {
-			migrationError += "；"
-		}
-		migrationError += restartError
-	}
-
-	svc.setState(model.InstallDone, "installed", 0, latestVersion, migrationError)
+	svc.setState(model.InstallDone, "installed", 0, latestVersion, "")
 	svc.broadcastStatus()
 
-	if !coreWasRunning {
+	if !svc.isCoreRunning() {
 		runtimeStatus := model.RuntimeNoConfig
 		if _, ok, err := svc.paths.ActiveConfigPath(); err == nil && ok {
 			runtimeStatus = model.RuntimeStopped
@@ -520,14 +493,18 @@ func (svc *InstallerService) downloadOnce(client *http.Client, downloadURL, dest
 	return nil
 }
 
-func (svc *InstallerService) extract(archive string) error {
+func (svc *InstallerService) extractWithInstaller(archive string, install func(string, []stagedRuntimeFile) error) error {
 	if runtime.GOOS == "windows" {
-		return svc.extractZip(archive)
+		return svc.extractZipWithInstaller(archive, install)
 	}
-	return svc.extractTarGz(archive)
+	return svc.extractTarGzWithInstaller(archive, install)
 }
 
 func (svc *InstallerService) extractZip(archive string) error {
+	return svc.extractZipWithInstaller(archive, svc.commitStagedRuntimeFiles)
+}
+
+func (svc *InstallerService) extractZipWithInstaller(archive string, install func(string, []stagedRuntimeFile) error) error {
 	r, err := zip.OpenReader(archive)
 	if err != nil {
 		return fmt.Errorf("open zip: %w", err)
@@ -578,7 +555,7 @@ func (svc *InstallerService) extractZip(archive string) error {
 	if !foundBinary {
 		return fmt.Errorf("archive does not contain sing-box.exe")
 	}
-	err = svc.commitStagedRuntimeFiles(stagingDir, stagedFiles)
+	err = install(stagingDir, stagedFiles)
 	var rollbackError *runtimeInstallRollbackError
 	if errors.As(err, &rollbackError) {
 		rollbackError.recoveryDir = stagingDir
@@ -588,6 +565,10 @@ func (svc *InstallerService) extractZip(archive string) error {
 }
 
 func (svc *InstallerService) extractTarGz(archive string) error {
+	return svc.extractTarGzWithInstaller(archive, svc.commitStagedRuntimeFiles)
+}
+
+func (svc *InstallerService) extractTarGzWithInstaller(archive string, install func(string, []stagedRuntimeFile) error) error {
 	f, err := os.Open(archive)
 	if err != nil {
 		return fmt.Errorf("open tar.gz: %w", err)
@@ -642,7 +623,7 @@ func (svc *InstallerService) extractTarGz(archive string) error {
 	if !foundBinary {
 		return fmt.Errorf("archive does not contain sing-box")
 	}
-	err = svc.commitStagedRuntimeFiles(stagingDir, stagedFiles)
+	err = install(stagingDir, stagedFiles)
 	var rollbackError *runtimeInstallRollbackError
 	if errors.As(err, &rollbackError) {
 		rollbackError.recoveryDir = stagingDir
@@ -741,6 +722,12 @@ func (svc *InstallerService) commitStagedRuntimeFiles(stagingDir string, files [
 }
 
 func commitRuntimeFiles(binaryDir, backupDir string, files []stagedRuntimeFile, replace func(string, string) error) error {
+	_, err := installRuntimeFiles(binaryDir, backupDir, files, replace)
+	return err
+}
+
+// Return the receipts so backups survive configuration migration and startup.
+func installRuntimeFiles(binaryDir, backupDir string, files []stagedRuntimeFile, replace func(string, string) error) ([]runtimeFileCommit, error) {
 	commits := make([]runtimeFileCommit, 0, len(files))
 	rollback := func(cause error) error {
 		if rollbackErr := rollbackRuntimeFiles(commits, replace); rollbackErr != nil {
@@ -753,17 +740,17 @@ func commitRuntimeFiles(binaryDir, backupDir string, files []stagedRuntimeFile, 
 		if _, err := os.Lstat(commit.target); err == nil {
 			commit.backup = filepath.Join(backupDir, file.name)
 			if err := os.Rename(commit.target, commit.backup); err != nil {
-				return rollback(fmt.Errorf("backup runtime file %s: %w", file.name, err))
+				return nil, rollback(fmt.Errorf("backup runtime file %s: %w", file.name, err))
 			}
 		} else if !os.IsNotExist(err) {
-			return rollback(fmt.Errorf("inspect runtime file %s: %w", file.name, err))
+			return nil, rollback(fmt.Errorf("inspect runtime file %s: %w", file.name, err))
 		}
 		commits = append(commits, commit)
 		if err := replace(file.path, commit.target); err != nil {
-			return rollback(fmt.Errorf("commit runtime file %s: %w", file.name, err))
+			return nil, rollback(fmt.Errorf("commit runtime file %s: %w", file.name, err))
 		}
 	}
-	return nil
+	return commits, nil
 }
 
 func rollbackRuntimeFiles(commits []runtimeFileCommit, replace func(string, string) error) error {

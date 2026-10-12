@@ -47,6 +47,9 @@ func migrateManagedConfigData(data []byte) ([]byte, int, error) {
 	if err := json.Unmarshal(data, &config); err != nil {
 		return nil, 0, fmt.Errorf("解析配置失败: %w", err)
 	}
+	if config == nil {
+		return nil, 0, fmt.Errorf("活动配置必须是 JSON 对象，不能为 null")
+	}
 	migrated, err := migrateManagedConfig(config)
 	if err != nil {
 		return nil, 0, err
@@ -801,15 +804,10 @@ func (svc *ConfigService) MigrateCompatibility(version string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("读取活动配置失败: %w", err)
 	}
-	migratedData, migrated, err := migrateInlineACMEConfig(data, version)
+	migratedData, migrated, err := migrateCoreCompatibilityData(data, version)
 	if err != nil {
 		return false, err
 	}
-	migratedData, managedConfigMigrated, err := migrateManagedConfigData(migratedData)
-	if err != nil {
-		return false, err
-	}
-	migrated += managedConfigMigrated
 	if migrated == 0 {
 		return permissionsUpdated, nil
 	}

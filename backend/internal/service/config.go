@@ -28,9 +28,11 @@ type ConfigService struct {
 }
 
 type configValidationCacheEntry struct {
-	modTimeNS int64
-	size      int64
-	err       error
+	modTimeNS       int64
+	size            int64
+	binaryModTimeNS int64
+	binarySize      int64
+	err             error
 }
 
 var (
@@ -437,6 +439,13 @@ func (svc *ConfigService) validateFile(path string) error {
 	if _, err := os.Stat(binPath); os.IsNotExist(err) {
 		return fmt.Errorf("sing-box binary not found")
 	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if _, _, err := migrateDevelopmentConfigData(data, readSingboxVersion(binPath)); err != nil {
+		return err
+	}
 
 	cmd := exec.Command(binPath, "check", "-c", path)
 	output, err := cmd.CombinedOutput()
@@ -453,7 +462,12 @@ func (svc *ConfigService) validateFileCached(path string, info os.FileInfo) erro
 	defer svc.validationMu.Unlock()
 
 	key := filepath.Clean(path)
-	if cached, ok := svc.validationCache[key]; ok && cached.modTimeNS == info.ModTime().UnixNano() && cached.size == info.Size() {
+	binaryInfo, _ := os.Stat(svc.paths.BinaryPath)
+	var binaryModTimeNS, binarySize int64
+	if binaryInfo != nil {
+		binaryModTimeNS, binarySize = binaryInfo.ModTime().UnixNano(), binaryInfo.Size()
+	}
+	if cached, ok := svc.validationCache[key]; ok && cached.modTimeNS == info.ModTime().UnixNano() && cached.size == info.Size() && cached.binaryModTimeNS == binaryModTimeNS && cached.binarySize == binarySize {
 		return cached.err
 	}
 	return svc.validateFileAndCacheLocked(key, path, info)
@@ -466,6 +480,7 @@ func (svc *ConfigService) validateFileAndCache(path string, info os.FileInfo) er
 }
 
 func (svc *ConfigService) validateFileAndCacheLocked(key, path string, info os.FileInfo) error {
+	binaryBefore, _ := os.Stat(svc.paths.BinaryPath)
 	err := svc.validateFile(path)
 	if svc.validationCache == nil {
 		svc.validationCache = make(map[string]configValidationCacheEntry)
@@ -474,6 +489,16 @@ func (svc *ConfigService) validateFileAndCacheLocked(key, path string, info os.F
 		modTimeNS: info.ModTime().UnixNano(),
 		size:      info.Size(),
 		err:       err,
+	}
+	binaryAfter, _ := os.Stat(svc.paths.BinaryPath)
+	if (binaryBefore == nil) != (binaryAfter == nil) || binaryBefore != nil && (binaryBefore.ModTime() != binaryAfter.ModTime() || binaryBefore.Size() != binaryAfter.Size()) {
+		// A concurrent update must not cache the old core's result under the new
+		// core's fingerprint.
+		delete(svc.validationCache, key)
+	} else if binaryAfter != nil {
+		entry := svc.validationCache[key]
+		entry.binaryModTimeNS, entry.binarySize = binaryAfter.ModTime().UnixNano(), binaryAfter.Size()
+		svc.validationCache[key] = entry
 	}
 	return err
 }

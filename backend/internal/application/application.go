@@ -113,22 +113,7 @@ func New(options Options) (*Application, error) {
 	if _, backupErr := configSvc.ListBackups(); backupErr != nil {
 		logging.Error("config.backup", "启动时整理配置备份失败: %v", backupErr)
 	}
-	installerSvc.SetPostInstallHook(func(version string) error {
-		_, configErr := configSvc.MigrateCompatibility(version)
-		_, dnsErr := dnsSvc.MigrateIndependentCache(version)
-		return errors.Join(configErr, dnsErr)
-	})
-	installerSvc.SetCoreUpdateHooks(
-		singboxSvc.IsRunning,
-		func() error {
-			_, err := singboxSvc.Stop()
-			return err
-		},
-		func() error {
-			_, err := singboxSvc.Start()
-			return err
-		},
-	)
+	installerSvc.SetCoreUpdateService(singboxSvc)
 
 	settingsSvc := service.NewSettingsService(db)
 	settingsSvc.SetDashboardsDir(options.Paths.DashboardsDir)

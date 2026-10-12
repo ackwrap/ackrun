@@ -315,17 +315,15 @@ func TestEnsureCachedDownloadRejectsMissingDigestBeforeDownload(t *testing.T) {
 func TestInstallerCoreUpdateHooksStopAndRestoreRunningCore(t *testing.T) {
 	svc := &InstallerService{}
 	var calls []string
-	svc.SetCoreUpdateHooks(
-		func() bool { return true },
-		func() error {
-			calls = append(calls, "stop")
-			return nil
-		},
-		func() error {
-			calls = append(calls, "start")
-			return nil
-		},
-	)
+	svc.coreRunning = func() bool { return true }
+	svc.stopCore = func() error {
+		calls = append(calls, "stop")
+		return nil
+	}
+	svc.startCore = func() error {
+		calls = append(calls, "start")
+		return nil
+	}
 
 	wasRunning, err := svc.stopCoreForUpdate()
 	if err != nil || !wasRunning {
@@ -342,11 +340,9 @@ func TestInstallerCoreUpdateHooksStopAndRestoreRunningCore(t *testing.T) {
 func TestInstallerCoreUpdateHooksIgnoreStoppedCore(t *testing.T) {
 	svc := &InstallerService{}
 	called := false
-	svc.SetCoreUpdateHooks(
-		func() bool { return false },
-		func() error { called = true; return nil },
-		func() error { called = true; return nil },
-	)
+	svc.coreRunning = func() bool { return false }
+	svc.stopCore = func() error { called = true; return nil }
+	svc.startCore = func() error { called = true; return nil }
 
 	wasRunning, err := svc.stopCoreForUpdate()
 	if err != nil || wasRunning {

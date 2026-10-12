@@ -1226,6 +1226,14 @@ func (s *ConfigGeneratorService) generateWireGuardEndpoint(node *model.Node, tag
 	if err := json.Unmarshal([]byte(node.RawJSON), &nodeData); err != nil {
 		return nil, fmt.Errorf("解析 WireGuard 节点 JSON 失败: %w", err)
 	}
+	if _, exists := nodeData["on_demand"]; exists {
+		version := s.coreVersion()
+		if version != "" && !singboxSupportsDevelopmentOptions(version) {
+			if _, err := removeInactiveCoreOption(nodeData, "on_demand", "WireGuard endpoint", version, false); err != nil {
+				return nil, err
+			}
+		}
+	}
 	address := stringListValue(firstExistingValue(nodeData, "address", "local_address", "local-address"))
 	if len(address) == 0 {
 		return nil, fmt.Errorf("缺少 WireGuard address")
@@ -1345,7 +1353,7 @@ func normalizeWireGuardEndpointPeers(raw interface{}) ([]interface{}, error) {
 }
 
 func copyWireGuardEndpointOptions(endpoint, source map[string]interface{}) {
-	for _, key := range []string{"system", "mtu", "listen_port", "udp_timeout", "udp_mapping", "udp_filtering", "udp_nat_max", "workers", "detour", "domain_resolver", "bind_interface", "routing_mark", "reuse_addr", "netns"} {
+	for _, key := range []string{"system", "mtu", "listen_port", "udp_timeout", "udp_mapping", "udp_filtering", "udp_nat_max", "workers", "on_demand", "detour", "domain_resolver", "bind_interface", "routing_mark", "reuse_addr", "netns"} {
 		if value, exists := source[key]; exists {
 			endpoint[key] = value
 		}

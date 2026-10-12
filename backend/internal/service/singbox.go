@@ -78,7 +78,7 @@ func (svc *SingboxService) Start() (*model.ActionResponse, error) {
 	}
 	svc.lifecycleMu.Lock()
 	defer svc.lifecycleMu.Unlock()
-	return svc.startAndSync()
+	return svc.startAndSync(svc.validateActiveConfig)
 }
 
 func (svc *SingboxService) prepareStartConfig() error {
@@ -94,8 +94,8 @@ func (svc *SingboxService) prepareStartConfig() error {
 	return nil
 }
 
-func (svc *SingboxService) startAndSync() (*model.ActionResponse, error) {
-	started, err := svc.start()
+func (svc *SingboxService) startAndSync(validateConfig func() (string, error)) (*model.ActionResponse, error) {
+	started, err := svc.start(validateConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -240,7 +240,7 @@ func startIfConfigured(isRunning func() bool, binaryPath string, activeConfig fu
 	return start()
 }
 
-func (svc *SingboxService) start() (*coreStartResult, error) {
+func (svc *SingboxService) start(validateConfig func() (string, error)) (*coreStartResult, error) {
 	svc.networkLifecycleMu.Lock()
 	defer svc.networkLifecycleMu.Unlock()
 	releaseNetworkLock, err := acquireNetworkLifecycleFileLock(svc.paths.NetworkLifecycleLockPath())
@@ -266,7 +266,7 @@ func (svc *SingboxService) start() (*coreStartResult, error) {
 		return nil, fmt.Errorf("sing-box binary not found")
 	}
 
-	configPath, err := svc.validateActiveConfig()
+	configPath, err := validateConfig()
 	if err != nil {
 		svc.realtime.Broadcast("core.status", map[string]any{
 			"status": "error",
@@ -644,19 +644,29 @@ func (svc *SingboxService) restart(reason string) (*model.ActionResponse, error)
 		return nil, err
 	}
 
-	return svc.startAndSync()
+	return svc.startAndSync(svc.validateActiveConfig)
 }
 
 func (svc *SingboxService) validateActiveConfig() (string, error) {
 	configFileMu.Lock()
 	defer configFileMu.Unlock()
+	return svc.validateActiveConfigLocked()
+}
 
+func (svc *SingboxService) validateActiveConfigLocked() (string, error) {
 	configPath, ok, err := svc.paths.ActiveConfigPath()
 	if err != nil {
 		return "", err
 	}
 	if !ok {
 		return "", fmt.Errorf("config file not found")
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return "", err
+	}
+	if _, _, err := migrateDevelopmentConfigData(data, svc.getVersion()); err != nil {
+		return "", err
 	}
 	if err := svc.migrateRuleSetAccessToken(configPath); err != nil {
 		return "", err
@@ -749,7 +759,7 @@ func (svc *SingboxService) ApplyConfigRuntime(startIfStopped bool) (bool, error)
 		return true, err
 	}
 	if startIfStopped {
-		_, err := svc.startAndSync()
+		_, err := svc.startAndSync(svc.validateActiveConfig)
 		return false, err
 	}
 	return false, nil
