@@ -26,6 +26,7 @@ import NodeGroupFormModal from "./collections/NodeGroupFormModal.vue";
 import NodeGroupSection from "./collections/NodeGroupSection.vue";
 import StrategyFormModal from "./collections/StrategyFormModal.vue";
 import StrategySection from "./collections/StrategySection.vue";
+import { collectionGroupNames } from "./collections/collectionSources";
 
 interface MatchedNode {
   uid: string;
@@ -84,8 +85,7 @@ const pagedGroups = computed(() =>
 );
 const previewSummary = computed(() => {
   const collection = previewStrategy.value?.collection as
-    | DetailedProxyCollection
-    | undefined;
+    DetailedProxyCollection | undefined;
   if (!collection) return null;
   const sourceMode = {
     node_groups: "引用节点组",
@@ -95,12 +95,16 @@ const previewSummary = computed(() => {
   return {
     name: previewStrategy.value?.name || collection.name,
     sourceMode,
-    groupNames: (collection.referenced_groups || []).map((group) => group.name),
+    groupNames: collectionGroupNames(collection),
     selectedNodeCount: (collection.node_uids || []).filter(
       (uid) => uid !== "direct",
     ).length,
-    selectionMode: collection.type === "urltest" ? "自动选择（URLTest）" : "手动切换（Selector）",
-    testURL: collection.type === "urltest" ? connectivitySettings.value.test_url : "",
+    selectionMode:
+      collection.type === "urltest"
+        ? "自动选择（URLTest）"
+        : "手动切换（Selector）",
+    testURL:
+      collection.type === "urltest" ? connectivitySettings.value.test_url : "",
     testInterval:
       collection.type === "urltest"
         ? `${connectivitySettings.value.interval_seconds} 秒`
@@ -110,10 +114,7 @@ const previewSummary = computed(() => {
   };
 });
 
-function show(
-  text: string,
-  type: "success" | "error" | "info" = "success",
-) {
+function show(text: string, type: "success" | "error" | "info" = "success") {
   message.value = text;
   messageType.value = type;
 }

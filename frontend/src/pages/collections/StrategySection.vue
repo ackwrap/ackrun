@@ -6,6 +6,7 @@ import type {
   StrategyItem,
 } from "@/services/types";
 import type { DetailedProxyCollection } from "./collectionTypes";
+import { collectionGroupNames } from "./collectionSources";
 
 defineProps<{
   strategies: StrategyItem[];
@@ -46,9 +47,17 @@ function sourceLabel(strategy: StrategyItem) {
   if (!strategy.collection) return "尚未配置节点来源";
   const collection = details(strategy.collection);
   if (collection.source_type === "manual") {
-    return `手动节点（${collection.node_uids.length}）`;
+    const nodeCount = collection.node_uids.filter(
+      (uid) => uid !== "direct",
+    ).length;
+    const direct = collectionGroupNames(collection);
+    return (
+      [nodeCount ? `手动节点（${nodeCount}）` : "", ...direct]
+        .filter(Boolean)
+        .join("、") || "未选择节点"
+    );
   }
-  const names = (collection.referenced_groups || []).map((group) => group.name);
+  const names = collectionGroupNames(collection);
   const suffix =
     collection.source_type === "node_groups_and_nodes" ? "（含组内节点）" : "";
   return names.length ? `${names.join("、")}${suffix}` : "未选择节点组";
@@ -107,7 +116,9 @@ function sourceLabel(strategy: StrategyItem) {
                     : "未配置"
                 }}
               </template>
-              <template v-if="strategy.collection && tests[strategy.collection.id]">
+              <template
+                v-if="strategy.collection && tests[strategy.collection.id]"
+              >
                 ·
                 <span>
                   {{ tests[strategy.collection.id].available }} /
@@ -116,7 +127,10 @@ function sourceLabel(strategy: StrategyItem) {
               </template>
             </td>
             <td>
-              <div v-if="strategy.kind === 'proxy'" class="flex flex-wrap gap-2">
+              <div
+                v-if="strategy.kind === 'proxy'"
+                class="flex flex-wrap gap-2"
+              >
                 <button
                   v-if="!strategy.collection"
                   class="aw-action-button aw-action-neutral"

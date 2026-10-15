@@ -830,7 +830,17 @@ func (s *ConfigGeneratorService) generateOutbounds(requireUsableProxy ...bool) (
 		if col.Name == "proxy" {
 			hasProxyCollection = true
 		} else if col.Name != SystemGlobalDirectRouteRuleName {
-			collectionTags = append(collectionTags, col.Name)
+			if len(collectionBuiltinOutboundTags(col)) > 0 {
+				// proxy also carries remote DNS. Do not let a business selector's
+				// manual DIRECT choice change DNS or global proxy traffic to direct.
+				for _, tag := range outboundMemberTags(outbound["outbounds"]) {
+					if tag != "direct" {
+						collectionTags = appendUniqueStrings(collectionTags, tag)
+					}
+				}
+			} else {
+				collectionTags = appendUniqueStrings(collectionTags, col.Name)
+			}
 		}
 		outbounds = append(outbounds, outbound)
 	}
@@ -1068,8 +1078,44 @@ func validateDNSDetourPaths(dns map[string]interface{}, outbounds, endpoints []i
 		if !hasUsableNonDirectOutboundPath(outbounds, endpoints, []string{detour}) {
 			return fmt.Errorf("DNS Server %s 的 detour %s 没有可用非直连代理路径", tag, detour)
 		}
+		if hasDirectOutboundPath(outbounds, endpoints, detour) {
+			return fmt.Errorf("DNS Server %s 的 detour %s 包含直连选项，请选择仅含代理的出站", tag, detour)
+		}
 	}
 	return nil
+}
+
+func hasDirectOutboundPath(outbounds, endpoints []interface{}, rootTag string) bool {
+	byTag := make(map[string]map[string]interface{}, len(outbounds)+len(endpoints))
+	for _, raw := range append(append([]interface{}{}, outbounds...), endpoints...) {
+		if item, ok := raw.(map[string]interface{}); ok {
+			if tag, ok := item["tag"].(string); ok {
+				byTag[tag] = item
+			}
+		}
+	}
+	visited := make(map[string]bool)
+	var reachesDirect func(string) bool
+	reachesDirect = func(tag string) bool {
+		if tag == "direct" {
+			return true
+		}
+		if visited[tag] {
+			return false
+		}
+		visited[tag] = true
+		item := byTag[tag]
+		if item["type"] == "direct" {
+			return true
+		}
+		for _, member := range outboundMemberTags(item["outbounds"]) {
+			if reachesDirect(member) {
+				return true
+			}
+		}
+		return false
+	}
+	return reachesDirect(rootTag)
 }
 
 func outboundMemberTags(value interface{}) []string {
@@ -1091,6 +1137,10 @@ func outboundMemberTags(value interface{}) []string {
 
 // generateCollectionOutbound 为代理集合生成 outbound
 func (s *ConfigGeneratorService) generateCollectionOutbound(col *model.ProxyCollectionWithNodes, validGroupTags map[string]bool, nodeTags map[string]string, groupNodeUIDs map[int64][]string) (map[string]interface{}, error) {
+	builtins := collectionBuiltinOutboundTags(col)
+	if col.Type == "urltest" && len(builtins) > 0 {
+		return nil, fmt.Errorf("全球直连仅支持手动切换，不能参与自动测速")
+	}
 	outbound := map[string]interface{}{
 		"type": col.Type,
 		"tag":  col.Name,
@@ -1099,11 +1149,8 @@ func (s *ConfigGeneratorService) generateCollectionOutbound(col *model.ProxyColl
 	// 判断是引用节点组还是手动选节点
 	if isCollectionGroupSource(col.SourceType) && len(col.ReferencedGroups) > 0 {
 		// 引用节点组模式。node_uids 兼容存放 direct 这类真实内置出站 tag。
-		referencedTags := collectionBuiltinOutboundTags(col)
-		seen := make(map[string]bool, len(referencedTags))
-		for _, tag := range referencedTags {
-			seen[tag] = true
-		}
+		referencedTags := []string{}
+		seen := make(map[string]bool)
 		appendUnique := func(tags ...string) {
 			for _, tag := range tags {
 				if tag == "" || seen[tag] {
@@ -1126,14 +1173,23 @@ func (s *ConfigGeneratorService) generateCollectionOutbound(col *model.ProxyColl
 		if len(referencedTags) == 0 {
 			return nil, fmt.Errorf("策略组没有可用节点组引用")
 		}
+		// Keep DIRECT last, and never use it to hide lost proxy members.
+		appendUnique(builtins...)
 		outbound["outbounds"] = referencedTags
 	} else {
 		// 手动选节点模式（兼容旧数据）
 		if len(col.NodeUIDs) == 0 {
 			return nil, fmt.Errorf("策略组没有可用节点")
 		}
-		outboundTags := collectionBuiltinOutboundTags(col)
-		outboundTags = append(outboundTags, nodeUIDsToOutboundTags(col.NodeUIDs, nodeTags)...)
+		outboundTags := nodeUIDsToOutboundTags(col.NodeUIDs, nodeTags)
+		if len(outboundTags) == 0 {
+			for _, uid := range col.NodeUIDs {
+				if uid != "direct" {
+					return nil, fmt.Errorf("策略组没有可用节点 outbound，拒绝自动回退到全球直连")
+				}
+			}
+		}
+		outboundTags = append(outboundTags, builtins...)
 		if len(outboundTags) == 0 {
 			return nil, fmt.Errorf("策略组没有可用节点 outbound")
 		}

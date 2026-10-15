@@ -79,14 +79,8 @@ func (s *ProxyCollectionService) Create(req model.ProxyCollectionRequest) (*mode
 		return nil, err
 	}
 
-	// 验证节点数量（manual 模式）
-	if sourceType == proxyCollectionSourceManual && len(req.NodeUIDs) == 0 {
-		return nil, fmt.Errorf("至少需要选择一个节点")
-	}
-
-	// 验证节点组引用
-	if isCollectionGroupSource(sourceType) && len(req.ReferencedGroupIDs) == 0 {
-		return nil, fmt.Errorf("至少需要引用一个节点组")
+	if err := validateCollectionMembers(&req, sourceType); err != nil {
+		return nil, err
 	}
 
 	referencedGroupIDsJSON, _ := json.Marshal(req.ReferencedGroupIDs)
@@ -174,14 +168,8 @@ func (s *ProxyCollectionService) Update(id int, req model.ProxyCollectionRequest
 		return err
 	}
 
-	// 验证节点数量（manual 模式）
-	if sourceType == proxyCollectionSourceManual && len(req.NodeUIDs) == 0 {
-		return fmt.Errorf("至少需要选择一个节点")
-	}
-
-	// 验证节点组引用
-	if isCollectionGroupSource(sourceType) && len(req.ReferencedGroupIDs) == 0 {
-		return fmt.Errorf("至少需要引用一个节点组")
+	if err := validateCollectionMembers(&req, sourceType); err != nil {
+		return err
 	}
 
 	referencedGroupIDsJSON, _ := json.Marshal(req.ReferencedGroupIDs)
@@ -293,6 +281,20 @@ func normalizeCollectionSourceType(sourceType string) (string, error) {
 
 func isCollectionGroupSource(sourceType string) bool {
 	return sourceType == proxyCollectionSourceNodeGroups || sourceType == proxyCollectionSourceNodeGroupsAndNodes
+}
+
+func validateCollectionMembers(req *model.ProxyCollectionRequest, sourceType string) error {
+	hasDirect := len(builtinOutboundTags(req.NodeUIDs)) > 0
+	if req.Type == "urltest" && hasDirect {
+		return fmt.Errorf("全球直连仅支持手动切换，不能参与自动测速")
+	}
+	if sourceType == proxyCollectionSourceManual && len(req.NodeUIDs) == 0 {
+		return fmt.Errorf("至少需要选择一个节点或全球直连")
+	}
+	if isCollectionGroupSource(sourceType) && len(req.ReferencedGroupIDs) == 0 && !hasDirect {
+		return fmt.Errorf("至少需要引用一个节点组或全球直连")
+	}
+	return nil
 }
 
 // Delete 删除代理集合

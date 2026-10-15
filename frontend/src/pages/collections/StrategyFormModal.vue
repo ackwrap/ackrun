@@ -3,6 +3,7 @@ import { computed, ref } from "vue";
 import Modal from "@/components/ui/Modal.vue";
 import type { StrategyItem } from "@/services/types";
 import ManualNodePickerModal from "./ManualNodePickerModal.vue";
+import { directNodeGroup } from "./collectionSources";
 import type {
   CollectionSourceType,
   DetailedProxyCollection,
@@ -23,8 +24,7 @@ const emit = defineEmits<{
 }>();
 
 const collection = props.strategy.collection as
-  | DetailedProxyCollection
-  | undefined;
+  DetailedProxyCollection | undefined;
 
 function referencedGroupIDs() {
   if (collection?.referenced_groups?.length) {
@@ -48,7 +48,15 @@ const source = ref<CollectionSourceType>(
 );
 const groupIDs = ref<number[]>(referencedGroupIDs());
 const nodeUIDs = ref(
-  (collection?.node_uids || []).filter((uid) => uid !== "direct"),
+  (collection?.node_uids || []).filter(
+    (uid) => uid !== directNodeGroup.outbound,
+  ),
+);
+const includeDirect = ref(
+  collection?.node_uids?.includes(directNodeGroup.outbound) ?? false,
+);
+const directSelected = computed(
+  () => type.value === "selector" && includeDirect.value,
 );
 const enabled = ref(collection?.enabled ?? true);
 const tolerance = ref(collection?.tolerance || 100);
@@ -60,7 +68,8 @@ const selectableGroups = computed(() => {
   return props.groups.filter(
     (group) =>
       group.enabled &&
-      ((group.matched_node_count || 0) > 0 || groupIDs.value.includes(group.id)) &&
+      ((group.matched_node_count || 0) > 0 ||
+        groupIDs.value.includes(group.id)) &&
       (!keyword || group.name.toLowerCase().includes(keyword)),
   );
 });
@@ -70,9 +79,10 @@ const selectableGroupIDs = computed(() =>
 const canSave = computed(
   () =>
     !props.saving &&
-    (source.value === "manual"
-      ? nodeUIDs.value.length > 0
-      : groupIDs.value.length > 0),
+    (directSelected.value ||
+      (source.value === "manual"
+        ? nodeUIDs.value.length > 0
+        : groupIDs.value.length > 0)),
 );
 
 function toggleGroup(id: number) {
@@ -90,7 +100,10 @@ function submit() {
     referenced_group_ids: source.value === "manual" ? [] : groupIDs.value,
     route_rule_id: props.strategy.rule_id,
     route_rule_ids: [props.strategy.rule_id],
-    node_uids: source.value === "manual" ? nodeUIDs.value : [],
+    node_uids: [
+      ...(source.value === "manual" ? nodeUIDs.value : []),
+      ...(directSelected.value ? [directNodeGroup.outbound] : []),
+    ],
     enabled: enabled.value,
     tolerance: tolerance.value,
     test_url: props.connectivity.test_url,
@@ -108,7 +121,9 @@ function submit() {
   >
     <div class="grid gap-4 md:grid-cols-2">
       <div class="grid content-start gap-1.5 md:col-span-2">
-        <span class="aw-modal-label text-xs font-medium">业务规则 / 策略组名称</span>
+        <span class="aw-modal-label text-xs font-medium"
+          >业务规则 / 策略组名称</span
+        >
         <div
           class="rounded-[var(--radius-md)] border border-[var(--border-default)] bg-[var(--bg-secondary)] px-3 py-2 text-sm text-[var(--text-primary)]"
         >
@@ -155,6 +170,34 @@ function submit() {
           />
         </label>
       </template>
+      <fieldset class="grid gap-1.5 md:col-span-2">
+        <legend class="mb-1.5 text-sm font-semibold">内置节点组</legend>
+        <label
+          class="flex cursor-pointer items-center gap-3 rounded-[var(--radius-md)] border px-3 py-2.5 text-xs"
+          :class="[
+            directSelected
+              ? 'border-[var(--button-primary-border)] bg-[var(--button-primary-bg)] text-[var(--button-primary-text)]'
+              : 'border-[var(--border-light)] bg-[var(--button-secondary-bg)] text-[var(--text-secondary)]',
+            type === 'urltest' ? 'cursor-not-allowed opacity-60' : '',
+          ]"
+        >
+          <input
+            type="checkbox"
+            class="h-4 w-4 shrink-0"
+            :checked="directSelected"
+            :disabled="type === 'urltest'"
+            @change="
+              includeDirect = ($event.target as HTMLInputElement).checked
+            "
+          />
+          <span class="font-medium">{{ directNodeGroup.name }}（DIRECT）</span>
+          <span>固定直连出口 · 仅限手动选择</span>
+        </label>
+        <small class="text-[11px] text-[var(--text-tertiary)]">
+          勾选后可在此业务策略中切换到直连；直连会使用本机公网出口
+          IP，不参与自动测速。
+        </small>
+      </fieldset>
       <fieldset v-if="source !== 'manual'" class="grid gap-3 md:col-span-2">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <div>
@@ -231,7 +274,11 @@ function submit() {
       </div>
     </div>
     <template #footer>
-      <button class="aw-action-button" :disabled="saving" @click="emit('close')">
+      <button
+        class="aw-action-button"
+        :disabled="saving"
+        @click="emit('close')"
+      >
         取消
       </button>
       <button class="aw-action-button" :disabled="!canSave" @click="submit">

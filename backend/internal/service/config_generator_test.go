@@ -318,7 +318,7 @@ func TestGenerateCollectionOutboundIncludesGroupsAndTheirNodes(t *testing.T) {
 	if !ok {
 		t.Fatalf("outbounds type = %T, want []string", outbound["outbounds"])
 	}
-	want := []string{"direct", "新加坡节点", "SG-node-1", "SG-node-2", "日本节点"}
+	want := []string{"新加坡节点", "SG-node-1", "SG-node-2", "日本节点", "direct"}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("outbounds = %v, want %v", got, want)
 	}

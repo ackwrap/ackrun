@@ -360,7 +360,7 @@ func TestProxyRuleChangesPreserveCollectionSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	collectionSvc := NewProxyCollectionService(db, nil)
-	collection, err := collectionSvc.Create(model.ProxyCollectionRequest{RouteRuleID: rule.ID, Type: "urltest", SourceType: "manual", NodeUIDs: []string{"direct"}, TestURL: "https://example.com/generate_204", TestInterval: 600, Tolerance: 250, Enabled: true})
+	collection, err := collectionSvc.Create(model.ProxyCollectionRequest{RouteRuleID: rule.ID, Type: "urltest", SourceType: "manual", NodeUIDs: []string{"test-node"}, TestURL: "https://example.com/generate_204", TestInterval: 600, Tolerance: 250, Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,7 +381,7 @@ func TestProxyRuleChangesPreserveCollectionSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.RouteRuleID != 0 || stored.RouteRuleIDs != "[]" || stored.Type != "urltest" || stored.TestInterval != 600 || stored.NodeUIDs != `["direct"]` {
+	if stored.RouteRuleID != 0 || stored.RouteRuleIDs != "[]" || stored.Type != "urltest" || stored.TestInterval != 600 || stored.NodeUIDs != `["test-node"]` {
 		t.Fatalf("unbinding changed persisted collection settings: %+v", stored)
 	}
 	stored.Enabled = false
@@ -391,7 +391,7 @@ func TestProxyRuleChangesPreserveCollectionSettings(t *testing.T) {
 	if _, err := routeSvc.Update(rule.ID, &model.RouteRuleRequest{Name: "Renamed Proxy", Enabled: true, Priority: rule.Priority, RuleType: rule.RuleType, Values: rule.Values, Outbound: "proxy"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := collectionSvc.Update(collection.ID, model.ProxyCollectionRequest{RouteRuleID: rule.ID, Type: "urltest", SourceType: "manual", NodeUIDs: []string{"direct"}, TestURL: "https://example.com/generate_204", TestInterval: 600, Tolerance: 250, Enabled: true}); err != nil {
+	if err := collectionSvc.Update(collection.ID, model.ProxyCollectionRequest{RouteRuleID: rule.ID, Type: "urltest", SourceType: "manual", NodeUIDs: []string{"test-node"}, TestURL: "https://example.com/generate_204", TestInterval: 600, Tolerance: 250, Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := routeSvc.Delete(rule.ID); err != nil {
@@ -401,7 +401,7 @@ func TestProxyRuleChangesPreserveCollectionSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.RouteRuleID != 0 || stored.Type != "urltest" || stored.TestInterval != 600 || stored.NodeUIDs != `["direct"]` {
+	if stored.RouteRuleID != 0 || stored.Type != "urltest" || stored.TestInterval != 600 || stored.NodeUIDs != `["test-node"]` {
 		t.Fatalf("rule deletion destroyed collection settings: %+v", stored)
 	}
 }

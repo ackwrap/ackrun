@@ -538,6 +538,12 @@ func (s *Store) GetProxyCollectionWithNodes(id int) (*model.ProxyCollectionWithN
 	if c.RouteRuleIDs != "" && c.RouteRuleIDs != "[]" {
 		json.Unmarshal([]byte(c.RouteRuleIDs), &result.RouteRuleIDs)
 	}
+	// Built-in outbounds such as direct are valid alongside node-group sources.
+	if c.NodeUIDs != "" && c.NodeUIDs != "[]" {
+		if err := json.Unmarshal([]byte(c.NodeUIDs), &result.NodeUIDs); err != nil {
+			return nil, err
+		}
+	}
 
 	// 节点组来源模式需要加载引用的节点组。
 	if c.SourceType == "node_groups" || c.SourceType == "node_groups_and_nodes" {
@@ -547,13 +553,6 @@ func (s *Store) GetProxyCollectionWithNodes(id int) (*model.ProxyCollectionWithN
 		}
 		groups, _ := s.GetNodeGroupsByIDs(groupIDs)
 		result.ReferencedGroups = groups
-	} else {
-		// manual 模式，解析 node_uids JSON
-		var uids []string
-		if c.NodeUIDs != "" && c.NodeUIDs != "[]" {
-			json.Unmarshal([]byte(c.NodeUIDs), &uids)
-		}
-		result.NodeUIDs = uids
 	}
 
 	return result, nil

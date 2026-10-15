@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { Edit, Eye, Plus, Trash2, Zap } from "lucide-vue-next";
+import { Edit, Eye, Globe, Plus, Trash2, Zap } from "lucide-vue-next";
 import Pagination from "@/components/ui/Pagination.vue";
 import { defaultFlag, getFlagImageURL } from "@/utils/nodeFlags";
 import { subscriptionFilterLabel } from "./nodeGroupLabels";
 import type { FacetItem, NodeGroup } from "./collectionTypes";
+import { directNodeGroup } from "./collectionSources";
 
 const props = defineProps<{
   groups: NodeGroup[];
@@ -46,7 +47,12 @@ function togglePage() {
       ? props.selected.filter(
           (id) => !props.pagedGroups.some((group) => group.id === id),
         )
-      : [...new Set([...props.selected, ...props.pagedGroups.map((group) => group.id)])],
+      : [
+          ...new Set([
+            ...props.selected,
+            ...props.pagedGroups.map((group) => group.id),
+          ]),
+        ],
   );
 }
 </script>
@@ -55,7 +61,7 @@ function togglePage() {
   <section class="space-y-4">
     <div class="flex flex-wrap justify-between gap-2">
       <p class="text-sm text-[var(--text-secondary)]">
-        使用关键词自动筛选节点，作为策略组的基础单元
+        普通组按关键词筛选节点；内置全球直连可供手动策略引用
       </p>
       <div class="flex gap-2">
         <button
@@ -106,6 +112,26 @@ function togglePage() {
           </tr>
         </thead>
         <tbody>
+          <tr>
+            <td>
+              <input
+                type="checkbox"
+                disabled
+                aria-label="全球直连为固定内置组，不能批量删除"
+              />
+            </td>
+            <td>
+              <Globe :size="16" class="mr-2 inline" />{{ directNodeGroup.name }}
+              <small class="ml-2 text-[var(--text-tertiary)]">内置</small>
+            </td>
+            <td>直连</td>
+            <td colspan="4" class="text-[var(--text-secondary)]">
+              固定 DIRECT 出站，不经过代理，不参与节点筛选或自动测速
+            </td>
+            <td>—</td>
+            <td>始终启用</td>
+            <td class="text-[var(--text-tertiary)]">固定内置组</td>
+          </tr>
           <tr v-for="group in pagedGroups" :key="group.id">
             <td>
               <input
