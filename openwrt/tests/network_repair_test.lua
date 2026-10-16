@@ -34,6 +34,7 @@ local function load_page()
 	return dofile("openwrt/luci/usr/lib/lua/luci/model/cbi/ackwrap.lua")
 end
 
+for _, action in ipairs({"repair", "reset"}) do
 for _, result in ipairs({
 	{"OK\n强制网络修复完成\n", "强制网络修复完成"},
 	{"ERROR\nfw4 reload failed\n", "fw4 reload failed"},
@@ -41,18 +42,29 @@ for _, result in ipairs({
 }) do
 	local page = load_page()
 	local button = assert(options._network_repair)
-	assert(button.inputtitle == "立即修复")
+	assert(button.inputtitle == "强制修复")
+	assert(button.resettitle == "强制重置")
+	assert(button.template == "ackwrap/network_repair")
 	response = result[1]
-	button.write()
-	assert(commands[1] == "/etc/init.d/ackwrap network_repair --force 2>&1")
+	button:write("main", action)
+	local flag = action == "reset" and "--force-reset" or "--force"
+	assert(commands[1] == "/etc/init.d/ackwrap network_repair " .. flag .. " 2>&1")
 	assert(page.message:find(result[2], 1, true))
 	-- CBI reparses children after applying. Never repair twice or restart here.
-	button.write()
+	button:write("main", action)
+	button:write("main", action == "reset" and "repair" or "reset")
 	page.on_after_apply()
 	assert(#commands == 1)
 end
+end
 
 local page = load_page()
+options._network_repair:write("main", "unknown; reboot")
+page.on_after_apply()
+assert(#commands == 0)
+assert(page.message == "无效的网络修复操作。")
+
+page = load_page()
 -- Map.parse commits UCI before on_after_apply when apply_on_parse is false.
 assert(page.apply_on_parse == false)
 assert(#commands == 0) -- Loading/saving alone does not start the service.
@@ -71,4 +83,4 @@ page = load_page()
 response = "ERROR\n无法启动 Ackwrap\n"
 page.on_after_apply()
 assert(page.message == "无法启动 Ackwrap")
-print("LuCI repair/apply results, reparse guard and fresh service status passed")
+print("LuCI repair/reset/apply results, reparse guard and fresh service status passed")

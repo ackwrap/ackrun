@@ -1,0 +1,6 @@
+<%+cbi/valueheader%>
+<div style="display:flex;flex-wrap:wrap;gap:.5rem">
+	<button class="btn cbi-button cbi-button-apply" type="submit"<%= attr("name", cbid) .. attr("id", cbid) %> value="repair"><%=self.inputtitle%></button>
+	<button class="btn cbi-button cbi-button-negative" type="submit"<%= attr("name", cbid) .. attr("id", cbid .. "-reset") %> value="reset"><%=self.resettitle%></button>
+</div>
+<%+cbi/valuefooter%>

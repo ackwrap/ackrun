@@ -103,6 +103,34 @@ func TestDeviceDNSNoRulesDoesNotTouchFirewall(t *testing.T) {
 	}
 }
 
+func TestDeviceDNSForceRestoreWithoutMarkerStillChecksOwnership(t *testing.T) {
+	for _, owner := range []string{deviceDNSOwner, "other application"} {
+		t.Run(owner, func(t *testing.T) {
+			deleted := false
+			d := &nftDeviceDNS{statePath: filepath.Join(t.TempDir(), "missing")}
+			d.run = func(_ string, args ...string) ([]byte, error) {
+				switch strings.Join(args, " ") {
+				case "-j list ruleset":
+					return []byte(`{"nftables":[{"table":{"family":"inet","name":"ackwrap_device_dns","comment":"` + owner + `"}}]}`), nil
+				case "delete table inet ackwrap_device_dns":
+					deleted = true
+					return nil, nil
+				default:
+					t.Fatal("unexpected firewall command")
+					return nil, nil
+				}
+			}
+			err := d.restore(true)
+			if owner == deviceDNSOwner && (err != nil || !deleted) {
+				t.Fatalf("orphan redirect not released: %v", err)
+			}
+			if owner != deviceDNSOwner && (err == nil || deleted) {
+				t.Fatal("reset modified another application's table")
+			}
+		})
+	}
+}
+
 type recordingDeviceDNS struct{ calls int }
 
 func (d *recordingDeviceDNS) Activate([]string) error { d.calls++; return nil }

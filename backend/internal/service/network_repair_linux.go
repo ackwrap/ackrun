@@ -12,7 +12,17 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/ackwrap/ackrun/internal/paths"
 )
+
+func resetPlatformDeviceDNS(p *paths.Paths) error {
+	return newDeviceDNSLifecycle(p).(*nftDeviceDNS).restore(true)
+}
+
+func resetPlatformTransitionGuard(p *paths.Paths) error {
+	return newCoreTransitionGuard(p).(*nftTransitionGuard).disable(true)
+}
 
 func forceCleanupPlatformSingboxState(statePath string) (platformCleanupResult, error) {
 	running, err := linuxSingboxProcessRunning()

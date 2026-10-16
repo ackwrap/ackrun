@@ -253,6 +253,12 @@ func (g *nftDeviceProtection) Disable() error {
 	if _, err := g.Sources(); err != nil {
 		return err
 	}
+	return g.ForceDisable()
+}
+
+// Explicit recovery can remove a damaged policy file, but still checks the
+// kernel table's ownership before touching any firewall state.
+func (g *nftDeviceProtection) ForceDisable() error {
 	owner, _, err := g.inspect(false)
 	if err != nil {
 		return err
@@ -265,6 +271,16 @@ func (g *nftDeviceProtection) Disable() error {
 	// old guard until an explicit retry; normal lifecycle cleanup never removes it.
 	if err := os.Remove(g.path); err != nil && !os.IsNotExist(err) {
 		return err
+	}
+	if readErr == nil {
+		dir, err := os.Open(filepath.Dir(g.path))
+		if err == nil {
+			err = dir.Sync()
+			dir.Close()
+		}
+		if err != nil {
+			return errors.Join(err, writeProtectionFile(g.path, previous))
+		}
 	}
 	if owner != "" {
 		if _, err := g.run("", "delete", "table", "inet", deviceProtectionTable); err != nil {

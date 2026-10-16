@@ -105,6 +105,18 @@ pidof() {
         self.assertEqual(calls, "stop\nbackend:network-repair --force\n")
         self.assertEqual(result.stdout, "OK\nfixture result\n")
 
+    def test_force_reset_stops_service_and_passes_explicit_reset_flag(self):
+        result, calls = self.run_repair("--force-reset", running=True, hung=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, "stop\nkill:-KILL daemon\nbackend:network-repair --force-reset\n")
+        self.assertEqual(result.stdout, "OK\nfixture result\n")
+
+    def test_reset_failure_is_not_reported_as_success_or_restarted(self):
+        result, calls = self.run_repair("--force-reset", running=True, status=1)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(calls, "stop\nbackend:network-repair --force-reset\n")
+        self.assertEqual(result.stdout, "ERROR\nfixture result\n")
+
     def test_apply_starts_enabled_service_even_without_config_changes(self):
         result, calls = self.run_repair("", action="apply_settings")
         self.assertEqual(result.returncode, 0, result.stderr)

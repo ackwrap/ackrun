@@ -19,6 +19,7 @@ type deviceProtectionFirewall interface {
 	Verify([]string) error
 	VerifyDisabled() error
 	Disable() error
+	ForceDisable() error
 }
 
 func (svc *SettingsService) checkDeviceProtectionMode(compatible bool) error {

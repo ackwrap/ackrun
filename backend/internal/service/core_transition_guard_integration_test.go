@@ -303,9 +303,41 @@ sys.exit(1 if leaked else 0)
 	}
 	check(lan, "198.51.100.2", "0", "drop")
 	check(lan, "2001:db8:2::2", "0", "drop")
-	if err := newDaemon.Disable(); err != nil {
+	// Force reset also recovers a damaged policy file and an orphaned device
+	// DNS redirect. Ordinary repair must never implicitly release these guards.
+	deviceDNS := &nftDeviceDNS{statePath: filepath.Join(t.TempDir(), "device-dns"), run: deviceGuard.run}
+	if err := deviceDNS.Activate(sources); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(deviceDNS.statePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(newDaemon.path, []byte("damaged policy"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := resetDeviceProtectionForRepair(&paths.Paths{DBPath: filepath.Join(t.TempDir(), "missing.db")}, newDaemon); err != nil {
+		t.Fatal(err)
+	}
+	if err := deviceDNS.restore(true); err != nil {
+		t.Fatal(err)
+	}
+	transitionPaths := &paths.Paths{DataDir: t.TempDir()}
+	transition := newCoreTransitionGuard(transitionPaths)
+	if err := transition.Enable(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(transitionPaths.CoreTransitionGuardPath()); err != nil {
+		t.Fatal(err)
+	}
+	if err := resetPlatformTransitionGuard(transitionPaths); err != nil {
 		t.Fatal(err)
 	}
 	check(lan, "198.51.100.2", "0", "pass")
 	check(lan, "2001:db8:2::2", "0", "pass")
+	for _, address := range []string{"198.51.100.2", "2001:db8:2::2"} {
+		for _, protocol := range []string{"tcp", "udp"} {
+			server(wan, address, "53", protocol)
+			check(lan, address, "0", "pass", "53", protocol)
+		}
+	}
 }

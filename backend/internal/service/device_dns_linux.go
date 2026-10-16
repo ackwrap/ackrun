@@ -109,10 +109,16 @@ func (d *nftDeviceDNS) Activate(cidrs []string) error {
 }
 
 func (d *nftDeviceDNS) Restore() error {
-	if _, err := os.Stat(d.statePath); os.IsNotExist(err) {
-		return nil
-	} else if err != nil {
-		return err
+	return d.restore(false)
+}
+
+func (d *nftDeviceDNS) restore(force bool) error {
+	if !force {
+		if _, err := os.Stat(d.statePath); os.IsNotExist(err) {
+			return nil
+		} else if err != nil {
+			return err
+		}
 	}
 	present, err := d.inspect(false)
 	if err != nil {

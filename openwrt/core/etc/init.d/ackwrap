@@ -4,7 +4,7 @@ USE_PROCD=1
 START=95
 STOP=10
 EXTRA_COMMANDS="network_repair apply_settings"
-EXTRA_HELP="\tnetwork_repair [--force]\tRestore DNS and network state; --force stops services and clears sing-box remnants\n\tapply_settings\tApply saved settings and verify the service state"
+EXTRA_HELP="\tnetwork_repair [--force | --force-reset]\tRepair network state; --force-reset also disables device leak protection\n\tapply_settings\tApply saved settings and verify the service state"
 
 generate_token() {
 	local token
@@ -103,14 +103,16 @@ apply_settings() {
 }
 
 network_repair() {
-	local data_dir status output message force_arg attempts
+	local data_dir status output message force_arg attempts action
 	force_arg=""
+	action="网络修复"
 	case "$*" in
 		"") ;;
 		--force) force_arg="--force" ;;
+		--force-reset) force_arg="--force-reset"; action="强制重置" ;;
 		*)
 			echo "ERROR"
-			echo "用法：/etc/init.d/ackwrap network_repair [--force]"
+			echo "用法：/etc/init.d/ackwrap network_repair [--force | --force-reset]"
 			return 1
 			;;
 	esac
@@ -138,9 +140,9 @@ network_repair() {
 	message="$(printf '%s\n' "$output" | tail -n 1)"
 	case "$status" in
 		0)
-			logger -t ackwrap-network-repair "network repair completed"
+			logger -t ackwrap-network-repair "$action completed"
 			echo "OK"
-			echo "${message:-网络修复完成：已检查并恢复 Ackwrap 接管的网络状态。}"
+			echo "${message:-$action 完成。}"
 			;;
 		2)
 			logger -t ackwrap-network-repair "network repair rejected because sing-box is running"
@@ -148,9 +150,9 @@ network_repair() {
 			echo "网络修复失败：sing-box 核心正在运行，请先停止核心后再执行网络修复。"
 			;;
 		*)
-			logger -t ackwrap-network-repair "network repair failed: $message"
+			logger -t ackwrap-network-repair "$action failed: $message"
 			echo "ERROR"
-			echo "${message:-网络修复失败，请检查系统日志。}"
+			echo "${message:-$action 失败，请检查系统日志。}"
 			;;
 	esac
 	return "$status"
