@@ -20,7 +20,7 @@ This file adds frontend contracts to the [root instructions](../AGENTS.md).
 - `npm run dev` uses port 5173 and proxies `/api` to the backend at port 8080.
   `npm run build` performs typechecking and writes the UI to
   `../backend/internal/webui/dist/` for Go embedding. Build artifacts are not source.
-- Follow the [root verification matrix](../AGENTS.md#验证). Check changed Vue
+- Follow the [root verification matrix](../AGENTS.md#validation). Check changed Vue
   files with the installed Prettier and format only touched files when needed.
   For UI behavior changes, check the affected success/error interaction and
   desktop/mobile layout when a browser is available; otherwise report that gap.
