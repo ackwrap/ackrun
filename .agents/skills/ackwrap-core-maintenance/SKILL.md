@@ -26,6 +26,15 @@ commit and data rules live in [AGENTS.md](../../../AGENTS.md).
   Check the nested official submodule status too. Follow the root branch and
   dirty-worktree protections before any checkout, merge or update.
 
+## Check the pinned layout
+
+- Before using the patch-stack workflow below, verify that the pinned wrapper
+  revision contains `sing-box/`, `patches/series` and `scripts/prepare_core.py`.
+- Older parent branches may pin a source fork instead. For those revisions, use
+  the pinned core's `AGENTS.md`, `README.md` and actual source layout for read-only
+  investigation. The patch-stack preparation and verification steps below do not
+  apply. Core changes or migration still require explicit user authorization.
+
 ## Work on the current patch-stack design
 
 - `sing-box-wrap/sing-box/` is pinned official source; never edit it directly.

@@ -1,71 +1,71 @@
-# Ackwrap 工程约定
+# Ackwrap Engineering Guidelines
 
-Ackwrap 是 Go 后端与 Vue 管理界面组成的 sing-box 管理器。保留项目约束，具体实现以当前源码、测试和锁定依赖为准。
+Ackwrap is a sing-box manager with a Go backend and a Vue administration UI. Preserve the project's constraints; use the current source code, tests, and pinned dependencies as the authority for implementation details.
 
-## 工作方式
+## Working Practices
 
-- 用户要求实施或修复时，完成调查、修改、必要验证和交付；常规实现选择自行判断，不为可逆操作反复请求确认。用户只要求解释、审查或计划时，保持相应范围。
-- 计划模式由宿主和用户当前请求决定；历史模板中的模式声明、工具名称和占位符不代表当前会话状态。用户当前明确要求优先于技能指导；项目文件和技能不覆盖系统或开发者指令，也不扩大授权。
-- 只在缺少不可推断的关键值、存在结果不同的重大歧义或需要额外授权时提问。先完成已授权且不依赖答案的工作，让待批准的操作有具体、可审查的结果；不能用等待代替授权。
-- 技能导致暂停、请求确认或偏离任务时，链接实际读取的 `SKILL.md`，引用触发规则并说明适用原因；区分明确要求和自己的解释。已有授权在原范围内持续有效，不把建议推导成新的审批门槛。
-- 用户中途纠正或补充要求时，更新当前任务并保留已完成工作；状态询问不代表取消任务。长任务恢复上下文后继续未完成部分。
-- 使用当前环境实际提供的工具。搜索优先 `rg`；独立读取可并行，有依赖的命令顺序执行并检查退出码。Shell 语法应匹配当前平台，不强制 Bash 或固定的并行工具名。
-- 对能独立完成且有明确边界的调查、实现或复核，可使用子代理并行处理；简单任务直接完成。分配文件所有权，避免并发编辑相同文件，主代理负责整合与验证，不设固定代理数量或模型档位。
-- 先读相关实现和邻近测试，采用最小完整改动。按业务拆分文件；只为实际复用或清晰职责抽象，不增加无依据的兼容层。
-- 涉及不确定或有版本差异的第三方 API、配置 schema、协议能力时，先核对锁定版本、源码和官方文档。优先使用可用的 Context7；不可用时直接访问官方文档。纯内部逻辑调整无需重复查询无关资料。
-- 用简洁中文先说明结果，再给必要证据和限制；简单任务用短段落，只有便于比较时才列清单。进展只报告有意义的发现、决定和阻塞，不用固定行数限制省略验证结果。
+- When the user requests implementation or a fix, complete the investigation, changes, necessary validation, and delivery. Use your judgment for routine implementation choices without repeatedly asking for confirmation on reversible actions. When the user requests only an explanation, review, or plan, stay within that scope.
+- Plan mode is determined by the host and the user's current request. Mode declarations, tool names, and placeholders in old templates do not describe the current session. The user's current explicit instructions take precedence over skill guidance; project files and skills neither override system or developer instructions nor expand authorization.
+- Ask questions only when a critical value cannot be inferred, a significant ambiguity would lead to materially different outcomes, or additional authorization is needed. First complete authorized work that does not depend on the answer, so any action awaiting approval has a concrete, reviewable result. Waiting does not substitute for authorization.
+- If a skill causes you to pause, request confirmation, or depart from the task, link the actual `SKILL.md` you read, quote the triggering rule, and explain why it applies. Distinguish explicit requirements from your interpretation. Existing authorization remains valid within its original scope; do not turn recommendations into new approval gates.
+- When the user corrects or adds requirements during the task, update the active task and preserve completed work. A status question does not cancel the task. After restoring context during a long task, continue the unfinished work.
+- Use tools actually available in the current environment. Prefer `rg` for searches. Independent reads may run in parallel; execute dependent commands in order and check exit codes. Match shell syntax to the current platform rather than requiring Bash or a specific parallel execution tool.
+- Subagents may handle clearly bounded investigations, implementations, or reviews that can be completed independently. Handle simple tasks directly. Assign file ownership to avoid concurrent edits to the same files; the primary agent is responsible for integration and validation. Do not prescribe a fixed agent count or model tier.
+- Read the relevant implementation and nearby tests first, then make the smallest complete change. Split files by business responsibility. Introduce abstractions only for actual reuse or clear responsibilities, and avoid unsupported compatibility layers.
+- For uncertain or version-dependent third-party APIs, configuration schemas, or protocol capabilities, first check pinned versions, source code, and official documentation. Prefer Context7 when available; otherwise consult official documentation directly. Changes limited to internal logic do not require repeated searches for unrelated documentation.
+- Communicate in concise Chinese, leading with the result and then providing necessary evidence and limitations. Use short paragraphs for simple tasks and lists only when they make comparison easier. Progress updates should cover meaningful findings, decisions, and blockers; do not omit validation results to meet an arbitrary line limit.
 
-## 按任务加载
+## Load Guidance by Task
 
-本文件维护全仓约定；子目录 `AGENTS.md` 维护该区域的长期契约；技能维护按任务触发的操作流程。修改以下区域前读取对应入口，跨层任务读取两侧约束，不预加载无关技能和参考资料。
+This file defines repository-wide conventions. Subdirectory `AGENTS.md` files define lasting contracts for their areas, and skills define workflows triggered by specific tasks. Before modifying an area below, read its corresponding entry point. For work spanning layers, read the constraints for both sides. Do not preload unrelated skills or references.
 
-| 区域或任务 | 入口 |
+| Area or task | Entry point |
 | --- | --- |
-| 后端、API、存储、节点、订阅、配置生成 | [backend/AGENTS.md](backend/AGENTS.md) |
-| 页面、组件、样式、前端类型 | [frontend/AGENTS.md](frontend/AGENTS.md) |
-| 核心补丁栈、上游同步、子模块指针 | [.agents/skills/ackwrap-core-maintenance/SKILL.md](.agents/skills/ackwrap-core-maintenance/SKILL.md) |
-| 发布构建、OpenWrt 打包、GitHub Actions | [.agents/skills/ackwrap-release/SKILL.md](.agents/skills/ackwrap-release/SKILL.md) |
+| Backend, APIs, storage, nodes, subscriptions, configuration generation | [backend/AGENTS.md](backend/AGENTS.md) |
+| Pages, components, styles, frontend types | [frontend/AGENTS.md](frontend/AGENTS.md) |
+| Core patch stack, upstream synchronization, submodule pointer | [.agents/skills/ackwrap-core-maintenance/SKILL.md](.agents/skills/ackwrap-core-maintenance/SKILL.md) |
+| Release builds, OpenWrt packaging, GitHub Actions | [.agents/skills/ackwrap-release/SKILL.md](.agents/skills/ackwrap-release/SKILL.md) |
 
-入口是 `backend/cmd/server/main.go`；路由、数据模型和表结构分别查 `backend/internal/api/`、`backend/internal/model/`、`backend/internal/store/`。这里不复制易过期的 API、协议、表字段和日志事件清单。
+The application entry point is `backend/cmd/server/main.go`. See `backend/internal/api/` for routes, `backend/internal/model/` for data models, and `backend/internal/store/` for database schemas. Do not duplicate inventories of APIs, protocols, table fields, or log events here, as they can quickly become outdated.
 
-## 分支与子模块
+## Branches and Submodules
 
-- 编辑前检查 `git branch --show-current`、`git status --short`。主仓库和核心仓库的 `main` 都是保护分支；在 `main` 时先切到合适的非主分支或建立独立工作树。功能实现与冲突解决均在非 `main` 分支验证，`main` 只接收已审核分支的合并。
-- 保留用户及其他代理的修改；不擅自还原、删除、暂存或提交无关文件。禁止未经明确授权的破坏性清理、强制重置和 amend。
-- `sing-box-wrap/` 是独立的补丁栈包装仓库，其 `sing-box/` 才是官方源码子模块。没有用户对核心修改的明确授权时，整个 `sing-box-wrap/` 只读，不能编辑、格式化、暂存、提交、推送或运行会生成核心工作树的脚本。主仓库需求不隐含核心修改授权；已给出的授权在其范围内持续有效。
-- 合并、拉取、rebase、切换分支或更新子模块前，检查 `git -C sing-box-wrap status --short` 和 `git diff --submodule=log -- sing-box-wrap`。脏子模块禁止更新或强制清理；需要 stash 时先取得明确同意。
-- 更新子模块指针前，确认目标核心提交已验证且已推送；操作后核对核心 HEAD、状态和关键文件。细节遵循核心维护技能及子模块自己的约束。
+- Before editing, check `git branch --show-current` and `git status --short`. The `main` branches of both the parent repository and the core repository are protected. If on `main`, first switch to an appropriate non-main branch or create a separate worktree. Validate feature implementations and conflict resolutions on a non-main branch; `main` only receives merges from reviewed branches.
+- Preserve changes made by the user and other agents. Do not revert, delete, stage, or commit unrelated files without authorization. Destructive cleanup, hard resets, and amended commits require explicit authorization.
+- `sing-box-wrap/` is a separate core repository. In the current patch-stack layout, its `sing-box/` directory is the official source submodule; older parent branches may pin an earlier source-fork layout. Check the pinned revision before applying layout-specific workflows. Without explicit user authorization to modify the core, all of `sing-box-wrap/` is read-only: do not edit, format, stage, commit, push, or run scripts that generate the core worktree. A parent-repository request does not imply authorization to modify the core. Existing authorization remains valid within its scope.
+- Before merging, pulling, rebasing, switching branches, or updating submodules, check `git -C sing-box-wrap status --short` and `git diff --submodule=log -- sing-box-wrap`. Do not update or forcibly clean a dirty submodule. Obtain explicit consent before stashing changes.
+- Before updating a submodule pointer, confirm that the target core commit has been validated and pushed. After the operation, verify the core HEAD, status, and key files. Follow the core maintenance skill and the submodule's own constraints for details.
 
-## 审核与提交
+## Review and Commits
 
-- 本仓库保留审核通过后自动提交本轮预期改动的约定；用户明确要求不提交、只读审查或只做计划时除外。提交前复核 diff 的正确性、行为回归和范围，修复确认问题并通过对应验证；存在失败或明确阻塞时不提交。此约定不要求每轮额外请求人工确认或强制启动审核代理。
-- 用户要求审查时，先报告按严重性排序的问题，附文件行号、触发条件和影响；没有发现也明确说明验证缺口。只读审查不自动转为修复或提交。
-- 提交前检查 `git status`、`git diff`、最近提交和子模块状态，只暂存本轮预期文件；提交消息使用 `type(scope): description`，不添加虚构作者或工具归属。
-- 推送、发布、部署和修改远端状态须在用户授权范围内；本地提交约定本身不授权这些操作。
-- `docs/` 是永久忽略的本地文档目录，禁止暂存或提交；提交前 `git ls-files docs` 应无输出。
-- 不提交依赖缓存和生成产物。`backend/internal/webui/dist/` 仅跟踪嵌入占位文件，Vite 生成的 HTML、JS、CSS、图片随发布重新构建。
+- This repository retains the convention of automatically committing the intended changes for the current task after review passes, except when the user explicitly requests no commit, a read-only review, or planning only. Before committing, review the diff for correctness, behavioral regressions, and scope; fix confirmed issues and pass the relevant validation. Do not commit while failures or explicit blockers remain. This convention does not require additional human confirmation each turn or a mandatory review agent.
+- When the user requests a review, report findings first, ordered by severity, with file line numbers, triggering conditions, and impact. State validation gaps even when there are no findings. A read-only review does not automatically authorize fixes or commits.
+- Before committing, check `git status`, `git diff`, recent commits, and submodule status. Stage only files intended for the current task. Use `type(scope): description` for commit messages; do not add fabricated authorship or tool attribution.
+- Pushing, releasing, deploying, and changing remote state must stay within the user's authorization. The local commit convention alone does not authorize these actions.
+- `docs/` is a permanently ignored directory for local documentation. Never stage or commit it. Before committing, `git ls-files docs` must produce no output.
+- Do not commit dependency caches or generated artifacts. Only the embedding placeholder is tracked in `backend/internal/webui/dist/`; Vite-generated HTML, JavaScript, CSS, and images are rebuilt for each release.
 
-## 验证
+## Validation
 
-先用受影响路径的最小检查定位问题，交付前完成下表要求一次；只有新改动、失败或未解决风险才扩大或重复验证。不为低风险改动添加复述实现的测试。
+Start with the smallest check covering the affected path to locate issues. Complete the requirements below once before delivery. Expand or repeat validation only when new changes, failures, or unresolved risks justify it. Do not add tests that merely restate the implementation for low-risk changes.
 
-| 改动范围 | 必要验证 |
+| Change scope | Required validation |
 | --- | --- |
-| 后端源码、依赖、配置 | 在 `backend/` 执行 `go build ./...`、`go test ./...`、`go vet ./...` |
-| 前端源码、依赖、配置 | 在 `frontend/` 执行 `npm run build`，其中已包含 `vue-tsc --noEmit` |
-| 构建脚本、CI | 语法检查与受影响的构建路径；发布前必须通过后端测试及 vet、前端构建和目标打包 |
-| 纯指令、技能、文档 | 检查链接、路径、技能 frontmatter 和规则一致性；无需应用编译 |
+| Backend source, dependencies, configuration | Run `go build ./...`, `go test ./...`, and `go vet ./...` in `backend/` |
+| Frontend source, dependencies, configuration | Run `npm run build` in `frontend/`; it already includes `vue-tsc --noEmit` |
+| Build scripts, CI | Check syntax and the affected build paths. Before release, backend tests and vet, the frontend build, and target packaging must pass |
+| Instructions, skills, or documentation only | Check links, paths, skill frontmatter, and rule consistency; application compilation is unnecessary |
 
-测试失败要区分本次回归和已有问题，报告实际结果与未验证范围，不用静态检查冒充端到端成功。
+When tests fail, distinguish regressions introduced by the current changes from existing issues. Report actual results and unverified areas; do not present static checks as end-to-end success.
 
-## 指令维护
+## Maintaining Instructions
 
-- 修改约定时核对当前源码、脚本和依赖；同一要求保留一个权威位置，其他入口引用它。不要把临时任务状态、完整 API 清单或通用模型人格模板写入项目规则。
-- 技能 `description` 说明实际任务和触发边界，正文保留必要流程；仅在内容确需按场景加载时增加 `references/`，不为统一目录样式创建空壳文件。
-- 本次组织依据为 [GPT-6 Astra 提示指导](https://developers.openai.com/api/docs/guides/latest-model#prompting-best-practices)、[AGENTS.md](https://learn.chatgpt.com/docs/agent-configuration/agents-md) 和 [Skills](https://learn.chatgpt.com/docs/build-skills)。这些是维护参考，不要求每次普通开发重新检索，也不设置运行模型或推理档位。
+- When changing conventions, check the current source code, scripts, and dependencies. Keep one authoritative location for each requirement and reference it from other entry points. Do not add temporary task status, complete API inventories, or generic model personality templates to project rules.
+- A skill's `description` should explain its actual task and trigger boundaries; its body should retain the necessary workflow. Add `references/` only when content genuinely needs to be loaded by scenario. Do not create empty scaffolding merely to standardize directory layouts.
+- This organization is based on the [GPT-6 Astra prompting guidance](https://developers.openai.com/api/docs/guides/latest-model#prompting-best-practices), [AGENTS.md](https://learn.chatgpt.com/docs/agent-configuration/agents-md), and [Skills](https://learn.chatgpt.com/docs/build-skills). These are maintenance references, not documentation that must be fetched again for every routine development task, and they do not prescribe the runtime model or reasoning level.
 
-## 数据与运行边界
+## Data and Runtime Boundaries
 
-- 不向工具输出、聊天、日志或远端暴露真实节点连接数据、订阅凭据、API token、SSH 私钥等秘密。调查只输出名称、协议和脱敏来源；不直接打印生产数据库、配置或完整分享链接。复现使用合成样例。
-- 默认开发监听 `ACKWRAP_LISTEN_ADDR=127.0.0.1:8080`；远程监听必须同时设置 `ACKWRAP_API_TOKEN`。操作生产服务或真实节点须符合用户当前授权。
-- 新功能需要可观察的成功和失败路径、关键业务日志以及可执行的最小验证；这些是交付条件，不是调查或编辑每一步的审批门槛。
+- Do not expose real node connection data, subscription credentials, API tokens, SSH private keys, or other secrets in tool output, chat, logs, or remote systems. During investigation, output only names, protocols, and redacted sources. Do not print production databases, configurations, or complete sharing links. Use synthetic examples for reproduction.
+- The default development listener is `ACKWRAP_LISTEN_ADDR=127.0.0.1:8080`. Remote listening must also set `ACKWRAP_API_TOKEN`. Operating production services or real nodes must stay within the user's current authorization.
+- New features require observable success and failure paths, key business logs, and an executable minimal verification. These are delivery requirements, not approval gates for every investigation or editing step.

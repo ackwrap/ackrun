@@ -89,7 +89,7 @@ are defined by the source. Read only the implementation relevant to the task.
 
 ## Verification
 
-Follow the [root verification matrix](../AGENTS.md#验证). Choose focused tests
+Follow the [root verification matrix](../AGENTS.md#validation). Choose focused tests
 for changed contracts, especially sync failure preserving nodes, UID inheritance,
 migrations preserving data, and invalid configuration preserving the active file.
 Exercise only the cases affected by the task; this is not an additional full-suite gate.
