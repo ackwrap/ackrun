@@ -57,14 +57,15 @@ type RouteRuleImportResponse struct {
 }
 
 type RouteStrategyItem struct {
-	RuleID      int64                     `json:"rule_id"`
-	Name        string                    `json:"name"`
-	Priority    int                       `json:"priority"`
-	Kind        string                    `json:"kind"`
-	Enabled     bool                      `json:"enabled"`
-	ReadOnly    bool                      `json:"read_only"`
-	OutboundTag string                    `json:"outbound_tag"`
-	Collection  *ProxyCollectionWithNodes `json:"collection,omitempty"`
+	DevicePolicy bool                      `json:"device_policy,omitempty"`
+	RuleID       int64                     `json:"rule_id"`
+	Name         string                    `json:"name"`
+	Priority     int                       `json:"priority"`
+	Kind         string                    `json:"kind"`
+	Enabled      bool                      `json:"enabled"`
+	ReadOnly     bool                      `json:"read_only"`
+	OutboundTag  string                    `json:"outbound_tag"`
+	Collection   *ProxyCollectionWithNodes `json:"collection,omitempty"`
 }
 
 type RouteRuleSubscription struct {

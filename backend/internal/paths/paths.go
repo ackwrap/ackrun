@@ -179,6 +179,10 @@ func (p *Paths) DNSMasqTakeoverStatePath() string {
 	return filepath.Join(p.DataDir, ".dnsmasq-takeover.json")
 }
 
+func (p *Paths) DeviceDNSStatePath() string {
+	return filepath.Join(p.DataDir, ".device-dns-state")
+}
+
 func (p *Paths) NetworkLifecycleLockPath() string {
 	return filepath.Join(p.DataDir, ".network-lifecycle.lock")
 }

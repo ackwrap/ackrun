@@ -833,6 +833,7 @@ export interface ProxyCollectionRequest {
 }
 
 export interface StrategyItem {
+  device_policy?: boolean;
   rule_id: number;
   name: string;
   priority: number;

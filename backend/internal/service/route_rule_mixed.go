@@ -53,7 +53,7 @@ func parseMixedRouteRuleValues(values []string) ([]mixedRouteRuleValue, error) {
 		}
 		ruleType := strings.TrimSpace(line[:sep])
 		value := strings.TrimSpace(line[sep+1:])
-		if !isRouteRuleType(ruleType) || ruleType == "mixed" {
+		if !isRouteRuleType(ruleType) || ruleType == "mixed" || ruleType == "source_ip_cidr" {
 			return nil, fmt.Errorf("unsupported mixed rule type: %s", ruleType)
 		}
 		if value == "" {
@@ -69,7 +69,7 @@ func parseMixedRouteRuleValues(values []string) ([]mixedRouteRuleValue, error) {
 
 func isRouteRuleType(ruleType string) bool {
 	switch ruleType {
-	case "domain", "domain_suffix", "domain_keyword", "ip_cidr", "process_name", "geoip", "geosite", "rule_set", "mixed":
+	case "domain", "domain_suffix", "domain_keyword", "ip_cidr", "source_ip_cidr", "process_name", "geoip", "geosite", "rule_set", "mixed":
 		return true
 	default:
 		return false

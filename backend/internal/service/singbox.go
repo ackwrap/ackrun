@@ -33,6 +33,7 @@ type SingboxService struct {
 	coreLogs           *CoreLogService
 	store              *store.Store
 	dnsmasq            dnsmasqLifecycle
+	deviceDNS          deviceDNSLifecycle
 	dnsmasqSupported   func() bool
 	cmd                *exec.Cmd
 	pid                int
@@ -57,6 +58,7 @@ type coreStartResult struct {
 	response        *model.ActionResponse
 	processExited   <-chan struct{}
 	dnsmasqTakeover bool
+	deviceDNSCIDRs  []string
 }
 
 var (
@@ -64,7 +66,7 @@ var (
 )
 
 func NewSingboxService(p *paths.Paths, rt *RealtimeService, logs *CoreLogService, s *store.Store) *SingboxService {
-	return &SingboxService{paths: p, realtime: rt, coreLogs: logs, store: s, dnsmasq: newDNSMasqLifecycle(p), dnsmasqSupported: platformSupportsDNSMasqTakeover, transitionGuard: newCoreTransitionGuard(p)}
+	return &SingboxService{paths: p, realtime: rt, coreLogs: logs, store: s, dnsmasq: newDNSMasqLifecycle(p), deviceDNS: newDeviceDNSLifecycle(p), dnsmasqSupported: platformSupportsDNSMasqTakeover, transitionGuard: newCoreTransitionGuard(p)}
 }
 
 func (svc *SingboxService) SetStartHooks(beforeStart func() error, waitReady func(context.Context) error, afterStart func() error) {
@@ -126,7 +128,29 @@ func (svc *SingboxService) startAndSync(validateConfig func() (string, error)) (
 			return svc.failStartup(fmt.Errorf("核心运行时同步失败: %w", err), "runtime synchronization failed")
 		}
 	}
+	if len(started.deviceDNSCIDRs) > 0 {
+		if err := svc.activateDeviceDNS(ctx, started.deviceDNSCIDRs); err != nil {
+			return svc.failStartup(fmt.Errorf("设备 DNS 接管失败: %w", err), "device DNS takeover failed")
+		}
+	}
 	return svc.markStarted(started.response)
+}
+
+func (svc *SingboxService) activateDeviceDNS(ctx context.Context, cidrs []string) error {
+	if svc.deviceDNS == nil {
+		return errors.New("设备 DNS 生命周期服务不可用")
+	}
+	svc.networkLifecycleMu.Lock()
+	defer svc.networkLifecycleMu.Unlock()
+	release, err := acquireNetworkLifecycleFileLock(svc.paths.NetworkLifecycleLockPath())
+	if err != nil {
+		return err
+	}
+	defer release()
+	if cause := context.Cause(ctx); cause != nil {
+		return cause
+	}
+	return svc.deviceDNS.Activate(cidrs)
 }
 
 func (svc *SingboxService) activateDNSMasq(ctx context.Context) error {
@@ -448,6 +472,7 @@ func (svc *SingboxService) start(validateConfig func() (string, error)) (*coreSt
 		response:        &model.ActionResponse{Success: true, Message: "service started"},
 		processExited:   processExited,
 		dnsmasqTakeover: dnsmasqTakeover,
+		deviceDNSCIDRs:  tunState.DeviceDNSCIDRs,
 	}, nil
 }
 
@@ -609,6 +634,11 @@ func (svc *SingboxService) recoverStoppedStateDetailed(forceDNS, forceCleanup bo
 	var failures []error
 	if cleanupErr != nil {
 		failures = append(failures, fmt.Errorf("cleanup sing-box network state: %w", cleanupErr))
+	}
+	if svc.deviceDNS != nil {
+		if err := svc.deviceDNS.Restore(); err != nil {
+			failures = append(failures, fmt.Errorf("清理设备 DNS 接管失败: %w", err))
+		}
 	}
 	dnsmasqRestored := false
 	if svc.dnsmasq != nil {
@@ -1014,6 +1044,7 @@ type activeTUNState struct {
 	AutoRouteWithoutRedirect bool
 	CleanupIdentityError     string
 	DNSMasqTakeover          bool
+	DeviceDNSCIDRs           []string
 }
 
 func readActiveTUNState(configPath string) (activeTUNState, error) {
@@ -1046,7 +1077,14 @@ func readActiveTUNState(configPath string) (activeTUNState, error) {
 	}
 	state := activeTUNState{}
 	dnsInboundPresent := false
+	deviceDNSPresent := false
 	for index, inbound := range config.Inbounds {
+		if inbound.Tag == deviceDNSInboundTag {
+			if inbound.Type != "direct" || inbound.Listen != "::" || inbound.ListenPort != deviceDNSPort {
+				return activeTUNState{}, fmt.Errorf("设备 DNS 入站配置无效")
+			}
+			deviceDNSPresent = true
+		}
 		if inbound.Tag == dnsInboundTag {
 			if inbound.Type != "direct" || inbound.Listen != "127.0.0.1" || inbound.ListenPort != defaultDNSInboundPort {
 				return activeTUNState{}, fmt.Errorf("Ackwrap DNS 入站配置无效")
@@ -1096,6 +1134,31 @@ func readActiveTUNState(configPath string) (activeTUNState, error) {
 				state.IPv6 = true
 				state.ExpectedIPv6 = state.ExpectedIPv6 || managesRoutes
 			}
+		}
+	}
+	if deviceDNSPresent {
+		if !state.Enabled || !state.AutoRedirect || config.DNS == nil {
+			return activeTUNState{}, fmt.Errorf("设备 DNS 接管需要 TUN auto_redirect 和 DNS 配置")
+		}
+		for _, rule := range config.Route.Rules {
+			var inbound, action string
+			_ = json.Unmarshal(rule["inbound"], &inbound)
+			_ = json.Unmarshal(rule["action"], &action)
+			if inbound != deviceDNSInboundTag || action != "hijack-dns" {
+				continue
+			}
+			var cidrs []string
+			if err := json.Unmarshal(rule["source_ip_cidr"], &cidrs); err != nil {
+				return activeTUNState{}, fmt.Errorf("设备 DNS 来源配置无效")
+			}
+			normalized, err := normalizeDeviceCIDRs(cidrs)
+			if err != nil {
+				return activeTUNState{}, err
+			}
+			state.DeviceDNSCIDRs = appendUniqueStrings(state.DeviceDNSCIDRs, normalized...)
+		}
+		if len(state.DeviceDNSCIDRs) == 0 {
+			return activeTUNState{}, fmt.Errorf("设备 DNS 接管缺少来源限制")
 		}
 	}
 	dnsHijackRulePresent := false

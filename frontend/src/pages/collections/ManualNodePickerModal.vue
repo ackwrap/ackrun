@@ -5,7 +5,11 @@ import NodeFlagName from "@/components/NodeFlagName.vue";
 import { api } from "@/services/api";
 import type { NodeItem } from "@/services/types";
 
-const props = defineProps<{ open: boolean; selected: string[] }>();
+const props = defineProps<{
+  open: boolean;
+  selected: string[];
+  single?: boolean;
+}>();
 const emit = defineEmits<{
   close: [];
   "update:selected": [string[]];
@@ -43,6 +47,10 @@ async function load() {
 }
 
 function toggle(uid: string) {
+  if (props.single) {
+    emit("update:selected", [uid]);
+    return;
+  }
   emit(
     "update:selected",
     props.selected.includes(uid)
@@ -93,7 +101,7 @@ watch(
           <tr v-for="node in nodes" v-else :key="node.uid">
             <td>
               <input
-                type="checkbox"
+                :type="single ? 'radio' : 'checkbox'"
                 :checked="selected.includes(node.uid)"
                 @change="toggle(node.uid)"
               />

@@ -13,6 +13,7 @@ import type {
   RouteRule,
   RouteRulePreviewResponse,
   RouteRuleSubscription,
+  StrategyItem,
   WSEvent,
 } from "@/services/types";
 import GeoDatabaseSection from "./rules/GeoDatabaseSection.vue";
@@ -22,6 +23,14 @@ import RouteRuleImportModal from "./rules/RouteRuleImportModal.vue";
 import RuleSubscriptionActionsModal from "./rules/RuleSubscriptionActionsModal.vue";
 import RuleSubscriptionFormModal from "./rules/RuleSubscriptionFormModal.vue";
 import RuleSubscriptionSection from "./rules/RuleSubscriptionSection.vue";
+import StrategyFormModal from "./collections/StrategyFormModal.vue";
+import type { StrategyCollectionRequest } from "./collections/collectionTypes";
+const deviceStrategy = ref<StrategyItem | null>(null);
+const deviceRule = ref<RouteRule | null>(null);
+const deviceEnabled = ref(true);
+const deviceSaving = ref(false);
+const deviceConnectivity = ref({ test_url: "", interval_seconds: 300 });
+const ruleSaving = ref(false);
 const rules = ref<RouteRule[]>([]),
   subscriptions = ref<RouteRuleSubscription[]>([]),
   geoAssets = ref<GeoAsset[]>([]),
@@ -128,6 +137,7 @@ function addRule(type = "domain_suffix") {
     name.value = "GeoSite 规则";
     outbound.value = "proxy";
   }
+  if (type === "source_ip_cidr") outbound.value = "proxy";
   formOpen.value = true;
 }
 function isFinalStrategyRule(rule: RouteRule | null) {
@@ -151,19 +161,26 @@ function editRule(r: RouteRule) {
   formOpen.value = true;
 }
 async function saveRule() {
+  if (ruleSaving.value) return;
   if (!isFinalStrategyRule(editing.value) && !values.value.length)
     return show("请填写匹配值", "error");
+  ruleSaving.value = true;
   try {
+    const isDevice = ruleType.value === "source_ip_cidr";
+    const requestedEnabled = enabled.value;
     const body = {
       name: name.value,
-      enabled: enabled.value,
+      enabled:
+        isDevice && editing.value?.rule_type !== "source_ip_cidr"
+          ? false
+          : enabled.value,
       priority: editing.value?.priority || 0,
       rule_type: ruleType.value,
       values: values.value,
       outbound: outbound.value,
       invert: invert.value,
     };
-    editing.value
+    const saved = editing.value
       ? await api.updateRouteRule(editing.value.id, body)
       : await api.createRouteRule(body);
     show(
@@ -176,8 +193,55 @@ async function saveRule() {
     formOpen.value = false;
     resetRule();
     await load();
+    if (isDevice) {
+      show("设备规则已保存，请完成固定节点绑定；新规则在绑定后启用");
+      try {
+        const [strategies, connectivity] = await Promise.all([
+          api.getRouteStrategies(),
+          api.getConnectivitySettings(),
+        ]);
+        const strategy = strategies.find((item) => item.rule_id === saved.id);
+        if (!strategy) throw new Error("未找到设备策略");
+        deviceRule.value = saved;
+        deviceEnabled.value = requestedEnabled;
+        deviceConnectivity.value = connectivity;
+        deviceStrategy.value = strategy;
+      } catch (e: any) {
+        show(
+          `设备规则已保存，节点选择加载失败：${e.message}。可编辑规则重试或前往策略组配置。`,
+          "error",
+        );
+      }
+    }
   } catch (e: any) {
     show(`规则保存失败: ${e.message}`, "error");
+  } finally {
+    ruleSaving.value = false;
+  }
+}
+async function saveDeviceStrategy(payload: StrategyCollectionRequest) {
+  if (!deviceStrategy.value || !deviceRule.value || deviceSaving.value) return;
+  deviceSaving.value = true;
+  try {
+    const current = deviceStrategy.value.collection;
+    if (current) await api.updateProxyCollection(current.id, payload);
+    else
+      deviceStrategy.value.collection =
+        await api.createProxyCollection(payload);
+    if (deviceRule.value.enabled !== deviceEnabled.value) {
+      await api.updateRouteRule(deviceRule.value.id, {
+        ...deviceRule.value,
+        enabled: deviceEnabled.value,
+      });
+    }
+    deviceStrategy.value = null;
+    deviceRule.value = null;
+    show("设备固定节点与 DNS 跟随已保存，配置应用结果请查看控制台");
+    await load();
+  } catch (e: any) {
+    show(`设备策略保存失败：${e.message}`, "error");
+  } finally {
+    deviceSaving.value = false;
   }
 }
 async function toggleRule(r: RouteRule) {
@@ -445,7 +509,9 @@ useRealtimeSocket((event: WSEvent) => {
       show(`Geo 数据库更新失败: ${data.error || "请求失败"}`, "error");
     }
   } else if (event.type === "route_rule_subscription.sync") {
-    const subscription = subscriptions.value.find((item) => item.id === data.id);
+    const subscription = subscriptions.value.find(
+      (item) => item.id === data.id,
+    );
     if (subscription) {
       subscription.sync_status = data.status ?? subscription.sync_status;
       subscription.sync_progress = data.progress ?? subscription.sync_progress;
@@ -492,12 +558,12 @@ onBeforeUnmount(() => clearInterval(poll));
         :syncing="isGeoSyncing"
         @sync-all="syncGeo()"
         @sync-one="syncGeo"
-        @update="updateGeo"
-      /><RuleListSection
+        @update="updateGeo" /><RuleListSection
         :rules="rules"
         :subscriptions="subscriptions"
         @refresh="load"
         @add-geo="addRule('geosite')"
+        @add-device="addRule('source_ip_cidr')"
         @add="addRule()"
         @preview="openRulePreview"
         @share="shareRules"
@@ -506,15 +572,13 @@ onBeforeUnmount(() => clearInterval(poll));
         @toggle="toggleRule"
         @edit="editRule"
         @remove="pending = $event"
-        @detail="detailRule = $event"
-      />
+        @detail="detailRule = $event" />
       <RuleSubscriptionSection
         :subscriptions="subscriptions"
         :syncing="isRuleSubscriptionSyncing"
         @add="addSub"
         @sync-all="syncAll"
-        @manage="actions = $event"
-      /></template
+        @manage="actions = $event" /></template
     ><RouteRuleFormModal
       v-if="formOpen"
       :editing="editing"
@@ -524,13 +588,26 @@ onBeforeUnmount(() => clearInterval(poll));
       v-model:values-text="valuesText"
       v-model:outbound="outbound"
       v-model:invert="invert"
+      :saving="ruleSaving"
       :subscriptions="subscriptions"
       @close="
         formOpen = false;
         resetRule();
       "
       @save="saveRule"
-    /><RouteRuleImportModal
+    />
+    <StrategyFormModal
+      v-if="deviceStrategy"
+      :key="deviceStrategy.rule_id"
+      :strategy="deviceStrategy"
+      :groups="[]"
+      :connectivity="deviceConnectivity"
+      :saving="deviceSaving"
+      @close="deviceStrategy = null"
+      @save="saveDeviceStrategy"
+      @error="show($event, 'error')"
+    />
+    <RouteRuleImportModal
       :open="importOpen"
       :code="importCode"
       :importing="importing"
@@ -558,7 +635,9 @@ onBeforeUnmount(() => clearInterval(poll));
     />
     <Modal
       :open="!!detailRule"
-      :title="detailRule ? `规则详情：${ruleDisplayName(detailRule)}` : '规则详情'"
+      :title="
+        detailRule ? `规则详情：${ruleDisplayName(detailRule)}` : '规则详情'
+      "
       size="lg"
       @close="detailRule = null"
     >
@@ -566,7 +645,11 @@ onBeforeUnmount(() => clearInterval(poll));
         <div class="rounded-lg bg-[var(--bg-base)] p-3">
           <span class="text-[var(--text-tertiary)]">类型</span>
           <p class="mt-1 font-mono">
-            {{ isFinalStrategyRule(detailRule) ? "最终规则" : detailRule.rule_type }}
+            {{
+              isFinalStrategyRule(detailRule)
+                ? "最终规则"
+                : detailRule.rule_type
+            }}
           </p>
         </div>
         <div class="rounded-lg bg-[var(--bg-base)] p-3">
@@ -589,7 +672,11 @@ onBeforeUnmount(() => clearInterval(poll));
           <span class="text-[var(--text-tertiary)]">匹配值</span>
           <pre
             class="mt-2 max-h-[50vh] overflow-auto whitespace-pre-wrap break-all font-mono text-xs leading-5 text-[var(--text-primary)]"
-          >{{ isFinalStrategyRule(detailRule) ? "未匹配流量" : detailRule.values.join("\n") || "-" }}</pre>
+            >{{
+              isFinalStrategyRule(detailRule)
+                ? "未匹配流量"
+                : detailRule.values.join("\n") || "-"
+            }}</pre>
         </div>
       </div>
     </Modal>
