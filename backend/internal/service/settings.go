@@ -216,6 +216,7 @@ func (svc *SettingsService) GetGeneralSettings() (*model.GeneralSettings, error)
 		return nil, err
 	}
 	settings.DNSMasqTakeoverSupported = platformSupportsDNSMasqTakeover()
+	svc.deviceProtectionStatus(settings)
 	return settings, nil
 }
 
@@ -232,6 +233,12 @@ func (svc *SettingsService) SetGeneralSettings(req *model.GeneralSettingsRequest
 	previous, err := svc.store.GetGeneralSettings()
 	if err != nil {
 		return err
+	}
+	if req.DeviceProtectionEnabled != nil {
+		if req.GeoSource != nil || req.AutoStartCore != nil || req.DNSMasqTakeoverEnabled != nil {
+			return errors.New("流量防泄漏开关请单独保存")
+		}
+		return svc.setDeviceProtection(*req.DeviceProtectionEnabled, previous)
 	}
 	next := *previous
 	if req.AutoStartCore != nil {
@@ -371,6 +378,15 @@ func (svc *SettingsService) GetInboundMode() string {
 }
 
 func (svc *SettingsService) SetInboundMode(mode string) error {
+	svc.generalSettingsMu.Lock()
+	defer svc.generalSettingsMu.Unlock()
+	if svc.singbox != nil {
+		svc.singbox.networkLifecycleMu.Lock()
+		defer svc.singbox.networkLifecycleMu.Unlock()
+	}
+	if err := svc.checkDeviceProtectionMode(mode != "mixed"); err != nil {
+		return err
+	}
 	switch mode {
 	case "tun", "mixed", "tun_mixed":
 	default:
@@ -385,6 +401,15 @@ func (svc *SettingsService) GetProxyMode() string {
 }
 
 func (svc *SettingsService) SetProxyMode(mode string) error {
+	svc.generalSettingsMu.Lock()
+	defer svc.generalSettingsMu.Unlock()
+	if svc.singbox != nil {
+		svc.singbox.networkLifecycleMu.Lock()
+		defer svc.singbox.networkLifecycleMu.Unlock()
+	}
+	if err := svc.checkDeviceProtectionMode(mode == "rule"); err != nil {
+		return err
+	}
 	switch mode {
 	case "rule", "global", "direct":
 	default:

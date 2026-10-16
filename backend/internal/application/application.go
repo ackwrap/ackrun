@@ -135,6 +135,7 @@ func New(options Options) (*Application, error) {
 	nodeSvc := service.NewNodeService(db)
 	nodeSvc.SetRealtimeService(realtimeSvc)
 	routeRuleSvc := service.NewRouteRuleService(db, options.Paths, realtimeSvc)
+	routeRuleSvc.SetDeviceProtectionCore(singboxSvc)
 	settingsSvc.SetGeoSourcePreparer(routeRuleSvc)
 	proxyCollectionSvc := service.NewProxyCollectionService(db, realtimeSvc)
 	configGenSvc := service.NewConfigGeneratorService(db, options.Paths, singboxSvc)

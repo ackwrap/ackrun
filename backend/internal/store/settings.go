@@ -314,7 +314,7 @@ func (s *Store) SetNTPSettings(req *model.NTPSettings) error {
 
 func (s *Store) GetGeneralSettings() (*model.GeneralSettings, error) {
 	settings := &model.GeneralSettings{AutoStartCore: true, DNSMasqTakeoverEnabled: true, GeoSource: model.GeoSourceSagerNet}
-	rows, err := s.db.Query(`SELECT key, value FROM app_settings WHERE key IN ('general.auto_start_core', 'general.dnsmasq_takeover_enabled', 'general.geo_source')`)
+	rows, err := s.db.Query(`SELECT key, value FROM app_settings WHERE key IN ('general.auto_start_core', 'general.dnsmasq_takeover_enabled', 'general.geo_source', 'general.device_protection_enabled')`)
 	if err != nil {
 		return nil, err
 	}
@@ -325,6 +325,8 @@ func (s *Store) GetGeneralSettings() (*model.GeneralSettings, error) {
 			return nil, err
 		}
 		switch key {
+		case "general.device_protection_enabled":
+			settings.DeviceProtectionEnabled = value == "true"
 		case "general.auto_start_core":
 			settings.AutoStartCore = value != "false"
 		case "general.dnsmasq_takeover_enabled":
@@ -427,6 +429,7 @@ func (s *Store) setGeneralSettingsWithGeoAssets(settings *model.GeneralSettings,
 		value string
 	}{
 		{key: "general.auto_start_core", value: strconv.FormatBool(settings.AutoStartCore)},
+		{key: "general.device_protection_enabled", value: strconv.FormatBool(settings.DeviceProtectionEnabled)},
 		{key: "general.dnsmasq_takeover_enabled", value: strconv.FormatBool(settings.DNSMasqTakeoverEnabled)},
 		{key: "general.geo_source", value: source},
 	}

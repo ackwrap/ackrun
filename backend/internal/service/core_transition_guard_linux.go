@@ -120,10 +120,16 @@ func transitionGuardRules(replace bool) string {
 }
 
 func (g *nftTransitionGuard) Disable() error {
-	if _, err := os.Stat(g.statePath); os.IsNotExist(err) {
-		return nil
-	} else if err != nil {
-		return err
+	return g.disable(false)
+}
+
+func (g *nftTransitionGuard) disable(force bool) error {
+	if !force {
+		if _, err := os.Stat(g.statePath); os.IsNotExist(err) {
+			return nil
+		} else if err != nil {
+			return err
+		}
 	}
 	present, _, err := g.inspect()
 	if err != nil {
@@ -134,5 +140,8 @@ func (g *nftTransitionGuard) Disable() error {
 			return fmt.Errorf("删除 Ackwrap 防泄漏表失败: %w", err)
 		}
 	}
-	return os.Remove(g.statePath)
+	if err := os.Remove(g.statePath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }

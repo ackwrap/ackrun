@@ -75,17 +75,18 @@ func IsSystemRouteRuleName(name string) bool {
 }
 
 type RouteRuleService struct {
-	store            *store.Store
-	paths            *paths.Paths
-	realtime         *RealtimeService
-	cron             *cron.Cron
-	ruleEntries      map[int64]cron.EntryID
-	geoEntries       map[int64]cron.EntryID
-	mu               sync.Mutex
-	cacheMu          sync.Mutex
-	cacheLocks       map[string]*sync.Mutex
-	ruleSetValidator func(context.Context, string) error
-	ruleSetCompiler  func(context.Context, []byte, string) error
+	store                *store.Store
+	paths                *paths.Paths
+	realtime             *RealtimeService
+	cron                 *cron.Cron
+	ruleEntries          map[int64]cron.EntryID
+	geoEntries           map[int64]cron.EntryID
+	mu                   sync.Mutex
+	cacheMu              sync.Mutex
+	cacheLocks           map[string]*sync.Mutex
+	ruleSetValidator     func(context.Context, string) error
+	ruleSetCompiler      func(context.Context, []byte, string) error
+	deviceProtectionCore *SingboxService
 }
 
 func NewRouteRuleService(s *store.Store, p *paths.Paths, rt *RealtimeService) *RouteRuleService {
@@ -268,10 +269,11 @@ func (svc *RouteRuleService) Strategies() ([]model.RouteStrategyItem, error) {
 	items := make([]model.RouteStrategyItem, 0, len(rules))
 	for _, rule := range rules {
 		item := model.RouteStrategyItem{
-			RuleID:   rule.ID,
-			Name:     rule.Name,
-			Priority: rule.Priority,
-			Enabled:  rule.Enabled,
+			DevicePolicy: rule.RuleType == "source_ip_cidr",
+			RuleID:       rule.ID,
+			Name:         rule.Name,
+			Priority:     rule.Priority,
+			Enabled:      rule.Enabled,
 		}
 		switch {
 		case rule.SystemKey == SystemRuleGlobalDirectKey || rule.RuleType == "fallback":
@@ -320,7 +322,12 @@ func (svc *RouteRuleService) Create(req *model.RouteRuleRequest) (*model.RouteRu
 		return nil, err
 	}
 	logging.Info("route_rule.create", "creating route rule: %s", req.Name)
-	item, err := svc.store.CreateRouteRule(req)
+	var item *model.RouteRule
+	err := svc.mutateProtectedDevice(nil, req, func() error {
+		var err error
+		item, err = svc.store.CreateRouteRule(req)
+		return err
+	})
 	if err != nil {
 		return nil, normalizeRouteRuleNameConflict(err)
 	}
@@ -364,7 +371,12 @@ func (svc *RouteRuleService) Update(id int64, req *model.RouteRuleRequest) (*mod
 		return nil, err
 	}
 	logging.Info("route_rule.update", "updating route rule: %d", id)
-	item, err := svc.store.UpdateRouteRule(id, req)
+	var item *model.RouteRule
+	err = svc.mutateProtectedDevice(existing, req, func() error {
+		var err error
+		item, err = svc.store.UpdateRouteRule(id, req)
+		return err
+	})
 	if err != nil {
 		return nil, normalizeRouteRuleNameConflict(err)
 	}
@@ -386,7 +398,7 @@ func (svc *RouteRuleService) Delete(id int64) (*model.ActionResponse, error) {
 	if existing == nil {
 		return nil, ErrRouteRuleNotFound
 	}
-	if err := svc.store.DeleteRouteRule(id); err != nil {
+	if err := svc.mutateProtectedDevice(existing, nil, func() error { return svc.store.DeleteRouteRule(id) }); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrRouteRuleNotFound
 		}
@@ -444,6 +456,7 @@ func (svc *RouteRuleService) PreviewWithBaseURL(baseURL string) (*model.RouteRul
 		ruleSets = append(ruleSets, ruleSet)
 	}
 	rules := make([]map[string]any, 0)
+	deviceRules := make([]map[string]any, 0)
 	bypassRules := make([]map[string]any, 0)
 	finalOutbound := SystemGlobalDirectRouteRuleName
 	ruleOutboundOverrides, err := svc.routeRuleOutboundOverrides(items)
@@ -483,13 +496,15 @@ func (svc *RouteRuleService) PreviewWithBaseURL(baseURL string) (*model.RouteRul
 			ruleSets = appendGeneratedGeoRuleSets(ruleSets, ruleSetTags, item.RuleType, item.Values, baseURL)
 		}
 		generatedRule := singboxRouteRule(item.RuleType, item.Values, outbound, item.Invert)
-		if item.Outbound == "bypass" {
+		if item.RuleType == "source_ip_cidr" {
+			deviceRules = append(deviceRules, generatedRule)
+		} else if item.Outbound == "bypass" {
 			bypassRules = append(bypassRules, generatedRule)
 		} else {
 			rules = append(rules, generatedRule)
 		}
 	}
-	rules = append(bypassRules, rules...)
+	rules = append(deviceRules, append(bypassRules, rules...)...)
 	if err := applyGeneratedGeoSource(svc.store, svc.paths, ruleSets); err != nil {
 		return nil, err
 	}
@@ -1682,6 +1697,9 @@ func validateRouteRule(req *model.RouteRuleRequest) error {
 	}
 	if len(req.Values) == 0 {
 		return fmt.Errorf("route rule values are required")
+	}
+	if req.RuleType == "source_ip_cidr" {
+		return normalizeDeviceRule(req)
 	}
 	switch req.Outbound {
 	case "proxy", "direct", "block", "bypass":

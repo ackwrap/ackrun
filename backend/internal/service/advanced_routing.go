@@ -418,6 +418,13 @@ func (svc *AdvancedRoutingService) buildRuntimeConfigWithHealthLocked(healthOver
 		return config, err
 	}
 	if settings.RoutingEnabled {
+		devices, err := enabledDeviceRules(svc.store)
+		if err != nil {
+			return config, err
+		}
+		if err := validateDevicePlatformRoutes(devices, routes); err != nil {
+			return config, err
+		}
 		for index := range routes {
 			route := &routes[index]
 			if !route.Enabled {

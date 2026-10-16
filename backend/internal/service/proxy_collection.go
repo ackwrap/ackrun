@@ -216,6 +216,25 @@ func (s *ProxyCollectionService) bindCollectionRequestToProxyRule(req *model.Pro
 	if rule.IsSystem || rule.Outbound != "proxy" {
 		return fmt.Errorf("%w: 代理集合只能绑定非系统代理规则", ErrProxyCollectionRuleBindingInvalid)
 	}
+	if rule.RuleType == "source_ip_cidr" {
+		if err := validateDeviceCollection(req); err != nil {
+			return err
+		}
+		nodes, err := s.store.ListEnabledNodes()
+		if err != nil {
+			return err
+		}
+		found := false
+		for _, node := range nodes {
+			if node.UID == req.NodeUIDs[0] {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("设备策略选择的节点不存在或未启用")
+		}
+	}
 	bound, err := s.store.GetProxyCollectionByRouteRuleID(routeRuleID)
 	if err != nil {
 		return err

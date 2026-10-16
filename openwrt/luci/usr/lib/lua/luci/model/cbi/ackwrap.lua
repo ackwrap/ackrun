@@ -92,14 +92,22 @@ local logger = settings:option(Flag, "logger", translate("启用日志"))
 logger.default = logger.enabled
 
 local network_repair = settings:option(Button, "_network_repair", translate("网络修复"))
-network_repair.inputtitle = translate("立即修复")
-network_repair.inputstyle = "apply"
-network_repair.description = translate("立即执行强制修复：停止 Ackwrap 和 sing-box，清理残留的 DNS 接管、策略路由及防火墙规则。断电导致记录缺失或损坏也可清理；完成后可重新启动服务。")
-function network_repair.write()
+network_repair.template = "ackwrap/network_repair"
+network_repair.inputtitle = translate("强制修复")
+network_repair.resettitle = translate("强制重置")
+network_repair.description = translate("强制修复：停止 Ackwrap 和 sing-box，清理 DNS、策略路由及防火墙残留，保留设备流量防泄漏。强制重置：额外关闭流量防泄漏并解除阻断，设备可恢复直连。两者均保留订阅、节点和设备规则，完成后服务保持停止。")
+function network_repair.write(self, section, value)
 	if repair_requested then return end
 	repair_requested = true
-	show_action_result(sys.exec("/etc/init.d/ackwrap network_repair --force 2>&1"),
-		translate("网络修复失败：未收到有效执行结果，请检查系统日志。"))
+	if value == "repair" then
+		show_action_result(sys.exec("/etc/init.d/ackwrap network_repair --force 2>&1"),
+			translate("网络修复失败：未收到有效执行结果，请检查系统日志。"))
+	elseif value == "reset" then
+		show_action_result(sys.exec("/etc/init.d/ackwrap network_repair --force-reset 2>&1"),
+			translate("强制重置失败：未收到有效执行结果，请检查系统日志。"))
+	else
+		m.message = translate("无效的网络修复操作。")
+	end
 end
 
 return m

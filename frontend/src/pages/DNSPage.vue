@@ -451,11 +451,13 @@ onMounted(load);
 </script>
 <template>
   <div class="space-y-4">
-    <PageHeader title="DNS 管理" /><Toast
-      :message="message"
-      :type="messageType"
-      @dismiss="message = ''"
-    />
+    <PageHeader title="DNS 管理" />
+    <p class="text-sm text-[var(--text-secondary)]">
+      <RouterLink to="/rules" class="underline">设备规则</RouterLink>
+      的 DNS 会自动跟随固定节点，优先于本页规则和 FakeIP；上游沿用代理 DNS Final
+      的服务器设置。 设备 DNS 跟随仅在规则模式下生效。
+    </p>
+    <Toast :message="message" :type="messageType" @dismiss="message = ''" />
     <div v-if="loading" class="py-20 text-center">加载中...</div>
     <template v-else
       ><div class="grid gap-4 lg:grid-cols-2">

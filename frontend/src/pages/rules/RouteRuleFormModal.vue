@@ -15,6 +15,7 @@ const props = defineProps<{
   outbound: string;
   invert: boolean;
   subscriptions: RouteRuleSubscription[];
+  saving?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -33,6 +34,7 @@ const types = [
   ["domain_suffix", "域名后缀"],
   ["domain_keyword", "域名关键词"],
   ["ip_cidr", "IP CIDR"],
+  ["source_ip_cidr", "设备 IP / 网段（DNS 跟随）"],
   ["process_name", "进程名称"],
   ["geoip", "GeoIP"],
   ["geosite", "GeoSite"],
@@ -43,7 +45,10 @@ const types = [
 type MixedBlock = { ruleType: string; value: string };
 type GeoRuleType = "geoip" | "geosite";
 
-const mixedRuleTypes = types.filter((item) => item[0] !== "mixed");
+const mixedRuleTypes = types.filter(
+  (item) => item[0] !== "mixed" && item[0] !== "source_ip_cidr",
+);
+const isDevice = computed(() => props.ruleType === "source_ip_cidr");
 const geoTagDraft = ref("");
 const geoTagOptions = ref<Record<GeoRuleType, string[]>>({
   geoip: [],
@@ -238,6 +243,7 @@ function previewRules() {
 }
 
 function ruleValuePlaceholder(ruleType: string) {
+  if (ruleType === "source_ip_cidr") return "192.168.1.100\nfd12:3456::100/128";
   if (ruleType === "rule_set") return "geosite-cn\ngeoip-cn";
   if (ruleType === "geosite") return "geolocation-!cn\nyoutube\ngoogle";
   if (ruleType === "geoip") return "cn\nprivate\nus";
@@ -348,8 +354,14 @@ function update(event: Event, field: "valuesText" | "outbound") {
 
 function updateRuleType(event: Event) {
   const next = (event.target as HTMLSelectElement).value;
+  if (next === "source_ip_cidr") {
+    emit("update:outbound", "proxy");
+    emit("update:invert", false);
+  }
   geoTagDraft.value = "";
-  if (next === "mixed" && props.ruleType !== "mixed") {
+  if (next === "mixed" && props.ruleType === "source_ip_cidr") {
+    emit("update:valuesText", "");
+  } else if (next === "mixed" && props.ruleType !== "mixed") {
     const values = props.valuesText
       .split("\n")
       .map((value) => value.trim())
@@ -381,7 +393,13 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <Modal :open="true" :title="title" size="xl" @close="emit('close')">
+  <Modal
+    :open="true"
+    :title="title"
+    size="xl"
+    :closable="!saving"
+    @close="emit('close')"
+  >
     <template #title>
       <span class="flex items-center gap-2"
         ><Route :size="18" />{{ title }}</span
@@ -433,7 +451,7 @@ onBeforeUnmount(() => {
             命中后动作
             <select
               :value="outbound"
-              :disabled="editing?.is_system && !isFinalStrategy"
+              :disabled="isDevice || (editing?.is_system && !isFinalStrategy)"
               @change="update($event, 'outbound')"
             >
               <option value="direct">直连 direct</option>
@@ -453,6 +471,21 @@ onBeforeUnmount(() => {
             </span>
           </label>
         </div>
+
+        <p
+          v-if="isDevice"
+          class="rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--bg-base)] p-3 text-xs leading-6 text-[var(--text-secondary)]"
+        >
+          每行填写一个设备 IP 或网段，例如 192.168.1.100 或 fd12:3456::100/128。
+          建议固定 DHCP 地址；同时填写设备实际使用的 IPv4 和 IPv6 地址。
+          保存后选择一个固定节点，DNS 自动使用同一出口并优先于普通 DNS、FakeIP
+          和业务分流规则。 需要 Linux/OpenWrt、规则模式、TUN 接管及 DNS
+          管理；设备网关须指向运行 Ackwrap 的路由器。 启用前需移除接口、目标
+          IP、域名流量排除，以及与设备重叠的直连排除，并关闭软/硬件流量卸载。
+          高级平台路由不能覆盖该设备；独立代理入口仍按各自策略转发。
+          节点失效时连接失败，不自动直连。节点服务连接的防回环排除仍生效；UDP
+          等协议需节点支持。
+        </p>
 
         <div
           v-if="!isFinalStrategy && ruleType === 'mixed'"
@@ -671,7 +704,7 @@ onBeforeUnmount(() => {
             <input
               type="checkbox"
               :checked="invert"
-              :disabled="editing?.is_system"
+              :disabled="editing?.is_system || isDevice"
               @change="
                 emit(
                   'update:invert',
@@ -698,12 +731,17 @@ onBeforeUnmount(() => {
     </div>
 
     <template #footer>
-      <button class="aw-action-button aw-action-neutral" @click="emit('close')">
+      <button
+        class="aw-action-button aw-action-neutral"
+        :disabled="saving"
+        @click="emit('close')"
+      >
         {{ editing?.is_system && !isFinalStrategy ? "关闭" : "取消" }}
       </button>
       <button
         v-if="!editing?.is_system || isFinalStrategy"
         class="aw-action-button aw-action-success"
+        :disabled="saving"
         @click="emit('save')"
       >
         <Save :size="14" />{{ isFinalStrategy ? "保存最终策略" : "保存规则" }}

@@ -10,6 +10,7 @@ const props = defineProps<{
 defineEmits<{
   refresh: [];
   addGeo: [];
+  addDevice: [];
   add: [];
   preview: [];
   share: [];
@@ -51,6 +52,7 @@ function moveDisabled(index: number, direction: -1 | 1) {
 }
 
 function typeLabel(rule: RouteRule) {
+  if (rule.rule_type === "source_ip_cidr") return "设备 IP · DNS 跟随";
   return isFinalStrategy(rule) ? "最终规则" : rule.rule_type;
 }
 
@@ -85,10 +87,16 @@ function actionLabel(rule: RouteRule) {
       <div>
         <h3 class="font-semibold">规则列表</h3>
         <small class="text-[var(--text-secondary)]"
-          >上移/下移会立即保存排序。</small
+          >上移/下移会立即保存排序；设备规则始终优先于普通业务规则。</small
         >
       </div>
       <div class="flex flex-wrap justify-end gap-2">
+        <button
+          class="aw-action-button aw-action-neutral"
+          @click="$emit('addDevice')"
+        >
+          <Plus :size="13" />添加设备规则
+        </button>
         <button
           class="aw-action-button aw-action-neutral"
           @click="$emit('preview')"

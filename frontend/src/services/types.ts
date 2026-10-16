@@ -277,6 +277,11 @@ export interface NTPSettingsResponse {
 export type GeoSource = "sagernet" | "loyalsoldier";
 
 export interface GeneralSettings {
+  device_protection_enabled: boolean;
+  device_protection_supported: boolean;
+  device_protection_status: "disabled" | "protected" | "blocked" | "error";
+  device_protection_error?: string;
+  device_protection_count: number;
   auto_start_core: boolean;
   dnsmasq_takeover_enabled: boolean;
   dnsmasq_takeover_supported: boolean;
@@ -286,7 +291,10 @@ export interface GeneralSettings {
 export type GeneralSettingsUpdate = Partial<
   Pick<
     GeneralSettings,
-    "auto_start_core" | "dnsmasq_takeover_enabled" | "geo_source"
+    | "auto_start_core"
+    | "dnsmasq_takeover_enabled"
+    | "geo_source"
+    | "device_protection_enabled"
   >
 >;
 
@@ -833,6 +841,7 @@ export interface ProxyCollectionRequest {
 }
 
 export interface StrategyItem {
+  device_policy?: boolean;
   rule_id: number;
   name: string;
   priority: number;

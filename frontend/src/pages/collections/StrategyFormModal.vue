@@ -25,6 +25,7 @@ const emit = defineEmits<{
 
 const collection = props.strategy.collection as
   DetailedProxyCollection | undefined;
+const devicePolicy = !!props.strategy.device_policy;
 
 function referencedGroupIDs() {
   if (collection?.referenced_groups?.length) {
@@ -42,9 +43,11 @@ function referencedGroupIDs() {
   }
 }
 
-const type = ref<"selector" | "urltest">(collection?.type || "selector");
+const type = ref<"selector" | "urltest">(
+  devicePolicy ? "selector" : collection?.type || "selector",
+);
 const source = ref<CollectionSourceType>(
-  collection?.source_type || "node_groups",
+  devicePolicy ? "manual" : collection?.source_type || "node_groups",
 );
 const groupIDs = ref<number[]>(referencedGroupIDs());
 const nodeUIDs = ref(
@@ -56,9 +59,9 @@ const includeDirect = ref(
   collection?.node_uids?.includes(directNodeGroup.outbound) ?? false,
 );
 const directSelected = computed(
-  () => type.value === "selector" && includeDirect.value,
+  () => !devicePolicy && type.value === "selector" && includeDirect.value,
 );
-const enabled = ref(collection?.enabled ?? true);
+const enabled = ref(devicePolicy ? true : (collection?.enabled ?? true));
 const tolerance = ref(collection?.tolerance || 100);
 const groupSearch = ref("");
 const pickerOpen = ref(false);
@@ -79,6 +82,7 @@ const selectableGroupIDs = computed(() =>
 const canSave = computed(
   () =>
     !props.saving &&
+    (!devicePolicy || nodeUIDs.value.length === 1) &&
     (directSelected.value ||
       (source.value === "manual"
         ? nodeUIDs.value.length > 0
@@ -117,9 +121,17 @@ function submit() {
     :open="true"
     :title="strategy.collection ? '编辑代理策略' : '配置代理策略'"
     size="lg"
+    :closable="!saving"
     @close="emit('close')"
   >
     <div class="grid gap-4 md:grid-cols-2">
+      <p
+        v-if="devicePolicy"
+        class="md:col-span-2 text-sm text-[var(--text-secondary)]"
+      >
+        为设备选择一个固定代理节点。DNS
+        自动跟随此节点；节点不可用时不会切换到直连。 仅在规则模式下生效。
+      </p>
       <div class="grid content-start gap-1.5 md:col-span-2">
         <span class="aw-modal-label text-xs font-medium"
           >业务规则 / 策略组名称</span
@@ -135,20 +147,21 @@ function submit() {
       </div>
       <label class="grid content-start gap-1.5">
         <span class="aw-modal-label text-xs font-medium">切换方式</span>
-        <select v-model="type" class="aw-input">
+        <select v-model="type" class="aw-input" :disabled="devicePolicy">
           <option value="selector">手动切换</option>
           <option value="urltest">自动选择（测速）</option>
         </select>
       </label>
       <label class="grid content-start gap-1.5">
         <span class="aw-modal-label text-xs font-medium">节点来源</span>
-        <select v-model="source" class="aw-input">
+        <select v-model="source" class="aw-input" :disabled="devicePolicy">
           <option value="node_groups">引用节点组</option>
           <option value="node_groups_and_nodes">引用节点组和节点</option>
           <option value="manual">手动选择节点</option>
         </select>
       </label>
       <label
+        v-if="!devicePolicy"
         class="flex h-[34px] cursor-pointer items-center gap-2 rounded-[var(--radius-md)] border border-[var(--border-default)] bg-[var(--button-secondary-bg)] px-3 text-xs text-[var(--text-secondary)]"
       >
         <input v-model="enabled" type="checkbox" class="h-4 w-4" />
@@ -170,7 +183,7 @@ function submit() {
           />
         </label>
       </template>
-      <fieldset class="grid gap-1.5 md:col-span-2">
+      <fieldset v-if="!devicePolicy" class="grid gap-1.5 md:col-span-2">
         <legend class="mb-1.5 text-sm font-semibold">内置节点组</legend>
         <label
           class="flex cursor-pointer items-center gap-3 rounded-[var(--radius-md)] border px-3 py-2.5 text-xs"
@@ -271,6 +284,12 @@ function submit() {
         <button class="aw-action-button" @click="pickerOpen = true">
           手动选择节点（已选择 {{ nodeUIDs.length }} 个）
         </button>
+        <p
+          v-if="devicePolicy && nodeUIDs.length !== 1"
+          class="mt-2 text-xs text-[var(--text-secondary)]"
+        >
+          请只选择一个节点后保存。
+        </p>
       </div>
     </div>
     <template #footer>
@@ -289,6 +308,7 @@ function submit() {
   <ManualNodePickerModal
     :open="pickerOpen"
     :selected="nodeUIDs"
+    :single="devicePolicy"
     @close="pickerOpen = false"
     @update:selected="nodeUIDs = $event"
     @error="emit('error', $event)"

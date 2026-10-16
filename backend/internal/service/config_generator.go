@@ -338,6 +338,9 @@ func (s *ConfigGeneratorService) generateLockedTo(req *model.ConfigGenerateReque
 	}
 
 	logging.Info("config_generator.generate", "开始生成配置，默认出站: %s", req.DefaultOutbound)
+	if err := s.validateDevicePolicies(); err != nil {
+		return nil, err
+	}
 
 	// 1. 生成 inbounds
 	inbounds, err := s.generateInbounds(req.InboundListen, req.InboundPort, req.TUNIPv4Address, req.TUNIPv6Address)
@@ -2216,6 +2219,10 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 		return nil, fmt.Errorf("读取 DNS 全局设置失败: %w", err)
 	}
 	dnsEnabled := dnsSettings != nil && dnsSettings.Enabled
+	devices, err := s.deviceRules()
+	if err != nil {
+		return nil, err
+	}
 
 	// 根据代理模式决定是否加载规则
 	var routeRules []map[string]interface{}
@@ -2243,12 +2250,38 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 	}
 
 	// 内核级绕过必须先于 sniff；TCP 预匹配遇到 sniff 后不会继续匹配后续规则。
+	if len(devices) > 0 {
+		// Only selected source addresses can use the LAN DNS listener. Unknown
+		// clients must never fall through to the general DNS hijack or routing.
+		routeRules = append(routeRules,
+			map[string]interface{}{"inbound": deviceDNSInboundTag, "source_ip_cidr": deviceRuleCIDRs(devices), "action": "hijack-dns"},
+			map[string]interface{}{"inbound": deviceDNSInboundTag, "action": "reject"},
+		)
+	}
 	bypassRules, err := s.defaultBypassRules(runtime.GOOS == "linux" && inboundMode != "mixed")
 	if err != nil {
 		return nil, err
 	}
 	routeRules = append(routeRules, bypassRules...)
 	route["find_process"] = true
+	if len(devices) > 0 {
+		overrides, err := s.routeRuleOutboundOverrides()
+		if err != nil {
+			return nil, err
+		}
+		for _, device := range devices {
+			outbound := overrides[device.ID]
+			if outbound == "" {
+				return nil, fmt.Errorf("设备规则 %d 尚未绑定启用的代理策略", device.ID)
+			}
+			// Also resolve previously cached FakeIP domains through this device's
+			// resolver, before selecting its fixed outbound.
+			routeRules = append(routeRules,
+				map[string]interface{}{"source_ip_cidr": device.Values, "action": "resolve", "server": deviceDNSServerTag(device.ID)},
+				singboxRouteRule("source_ip_cidr", device.Values, outbound, false),
+			)
+		}
+	}
 	preSniffRuleCount := len(routeRules)
 
 	// sing-box 1.13 已移除 inbound sniff 字段，嗅探和 DNS 劫持必须使用 rule action。
@@ -2309,7 +2342,7 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 		var userBypassRules []map[string]interface{}
 		var preBypassRejectRules []map[string]interface{}
 		for _, rule := range rules {
-			if !rule.Enabled {
+			if !rule.Enabled || rule.RuleType == "source_ip_cidr" {
 				continue
 			}
 			if rule.RuleType == "fallback" || rule.SystemKey == SystemRuleGlobalDirectKey {
@@ -2780,6 +2813,10 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase(routeFinal ...string) (
 		}
 		servers = append(servers, fakeIP)
 	}
+	servers, deviceDNSRules, err := s.appendDeviceDNS(servers, serverTags, proxyFinalServer)
+	if err != nil {
+		return nil, err
+	}
 	if len(servers) == 0 {
 		logging.Info("config_generator.dns", "没有启用的 DNS server，跳过 DNS 配置")
 		return nil, nil
@@ -2787,7 +2824,7 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase(routeFinal ...string) (
 
 	// 4. 显式规则用于国内、局域网等真实 IP 例外。TUN 客户端未命中的
 	// A/AAAA 查询随后使用 FakeIP；其他查询进入统一 DNS final。
-	rules := []map[string]interface{}{}
+	rules := append([]map[string]interface{}{}, deviceDNSRules...)
 	if hostsServerTag != "" {
 		rules = append(rules, map[string]interface{}{
 			"domain":     hostDomains,
@@ -2862,6 +2899,9 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase(routeFinal ...string) (
 		"reverse_mapping": globalSettings.ReverseMapping,
 	}
 	setDNSIndependentCache(dns, globalSettings.IndependentCache, s.coreVersion())
+	if len(deviceDNSRules) > 0 {
+		setDNSIndependentCache(dns, true, s.coreVersion())
+	}
 	if globalSettings.CacheCapacity > 0 {
 		dns["cache_capacity"] = globalSettings.CacheCapacity
 	}
@@ -3486,6 +3526,18 @@ func (s *ConfigGeneratorService) generateInbounds(listen string, port int, tunIP
 			return nil, fmt.Errorf("Mixed 入站端口不能与 Ackwrap DNS 端口 %d 冲突", defaultDNSInboundPort)
 		}
 		inbounds = append(inbounds, generatedDNSInbound())
+	}
+	devices, err := s.deviceRules()
+	if err != nil {
+		return nil, err
+	}
+	if len(devices) > 0 {
+		if mode != "tun" && port == deviceDNSPort {
+			return nil, fmt.Errorf("Mixed 入站端口不能与设备 DNS 端口 %d 冲突", deviceDNSPort)
+		}
+		inbounds = append(inbounds, map[string]interface{}{
+			"type": "direct", "tag": deviceDNSInboundTag, "listen": "::", "listen_port": deviceDNSPort,
+		})
 	}
 
 	return inbounds, nil

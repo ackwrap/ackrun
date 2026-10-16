@@ -54,18 +54,25 @@ func loadServerConfig() (serverConfig, error) {
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "network-repair" {
-		force := len(os.Args) == 3 && os.Args[2] == "--force"
+		force := len(os.Args) == 3 && (os.Args[2] == "--force" || os.Args[2] == "--force-reset")
+		reset := len(os.Args) == 3 && os.Args[2] == "--force-reset"
 		if len(os.Args) != 2 && !force {
-			fmt.Fprintln(os.Stderr, "用法：ackwrap network-repair [--force]")
+			fmt.Fprintln(os.Stderr, "用法：ackwrap network-repair [--force | --force-reset]")
 			os.Exit(1)
 		}
-		message, err := service.RepairNetwork(paths.Default(), force)
+		var message string
+		var err error
+		action := "网络修复"
+		if reset {
+			action = "强制重置"
+			message, err = service.ResetNetwork(paths.Default())
+		} else {
+			message, err = service.RepairNetwork(paths.Default(), force)
+		}
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s失败：%s\n", action, strings.Join(strings.Fields(err.Error()), " "))
 			if errors.Is(err, service.ErrNetworkRepairCoreRunning) {
-				fmt.Fprintf(os.Stderr, "网络修复失败：%s\n", strings.Join(strings.Fields(err.Error()), " "))
 				os.Exit(2)
-			} else {
-				fmt.Fprintf(os.Stderr, "网络修复失败：%s\n", strings.Join(strings.Fields(err.Error()), " "))
 			}
 			os.Exit(1)
 		}
