@@ -2287,6 +2287,7 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 			if len(local) > 0 {
 				routeRules = append(routeRules, deviceLocalRouteRule(device.Values, local))
 			}
+			routeRules = append(routeRules, deviceDirectRouteRules(device, fakeIPs)...)
 			routeRules = append(routeRules, map[string]interface{}{"source_ip_cidr": device.Values, "action": "resolve", "server": deviceDNSServerTag(device.ID)})
 			// A domain (including an old FakeIP mapping) may resolve to LAN.
 			if len(local) > 0 {
@@ -2837,7 +2838,7 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase(routeFinal ...string) (
 		}
 		servers = append(servers, fakeIP)
 	}
-	servers, deviceDNSRules, err := s.appendDeviceDNS(servers, serverTags, proxyFinalServer)
+	servers, deviceDNSRules, err := s.appendDeviceDNS(servers, serverTags, proxyFinalServer, globalSettings.Final)
 	if err != nil {
 		return nil, err
 	}
@@ -2921,6 +2922,13 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase(routeFinal ...string) (
 		"disable_cache":   globalSettings.DisableCache,
 		"disable_expire":  globalSettings.DisableExpire,
 		"reverse_mapping": globalSettings.ReverseMapping,
+	}
+	// Device whitelist matching also needs domains for connections without HTTP/TLS sniff data.
+	for _, rule := range deviceDNSRules {
+		if _, ok := rule["domain_suffix"]; ok {
+			dns["reverse_mapping"] = true
+			break
+		}
 	}
 	setDNSIndependentCache(dns, globalSettings.IndependentCache, s.coreVersion())
 	if len(deviceDNSRules) > 0 {

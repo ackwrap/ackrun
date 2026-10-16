@@ -129,8 +129,8 @@ function submit() {
         v-if="devicePolicy"
         class="md:col-span-2 text-sm text-[var(--text-secondary)]"
       >
-        为设备选择一个固定代理节点。DNS
-        自动跟随此节点；节点不可用时不会切换到直连。 仅在规则模式下生效。
+        为设备选择一个固定代理节点。默认流量和 DNS
+        跟随此节点，设备规则中的直连域名白名单除外；节点不可用时不会自动切换到直连。仅在规则模式下生效。
       </p>
       <div class="grid content-start gap-1.5 md:col-span-2">
         <span class="aw-modal-label text-xs font-medium"
@@ -145,16 +145,16 @@ function submit() {
           名称与规则绑定固定，保存时由后端再次校正
         </small>
       </div>
-      <label class="grid content-start gap-1.5">
+      <label v-if="!devicePolicy" class="grid content-start gap-1.5">
         <span class="aw-modal-label text-xs font-medium">切换方式</span>
-        <select v-model="type" class="aw-input" :disabled="devicePolicy">
+        <select v-model="type" class="aw-input">
           <option value="selector">手动切换</option>
           <option value="urltest">自动选择（测速）</option>
         </select>
       </label>
-      <label class="grid content-start gap-1.5">
+      <label v-if="!devicePolicy" class="grid content-start gap-1.5">
         <span class="aw-modal-label text-xs font-medium">节点来源</span>
-        <select v-model="source" class="aw-input" :disabled="devicePolicy">
+        <select v-model="source" class="aw-input">
           <option value="node_groups">引用节点组</option>
           <option value="node_groups_and_nodes">引用节点组和节点</option>
           <option value="manual">手动选择节点</option>

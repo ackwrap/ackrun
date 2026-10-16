@@ -25,12 +25,13 @@ type routeRuleSharePayload struct {
 }
 
 type routeRuleShareItem struct {
-	Name     string   `json:"name"`
-	Enabled  bool     `json:"enabled"`
-	RuleType string   `json:"rule_type"`
-	Values   []string `json:"values"`
-	Outbound string   `json:"outbound"`
-	Invert   bool     `json:"invert"`
+	Name          string   `json:"name"`
+	Enabled       bool     `json:"enabled"`
+	RuleType      string   `json:"rule_type"`
+	Values        []string `json:"values"`
+	DirectDomains []string `json:"direct_domains,omitempty"`
+	Outbound      string   `json:"outbound"`
+	Invert        bool     `json:"invert"`
 }
 
 func (svc *RouteRuleService) Share() (*model.RouteRuleShareResponse, error) {
@@ -54,7 +55,8 @@ func (svc *RouteRuleService) Share() (*model.RouteRuleShareResponse, error) {
 		}
 		payload.Rules = append(payload.Rules, routeRuleShareItem{
 			Name: rule.Name, Enabled: rule.Enabled, RuleType: rule.RuleType,
-			Values: append([]string(nil), rule.Values...), Outbound: rule.Outbound, Invert: rule.Invert,
+			DirectDomains: append([]string(nil), rule.DirectDomains...),
+			Values:        append([]string(nil), rule.Values...), Outbound: rule.Outbound, Invert: rule.Invert,
 		})
 	}
 	encoded, err := json.Marshal(payload)
@@ -115,7 +117,8 @@ func (svc *RouteRuleService) ImportShare(req *model.RouteRuleImportRequest) (*mo
 	for index, item := range payload.Rules {
 		rule := model.RouteRuleRequest{
 			Name: item.Name, Enabled: item.Enabled, RuleType: item.RuleType,
-			Values: item.Values, Outbound: item.Outbound, Invert: item.Invert,
+			DirectDomains: item.DirectDomains,
+			Values:        item.Values, Outbound: item.Outbound, Invert: item.Invert,
 		}
 		if err := svc.validateRouteRule(&rule); err != nil {
 			return nil, fmt.Errorf("第 %d 条规则无效: %w", index+1, err)

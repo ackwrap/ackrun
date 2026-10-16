@@ -45,6 +45,7 @@ const rules = ref<RouteRule[]>([]),
   enabled = ref(true),
   ruleType = ref("domain_suffix"),
   valuesText = ref(""),
+  directDomainsText = ref(""),
   outbound = ref("direct"),
   invert = ref(false),
   subEdit = ref<RouteRuleSubscription | null>(null),
@@ -127,6 +128,7 @@ function resetRule() {
   enabled.value = true;
   ruleType.value = "domain_suffix";
   valuesText.value = "";
+  directDomainsText.value = "";
   outbound.value = "direct";
   invert.value = false;
 }
@@ -156,6 +158,7 @@ function editRule(r: RouteRule) {
   enabled.value = r.enabled;
   ruleType.value = r.rule_type;
   valuesText.value = r.values.join("\n");
+  directDomainsText.value = (r.direct_domains || []).join("\n");
   outbound.value = r.outbound;
   invert.value = r.invert;
   formOpen.value = true;
@@ -177,6 +180,12 @@ async function saveRule() {
       priority: editing.value?.priority || 0,
       rule_type: ruleType.value,
       values: values.value,
+      direct_domains: isDevice
+        ? directDomainsText.value
+            .split("\n")
+            .map((value) => value.trim())
+            .filter(Boolean)
+        : [],
       outbound: outbound.value,
       invert: invert.value,
     };
@@ -586,6 +595,7 @@ onBeforeUnmount(() => clearInterval(poll));
       v-model:enabled="enabled"
       v-model:rule-type="ruleType"
       v-model:values-text="valuesText"
+      v-model:direct-domains-text="directDomainsText"
       v-model:outbound="outbound"
       v-model:invert="invert"
       :saving="ruleSaving"

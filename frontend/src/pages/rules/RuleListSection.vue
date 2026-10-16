@@ -58,7 +58,10 @@ function typeLabel(rule: RouteRule) {
 
 function valueLabel(rule: RouteRule) {
   if (isFinalStrategy(rule)) return "未匹配流量";
-  return rule.values.join(", ") || "无匹配值";
+  const values = rule.values.join(", ") || "无匹配值";
+  return rule.rule_type === "source_ip_cidr" && rule.direct_domains?.length
+    ? `${values} · 直连白名单 ${rule.direct_domains.length} 个域名`
+    : values;
 }
 
 function statusToggleTitle(rule: RouteRule) {

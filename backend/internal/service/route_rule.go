@@ -497,6 +497,11 @@ func (svc *RouteRuleService) PreviewWithBaseURL(baseURL string) (*model.RouteRul
 		}
 		generatedRule := singboxRouteRule(item.RuleType, item.Values, outbound, item.Invert)
 		if item.RuleType == "source_ip_cidr" {
+			if len(item.DirectDomains) > 0 {
+				deviceRules = append(deviceRules, map[string]any{
+					"source_ip_cidr": item.Values, "domain_suffix": item.DirectDomains, "action": "route", "outbound": "direct",
+				})
+			}
 			deviceRules = append(deviceRules, generatedRule)
 		} else if item.Outbound == "bypass" {
 			bypassRules = append(bypassRules, generatedRule)
@@ -1700,6 +1705,9 @@ func validateRouteRule(req *model.RouteRuleRequest) error {
 	}
 	if req.RuleType == "source_ip_cidr" {
 		return normalizeDeviceRule(req)
+	}
+	if len(req.DirectDomains) > 0 {
+		return fmt.Errorf("直连域名白名单仅支持设备规则")
 	}
 	switch req.Outbound {
 	case "proxy", "direct", "block", "bypass":
