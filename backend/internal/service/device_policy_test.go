@@ -134,6 +134,14 @@ func TestDeviceTrafficAndDNSUseSameFixedNode(t *testing.T) {
 		t.Fatal(err)
 	}
 	routes := route["rules"].([]map[string]interface{})
+	fakeIPs, err := g.deviceFakeIPCIDRs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, err := excludeDeviceFakeIPCIDRs(deviceLocalDestinationCIDRs(), fakeIPs)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for i, device := range devices {
 		tag := deviceDNSServerTag(device.ID)
 		if dnsRules[i]["server"] != tag || !reflect.DeepEqual(dnsRules[i]["source_ip_cidr"], device.Values) {
@@ -141,12 +149,29 @@ func TestDeviceTrafficAndDNSUseSameFixedNode(t *testing.T) {
 		}
 		assertGeneratedDNSServerDetour(t, dns, tag, device.Name)
 		found := false
+		localBeforeResolve, localAfterResolve, resolved := false, false, false
 		for _, rule := range routes {
 			if rule["action"] == "sniff" || reflect.DeepEqual(rule["ip_cidr"], []string{"0.0.0.0/0"}) {
 				break
 			}
 			if rule["action"] == "route" && rule["outbound"] == device.Name {
 				found = reflect.DeepEqual(rule["source_ip_cidr"], device.Values)
+				if !localBeforeResolve || !localAfterResolve {
+					t.Fatal("device local traffic must bypass before resolution and before the fixed outbound")
+				}
+			}
+			if !reflect.DeepEqual(rule["source_ip_cidr"], device.Values) {
+				continue
+			}
+			if rule["action"] == "resolve" {
+				resolved = true
+			}
+			if rule["action"] == "bypass" && rule["outbound"] == "direct" && reflect.DeepEqual(rule["ip_cidr"], local) {
+				if resolved {
+					localAfterResolve = true
+				} else {
+					localBeforeResolve = true
+				}
 			}
 		}
 		if !found {
@@ -171,6 +196,46 @@ func TestDeviceTrafficAndDNSUseSameFixedNode(t *testing.T) {
 		if !state.DNSMasqTakeover || len(state.DeviceDNSCIDRs) != 3 {
 			t.Fatalf("missing DNS lifecycle state: %+v", state)
 		}
+	}
+}
+
+func TestDevicePolicyAllowsOnlyLocalTargetExclusions(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux device policy validation")
+	}
+	for _, test := range []struct {
+		name    string
+		rule    model.TrafficBypassRule
+		allowed bool
+	}{
+		{"private-10", model.TrafficBypassRule{Type: "ip_cidr", Value: "10.0.0.0/8"}, true},
+		{"private-172", model.TrafficBypassRule{Type: "ip_cidr", Value: "172.16.0.0/12"}, true},
+		{"private-192", model.TrafficBypassRule{Type: "ip_cidr", Value: "192.168.0.0/16"}, true},
+		{"private-subnet", model.TrafficBypassRule{Type: "ip_cidr", Value: "10.20.30.0/24"}, true},
+		{"ula", model.TrafficBypassRule{Type: "ip_cidr", Value: "fc00::/7"}, true},
+		{"link-local", model.TrafficBypassRule{Type: "ip_cidr", Value: "fe80::/10"}, true},
+		{"easytier-process", model.TrafficBypassRule{Type: "process_name", Value: "easytier-core"}, true},
+		{"unrelated-source", model.TrafficBypassRule{Type: "source_ip_cidr", Value: "192.168.60.0/24"}, true},
+		{"overlapping-source", model.TrafficBypassRule{Type: "source_ip_cidr", Value: "192.168.50.0/24"}, false},
+		{"interface", model.TrafficBypassRule{Type: "interface", Value: "easytier-tun"}, true},
+		{"domain", model.TrafficBypassRule{Type: "domain_suffix", Value: "example.com"}, false},
+		{"public", model.TrafficBypassRule{Type: "ip_cidr", Value: "8.8.8.8/32"}, false},
+		{"spans-public", model.TrafficBypassRule{Type: "ip_cidr", Value: "10.0.0.0/7"}, false},
+		{"spans-public-172", model.TrafficBypassRule{Type: "ip_cidr", Value: "172.16.0.0/11"}, false},
+		{"default", model.TrafficBypassRule{Type: "ip_cidr", Value: "0.0.0.0/0"}, false},
+		{"public-ipv6", model.TrafficBypassRule{Type: "ip_cidr", Value: "2000::/3"}, false},
+		{"mapped", model.TrafficBypassRule{Type: "ip_cidr", Value: "::ffff:192.168.1.1/128"}, false},
+		{"fakeip", model.TrafficBypassRule{Type: "ip_cidr", Value: "198.18.0.0/15"}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db, g, _ := devicePolicyFixture(t)
+			if err := db.SetTrafficBypassSettings(&model.TrafficBypassSettings{Rules: []model.TrafficBypassRule{test.rule}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := g.validateDevicePolicies(); (err == nil) != test.allowed {
+				t.Fatalf("allowed=%t, err=%v", test.allowed, err)
+			}
+		})
 	}
 }
 
@@ -305,7 +370,10 @@ func TestDeviceConfigurationPassesAvailableCoreCheck(t *testing.T) {
 	if binary == "" {
 		t.Skip("set ACKWRAP_SINGBOX_114_BIN for real core validation")
 	}
-	_, g, _ := devicePolicyFixture(t)
+	db, g, _ := devicePolicyFixture(t)
+	if err := db.SetTrafficBypassSettings(&model.TrafficBypassSettings{Rules: []model.TrafficBypassRule{{Type: "interface", Value: "easytier-tun"}}}); err != nil {
+		t.Fatal(err)
+	}
 	g.paths.BinaryPath = binary
 	result, err := g.generateLockedTo(&model.ConfigGenerateRequest{
 		DefaultOutbound: "direct", InboundListen: "127.0.0.1", InboundPort: 7890,

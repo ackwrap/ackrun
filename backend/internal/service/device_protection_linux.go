@@ -20,7 +20,9 @@ import (
 )
 
 const deviceProtectionTable = "ackwrap_device_protection"
-const deviceProtectionOwner = "Ackwrap device protection v1"
+const deviceProtectionOwner = "Ackwrap device protection v3"
+const localDeviceProtectionOwner = "Ackwrap device protection v2"
+const legacyDeviceProtectionOwner = "Ackwrap device protection v1"
 const deviceProtectionInclude = "/usr/share/nftables.d/ruleset-pre/30-ackwrap-protection.nft"
 
 type nftDeviceProtection struct {
@@ -68,26 +70,72 @@ func protectionSources(values []string) ([]string, error) {
 	return values, nil
 }
 
-func deviceProtectionRules(values []string) (string, string, error) {
+func deviceProtectionRules(values, excluded []string, fakeIPs ...string) (string, string, error) {
+	return renderDeviceProtectionRules(values, deviceProtectionOwner, excluded, fakeIPs...)
+}
+
+// Previous formats are retained to validate and safely upgrade installed policies.
+func renderDeviceProtectionRules(values []string, version string, excluded []string, fakeIPs ...string) (string, string, error) {
 	values, err := protectionSources(values)
 	if err != nil {
 		return "", "", err
 	}
+	excluded, err = normalizeExcludedInterfaces(excluded)
+	if err != nil {
+		return "", "", err
+	}
+	interfaceData, _ := json.Marshal(excluded)
 	data, _ := json.Marshal(values)
-	owner := fmt.Sprintf("%s %x", deviceProtectionOwner, sha256.Sum256(data))
+	fakeIPs, err = normalizeDeviceFakeIPCIDRs(fakeIPs...)
+	if err != nil {
+		return "", "", err
+	}
+	fakeData, _ := json.Marshal(fakeIPs)
+	digestData := data
+	if version != legacyDeviceProtectionOwner {
+		digestData = append(append([]byte{}, data...), fakeData...)
+	}
+	if version == deviceProtectionOwner {
+		digestData = append(digestData, interfaceData...)
+	}
+	owner := fmt.Sprintf("%s %x", version, sha256.Sum256(digestData))
 	var b strings.Builder
-	fmt.Fprintf(&b, "# %s\n# sources %s\n", deviceProtectionOwner, data)
+	fmt.Fprintf(&b, "# %s\n# sources %s\n", version, data)
+	if version != legacyDeviceProtectionOwner {
+		fmt.Fprintf(&b, "# fakeip %s\n", fakeData)
+	}
+	if version == deviceProtectionOwner {
+		fmt.Fprintf(&b, "# interfaces %s\n", interfaceData)
+	}
 	// Idempotent in a single nft transaction, including fw4 reloads and boots.
 	fmt.Fprintf(&b, "add table inet %s\ndelete table inet %s\ntable inet %s {\n comment %q\n", deviceProtectionTable, deviceProtectionTable, deviceProtectionTable, owner)
 	b.WriteString(" chain forward {\n type filter hook forward priority -5; policy accept;\n")
+	if version == deviceProtectionOwner {
+		for _, name := range excluded {
+			fmt.Fprintf(&b, " iifname %q counter return\n", name)
+			fmt.Fprintf(&b, " oifname %q ct direction reply counter return\n", name)
+		}
+	}
 	for _, value := range values {
 		family := "ip"
 		if netip.MustParsePrefix(value).Addr().Is6() {
 			family = "ip6"
 		}
+		if version != legacyDeviceProtectionOwner {
+			// Existing conntrack DNS may predate our redirect. Never exempt it
+			// just because the old resolver is on the LAN.
+			fmt.Fprintf(&b, " %s saddr %s meta l4proto { tcp, udp } th dport 53 counter drop\n", family, value)
+			fmt.Fprintf(&b, " %s saddr %s meta l4proto { tcp, udp } ct original proto-dst 53 counter drop\n", family, value)
+			fmt.Fprintf(&b, " %s saddr %s %s counter return\n", family, value, deviceLocalNFTMatch(family, fakeIPs...))
+		}
 		fmt.Fprintf(&b, " %s saddr %s oifname != \"tun0\" counter drop\n", family, value)
 	}
 	b.WriteString(" }\n chain input {\n type filter hook input priority -5; policy accept;\n")
+	if version == deviceProtectionOwner {
+		for _, name := range excluded {
+			fmt.Fprintf(&b, " iifname %q counter return\n", name)
+		}
+	}
 	for _, value := range values {
 		family := "ip"
 		if netip.MustParsePrefix(value).Addr().Is6() {
@@ -99,6 +147,11 @@ func deviceProtectionRules(values []string) (string, string, error) {
 		fmt.Fprintf(&b, " %s saddr %s meta l4proto { tcp, udp } ct original proto-dst 53 th dport != %d counter drop\n", family, value, deviceDNSPort)
 	}
 	b.WriteString(" }\n chain prerouting {\n type nat hook prerouting priority -191; policy accept;\n")
+	if version == deviceProtectionOwner {
+		for _, name := range excluded {
+			fmt.Fprintf(&b, " iifname %q counter return\n", name)
+		}
+	}
 	for _, value := range values {
 		family := "ip"
 		if netip.MustParsePrefix(value).Addr().Is6() {
@@ -113,29 +166,54 @@ func deviceProtectionRules(values []string) (string, string, error) {
 }
 
 func (g *nftDeviceProtection) Sources() ([]string, error) {
+	sources, _, _, err := g.readPolicy()
+	return sources, err
+}
+
+func (g *nftDeviceProtection) FakeIPCIDRs() ([]string, error) {
+	_, fakeIPs, _, err := g.readPolicy()
+	return fakeIPs, err
+}
+
+func (g *nftDeviceProtection) readPolicy() ([]string, []string, []string, error) {
 	data, err := os.ReadFile(g.path)
 	if os.IsNotExist(err) {
-		return nil, nil
+		return nil, nil, nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
-	lines := strings.SplitN(string(data), "\n", 3)
-	if len(lines) != 3 || lines[0] != "# "+deviceProtectionOwner || !strings.HasPrefix(lines[1], "# sources ") {
-		return nil, fmt.Errorf("设备防泄漏持久文件损坏，拒绝解除保护")
+	lines := strings.SplitN(string(data), "\n", 5)
+	if len(lines) != 5 || !strings.HasPrefix(lines[1], "# sources ") {
+		return nil, nil, nil, fmt.Errorf("设备防泄漏持久文件损坏，拒绝解除保护")
 	}
-	var values []string
+	version := strings.TrimPrefix(lines[0], "# ")
+	if version != deviceProtectionOwner && version != localDeviceProtectionOwner && version != legacyDeviceProtectionOwner {
+		return nil, nil, nil, fmt.Errorf("设备防泄漏持久文件版本无效")
+	}
+	var values, fakeIPs, excluded []string
 	if err := json.Unmarshal([]byte(strings.TrimPrefix(lines[1], "# sources ")), &values); err != nil {
-		return nil, fmt.Errorf("设备防泄漏来源记录无效")
+		return nil, nil, nil, fmt.Errorf("设备防泄漏来源记录无效")
 	}
-	rules, _, err := deviceProtectionRules(values)
+	if version != legacyDeviceProtectionOwner {
+		if !strings.HasPrefix(lines[2], "# fakeip ") || json.Unmarshal([]byte(strings.TrimPrefix(lines[2], "# fakeip ")), &fakeIPs) != nil {
+			return nil, nil, nil, fmt.Errorf("设备防泄漏 FakeIP 记录无效")
+		}
+	}
+	if version == deviceProtectionOwner {
+		if !strings.HasPrefix(lines[3], "# interfaces ") || json.Unmarshal([]byte(strings.TrimPrefix(lines[3], "# interfaces ")), &excluded) != nil {
+			return nil, nil, nil, fmt.Errorf("设备防泄漏接口排除记录无效")
+		}
+	}
+	rules, _, err := renderDeviceProtectionRules(values, version, excluded, fakeIPs...)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 	if !bytes.Equal(data, []byte(rules)) {
-		return nil, fmt.Errorf("设备防泄漏持久规则与来源记录不一致")
+		return nil, nil, nil, fmt.Errorf("设备防泄漏持久规则与来源记录不一致")
 	}
-	return protectionSources(values)
+	values, err = protectionSources(values)
+	return values, fakeIPs, excluded, err
 }
 
 func (g *nftDeviceProtection) inspect(activating bool) (string, int, error) {
@@ -159,7 +237,7 @@ func (g *nftDeviceProtection) inspect(activating bool) (string, int, error) {
 			return "", 0, fmt.Errorf("请先关闭软/硬件流量卸载并重载防火墙")
 		}
 		if table := entry.Table; table != nil && table.Family == "inet" && table.Name == deviceProtectionTable {
-			if !strings.HasPrefix(table.Comment, deviceProtectionOwner+" ") {
+			if !strings.HasPrefix(table.Comment, deviceProtectionOwner+" ") && !strings.HasPrefix(table.Comment, localDeviceProtectionOwner+" ") && !strings.HasPrefix(table.Comment, legacyDeviceProtectionOwner+" ") {
 				return "", 0, fmt.Errorf("设备防泄漏表被其他程序占用")
 			}
 			owner = table.Comment
@@ -185,8 +263,13 @@ func (g *nftDeviceProtection) VerifyDisabled() error {
 	return nil
 }
 
-func (g *nftDeviceProtection) Verify(values []string) error {
-	values, err := protectionSources(values)
+func (g *nftDeviceProtection) Verify(values, excluded []string, fakeIPs ...string) error {
+	var err error
+	excluded, err = normalizeExcludedInterfaces(excluded)
+	if err != nil {
+		return err
+	}
+	values, err = protectionSources(values)
 	if err != nil {
 		return err
 	}
@@ -198,7 +281,11 @@ func (g *nftDeviceProtection) Verify(values []string) error {
 			return err
 		}
 	}
-	rules, expected, err := deviceProtectionRules(values)
+	previous, err := g.FakeIPCIDRs()
+	if err != nil {
+		return err
+	}
+	rules, expected, err := deviceProtectionRules(values, excluded, append(previous, fakeIPs...)...)
 	if err != nil {
 		return err
 	}
@@ -210,13 +297,13 @@ func (g *nftDeviceProtection) Verify(values []string) error {
 	if err != nil {
 		return err
 	}
-	if owner != expected || count != len(values)*5 {
+	if owner != expected || count != len(values)*8+len(excluded)*4 {
 		return fmt.Errorf("设备防泄漏内核规则缺失或不完整，请停止核心后重新启用保护")
 	}
 	return nil
 }
 
-func (g *nftDeviceProtection) Apply(values []string) error {
+func (g *nftDeviceProtection) Apply(values, excluded []string, fakeIPs ...string) error {
 	if !g.Supported() {
 		return fmt.Errorf("设备防泄漏需要 OpenWrt fw4 及新版 Ackwrap 防火墙加载文件")
 	}
@@ -228,17 +315,19 @@ func (g *nftDeviceProtection) Apply(values []string) error {
 	if _, _, err := g.inspect(true); err != nil {
 		return err
 	}
-	if _, err := g.Sources(); err != nil {
+	previous, err := g.FakeIPCIDRs()
+	if err != nil {
 		return err
 	}
-	rules, _, err := deviceProtectionRules(values)
+	fakeIPs = append(previous, fakeIPs...)
+	rules, _, err := deviceProtectionRules(values, excluded, fakeIPs...)
 	if err != nil {
 		return err
 	}
 	if _, err := g.run(rules, "-c", "-f", "-"); err != nil {
 		return fmt.Errorf("设备防泄漏规则校验失败: %w", err)
 	}
-	// Durable intent precedes activation. A failed apply retains the stricter
+	// Durable intent precedes activation. A failed apply retains the intended
 	// boot policy, and must never be reported as an enabled/healthy switch.
 	if err := writeProtectionFile(g.path, []byte(rules)); err != nil {
 		return err
@@ -246,7 +335,7 @@ func (g *nftDeviceProtection) Apply(values []string) error {
 	if _, err := g.run(rules, "-f", "-"); err != nil {
 		return fmt.Errorf("设备防泄漏规则安装失败，已保留持久阻断记录: %w", err)
 	}
-	return g.Verify(values)
+	return g.Verify(values, excluded, fakeIPs...)
 }
 
 func (g *nftDeviceProtection) Disable() error {

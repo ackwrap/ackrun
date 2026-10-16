@@ -2265,6 +2265,14 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 	routeRules = append(routeRules, bypassRules...)
 	route["find_process"] = true
 	if len(devices) > 0 {
+		fakeIPs, err := s.deviceFakeIPCIDRs()
+		if err != nil {
+			return nil, err
+		}
+		local, err := excludeDeviceFakeIPCIDRs(deviceLocalDestinationCIDRs(), fakeIPs)
+		if err != nil {
+			return nil, err
+		}
 		overrides, err := s.routeRuleOutboundOverrides()
 		if err != nil {
 			return nil, err
@@ -2276,8 +2284,16 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 			}
 			// Also resolve previously cached FakeIP domains through this device's
 			// resolver, before selecting its fixed outbound.
+			if len(local) > 0 {
+				routeRules = append(routeRules, deviceLocalRouteRule(device.Values, local))
+			}
+			routeRules = append(routeRules, map[string]interface{}{"source_ip_cidr": device.Values, "action": "resolve", "server": deviceDNSServerTag(device.ID)})
+			// A domain (including an old FakeIP mapping) may resolve to LAN.
+			if len(local) > 0 {
+				routeRules = append(routeRules, deviceLocalRouteRule(device.Values, local))
+			}
 			routeRules = append(routeRules,
-				map[string]interface{}{"source_ip_cidr": device.Values, "action": "resolve", "server": deviceDNSServerTag(device.ID)},
+				map[string]interface{}{"source_ip_cidr": device.Values, "ip_cidr": fakeIPs, "action": "reject"},
 				singboxRouteRule("source_ip_cidr", device.Values, outbound, false),
 			)
 		}
@@ -2475,6 +2491,10 @@ func (s *ConfigGeneratorService) defaultBypassRules(autoRedirect bool) ([]map[st
 		return nil, fmt.Errorf("加载流量排除设置失败: %w", err)
 	}
 	customProcesses, _, targetCIDRs, sourceCIDRs, domainSuffixes := trafficBypassValues(bypassSettings)
+	targetCIDRs, err = s.deviceBypassTargets(targetCIDRs)
+	if err != nil {
+		return nil, err
+	}
 	processNames = appendUniqueStrings(processNames, customProcesses...)
 
 	var rules []map[string]interface{}
@@ -2519,6 +2539,10 @@ func (s *ConfigGeneratorService) defaultBypassRules(autoRedirect bool) ([]map[st
 		return nil, fmt.Errorf("加载节点服务器直连白名单失败: %w", err)
 	}
 	domains, ipCIDRs := nodeServerBypassTargets(nodes)
+	ipCIDRs, err = s.deviceBypassTargets(ipCIDRs)
+	if err != nil {
+		return nil, err
+	}
 	if len(domains) > 0 {
 		rules = append(rules, map[string]interface{}{
 			"domain":   domains,
@@ -3508,6 +3532,17 @@ func (s *ConfigGeneratorService) generateInbounds(listen string, port int, tunIP
 		inbounds = []interface{}{
 			generatedTUNInbound(autoRedirect, tunIPv4Address, tunIPv6Address, excludedInterfaces, excludedCIDRs),
 			mixedInbound,
+		}
+	}
+	for _, inbound := range inbounds {
+		item := inbound.(map[string]interface{})
+		if item["type"] == "tun" {
+			// Include built-in link-local and node exclusions in the subtraction;
+			// a custom FakeIP pool may overlap any of them.
+			item["route_exclude_address"], err = s.deviceBypassTargets(item["route_exclude_address"].([]string))
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	if autoRedirect && (mode == "tun" || mode == "tun_mixed") {

@@ -133,8 +133,8 @@ func TestDeviceDNSForceRestoreWithoutMarkerStillChecksOwnership(t *testing.T) {
 
 type recordingDeviceDNS struct{ calls int }
 
-func (d *recordingDeviceDNS) Activate([]string) error { d.calls++; return nil }
-func (*recordingDeviceDNS) Restore() error            { return nil }
+func (d *recordingDeviceDNS) Activate([]string, ...string) error { d.calls++; return nil }
+func (*recordingDeviceDNS) Restore() error                       { return nil }
 
 func TestDeviceDNSDoesNotActivateAfterCoreExit(t *testing.T) {
 	d := &recordingDeviceDNS{}

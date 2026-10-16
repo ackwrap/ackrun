@@ -48,7 +48,7 @@ func (n *protectionNFTStub) run(input string, args ...string) ([]byte, error) {
 				_ = json.Unmarshal([]byte(strings.TrimPrefix(line, " comment ")), &n.owner)
 			}
 		}
-		n.count = strings.Count(input, "counter drop") + strings.Count(input, "redirect to")
+		n.count = strings.Count(input, "counter drop") + strings.Count(input, "counter return") + strings.Count(input, "redirect to")
 		return nil, nil
 	case "delete table inet " + deviceProtectionTable:
 		if n.failDelete {
@@ -70,7 +70,7 @@ func testDeviceProtection(t *testing.T) (*nftDeviceProtection, *protectionNFTStu
 func TestDeviceProtectionDurablePolicyAndExplicitRelease(t *testing.T) {
 	g, n := testDeviceProtection(t)
 	sources := []string{"192.168.50.10/32", "fd12:3456::10/128"}
-	if err := g.Apply(sources); err != nil {
+	if err := g.Apply(sources, nil); err != nil {
 		t.Fatal(err)
 	}
 	// A new daemon sees the same policy; losing process memory does not unblock.
@@ -79,14 +79,14 @@ func TestDeviceProtectionDurablePolicyAndExplicitRelease(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(got, sources) {
 		t.Fatalf("recovery: %v %v", got, err)
 	}
-	if err := recovered.Verify(sources); err != nil {
+	if err := recovered.Verify(sources, nil); err != nil {
 		t.Fatal(err)
 	}
 	n.count--
-	if err := recovered.Verify(sources); err == nil {
+	if err := recovered.Verify(sources, nil); err == nil {
 		t.Fatal("missing kernel rule reported protected")
 	}
-	if err := recovered.Apply(sources); err != nil {
+	if err := recovered.Apply(sources, nil); err != nil {
 		t.Fatal(err)
 	}
 	n.failDelete = true
@@ -106,6 +106,42 @@ func TestDeviceProtectionDurablePolicyAndExplicitRelease(t *testing.T) {
 	}
 	if _, err := os.Stat(g.path); !os.IsNotExist(err) {
 		t.Fatal("boot protection retained")
+	}
+}
+
+func TestDeviceProtectionUpgradesLegacyPolicyWithoutReleasingSources(t *testing.T) {
+	g, n := testDeviceProtection(t)
+	sources := []string{"192.168.50.10/32", "fd12:3456::10/128"}
+	legacy, owner, err := renderDeviceProtectionRules(sources, legacyDeviceProtectionOwner, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(g.path, []byte(legacy), 0600); err != nil {
+		t.Fatal(err)
+	}
+	n.owner, n.count = owner, len(sources)*5
+	if got, err := g.Sources(); err != nil || !reflect.DeepEqual(got, sources) {
+		t.Fatalf("cannot recover v0.3.0 sources: %v %v", got, err)
+	}
+	if err := g.Verify(sources, nil); err == nil {
+		t.Fatal("old policy incorrectly reported as the new local-access policy")
+	}
+	if err := g.Apply(sources, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(n.owner, deviceProtectionOwner+" ") {
+		t.Fatal("kernel policy not upgraded")
+	}
+	data, err := os.ReadFile(g.path)
+	if err != nil || !strings.HasPrefix(string(data), "# "+deviceProtectionOwner+"\n") {
+		t.Fatal("boot policy not upgraded", err)
+	}
+	// Local access must not weaken the ownership/content check on disk.
+	if err := os.WriteFile(g.path, append(data, []byte("flush ruleset\n")...), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.Sources(); err == nil {
+		t.Fatal("modified policy was accepted")
 	}
 }
 
@@ -130,7 +166,7 @@ func TestDeviceProtectionRejectsIncompatibleOrFailedActivation(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if err := g.Apply(values); err == nil {
+			if err := g.Apply(values, nil); err == nil {
 				t.Fatal("invalid activation accepted")
 			}
 			if scenario == "apply" {
@@ -212,7 +248,7 @@ func TestDeviceProtectionSettingsModesAndMutationLifecycle(t *testing.T) {
 func TestDeviceProtectionInterruptedReleaseReportsKernelResidue(t *testing.T) {
 	db, g, _ := devicePolicyFixture(t)
 	firewall, n := testDeviceProtection(t)
-	if err := firewall.Apply([]string{"192.168.50.10/32"}); err != nil {
+	if err := firewall.Apply([]string{"192.168.50.10/32"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	// Simulate interruption after removing boot intent but before kernel release.
@@ -294,6 +330,18 @@ func TestDeviceProtectionValidatesManagedConfigBeforeStart(t *testing.T) {
 	write()
 	if err := core.validateProtectedConfig(path); err != nil {
 		t.Fatal(err)
+	}
+	tun := inbounds[0].(map[string]interface{})
+	tun["exclude_interface"] = []string{"easytier-tun"}
+	write()
+	if err := core.validateProtectedConfig(path); err == nil || !strings.Contains(err.Error(), "接口排除") {
+		t.Fatalf("unapproved config exemption accepted: %v", err)
+	}
+	if err := svc.SetTrafficBypassSettings(&model.TrafficBypassSettings{Rules: []model.TrafficBypassRule{{Type: "interface", Value: "easytier-tun"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := core.validateProtectedConfig(path); err != nil {
+		t.Fatalf("explicit interface exemption rejected: %v", err)
 	}
 	route["rules"] = []interface{}{}
 	write()

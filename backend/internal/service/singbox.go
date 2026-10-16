@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ackwrap/ackrun/internal/httpclient"
@@ -51,8 +52,9 @@ type SingboxService struct {
 	waitReady          func(context.Context) error
 	afterStart         func() error
 	transitionGuard    coreTransitionGuard
-	transitionHeld     bool // lifecycleMu: updates keep protection through rollback/DB commit
-	runningTUN         bool // lifecycleMu: capture old mode before config regeneration
+	transitionHeld     bool                     // lifecycleMu: updates keep protection through rollback/DB commit
+	runningTUN         bool                     // lifecycleMu: capture old mode before config regeneration
+	runningFakeIPCIDRs atomic.Pointer[[]string] // immutable snapshot for concurrent config generation
 }
 
 type coreStartResult struct {
@@ -151,7 +153,11 @@ func (svc *SingboxService) activateDeviceDNS(ctx context.Context, cidrs []string
 	if cause := context.Cause(ctx); cause != nil {
 		return cause
 	}
-	return svc.deviceDNS.Activate(cidrs)
+	excluded, err := deviceExcludedInterfaces(svc.store)
+	if err != nil {
+		return err
+	}
+	return svc.deviceDNS.Activate(cidrs, excluded...)
 }
 
 func (svc *SingboxService) activateDNSMasq(ctx context.Context) error {
@@ -386,6 +392,7 @@ func (svc *SingboxService) start(validateConfig func() (string, error)) (*coreSt
 	}
 	processStarted = true
 	svc.runningTUN = tunState.ManagesRoutes
+	svc.runningFakeIPCIDRs.Store(&tunState.FakeIPCIDRs)
 
 	svc.cmd = cmd
 	svc.pid = cmd.Process.Pid
@@ -1054,6 +1061,7 @@ type activeTUNState struct {
 	CleanupIdentityError     string
 	DNSMasqTakeover          bool
 	DeviceDNSCIDRs           []string
+	FakeIPCIDRs              []string
 }
 
 func readActiveTUNState(configPath string) (activeTUNState, error) {
@@ -1084,7 +1092,11 @@ func readActiveTUNState(configPath string) (activeTUNState, error) {
 	if err := json.Unmarshal(data, &config); err != nil {
 		return activeTUNState{}, err
 	}
-	state := activeTUNState{}
+	fakeIPs, err := configDeviceFakeIPCIDRs(data)
+	if err != nil {
+		return activeTUNState{}, err
+	}
+	state := activeTUNState{FakeIPCIDRs: fakeIPs}
 	dnsInboundPresent := false
 	deviceDNSPresent := false
 	for index, inbound := range config.Inbounds {
