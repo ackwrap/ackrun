@@ -183,6 +183,12 @@ func (p *Paths) DeviceDNSStatePath() string {
 	return filepath.Join(p.DataDir, ".device-dns-state")
 }
 
+// The fw4 package include uses a fixed location, independent of the database
+// directory and available before the daemon starts or external storage mounts.
+func (p *Paths) DeviceProtectionRulesPath() string {
+	return "/etc/ackwrap-protection/guard.nft"
+}
+
 func (p *Paths) NetworkLifecycleLockPath() string {
 	return filepath.Join(p.DataDir, ".network-lifecycle.lock")
 }

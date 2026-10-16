@@ -75,17 +75,18 @@ func IsSystemRouteRuleName(name string) bool {
 }
 
 type RouteRuleService struct {
-	store            *store.Store
-	paths            *paths.Paths
-	realtime         *RealtimeService
-	cron             *cron.Cron
-	ruleEntries      map[int64]cron.EntryID
-	geoEntries       map[int64]cron.EntryID
-	mu               sync.Mutex
-	cacheMu          sync.Mutex
-	cacheLocks       map[string]*sync.Mutex
-	ruleSetValidator func(context.Context, string) error
-	ruleSetCompiler  func(context.Context, []byte, string) error
+	store                *store.Store
+	paths                *paths.Paths
+	realtime             *RealtimeService
+	cron                 *cron.Cron
+	ruleEntries          map[int64]cron.EntryID
+	geoEntries           map[int64]cron.EntryID
+	mu                   sync.Mutex
+	cacheMu              sync.Mutex
+	cacheLocks           map[string]*sync.Mutex
+	ruleSetValidator     func(context.Context, string) error
+	ruleSetCompiler      func(context.Context, []byte, string) error
+	deviceProtectionCore *SingboxService
 }
 
 func NewRouteRuleService(s *store.Store, p *paths.Paths, rt *RealtimeService) *RouteRuleService {
@@ -321,7 +322,12 @@ func (svc *RouteRuleService) Create(req *model.RouteRuleRequest) (*model.RouteRu
 		return nil, err
 	}
 	logging.Info("route_rule.create", "creating route rule: %s", req.Name)
-	item, err := svc.store.CreateRouteRule(req)
+	var item *model.RouteRule
+	err := svc.mutateProtectedDevice(nil, req, func() error {
+		var err error
+		item, err = svc.store.CreateRouteRule(req)
+		return err
+	})
 	if err != nil {
 		return nil, normalizeRouteRuleNameConflict(err)
 	}
@@ -365,7 +371,12 @@ func (svc *RouteRuleService) Update(id int64, req *model.RouteRuleRequest) (*mod
 		return nil, err
 	}
 	logging.Info("route_rule.update", "updating route rule: %d", id)
-	item, err := svc.store.UpdateRouteRule(id, req)
+	var item *model.RouteRule
+	err = svc.mutateProtectedDevice(existing, req, func() error {
+		var err error
+		item, err = svc.store.UpdateRouteRule(id, req)
+		return err
+	})
 	if err != nil {
 		return nil, normalizeRouteRuleNameConflict(err)
 	}
@@ -387,7 +398,7 @@ func (svc *RouteRuleService) Delete(id int64) (*model.ActionResponse, error) {
 	if existing == nil {
 		return nil, ErrRouteRuleNotFound
 	}
-	if err := svc.store.DeleteRouteRule(id); err != nil {
+	if err := svc.mutateProtectedDevice(existing, nil, func() error { return svc.store.DeleteRouteRule(id) }); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrRouteRuleNotFound
 		}

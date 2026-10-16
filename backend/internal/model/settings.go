@@ -38,16 +38,22 @@ type ConnectivitySettings struct {
 
 // GeneralSettings contains application-level behavior switches.
 type GeneralSettings struct {
-	GeoSource                string `json:"geo_source"`
-	AutoStartCore            bool   `json:"auto_start_core"`
-	DNSMasqTakeoverEnabled   bool   `json:"dnsmasq_takeover_enabled"`
-	DNSMasqTakeoverSupported bool   `json:"dnsmasq_takeover_supported"`
+	DeviceProtectionEnabled   bool   `json:"device_protection_enabled"`
+	DeviceProtectionSupported bool   `json:"device_protection_supported"`
+	DeviceProtectionStatus    string `json:"device_protection_status"`
+	DeviceProtectionError     string `json:"device_protection_error,omitempty"`
+	DeviceProtectionCount     int    `json:"device_protection_count"`
+	GeoSource                 string `json:"geo_source"`
+	AutoStartCore             bool   `json:"auto_start_core"`
+	DNSMasqTakeoverEnabled    bool   `json:"dnsmasq_takeover_enabled"`
+	DNSMasqTakeoverSupported  bool   `json:"dnsmasq_takeover_supported"`
 }
 
 type GeneralSettingsRequest struct {
-	GeoSource              *string `json:"geo_source"`
-	AutoStartCore          *bool   `json:"auto_start_core"`
-	DNSMasqTakeoverEnabled *bool   `json:"dnsmasq_takeover_enabled"`
+	DeviceProtectionEnabled *bool   `json:"device_protection_enabled"`
+	GeoSource               *string `json:"geo_source"`
+	AutoStartCore           *bool   `json:"auto_start_core"`
+	DNSMasqTakeoverEnabled  *bool   `json:"dnsmasq_takeover_enabled"`
 }
 
 // NTPSettings NTP 时间同步设置

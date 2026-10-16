@@ -1,0 +1,2 @@
+# Ackwrap device protection v1: load before forwarding, independently of daemon/core.
+include "/etc/ackwrap-protection/*.nft"

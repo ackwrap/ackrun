@@ -34,6 +34,7 @@ type SingboxService struct {
 	store              *store.Store
 	dnsmasq            dnsmasqLifecycle
 	deviceDNS          deviceDNSLifecycle
+	deviceProtection   deviceProtectionFirewall
 	dnsmasqSupported   func() bool
 	cmd                *exec.Cmd
 	pid                int
@@ -66,7 +67,7 @@ var (
 )
 
 func NewSingboxService(p *paths.Paths, rt *RealtimeService, logs *CoreLogService, s *store.Store) *SingboxService {
-	return &SingboxService{paths: p, realtime: rt, coreLogs: logs, store: s, dnsmasq: newDNSMasqLifecycle(p), deviceDNS: newDeviceDNSLifecycle(p), dnsmasqSupported: platformSupportsDNSMasqTakeover, transitionGuard: newCoreTransitionGuard(p)}
+	return &SingboxService{paths: p, realtime: rt, coreLogs: logs, store: s, dnsmasq: newDNSMasqLifecycle(p), deviceDNS: newDeviceDNSLifecycle(p), deviceProtection: newDeviceProtection(p), dnsmasqSupported: platformSupportsDNSMasqTakeover, transitionGuard: newCoreTransitionGuard(p)}
 }
 
 func (svc *SingboxService) SetStartHooks(beforeStart func() error, waitReady func(context.Context) error, afterStart func() error) {
@@ -306,6 +307,9 @@ func (svc *SingboxService) start(validateConfig func() (string, error)) (*coreSt
 			"error":  err.Error(),
 		})
 		return nil, err
+	}
+	if err := svc.validateProtectedConfig(configPath); err != nil {
+		return nil, fmt.Errorf("设备防泄漏启动校验失败: %w", err)
 	}
 	logging.Info("core.start", "starting sing-box")
 	svc.realtime.Broadcast("core.status", map[string]any{
@@ -619,6 +623,11 @@ type stoppedStateRecovery struct {
 }
 
 func (svc *SingboxService) recoverStoppedStateDetailed(forceDNS, forceCleanup bool) (stoppedStateRecovery, error) {
+	// Reinstall persistent device policy BEFORE clearing stale TUN/DNS state.
+	// Never undo this table in exit, shutdown, or routine network repair.
+	if err := svc.restoreDeviceProtection(); err != nil {
+		return stoppedStateRecovery{}, fmt.Errorf("恢复设备防泄漏失败，保留网络接管残留: %w", err)
+	}
 	cleanup := cleanupPlatformSingboxState
 	if forceCleanup {
 		cleanup = forceCleanupPlatformSingboxState
