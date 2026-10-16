@@ -67,7 +67,11 @@ func (g *nftTransitionGuard) inspect() (present, offloaded bool, err error) {
 	return present, offloaded, nil
 }
 
-func (g *nftTransitionGuard) Enable(fakeIPs ...string) error {
+func (g *nftTransitionGuard) Enable(excluded []string, fakeIPs ...string) error {
+	excluded, err := normalizeExcludedInterfaces(excluded)
+	if err != nil {
+		return err
+	}
 	present, offloaded, err := g.inspect()
 	if err != nil {
 		return fmt.Errorf("检查 nftables 防泄漏状态失败: %w", err)
@@ -104,7 +108,7 @@ func (g *nftTransitionGuard) Enable(fakeIPs ...string) error {
 	if err := os.WriteFile(g.statePath, []byte(transitionGuardOwner+"\n"+string(fakeData)+"\n"), 0600); err != nil {
 		return fmt.Errorf("记录防泄漏保护状态失败: %w", err)
 	}
-	rules := transitionGuardRules(present, fakeIPs...)
+	rules := transitionGuardRules(present, excluded, fakeIPs...)
 	if _, err := g.run(rules, "-f", "-"); err != nil {
 		// Do not log nft diagnostics: they may contain existing network data.
 		return fmt.Errorf("原子安装防泄漏规则失败: %w", err)
@@ -112,8 +116,14 @@ func (g *nftTransitionGuard) Enable(fakeIPs ...string) error {
 	return nil
 }
 
-func transitionGuardRules(replace bool, fakeIPs ...string) string {
+func transitionGuardRules(replace bool, excluded []string, fakeIPs ...string) string {
 	var rules strings.Builder
+	var bypass strings.Builder
+	for _, name := range excluded {
+		// Match the same ingress interfaces as TUN exclude_interface. Only
+		// replies may use the reverse exemption; unrelated egress stays guarded.
+		fmt.Fprintf(&bypass, "\t\tiifname %q accept\n\t\toifname %q ct direction reply accept\n", name, name)
+	}
 	if replace {
 		fmt.Fprintf(&rules, "delete table inet %s\n", transitionGuardTable)
 	}
@@ -125,6 +135,7 @@ func transitionGuardRules(replace bool, fakeIPs ...string) string {
 	comment "%s"
 	chain forward {
 		type filter hook forward priority -1; policy drop;
+		%s
 		meta l4proto { tcp, udp } th dport 53 drop
 		meta l4proto { tcp, udp } ct original proto-dst 53 drop
 		%s accept
@@ -144,7 +155,7 @@ func transitionGuardRules(replace bool, fakeIPs ...string) string {
 		%s accept
 	}
 }
-`, transitionGuardTable, transitionGuardOwner,
+`, transitionGuardTable, transitionGuardOwner, bypass.String(),
 		deviceLocalNFTMatch("ip", fakeIPs...), deviceLocalNFTMatch("ip6", fakeIPs...), defaultAutoRedirectMark,
 		deviceLocalNFTMatch("ip", fakeIPs...), deviceLocalNFTMatch("ip6", fakeIPs...))
 	return rules.String()

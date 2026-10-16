@@ -62,8 +62,12 @@ func (d *nftDeviceDNS) inspect(activating bool) (bool, error) {
 	return present, nil
 }
 
-func deviceDNSNFTRules(cidrs []string, replace bool) (string, error) {
+func deviceDNSNFTRules(cidrs []string, replace bool, excluded ...string) (string, error) {
 	values, err := normalizeDeviceCIDRs(cidrs)
+	if err != nil {
+		return "", err
+	}
+	excluded, err = normalizeExcludedInterfaces(excluded)
 	if err != nil {
 		return "", err
 	}
@@ -72,6 +76,9 @@ func deviceDNSNFTRules(cidrs []string, replace bool) (string, error) {
 		fmt.Fprintf(&rules, "delete table inet %s\n", deviceDNSTable)
 	}
 	fmt.Fprintf(&rules, "table inet %s {\n comment \"%s\"\n chain prerouting {\n type nat hook prerouting priority -190; policy accept;\n", deviceDNSTable, deviceDNSOwner)
+	for _, name := range excluded {
+		fmt.Fprintf(&rules, " iifname %q return\n", name)
+	}
 	// Run after conntrack (-200), before sing-box's redirect and fw4 dstnat.
 	// Destination NAT preserves the device source, even for router-local DNS.
 	for _, value := range values {
@@ -87,12 +94,12 @@ func deviceDNSNFTRules(cidrs []string, replace bool) (string, error) {
 	return rules.String(), nil
 }
 
-func (d *nftDeviceDNS) Activate(cidrs []string) error {
+func (d *nftDeviceDNS) Activate(cidrs []string, excluded ...string) error {
 	present, err := d.inspect(true)
 	if err != nil {
 		return err
 	}
-	rules, err := deviceDNSNFTRules(cidrs, present)
+	rules, err := deviceDNSNFTRules(cidrs, present, excluded...)
 	if err != nil {
 		return err
 	}
@@ -104,7 +111,7 @@ func (d *nftDeviceDNS) Activate(cidrs []string) error {
 	if _, err := d.run(rules, "-f", "-"); err != nil {
 		return fmt.Errorf("安装设备 DNS 接管规则失败: %w", err)
 	}
-	logging.Info("device_dns.activate", "已为 %d 个设备地址范围接管 TCP/UDP DNS", len(cidrs))
+	logging.Info("device_dns.activate", "已为 %d 个设备地址范围接管 TCP/UDP DNS，排除 %d 个接口", len(cidrs), len(excluded))
 	return nil
 }
 

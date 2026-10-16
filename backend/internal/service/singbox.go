@@ -153,7 +153,11 @@ func (svc *SingboxService) activateDeviceDNS(ctx context.Context, cidrs []string
 	if cause := context.Cause(ctx); cause != nil {
 		return cause
 	}
-	return svc.deviceDNS.Activate(cidrs)
+	excluded, err := deviceExcludedInterfaces(svc.store)
+	if err != nil {
+		return err
+	}
+	return svc.deviceDNS.Activate(cidrs, excluded...)
 }
 
 func (svc *SingboxService) activateDNSMasq(ctx context.Context) error {

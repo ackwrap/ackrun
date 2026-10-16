@@ -16,8 +16,8 @@ type deviceProtectionFirewall interface {
 	Supported() bool
 	Sources() ([]string, error)
 	FakeIPCIDRs() ([]string, error)
-	Apply([]string, ...string) error
-	Verify([]string, ...string) error
+	Apply([]string, []string, ...string) error
+	Verify([]string, []string, ...string) error
 	VerifyDisabled() error
 	Disable() error
 	ForceDisable() error
@@ -97,19 +97,23 @@ func (svc *RouteRuleService) mutateProtectedDevice(previous *model.RouteRule, ne
 		return err
 	}
 	union := appendUniqueStrings(persisted, desired...)
+	excluded, err := deviceExcludedInterfaces(core.store)
+	if err != nil {
+		return err
+	}
 	fakeIPs, err := core.deviceFakeIPCIDRs()
 	if err != nil {
 		return err
 	}
 	// Widen protection before committing new addresses. If persistence or the
 	// final narrowing fails, retain conservative blocking and report the failure.
-	if err := core.deviceProtection.Apply(union, fakeIPs...); err != nil {
+	if err := core.deviceProtection.Apply(union, excluded, fakeIPs...); err != nil {
 		return err
 	}
 	if err := persist(); err != nil {
 		return err
 	}
-	if err := core.deviceProtection.Apply(desired, fakeIPs...); err != nil {
+	if err := core.deviceProtection.Apply(desired, excluded, fakeIPs...); err != nil {
 		return fmt.Errorf("设备规则已保存，防泄漏范围同步失败；保留阻断，请重试: %w", err)
 	}
 	logging.Info("device_protection.sync", "设备规则变更后保护 %d 个地址范围", len(desired))
@@ -175,11 +179,15 @@ func (svc *SingboxService) restoreDeviceProtection() error {
 		// Recovery never releases addresses left by an interrupted mutation.
 		persisted = appendUniqueStrings(persisted, desired...)
 	}
+	excluded, err := deviceExcludedInterfaces(svc.store)
+	if err != nil {
+		return err
+	}
 	fakeIPs, err := svc.deviceFakeIPCIDRs()
 	if err != nil {
 		return err
 	}
-	if err := svc.deviceProtection.Apply(persisted, fakeIPs...); err != nil {
+	if err := svc.deviceProtection.Apply(persisted, excluded, fakeIPs...); err != nil {
 		return err
 	}
 	logging.Info("device_protection.restore", "已恢复 %d 个地址范围的常驻防泄漏保护", len(persisted))
@@ -217,7 +225,11 @@ func (svc *SettingsService) deviceProtectionStatus(settings *model.GeneralSettin
 			var fakeIPs []string
 			fakeIPs, err = core.deviceFakeIPCIDRs()
 			if err == nil {
-				err = guard.Verify(desired, fakeIPs...)
+				var excluded []string
+				excluded, err = deviceExcludedInterfaces(core.store)
+				if err == nil {
+					err = guard.Verify(desired, excluded, fakeIPs...)
+				}
 			}
 		}
 	}
@@ -261,11 +273,15 @@ func (svc *SettingsService) setDeviceProtection(enabled bool, previous *model.Ge
 		if err != nil {
 			return err
 		}
+		excluded, err := deviceExcludedInterfaces(core.store)
+		if err != nil {
+			return err
+		}
 		fakeIPs, err := core.deviceFakeIPCIDRs()
 		if err != nil {
 			return err
 		}
-		if err := core.deviceProtection.Apply(sources, fakeIPs...); err != nil {
+		if err := core.deviceProtection.Apply(sources, excluded, fakeIPs...); err != nil {
 			return err
 		}
 		if err := svc.store.SetGeneralSettings(&next); err != nil {
@@ -309,11 +325,15 @@ func (svc *SingboxService) validateProtectedConfig(path string) error {
 	if err != nil {
 		return err
 	}
+	excluded, err := deviceExcludedInterfaces(svc.store)
+	if err != nil {
+		return err
+	}
 	fakeIPs, err := svc.deviceFakeIPCIDRs()
 	if err != nil {
 		return err
 	}
-	if err := svc.deviceProtection.Verify(desired, fakeIPs...); err != nil {
+	if err := svc.deviceProtection.Verify(desired, excluded, fakeIPs...); err != nil {
 		return err
 	}
 	g := NewConfigGeneratorService(svc.store, svc.paths)
@@ -373,8 +393,9 @@ func (svc *SingboxService) validateProtectedConfig(path string) error {
 		return errors.New("活动配置缺少受保护设备 DNS 来源，请重新生成配置")
 	}
 	var inbounds []struct {
-		Type          string `json:"type"`
-		InterfaceName string `json:"interface_name"`
+		Type               string   `json:"type"`
+		InterfaceName      string   `json:"interface_name"`
+		ExcludedInterfaces []string `json:"exclude_interface"`
 	}
 	raw, _ := json.Marshal(actual["inbounds"])
 	if err := json.Unmarshal(raw, &inbounds); err != nil {
@@ -383,6 +404,15 @@ func (svc *SingboxService) validateProtectedConfig(path string) error {
 	for _, inbound := range inbounds {
 		if inbound.Type == "tun" && inbound.InterfaceName != "tun0" {
 			return errors.New("设备防泄漏仅支持受管 tun0 接口")
+		}
+		if inbound.Type == "tun" {
+			actualExcluded, err := normalizeExcludedInterfaces(inbound.ExcludedInterfaces)
+			if err != nil {
+				return err
+			}
+			if !slices.Equal(actualExcluded, excluded) {
+				return errors.New("活动配置的接口排除与防泄漏策略不一致，请重新生成配置")
+			}
 		}
 	}
 	return nil

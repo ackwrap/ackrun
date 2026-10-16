@@ -183,8 +183,8 @@ func (s *ConfigGeneratorService) validateDevicePolicies() error {
 		return err
 	}
 	_, interfaces, targets, sources, domains := trafficBypassValues(settings)
-	if len(interfaces) > 0 {
-		return fmt.Errorf("设备规则不能与整接口流量排除同时启用：请移除网络接口排除，保留进程排除和本地目标 IP/CIDR；本地网络会自动直连")
+	if _, err := normalizeExcludedInterfaces(interfaces); err != nil {
+		return err
 	}
 	if len(domains) > 0 {
 		return fmt.Errorf("设备规则不能与域名流量排除同时启用：域名可能解析到外网，请移除域名排除；本地目标 IP/CIDR 可以保留")

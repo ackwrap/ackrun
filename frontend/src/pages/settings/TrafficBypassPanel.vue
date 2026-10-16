@@ -124,10 +124,11 @@ onMounted(load);
           自动路由中排除。
         </p>
         <p class="mt-1 text-xs leading-5 text-[var(--text-secondary)]">
-          设备绑定自动直连本地网络，可保留私网目标 CIDR 和进程排除。 与 FakeIP
-          地址池重叠的部分会自动扣除。 整接口、外网目标
-          IP、域名排除及重叠的来源排除会与设备外网绑定冲突。 EasyTier
-          内网可使用进程排除和私网目标 CIDR，无需整接口排除。
+          网络接口是明确的直连例外：从这些接口进入的流量优先排除，
+          不受设备绑定、设备 DNS 接管和防泄漏阻断影响，可保留 easytier-tun
+          等接口。 修改接口排除前请先停止核心。设备绑定仍允许本地网络直连；
+          本地目标 CIDR 中与 FakeIP 地址池重叠的部分会自动扣除。 外网目标
+          IP、域名排除及重叠的来源排除仍会与设备绑定冲突。
         </p>
       </div>
       <Button size="sm" variant="secondary" @click="openAdd">

@@ -20,7 +20,7 @@ func TestNetworkResetReleasesCorruptPolicyAndStaysDisabledAfterRecovery(t *testi
 	if err := db.SetGeneralSettings(settings); err != nil {
 		t.Fatal(err)
 	}
-	if err := guard.Apply(rules[0].Values); err != nil {
+	if err := guard.Apply(rules[0].Values, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(guard.path, []byte("damaged policy"), 0600); err != nil {
@@ -58,7 +58,7 @@ func TestNetworkResetRetainsGuardWhenSettingCannotBeSaved(t *testing.T) {
 	_, g, rules := devicePolicyFixture(t)
 	g.paths.DBPath = filepath.Join(g.paths.DataDir, "test.db")
 	guard, nft := testDeviceProtection(t)
-	if err := guard.Apply(rules[0].Values); err != nil {
+	if err := guard.Apply(rules[0].Values, nil); err != nil {
 		t.Fatal(err)
 	}
 	p := *g.paths
@@ -81,7 +81,7 @@ func TestNetworkResetReleaseFailureCanBeRetried(t *testing.T) {
 	_, g, rules := devicePolicyFixture(t)
 	g.paths.DBPath = filepath.Join(g.paths.DataDir, "test.db")
 	guard, nft := testDeviceProtection(t)
-	if err := guard.Apply(rules[0].Values); err != nil {
+	if err := guard.Apply(rules[0].Values, nil); err != nil {
 		t.Fatal(err)
 	}
 	nft.failDelete = true

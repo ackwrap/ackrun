@@ -51,7 +51,7 @@ func TestNFTTransitionGuardOwnershipOffloadAndAtomicRules(t *testing.T) {
 				t.Fatalf("unexpected command: %s", call)
 				return nil, nil
 			}
-			err := g.Enable()
+			err := g.Enable(nil)
 			fails := scenario == "foreign" || scenario == "offload" || scenario == "apply-failure"
 			if (err != nil) != fails {
 				t.Fatalf("Enable error=%v", err)

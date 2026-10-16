@@ -81,6 +81,7 @@ func TestNFTGuardPackets(t *testing.T) {
 	run("ip", "link", "set", "lo", "up")
 	lan := newPeer("guard-lan", "192.168.50.1", "192.168.50.2", "fd12:3456::1", "fd12:3456::2")
 	wan := newPeer("guard-wan", "198.51.100.1", "198.51.100.2", "2001:db8:2::1", "2001:db8:2::2")
+	vpn := newPeer("guard-vpn", "192.168.60.1", "192.168.60.2", "fd60::1", "fd60::2")
 	local := newPeer("guard-loc", "10.44.0.1", "10.44.0.2", "fd44:1::1", "fd44:1::2")
 	fakePools := []string{"10.66.0.0/24", "fd66::/64"}
 	fakeTargets := []string{"198.18.0.2", "fc00::2", "10.66.0.2", "fd66::2"}
@@ -165,6 +166,14 @@ while True:
 	server(wan, "2001:db8:2::2")
 	server(wan, "198.51.100.2", "15153", "tcp")
 	server(wan, "2001:db8:2::2", "15153", "tcp")
+	for _, address := range []string{"198.51.100.2", "2001:db8:2::2"} {
+		server(wan, address, "53", "tcp")
+		server(wan, address, "53", "udp")
+	}
+	for _, address := range []string{"192.168.60.1", "fd60::1"} {
+		server("", address, "53", "tcp")
+		server("", address, "53", "udp")
+	}
 	server("", "192.168.50.1")
 	server("", "127.0.0.1")
 	for _, address := range []string{"10.44.0.2", "fd44:1::2"} {
@@ -228,16 +237,37 @@ sys.exit(0 if ok==(sys.argv[3]=='pass') else 1)
 	for _, address := range fakeTargets {
 		check(lan, address, "0", "pass")
 	}
+	checkExcluded := func(want string, routerDNS bool) {
+		t.Helper()
+		for _, address := range []string{"198.51.100.2", "2001:db8:2::2"} {
+			for _, protocol := range []string{"tcp", "udp"} {
+				check(vpn, address, "0", want, "15153", protocol)
+				check(vpn, address, "0", want, "53", protocol)
+			}
+		}
+		if routerDNS {
+			for _, address := range []string{"192.168.60.1", "fd60::1"} {
+				check(vpn, address, "0", want, "53", "tcp")
+				check(vpn, address, "0", want, "53", "udp")
+			}
+		}
+	}
 	guard := newCoreTransitionGuard(&paths.Paths{DataDir: t.TempDir()})
-	if err := guard.Enable(fakePools...); err != nil {
+	if err := guard.Enable([]string{"guard-vpn"}, fakePools...); err != nil {
 		t.Fatal(err)
 	}
 	for _, address := range fakeTargets {
 		check(lan, address, "0", "drop")
 		check("", address, "0", "drop")
 	}
+	checkExcluded("pass", true)
+	// Removing an exemption must close even connections established above.
+	if err := guard.Enable(nil, fakePools...); err != nil {
+		t.Fatal(err)
+	}
+	checkExcluded("drop", false)
 	// A subsequent reload retains the old pools as well as the replacement.
-	if err := guard.Enable("10.77.0.0/24", "fd77::/64"); err != nil {
+	if err := guard.Enable(nil, "10.77.0.0/24", "fd77::/64"); err != nil {
 		t.Fatal(err)
 	}
 	for _, address := range append(fakeTargets, "10.77.0.2", "fd77::2") {
@@ -318,7 +348,7 @@ sys.exit(1 if leaked else 0)
 		cmd.Stdin = strings.NewReader(input)
 		return cmd.CombinedOutput()
 	}}
-	sources := []string{"192.168.50.2/32", "fd12:3456::2/128"}
+	sources := []string{"192.168.50.2/32", "fd12:3456::2/128", "192.168.60.2/32", "fd60::2/128"}
 	// A public destination DNATed to a LAN relay must not inherit the local
 	// exception. Exercise both NAT families with actual packets.
 	_, err = deviceGuard.run(`table inet guard_test_nat {
@@ -334,7 +364,7 @@ sys.exit(1 if leaked else 0)
 	for _, address := range []string{"203.0.113.9", "2001:db8:ff::9"} {
 		check(lan, address, "0", "pass")
 	}
-	if err := deviceGuard.Apply(sources, fakePools...); err != nil {
+	if err := deviceGuard.Apply(sources, nil, fakePools...); err != nil {
 		t.Fatal(err)
 	}
 	for _, address := range fakeTargets {
@@ -380,21 +410,49 @@ sys.exit(1 if leaked else 0)
 	// Simulate fw4 boot/reload, even with both daemon and core absent.
 	run("nft", "-f", deviceGuard.path)
 	newDaemon := &nftDeviceProtection{path: deviceGuard.path, supported: deviceGuard.supported, run: deviceGuard.run}
-	if err := newDaemon.Verify(sources); err != nil {
+	if err := newDaemon.Verify(sources, nil); err != nil {
 		t.Fatal(err)
 	}
 	for _, address := range fakeTargets {
 		check(lan, address, "0", "drop")
 	}
-	if err := newDaemon.Apply(sources, "10.77.0.0/24", "fd77::/64"); err != nil {
+	if err := newDaemon.Apply(sources, nil, "10.77.0.0/24", "fd77::/64"); err != nil {
 		t.Fatal(err)
 	}
 	for _, address := range append(fakeTargets, "10.77.0.2", "fd77::2") {
 		check(lan, address, "0", "drop")
 	}
 	checkLocal()
+	// Explicit ingress interfaces bypass both DNS redirect tables and the
+	// persistent guard, including public TCP/UDP and router-local DNS.
+	excludedDNS := &nftDeviceDNS{statePath: filepath.Join(t.TempDir(), "excluded-dns"), run: deviceGuard.run}
+	if err := excludedDNS.Activate(sources, "guard-vpn"); err != nil {
+		t.Fatal(err)
+	}
+	if err := newDaemon.Apply(sources, []string{"guard-vpn"}); err != nil {
+		t.Fatal(err)
+	}
+	run("nft", "-f", newDaemon.path) // Exemptions survive fw4/daemon reloads.
+	if err := newDaemon.Verify(sources, []string{"guard-vpn"}); err != nil {
+		t.Fatal(err)
+	}
+	checkExcluded("pass", true)
+	for _, address := range []string{"198.51.100.2", "2001:db8:2::2"} {
+		check(lan, address, "0", "drop")
+		check(lan, address, "0", "drop", "53")
+	}
+	for _, address := range fakeTargets {
+		check(lan, address, "0", "drop")
+	}
+	if err := newDaemon.Apply(sources, nil); err != nil {
+		t.Fatal(err)
+	}
+	checkExcluded("drop", true)
+	if err := excludedDNS.Restore(); err != nil {
+		t.Fatal(err)
+	}
 	// Even an empty remaining LAN range must not render an unconditional allow.
-	if err := newDaemon.Apply(sources, "0.0.0.0/0", "::/0"); err != nil {
+	if err := newDaemon.Apply(sources, nil, "0.0.0.0/0", "::/0"); err != nil {
 		t.Fatal(err)
 	}
 	check(lan, "10.44.0.2", "0", "drop")
@@ -421,7 +479,7 @@ sys.exit(1 if leaked else 0)
 	}
 	transitionPaths := &paths.Paths{DataDir: t.TempDir()}
 	transition := newCoreTransitionGuard(transitionPaths)
-	if err := transition.Enable(); err != nil {
+	if err := transition.Enable(nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(transitionPaths.CoreTransitionGuardPath()); err != nil {
@@ -434,7 +492,6 @@ sys.exit(1 if leaked else 0)
 	check(lan, "2001:db8:2::2", "0", "pass")
 	for _, address := range []string{"198.51.100.2", "2001:db8:2::2"} {
 		for _, protocol := range []string{"tcp", "udp"} {
-			server(wan, address, "53", protocol)
 			check(lan, address, "0", "pass", "53", protocol)
 		}
 	}

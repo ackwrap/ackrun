@@ -114,8 +114,8 @@ func (svc *SettingsService) SetTrafficBypassSettings(settings *model.TrafficBypa
 				return fmt.Errorf("%w: 进程名称无效", ErrTrafficBypassSettingsInvalid)
 			}
 		case "interface":
-			if len(rule.Value) > 64 || !regexp.MustCompile(`^[A-Za-z0-9_.:@-]+$`).MatchString(rule.Value) {
-				return fmt.Errorf("%w: 网络接口名称无效", ErrTrafficBypassSettingsInvalid)
+			if _, err := normalizeExcludedInterfaces([]string{rule.Value}); err != nil {
+				return fmt.Errorf("%w: %v", ErrTrafficBypassSettingsInvalid, err)
 			}
 		case "ip_cidr", "source_ip_cidr":
 			prefix, err := netip.ParsePrefix(rule.Value)
@@ -138,7 +138,7 @@ func (svc *SettingsService) SetTrafficBypassSettings(settings *model.TrafficBypa
 		}
 	}
 	settings.Rules = normalized
-	if err := svc.store.SetTrafficBypassSettings(settings); err != nil {
+	if err := svc.saveTrafficBypassSettings(settings); err != nil {
 		return err
 	}
 	logging.Info("settings.traffic_bypass", "流量排除设置已更新，规则数: %d", len(normalized))

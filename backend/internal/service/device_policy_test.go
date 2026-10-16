@@ -217,7 +217,7 @@ func TestDevicePolicyAllowsOnlyLocalTargetExclusions(t *testing.T) {
 		{"easytier-process", model.TrafficBypassRule{Type: "process_name", Value: "easytier-core"}, true},
 		{"unrelated-source", model.TrafficBypassRule{Type: "source_ip_cidr", Value: "192.168.60.0/24"}, true},
 		{"overlapping-source", model.TrafficBypassRule{Type: "source_ip_cidr", Value: "192.168.50.0/24"}, false},
-		{"interface", model.TrafficBypassRule{Type: "interface", Value: "easytier-tun"}, false},
+		{"interface", model.TrafficBypassRule{Type: "interface", Value: "easytier-tun"}, true},
 		{"domain", model.TrafficBypassRule{Type: "domain_suffix", Value: "example.com"}, false},
 		{"public", model.TrafficBypassRule{Type: "ip_cidr", Value: "8.8.8.8/32"}, false},
 		{"spans-public", model.TrafficBypassRule{Type: "ip_cidr", Value: "10.0.0.0/7"}, false},
@@ -370,7 +370,10 @@ func TestDeviceConfigurationPassesAvailableCoreCheck(t *testing.T) {
 	if binary == "" {
 		t.Skip("set ACKWRAP_SINGBOX_114_BIN for real core validation")
 	}
-	_, g, _ := devicePolicyFixture(t)
+	db, g, _ := devicePolicyFixture(t)
+	if err := db.SetTrafficBypassSettings(&model.TrafficBypassSettings{Rules: []model.TrafficBypassRule{{Type: "interface", Value: "easytier-tun"}}}); err != nil {
+		t.Fatal(err)
+	}
 	g.paths.BinaryPath = binary
 	result, err := g.generateLockedTo(&model.ConfigGenerateRequest{
 		DefaultOutbound: "direct", InboundListen: "127.0.0.1", InboundPort: 7890,
