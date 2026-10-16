@@ -120,7 +120,14 @@ onMounted(load);
           <h2 class="font-semibold">流量排除</h2>
         </div>
         <p class="mt-1 text-xs text-[var(--text-secondary)]">
-          匹配项优先直连并绕过透明代理；接口和目标 CIDR 同时从 TUN 自动路由中排除。
+          匹配项优先直连并绕过透明代理；接口和目标 CIDR 同时从 TUN
+          自动路由中排除。
+        </p>
+        <p class="mt-1 text-xs leading-5 text-[var(--text-secondary)]">
+          设备绑定自动直连本地网络，可保留私网目标 CIDR 和进程排除。 与 FakeIP
+          地址池重叠的部分会自动扣除。 整接口、外网目标
+          IP、域名排除及重叠的来源排除会与设备外网绑定冲突。 EasyTier
+          内网可使用进程排除和私网目标 CIDR，无需整接口排除。
         </p>
       </div>
       <Button size="sm" variant="secondary" @click="openAdd">
@@ -128,13 +135,18 @@ onMounted(load);
       </Button>
     </div>
 
-    <div class="overflow-x-auto rounded-[var(--radius-lg)] border border-[var(--border-default)]">
+    <div
+      class="overflow-x-auto rounded-[var(--radius-lg)] border border-[var(--border-default)]"
+    >
       <div
         class="hidden grid-cols-[180px_minmax(240px,1fr)_minmax(180px,0.7fr)_44px] gap-3 border-b border-[var(--border-default)] bg-[var(--bg-base)] px-3 py-2 text-xs text-[var(--text-secondary)] sm:grid"
       >
         <span>排除类型</span><span>匹配值</span><span>备注</span><span></span>
       </div>
-      <div v-if="loading" class="py-10 text-center text-sm text-[var(--text-secondary)]">
+      <div
+        v-if="loading"
+        class="py-10 text-center text-sm text-[var(--text-secondary)]"
+      >
         加载中...
       </div>
       <div
@@ -152,7 +164,10 @@ onMounted(load);
         <span class="self-center text-xs text-[var(--text-secondary)]">
           {{ typeLabel(rule.type) }}
         </span>
-        <span class="min-w-0 self-center truncate font-mono text-xs" :title="rule.value">
+        <span
+          class="min-w-0 self-center truncate font-mono text-xs"
+          :title="rule.value"
+        >
           {{ rule.value }}
         </span>
         <span
@@ -173,10 +188,17 @@ onMounted(load);
     </div>
 
     <div class="mt-4 flex justify-end">
-      <Button size="sm" :loading="saving" @click="save">保存流量排除设置</Button>
+      <Button size="sm" :loading="saving" @click="save"
+        >保存流量排除设置</Button
+      >
     </div>
 
-    <Modal :open="addOpen" title="添加排除项" size="sm" @close="addOpen = false">
+    <Modal
+      :open="addOpen"
+      title="添加排除项"
+      size="sm"
+      @close="addOpen = false"
+    >
       <form class="space-y-4" @submit.prevent="addRule">
         <label class="block space-y-1.5">
           <span class="text-xs text-[var(--text-secondary)]">排除类型</span>

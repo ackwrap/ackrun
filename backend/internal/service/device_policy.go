@@ -175,13 +175,25 @@ func (s *ConfigGeneratorService) validateDevicePolicies() error {
 	if dns == nil || !dns.Enabled {
 		return fmt.Errorf("设备规则需要启用 DNS 管理，才能保证 DNS 跟随设备出口")
 	}
+	if _, err := s.deviceFakeIPCIDRs(); err != nil {
+		return err
+	}
 	settings, err := s.store.GetTrafficBypassSettings()
 	if err != nil {
 		return err
 	}
 	_, interfaces, targets, sources, domains := trafficBypassValues(settings)
-	if len(interfaces)+len(targets)+len(domains) > 0 {
-		return fmt.Errorf("设备规则与接口、目标 IP 或域名流量排除同时启用会绕过设备出口，请先移除这些流量排除")
+	if len(interfaces) > 0 {
+		return fmt.Errorf("设备规则不能与整接口流量排除同时启用：请移除网络接口排除，保留进程排除和本地目标 IP/CIDR；本地网络会自动直连")
+	}
+	if len(domains) > 0 {
+		return fmt.Errorf("设备规则不能与域名流量排除同时启用：域名可能解析到外网，请移除域名排除；本地目标 IP/CIDR 可以保留")
+	}
+	for _, value := range targets {
+		prefix, err := netip.ParsePrefix(value)
+		if err != nil || !isDeviceLocalDestination(prefix) {
+			return fmt.Errorf("设备规则仅允许本地目标 IP/CIDR 流量排除，请移除包含外网地址的目标排除")
+		}
 	}
 	for i, rule := range rules {
 		for _, value := range rule.Values {

@@ -15,8 +15,9 @@ import (
 type deviceProtectionFirewall interface {
 	Supported() bool
 	Sources() ([]string, error)
-	Apply([]string) error
-	Verify([]string) error
+	FakeIPCIDRs() ([]string, error)
+	Apply([]string, ...string) error
+	Verify([]string, ...string) error
 	VerifyDisabled() error
 	Disable() error
 	ForceDisable() error
@@ -96,15 +97,19 @@ func (svc *RouteRuleService) mutateProtectedDevice(previous *model.RouteRule, ne
 		return err
 	}
 	union := appendUniqueStrings(persisted, desired...)
+	fakeIPs, err := core.deviceFakeIPCIDRs()
+	if err != nil {
+		return err
+	}
 	// Widen protection before committing new addresses. If persistence or the
 	// final narrowing fails, retain conservative blocking and report the failure.
-	if err := core.deviceProtection.Apply(union); err != nil {
+	if err := core.deviceProtection.Apply(union, fakeIPs...); err != nil {
 		return err
 	}
 	if err := persist(); err != nil {
 		return err
 	}
-	if err := core.deviceProtection.Apply(desired); err != nil {
+	if err := core.deviceProtection.Apply(desired, fakeIPs...); err != nil {
 		return fmt.Errorf("设备规则已保存，防泄漏范围同步失败；保留阻断，请重试: %w", err)
 	}
 	logging.Info("device_protection.sync", "设备规则变更后保护 %d 个地址范围", len(desired))
@@ -170,7 +175,11 @@ func (svc *SingboxService) restoreDeviceProtection() error {
 		// Recovery never releases addresses left by an interrupted mutation.
 		persisted = appendUniqueStrings(persisted, desired...)
 	}
-	if err := svc.deviceProtection.Apply(persisted); err != nil {
+	fakeIPs, err := svc.deviceFakeIPCIDRs()
+	if err != nil {
+		return err
+	}
+	if err := svc.deviceProtection.Apply(persisted, fakeIPs...); err != nil {
 		return err
 	}
 	logging.Info("device_protection.restore", "已恢复 %d 个地址范围的常驻防泄漏保护", len(persisted))
@@ -205,7 +214,11 @@ func (svc *SettingsService) deviceProtectionStatus(settings *model.GeneralSettin
 		var desired []string
 		desired, err = core.desiredProtectedSources()
 		if err == nil {
-			err = guard.Verify(desired)
+			var fakeIPs []string
+			fakeIPs, err = core.deviceFakeIPCIDRs()
+			if err == nil {
+				err = guard.Verify(desired, fakeIPs...)
+			}
 		}
 	}
 	if err != nil {
@@ -248,7 +261,11 @@ func (svc *SettingsService) setDeviceProtection(enabled bool, previous *model.Ge
 		if err != nil {
 			return err
 		}
-		if err := core.deviceProtection.Apply(sources); err != nil {
+		fakeIPs, err := core.deviceFakeIPCIDRs()
+		if err != nil {
+			return err
+		}
+		if err := core.deviceProtection.Apply(sources, fakeIPs...); err != nil {
 			return err
 		}
 		if err := svc.store.SetGeneralSettings(&next); err != nil {
@@ -292,7 +309,11 @@ func (svc *SingboxService) validateProtectedConfig(path string) error {
 	if err != nil {
 		return err
 	}
-	if err := svc.deviceProtection.Verify(desired); err != nil {
+	fakeIPs, err := svc.deviceFakeIPCIDRs()
+	if err != nil {
+		return err
+	}
+	if err := svc.deviceProtection.Verify(desired, fakeIPs...); err != nil {
 		return err
 	}
 	g := NewConfigGeneratorService(svc.store, svc.paths)

@@ -9,7 +9,7 @@ import (
 // The independent firewall table must outlive sing-box's own route/fw4 cleanup.
 // Callers hold lifecycleMu. Without a ready recovered core, it remains in place.
 type coreTransitionGuard interface {
-	Enable() error
+	Enable(...string) error
 	Disable() error
 }
 
@@ -43,11 +43,15 @@ func (svc *SingboxService) protectCoreTransition() error {
 	if !protected {
 		return nil
 	}
-	if err := svc.transitionGuard.Enable(); err != nil {
+	fakeIPs, err := svc.deviceFakeIPCIDRs()
+	if err != nil {
+		return err
+	}
+	if err := svc.transitionGuard.Enable(fakeIPs...); err != nil {
 		logging.Error("core.network_guard", "无法启用防泄漏保护，取消停止核心: %v", err)
 		return fmt.Errorf("启用重启防泄漏保护失败，核心未停止: %w", err)
 	}
-	logging.Info("core.network_guard", "已阻断 IPv4/IPv6 转发和非核心外连，保留本机管理连接")
+	logging.Info("core.network_guard", "已阻断 IPv4/IPv6 外网与 FakeIP 直连，保留本地网络和管理连接")
 	return nil
 }
 

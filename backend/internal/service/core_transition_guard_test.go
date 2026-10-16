@@ -17,8 +17,8 @@ type transitionGuardStub struct {
 	unblock func() error
 }
 
-func (g transitionGuardStub) Enable() error  { return g.block() }
-func (g transitionGuardStub) Disable() error { return g.unblock() }
+func (g transitionGuardStub) Enable(...string) error { return g.block() }
+func (g transitionGuardStub) Disable() error         { return g.unblock() }
 
 func TestProtectTransitionIncludesPreviousTUNMode(t *testing.T) {
 	for _, oldTUN := range []bool{false, true} {
