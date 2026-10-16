@@ -129,8 +129,8 @@ function submit() {
         v-if="devicePolicy"
         class="md:col-span-2 text-sm text-[var(--text-secondary)]"
       >
-        为设备选择一个固定代理节点。DNS
-        自动跟随此节点；节点不可用时不会切换到直连。 仅在规则模式下生效。
+        为设备选择一个固定代理节点。默认流量和 DNS
+        跟随此节点，设备规则中的直连域名白名单除外；节点不可用时不会自动切换到直连。仅在规则模式下生效。
       </p>
       <div class="grid content-start gap-1.5 md:col-span-2">
         <span class="aw-modal-label text-xs font-medium"

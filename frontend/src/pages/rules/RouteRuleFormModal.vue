@@ -12,6 +12,7 @@ const props = defineProps<{
   enabled: boolean;
   ruleType: string;
   valuesText: string;
+  directDomainsText: string;
   outbound: string;
   invert: boolean;
   subscriptions: RouteRuleSubscription[];
@@ -25,6 +26,7 @@ const emit = defineEmits<{
   "update:enabled": [boolean];
   "update:ruleType": [string];
   "update:valuesText": [string];
+  "update:directDomainsText": [string];
   "update:outbound": [string];
   "update:invert": [boolean];
 }>();
@@ -195,6 +197,29 @@ function previewRules() {
     .split("\n")
     .map((value) => value.trim())
     .filter(Boolean);
+  if (isDevice.value) {
+    const domains = props.directDomainsText
+      .split("\n")
+      .map((value) => value.trim().toLowerCase().replace(/\.$/, ""))
+      .filter(Boolean);
+    return [
+      ...(domains.length
+        ? [
+            {
+              source_ip_cidr: values,
+              domain_suffix: domains,
+              action: "route",
+              outbound: "direct",
+            },
+          ]
+        : []),
+      {
+        source_ip_cidr: values,
+        action: "route",
+        outbound: props.name || "设备固定节点",
+      },
+    ];
+  }
   if (props.ruleType !== "mixed") {
     const key = ["geoip", "geosite"].includes(props.ruleType)
       ? "rule_set"
@@ -478,8 +503,8 @@ onBeforeUnmount(() => {
         >
           每行填写一个设备 IP 或网段，例如 192.168.1.100 或 fd12:3456::100/128。
           建议固定 DHCP 地址；同时填写设备实际使用的 IPv4 和 IPv6 地址。
-          保存后选择一个固定节点，非排除接口的外网流量优先走该节点，DNS
-          使用同一出口并优先于普通 DNS、FakeIP
+          保存后选择一个固定节点，非排除接口的外网流量默认走该节点，DNS
+          默认使用同一出口并优先于普通 DNS、FakeIP
           和业务分流规则。本地网络自动直连：IPv4 私网、链路本地地址及 IPv6
           ULA、链路本地地址，不强制经过节点。FakeIP
           地址池会从本地直连范围中扣除， 还原为真实目标后再决定出口。需要
@@ -489,8 +514,8 @@ onBeforeUnmount(() => {
           和进程排除可保留；需移除外网目标
           IP、域名排除及与设备重叠的来源排除，并关闭软/硬件流量卸载。
           高级平台路由不能覆盖该设备；独立代理入口仍按各自策略转发。
-          非排除接口的设备在节点失效时外网连接失败，不自动直连；本地网络仍可访问，DNS
-          仍由节点处理。 节点服务连接的防回环排除仍生效；UDP 等协议需节点支持。
+          未命中直连白名单的外网流量在节点失效时连接失败，不自动直连；本地网络仍可访问。
+          节点服务连接的防回环排除仍生效；UDP 等协议需节点支持。
         </p>
 
         <div
@@ -609,6 +634,32 @@ onBeforeUnmount(() => {
             class="mt-1.5 block text-[11px] font-normal text-[var(--text-tertiary)]"
           >
             {{ ruleValueHelp(ruleType) }}
+          </span>
+        </label>
+
+        <label v-if="isDevice" class="block text-xs font-medium">
+          直连域名白名单（可选）
+          <textarea
+            :value="directDomainsText"
+            rows="4"
+            class="w-full font-mono"
+            placeholder="baidu.com&#10;example.com"
+            @input="
+              emit(
+                'update:directDomainsText',
+                ($event.target as HTMLTextAreaElement).value,
+              )
+            "
+          />
+          <span
+            class="mt-1.5 block text-[11px] font-normal leading-5 text-[var(--text-tertiary)]"
+          >
+            每行一个域名，包含该域名及其子域名；最多 256
+            个，不填协议、路径或通配符。 仅对上方设备生效：白名单流量和 DNS
+            直连，其余默认走绑定节点。 DNS 使用全局默认的远程上游（默认项非远程
+            DNS 时使用代理 DNS Final 上游），经直连查询。域名通过受管 DNS
+            或连接嗅探识别；无法识别域名时仍走绑定节点。
+            开启流量防泄漏后，核心停止时白名单外网流量也会阻断。
           </span>
         </label>
 

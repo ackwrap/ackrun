@@ -25,7 +25,8 @@ func normalizeDeviceRule(req *model.RouteRuleRequest) error {
 		return err
 	}
 	req.Values = values
-	return nil
+	req.DirectDomains, err = normalizeDeviceDirectDomains(req.DirectDomains)
+	return err
 }
 
 func normalizeDeviceCIDRs(values []string) ([]string, error) {
@@ -78,11 +79,12 @@ func enabledDeviceRules(db *store.Store) ([]model.RouteRule, error) {
 		if !rule.Enabled || rule.RuleType != "source_ip_cidr" {
 			continue
 		}
-		req := model.RouteRuleRequest{Values: rule.Values, Outbound: rule.Outbound, Invert: rule.Invert}
+		req := model.RouteRuleRequest{Values: rule.Values, DirectDomains: rule.DirectDomains, Outbound: rule.Outbound, Invert: rule.Invert}
 		if err := normalizeDeviceRule(&req); err != nil {
 			return nil, fmt.Errorf("设备规则 %d 无效: %w", rule.ID, err)
 		}
 		rule.Values = req.Values
+		rule.DirectDomains = req.DirectDomains
 		devices = append(devices, rule)
 	}
 	return devices, nil
@@ -216,7 +218,7 @@ func (s *ConfigGeneratorService) validateDevicePolicies() error {
 	return nil
 }
 
-func (s *ConfigGeneratorService) appendDeviceDNS(servers []map[string]interface{}, tags map[string]bool, templateTag string) ([]map[string]interface{}, []map[string]interface{}, error) {
+func (s *ConfigGeneratorService) appendDeviceDNS(servers []map[string]interface{}, tags map[string]bool, templateTag, directTemplateTag string) ([]map[string]interface{}, []map[string]interface{}, error) {
 	devices, err := s.deviceRules()
 	if err != nil || len(devices) == 0 {
 		return servers, nil, err
@@ -235,6 +237,14 @@ func (s *ConfigGeneratorService) appendDeviceDNS(servers []map[string]interface{
 	if template == nil {
 		return nil, nil, fmt.Errorf("设备 DNS 缺少可用的代理 DNS Final，请先配置远程 DNS")
 	}
+	directTemplate := template
+	for _, server := range servers {
+		if server["tag"] == directTemplateTag {
+			if serverType, _ := server["type"].(string); isStrategyDNSRemoteType(serverType) {
+				directTemplate = server
+			}
+		}
+	}
 	rules := make([]map[string]interface{}, 0, len(devices))
 	for _, device := range devices {
 		outbound := overrides[device.ID]
@@ -252,6 +262,25 @@ func (s *ConfigGeneratorService) appendDeviceDNS(servers []map[string]interface{
 		clone["tag"], clone["detour"] = tag, outbound
 		servers = append(servers, clone)
 		tags[tag] = true
+		if len(device.DirectDomains) > 0 {
+			directTag := deviceDirectDNSServerTag(device.ID)
+			if tags[directTag] {
+				return nil, nil, fmt.Errorf("DNS Server 标签 %s 被设备 DNS 保留，请重命名同名 Server", directTag)
+			}
+			directClone := make(map[string]interface{}, len(directTemplate))
+			for key, value := range directTemplate {
+				directClone[key] = value
+			}
+			directClone["tag"] = directTag
+			// No detour uses the resolver's own direct dialer, preserving bootstrap options.
+			delete(directClone, "detour")
+			servers = append(servers, directClone)
+			tags[directTag] = true
+			rules = append(rules, map[string]interface{}{
+				"source_ip_cidr": device.Values, "domain_suffix": device.DirectDomains, "server": directTag,
+			})
+			logging.Info("config_generator.device", "设备规则 %d 生成 %d 个直连域名白名单", device.ID, len(device.DirectDomains))
+		}
 		rules = append(rules, map[string]interface{}{
 			"source_ip_cidr": device.Values, "server": tag,
 		})

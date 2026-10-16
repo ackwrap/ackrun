@@ -207,7 +207,7 @@ func (s *Store) UpdateFinalStrategy(id int64, outbound string) (*model.RouteRule
 	if err := normalizeSystemRouteRuleOrderInTx(tx); err != nil {
 		return nil, err
 	}
-	item, err := scanRouteRule(tx.QueryRow(`SELECT id, name, enabled, priority, rule_type, values_json, outbound, invert, system_key, created_at, updated_at FROM route_rules WHERE id = ?`, id))
+	item, err := scanRouteRule(tx.QueryRow(`SELECT id, name, enabled, priority, rule_type, values_json, outbound, invert, system_key, created_at, updated_at, direct_domains_json FROM route_rules WHERE id = ?`, id))
 	if err != nil {
 		return nil, err
 	}

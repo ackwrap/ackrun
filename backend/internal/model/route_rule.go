@@ -3,28 +3,30 @@ package model
 const MaxRouteRuleShareCodeSize = 1024 * 1024
 
 type RouteRule struct {
-	ID        int64    `json:"id"`
-	Name      string   `json:"name"`
-	Enabled   bool     `json:"enabled"`
-	Priority  int      `json:"priority"`
-	RuleType  string   `json:"rule_type"`
-	Values    []string `json:"values"`
-	Outbound  string   `json:"outbound"`
-	Invert    bool     `json:"invert"`
-	SystemKey string   `json:"system_key,omitempty"`
-	IsSystem  bool     `json:"is_system"`
-	CreatedAt int64    `json:"created_at"`
-	UpdatedAt int64    `json:"updated_at"`
+	ID            int64    `json:"id"`
+	Name          string   `json:"name"`
+	Enabled       bool     `json:"enabled"`
+	Priority      int      `json:"priority"`
+	RuleType      string   `json:"rule_type"`
+	Values        []string `json:"values"`
+	DirectDomains []string `json:"direct_domains,omitempty"`
+	Outbound      string   `json:"outbound"`
+	Invert        bool     `json:"invert"`
+	SystemKey     string   `json:"system_key,omitempty"`
+	IsSystem      bool     `json:"is_system"`
+	CreatedAt     int64    `json:"created_at"`
+	UpdatedAt     int64    `json:"updated_at"`
 }
 
 type RouteRuleRequest struct {
-	Name     string   `json:"name" binding:"required"`
-	Enabled  bool     `json:"enabled"`
-	Priority int      `json:"priority"`
-	RuleType string   `json:"rule_type" binding:"required"`
-	Values   []string `json:"values" binding:"required"`
-	Outbound string   `json:"outbound" binding:"required"`
-	Invert   bool     `json:"invert"`
+	Name          string   `json:"name" binding:"required"`
+	Enabled       bool     `json:"enabled"`
+	Priority      int      `json:"priority"`
+	RuleType      string   `json:"rule_type" binding:"required"`
+	Values        []string `json:"values" binding:"required"`
+	DirectDomains []string `json:"direct_domains,omitempty"`
+	Outbound      string   `json:"outbound" binding:"required"`
+	Invert        bool     `json:"invert"`
 	// SystemKey is internal-only. User API requests must not set system rule identity.
 	SystemKey string `json:"-"`
 }

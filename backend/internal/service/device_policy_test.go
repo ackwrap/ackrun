@@ -350,7 +350,8 @@ func TestDevicePolicyRejectsRuntimeOverrideAndRollsBack(t *testing.T) {
 }
 
 func TestDevicePolicyInactiveOutsideRuleMode(t *testing.T) {
-	db, g, _ := devicePolicyFixture(t)
+	db, g, devices := devicePolicyFixture(t)
+	setDeviceDirectDomains(t, db, devices[0], "example.com")
 	for _, mode := range []string{"direct", "global"} {
 		if err := db.SetProxyMode(mode); err != nil {
 			t.Fatal(err)
@@ -370,7 +371,7 @@ func TestDeviceConfigurationPassesAvailableCoreCheck(t *testing.T) {
 	if binary == "" {
 		t.Skip("set ACKWRAP_SINGBOX_114_BIN for real core validation")
 	}
-	db, g, _ := devicePolicyFixture(t)
+	db, g, devices := devicePolicyFixture(t)
 	if err := db.SetTrafficBypassSettings(&model.TrafficBypassSettings{Rules: []model.TrafficBypassRule{{Type: "interface", Value: "easytier-tun"}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -384,5 +385,24 @@ func TestDeviceConfigurationPassesAvailableCoreCheck(t *testing.T) {
 	}
 	if !result.Valid {
 		t.Fatalf("device configuration rejected by core: %s", result.Error)
+	}
+	setDeviceDirectDomains(t, db, devices[0], "baidu.com", "example.com")
+	global, err := db.GetDNSGlobalSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	global.FakeIPEnabled = true
+	if err := db.SetDNSGlobalSettings(global); err != nil {
+		t.Fatal(err)
+	}
+	result, err = g.generateLockedTo(&model.ConfigGenerateRequest{
+		DefaultOutbound: "direct", InboundListen: "127.0.0.1", InboundPort: 7890,
+		TUNIPv4Address: defaultTUNIPv4Address, TUNIPv6Address: defaultTUNIPv6Address, LogLevel: "warn",
+	}, filepath.Join(t.TempDir(), "whitelist.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Valid {
+		t.Fatalf("whitelist configuration rejected by core: %s", result.Error)
 	}
 }

@@ -154,11 +154,7 @@ export interface AppUpdateInstallStatus {
 }
 
 export type TrafficBypassRuleType =
-  | "process_name"
-  | "interface"
-  | "ip_cidr"
-  | "source_ip_cidr"
-  | "domain_suffix";
+  "process_name" | "interface" | "ip_cidr" | "source_ip_cidr" | "domain_suffix";
 
 export interface TrafficBypassRule {
   type: TrafficBypassRuleType;
@@ -659,6 +655,7 @@ export interface RouteRule {
   priority: number;
   rule_type: string;
   values: string[];
+  direct_domains?: string[];
   outbound: string;
   invert: boolean;
   system_key?: string;
@@ -673,6 +670,7 @@ export interface RouteRuleRequest {
   priority: number;
   rule_type: string;
   values: string[];
+  direct_domains?: string[];
   outbound: string;
   invert: boolean;
 }

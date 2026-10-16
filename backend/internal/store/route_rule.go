@@ -11,7 +11,7 @@ import (
 )
 
 func (s *Store) ListRouteRules() ([]model.RouteRule, error) {
-	rows, err := s.db.Query(`SELECT id, name, enabled, priority, rule_type, values_json, outbound, invert, system_key, created_at, updated_at FROM route_rules ORDER BY priority ASC, id ASC`)
+	rows, err := s.db.Query(`SELECT id, name, enabled, priority, rule_type, values_json, outbound, invert, system_key, created_at, updated_at, direct_domains_json FROM route_rules ORDER BY priority ASC, id ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -43,12 +43,13 @@ func (s *Store) CreateRouteRule(req *model.RouteRuleRequest) (*model.RouteRule, 
 			priority = 10
 		}
 	}
+	directDomainsJSON, _ := json.Marshal(req.DirectDomains)
 	valuesJSON, err := json.Marshal(req.Values)
 	if err != nil {
 		return nil, err
 	}
 	now := time.Now().UnixMilli()
-	res, err := tx.Exec(`INSERT INTO route_rules (name, enabled, priority, rule_type, values_json, outbound, invert, system_key, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, req.Name, boolToInt(req.Enabled), priority, req.RuleType, string(valuesJSON), req.Outbound, boolToInt(req.Invert), req.SystemKey, now, now)
+	res, err := tx.Exec(`INSERT INTO route_rules (name, enabled, priority, rule_type, values_json, outbound, invert, system_key, created_at, updated_at, direct_domains_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, req.Name, boolToInt(req.Enabled), priority, req.RuleType, string(valuesJSON), req.Outbound, boolToInt(req.Invert), req.SystemKey, now, now, string(directDomainsJSON))
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +60,7 @@ func (s *Store) CreateRouteRule(req *model.RouteRuleRequest) (*model.RouteRule, 
 	if err := normalizeSystemRouteRuleOrderInTx(tx); err != nil {
 		return nil, err
 	}
-	item, err := scanRouteRule(tx.QueryRow(`SELECT id, name, enabled, priority, rule_type, values_json, outbound, invert, system_key, created_at, updated_at FROM route_rules WHERE id = ?`, id))
+	item, err := scanRouteRule(tx.QueryRow(`SELECT id, name, enabled, priority, rule_type, values_json, outbound, invert, system_key, created_at, updated_at, direct_domains_json FROM route_rules WHERE id = ?`, id))
 	if err != nil {
 		return nil, err
 	}
@@ -70,7 +71,7 @@ func (s *Store) CreateRouteRule(req *model.RouteRuleRequest) (*model.RouteRule, 
 }
 
 func (s *Store) GetRouteRule(id int64) (*model.RouteRule, error) {
-	row := s.db.QueryRow(`SELECT id, name, enabled, priority, rule_type, values_json, outbound, invert, system_key, created_at, updated_at FROM route_rules WHERE id = ?`, id)
+	row := s.db.QueryRow(`SELECT id, name, enabled, priority, rule_type, values_json, outbound, invert, system_key, created_at, updated_at, direct_domains_json FROM route_rules WHERE id = ?`, id)
 	item, err := scanRouteRule(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -88,6 +89,7 @@ func (s *Store) SetRouteRuleSystemKey(id int64, systemKey string) error {
 }
 
 func (s *Store) UpdateRouteRule(id int64, req *model.RouteRuleRequest) (*model.RouteRule, error) {
+	directDomainsJSON, _ := json.Marshal(req.DirectDomains)
 	valuesJSON, err := json.Marshal(req.Values)
 	if err != nil {
 		return nil, err
@@ -98,7 +100,7 @@ func (s *Store) UpdateRouteRule(id int64, req *model.RouteRuleRequest) (*model.R
 	}
 	defer tx.Rollback()
 	now := time.Now().UnixMilli()
-	result, err := tx.Exec(`UPDATE route_rules SET name = ?, enabled = ?, priority = ?, rule_type = ?, values_json = ?, outbound = ?, invert = ?, updated_at = ? WHERE id = ?`, req.Name, boolToInt(req.Enabled), req.Priority, req.RuleType, string(valuesJSON), req.Outbound, boolToInt(req.Invert), now, id)
+	result, err := tx.Exec(`UPDATE route_rules SET name = ?, enabled = ?, priority = ?, rule_type = ?, values_json = ?, outbound = ?, invert = ?, direct_domains_json = ?, updated_at = ? WHERE id = ?`, req.Name, boolToInt(req.Enabled), req.Priority, req.RuleType, string(valuesJSON), req.Outbound, boolToInt(req.Invert), string(directDomainsJSON), now, id)
 	if err != nil {
 		return nil, err
 	}
@@ -122,7 +124,7 @@ func (s *Store) UpdateRouteRule(id int64, req *model.RouteRuleRequest) (*model.R
 	if err := normalizeSystemRouteRuleOrderInTx(tx); err != nil {
 		return nil, err
 	}
-	item, err := scanRouteRule(tx.QueryRow(`SELECT id, name, enabled, priority, rule_type, values_json, outbound, invert, system_key, created_at, updated_at FROM route_rules WHERE id = ?`, id))
+	item, err := scanRouteRule(tx.QueryRow(`SELECT id, name, enabled, priority, rule_type, values_json, outbound, invert, system_key, created_at, updated_at, direct_domains_json FROM route_rules WHERE id = ?`, id))
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +201,7 @@ func (s *Store) MergeRouteRules(requests []model.RouteRuleRequest, finalOutbound
 	}
 	defer tx.Rollback()
 
-	rows, err := tx.Query(`SELECT id, name, enabled, priority, rule_type, values_json, outbound, invert, system_key, created_at, updated_at FROM route_rules ORDER BY priority ASC, id ASC`)
+	rows, err := tx.Query(`SELECT id, name, enabled, priority, rule_type, values_json, outbound, invert, system_key, created_at, updated_at, direct_domains_json FROM route_rules ORDER BY priority ASC, id ASC`)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -235,6 +237,7 @@ func (s *Store) MergeRouteRules(requests []model.RouteRuleRequest, finalOutbound
 	importedIDs := make([]int64, 0, len(requests))
 	importedNames := make(map[string]bool, len(requests))
 	for _, req := range requests {
+		directDomainsJSON, _ := json.Marshal(req.DirectDomains)
 		valuesJSON, marshalErr := json.Marshal(req.Values)
 		if marshalErr != nil {
 			return 0, 0, marshalErr
@@ -244,7 +247,7 @@ func (s *Store) MergeRouteRules(requests []model.RouteRuleRequest, finalOutbound
 			if item.SystemKey != "" {
 				return 0, 0, fmt.Errorf("system route rule cannot be imported: %s", req.Name)
 			}
-			if _, err = tx.Exec(`UPDATE route_rules SET enabled = ?, rule_type = ?, values_json = ?, outbound = ?, invert = ?, updated_at = ? WHERE id = ?`, boolToInt(req.Enabled), req.RuleType, string(valuesJSON), req.Outbound, boolToInt(req.Invert), now, item.ID); err != nil {
+			if _, err = tx.Exec(`UPDATE route_rules SET enabled = ?, rule_type = ?, values_json = ?, outbound = ?, invert = ?, direct_domains_json = ?, updated_at = ? WHERE id = ?`, boolToInt(req.Enabled), req.RuleType, string(valuesJSON), req.Outbound, boolToInt(req.Invert), string(directDomainsJSON), now, item.ID); err != nil {
 				return 0, 0, err
 			}
 			if err = updateRouteRuleCollectionBindingTx(tx, item.ID, req.Outbound, now); err != nil {
@@ -253,7 +256,7 @@ func (s *Store) MergeRouteRules(requests []model.RouteRuleRequest, finalOutbound
 			importedIDs = append(importedIDs, item.ID)
 			updated++
 		} else {
-			result, execErr := tx.Exec(`INSERT INTO route_rules (name, enabled, priority, rule_type, values_json, outbound, invert, system_key, created_at, updated_at) VALUES (?, ?, 0, ?, ?, ?, ?, '', ?, ?)`, req.Name, boolToInt(req.Enabled), req.RuleType, string(valuesJSON), req.Outbound, boolToInt(req.Invert), now, now)
+			result, execErr := tx.Exec(`INSERT INTO route_rules (name, enabled, priority, rule_type, values_json, outbound, invert, system_key, created_at, updated_at, direct_domains_json) VALUES (?, ?, 0, ?, ?, ?, ?, '', ?, ?, ?)`, req.Name, boolToInt(req.Enabled), req.RuleType, string(valuesJSON), req.Outbound, boolToInt(req.Invert), now, now, string(directDomainsJSON))
 			if execErr != nil {
 				return 0, 0, execErr
 			}
@@ -311,12 +314,15 @@ type routeRuleScanner interface {
 func scanRouteRule(scanner routeRuleScanner) (*model.RouteRule, error) {
 	var item model.RouteRule
 	var enabled, invert int
-	var valuesJSON string
-	if err := scanner.Scan(&item.ID, &item.Name, &enabled, &item.Priority, &item.RuleType, &valuesJSON, &item.Outbound, &invert, &item.SystemKey, &item.CreatedAt, &item.UpdatedAt); err != nil {
+	var valuesJSON, directDomainsJSON string
+	if err := scanner.Scan(&item.ID, &item.Name, &enabled, &item.Priority, &item.RuleType, &valuesJSON, &item.Outbound, &invert, &item.SystemKey, &item.CreatedAt, &item.UpdatedAt, &directDomainsJSON); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal([]byte(valuesJSON), &item.Values); err != nil {
 		return nil, fmt.Errorf("decode route rule values: %w", err)
+	}
+	if err := json.Unmarshal([]byte(directDomainsJSON), &item.DirectDomains); err != nil {
+		return nil, fmt.Errorf("decode route rule direct domains: %w", err)
 	}
 	item.Enabled = enabled != 0
 	item.Invert = invert != 0
