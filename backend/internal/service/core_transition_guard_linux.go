@@ -11,34 +11,39 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/ackwrap/ackrun/internal/logging"
 	"github.com/ackwrap/ackrun/internal/paths"
 )
 
 const (
-	transitionGuardTable = "ackwrap_transition"
-	transitionGuardOwner = "Ackwrap core transition guard v1"
+	transitionGuardTable       = "ackwrap_transition"
+	transitionGuardOwner       = "Ackwrap core transition guard v2"
+	legacyTransitionGuardOwner = "Ackwrap core transition guard v1"
 )
 
 type nftTransitionGuard struct {
 	run       func(input string, args ...string) ([]byte, error)
 	statePath string
+	offload   *fw4OffloadPause
 }
 
 func newCoreTransitionGuard(p *paths.Paths) coreTransitionGuard {
-	return &nftTransitionGuard{statePath: p.CoreTransitionGuardPath(), run: func(input string, args ...string) ([]byte, error) {
+	g := &nftTransitionGuard{statePath: p.CoreTransitionGuardPath(), run: func(input string, args ...string) ([]byte, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), linuxNetworkCommandTimeout)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, "nft", args...)
 		cmd.Stdin = strings.NewReader(input)
 		return cmd.CombinedOutput()
 	}}
+	g.offload = newFW4OffloadPause(p, g.run)
+	return g
 }
 
-func (g *nftTransitionGuard) inspect() (present, offloaded bool, err error) {
+func (g *nftTransitionGuard) inspect() (present bool, rulesetData []byte, err error) {
 	output, err := g.run("", "-j", "list", "ruleset")
 	if err != nil {
-		// Mixed-only installations may not have nft. Enable still rejects that.
-		return false, false, err
+		// Enable classifies a missing nft only when no recovery state is pending.
+		return false, nil, err
 	}
 	var ruleset struct {
 		NFTables []struct {
@@ -47,71 +52,137 @@ func (g *nftTransitionGuard) inspect() (present, offloaded bool, err error) {
 				Name    string `json:"name"`
 				Comment string `json:"comment"`
 			} `json:"table"`
-			Flowtable *json.RawMessage `json:"flowtable"`
 		} `json:"nftables"`
 	}
 	if err := json.Unmarshal(output, &ruleset); err != nil {
-		return false, false, fmt.Errorf("解析 nftables 状态失败: %w", err)
+		return false, nil, fmt.Errorf("解析 nftables 状态失败: %w", err)
 	}
 	for _, object := range ruleset.NFTables {
-		if object.Flowtable != nil {
-			offloaded = true
-		}
 		if table := object.Table; table != nil && table.Family == "inet" && table.Name == transitionGuardTable {
-			if table.Comment != transitionGuardOwner {
-				return false, offloaded, errors.New("防泄漏表名称被非 Ackwrap 规则占用")
+			if table.Comment != transitionGuardOwner && table.Comment != legacyTransitionGuardOwner {
+				return false, nil, errors.New("防泄漏表名称被非 Ackwrap 规则占用")
 			}
 			present = true
 		}
 	}
-	return present, offloaded, nil
+	return present, output, nil
 }
 
-func (g *nftTransitionGuard) Enable(excluded []string, fakeIPs ...string) error {
+func (g *nftTransitionGuard) Enable(sources, excluded []string, fakeIPs ...string) error {
 	excluded, err := normalizeExcludedInterfaces(excluded)
 	if err != nil {
 		return err
 	}
-	present, offloaded, err := g.inspect()
+	pendingOffload := false
+	if g.offload != nil {
+		pendingOffload, err = g.offload.pending()
+		if err != nil {
+			return err
+		}
+	}
+	_, markerErr := os.Stat(g.statePath)
+	canSkip := os.IsNotExist(markerErr) && !pendingOffload
+	present, rulesetData, err := g.inspect()
 	if err != nil {
+		if canSkip && (errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist)) {
+			return fmt.Errorf("%w: nft 不可用", errTransitionProtectionUnsupported)
+		}
 		return fmt.Errorf("检查 nftables 防泄漏状态失败: %w", err)
 	}
-	// Offloaded flows bypass forward/output hooks. Do not claim protection or
-	// stop the working core unless those fast paths have been disabled first.
-	if offloaded {
-		return errors.New("检测到 flowtable 流量卸载，请先关闭软/硬件流量卸载再重启或更新核心")
-	}
-	// Preserve previous pools through failed reloads and daemon restarts.
+	// Preserve both identities and pools through failed reloads and restarts.
 	if data, err := os.ReadFile(g.statePath); err == nil {
 		lines := strings.SplitN(strings.TrimSpace(string(data)), "\n", 2)
-		if lines[0] != transitionGuardOwner {
-			return errors.New("重启防泄漏状态记录无效")
-		}
-		if len(lines) == 2 {
+		switch lines[0] {
+		case legacyTransitionGuardOwner:
+			// Never narrow a legacy global guard while a transition is pending.
+			sources = nil
 			var previous []string
-			if err := json.Unmarshal([]byte(lines[1]), &previous); err != nil {
+			if len(lines) == 2 && json.Unmarshal([]byte(lines[1]), &previous) != nil {
 				return errors.New("重启防泄漏 FakeIP 记录无效")
 			}
 			fakeIPs = append(fakeIPs, previous...)
+		case transitionGuardOwner:
+			var previous transitionGuardPolicy
+			if len(lines) != 2 || json.Unmarshal([]byte(lines[1]), &previous) != nil || previous.Sources == nil || previous.FakeIPs == nil {
+				return errors.New("重启防泄漏设备范围记录无效")
+			}
+			if len(previous.Sources) > 0 {
+				if _, err := normalizeDeviceSources(previous.Sources); err != nil {
+					return fmt.Errorf("重启防泄漏设备范围记录无效: %w", err)
+				}
+			}
+			if len(previous.Sources) == 0 || len(sources) == 0 {
+				sources = nil
+			} else {
+				sources = appendUniqueStrings(sources, previous.Sources...)
+			}
+			fakeIPs = append(fakeIPs, previous.FakeIPs...)
+		default:
+			return errors.New("重启防泄漏状态记录无效")
 		}
 	} else if !os.IsNotExist(err) {
 		return err
+	} else if present {
+		return errors.New("重启防泄漏表存在但范围记录缺失，拒绝覆盖；请先执行网络修复")
+	}
+	if len(sources) > 0 {
+		sources, err = normalizeDeviceSources(sources)
+		if err != nil {
+			return err
+		}
 	}
 	fakeIPs, err = normalizeDeviceFakeIPCIDRs(fakeIPs...)
 	if err != nil {
 		return err
 	}
-	fakeData, _ := json.Marshal(fakeIPs)
+	if flowErr := checkNFTFlowtables(rulesetData, sources); flowErr != nil || pendingOffload {
+		if flowErr != nil && !errors.Is(flowErr, errFlowtableConflict) {
+			return flowErr
+		}
+		if g.offload == nil {
+			if canSkip && !present {
+				return fmt.Errorf("%w: %v", errTransitionProtectionUnsupported, flowErr)
+			}
+			return flowErr
+		}
+		if err := g.offload.pause(rulesetData); err != nil {
+			if errors.Is(err, errTransitionProtectionUnsupported) && flowErr != nil {
+				err = errors.Join(err, flowErr)
+			}
+			if errors.Is(err, errTransitionProtectionUnsupported) && (!canSkip || present) {
+				return fmt.Errorf("已有保护不能跳过: %v", err)
+			}
+			return err
+		}
+		// Reloads can change tables and handles. Re-check ownership and fast
+		// paths before writing intent or stopping the still-running core.
+		present, rulesetData, err = g.inspect()
+		if err != nil {
+			return err
+		}
+		if err := checkNFTFlowtables(rulesetData, sources); err != nil {
+			return err
+		}
+	}
+	policyData, _ := json.Marshal(transitionGuardPolicy{Sources: append([]string{}, sources...), FakeIPs: append([]string{}, fakeIPs...)})
 	// Persist intent before the atomic nft operation. If Ackwrap exits after
 	// installing the table, the next ready core can still remove it. Mixed-only,
 	// unprivileged deployments never need to inspect the host firewall.
-	if err := os.WriteFile(g.statePath, []byte(transitionGuardOwner+"\n"+string(fakeData)+"\n"), 0600); err != nil {
+	if err := writeProtectionFile(g.statePath, []byte(transitionGuardOwner+"\n"+string(policyData)+"\n")); err != nil {
 		return fmt.Errorf("记录防泄漏保护状态失败: %w", err)
 	}
 	rules := transitionGuardRules(present, excluded, fakeIPs...)
+	if len(sources) > 0 {
+		rules = transitionDeviceGuardRules(present, sources, excluded, fakeIPs...)
+	}
 	if _, err := g.run(rules, "-f", "-"); err != nil {
 		// Do not log nft diagnostics: they may contain existing network data.
 		return fmt.Errorf("原子安装防泄漏规则失败: %w", err)
+	}
+	if len(sources) > 0 {
+		logging.Info("core.network_guard", "已按 %d 个设备身份安装重启保护（含未完成操作的历史范围），保留其他设备通信", len(sources))
+	} else {
+		logging.Info("core.network_guard", "已安装全局 TUN 重启保护（无设备身份或存在旧版未完成保护），保留 %d 个明确排除接口", len(excluded))
 	}
 	return nil
 }
@@ -168,6 +239,9 @@ func (g *nftTransitionGuard) Disable() error {
 func (g *nftTransitionGuard) disable(force bool) error {
 	if !force {
 		if _, err := os.Stat(g.statePath); os.IsNotExist(err) {
+			if g.offload != nil {
+				return g.offload.restore()
+			}
 			return nil
 		} else if err != nil {
 			return err
@@ -184,6 +258,9 @@ func (g *nftTransitionGuard) disable(force bool) error {
 	}
 	if err := os.Remove(g.statePath); err != nil && !os.IsNotExist(err) {
 		return err
+	}
+	if g.offload != nil {
+		return g.offload.restore()
 	}
 	return nil
 }

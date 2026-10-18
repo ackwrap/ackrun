@@ -49,7 +49,7 @@ func newDeviceProtection(p *paths.Paths) deviceProtectionFirewall {
 			return fmt.Errorf("fw4 未加载设备防泄漏文件，请启用防火墙自动 includes")
 		}
 		if strings.Contains(string(data), "flowtable ") {
-			return fmt.Errorf("请关闭防火墙配置中的软/硬件流量卸载")
+			return fmt.Errorf("fw4 开机配置含 flowtable 流量卸载，无法确认与指定设备隔离；请关闭相关软/硬件流量卸载并重载防火墙")
 		}
 		return nil
 	}, run: func(input string, args ...string) ([]byte, error) {
@@ -250,26 +250,27 @@ func (g *nftDeviceProtection) readPolicy() ([]string, []string, []string, error)
 	return values, fakeIPs, excluded, err
 }
 
-func (g *nftDeviceProtection) inspect(activating bool) (string, int, error) {
+func (g *nftDeviceProtection) inspect(activating bool, sources ...string) (string, int, error) {
 	data, err := g.run("", "-j", "list", "ruleset")
 	if err != nil {
 		return "", 0, fmt.Errorf("无法读取设备防泄漏规则，请检查 nftables 和权限: %w", err)
 	}
 	var state struct {
 		NFTables []struct {
-			Table     *struct{ Family, Name, Comment string } `json:"table"`
-			Rule      *struct{ Family, Table string }         `json:"rule"`
-			Flowtable *json.RawMessage                        `json:"flowtable"`
+			Table *struct{ Family, Name, Comment string } `json:"table"`
+			Rule  *struct{ Family, Table string }         `json:"rule"`
 		} `json:"nftables"`
 	}
 	if err := json.Unmarshal(data, &state); err != nil {
 		return "", 0, fmt.Errorf("无法解析设备防泄漏规则")
 	}
+	if activating {
+		if err := checkNFTFlowtables(data, sources); err != nil {
+			return "", 0, err
+		}
+	}
 	owner, count := "", 0
 	for _, entry := range state.NFTables {
-		if activating && entry.Flowtable != nil {
-			return "", 0, fmt.Errorf("请先关闭软/硬件流量卸载并重载防火墙")
-		}
 		if table := entry.Table; table != nil && table.Family == "inet" && table.Name == deviceProtectionTable {
 			if !strings.HasPrefix(table.Comment, deviceProtectionOwner+" ") && !strings.HasPrefix(table.Comment, localDeviceProtectionOwner+" ") && !strings.HasPrefix(table.Comment, legacyDeviceProtectionOwner+" ") {
 				return "", 0, fmt.Errorf("设备防泄漏表被其他程序占用")
@@ -327,7 +328,7 @@ func (g *nftDeviceProtection) Verify(values, excluded []string, fakeIPs ...strin
 	if err != nil || !bytes.Equal(data, []byte(rules)) {
 		return fmt.Errorf("设备防泄漏持久规则尚未同步")
 	}
-	owner, count, err := g.inspect(true)
+	owner, count, err := g.inspect(true, values...)
 	if err != nil {
 		return err
 	}
@@ -344,6 +345,10 @@ func (g *nftDeviceProtection) Verify(values, excluded []string, fakeIPs ...strin
 }
 
 func (g *nftDeviceProtection) Apply(values, excluded []string, fakeIPs ...string) error {
+	values, err := protectionSources(values)
+	if err != nil {
+		return err
+	}
 	if !g.Supported() {
 		return fmt.Errorf("设备防泄漏需要 OpenWrt fw4 及新版 Ackwrap 防火墙加载文件")
 	}
@@ -352,7 +357,7 @@ func (g *nftDeviceProtection) Apply(values, excluded []string, fakeIPs ...string
 			return err
 		}
 	}
-	if _, _, err := g.inspect(true); err != nil {
+	if _, _, err := g.inspect(true, values...); err != nil {
 		return err
 	}
 	previous, err := g.FakeIPCIDRs()

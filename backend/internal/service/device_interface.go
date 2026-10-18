@@ -100,7 +100,11 @@ func (svc *SingboxService) syncExcludedInterfaceProtection(excluded []string) er
 	}
 	if svc.transitionGuard != nil {
 		if _, err := os.Stat(svc.paths.CoreTransitionGuardPath()); err == nil {
-			return svc.transitionGuard.Enable(excluded, fakeIPs...)
+			sources, err := svc.transitionDeviceSources(svc.runningDeviceIPs)
+			if err != nil {
+				return err
+			}
+			return svc.transitionGuard.Enable(sources, excluded, fakeIPs...)
 		} else if !os.IsNotExist(err) {
 			return err
 		}

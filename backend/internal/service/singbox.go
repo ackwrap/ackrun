@@ -54,6 +54,7 @@ type SingboxService struct {
 	transitionGuard    coreTransitionGuard
 	transitionHeld     bool                     // lifecycleMu: updates keep protection through rollback/DB commit
 	runningTUN         bool                     // lifecycleMu: capture old mode before config regeneration
+	runningDeviceIPs   []string                 // lifecycleMu: retain IPs when rules/config change; MACs are persisted
 	runningFakeIPCIDRs atomic.Pointer[[]string] // immutable snapshot for concurrent config generation
 }
 
@@ -392,6 +393,7 @@ func (svc *SingboxService) start(validateConfig func() (string, error)) (*coreSt
 	}
 	processStarted = true
 	svc.runningTUN = tunState.ManagesRoutes
+	svc.runningDeviceIPs = append([]string(nil), tunState.DeviceDNSCIDRs...)
 	svc.runningFakeIPCIDRs.Store(&tunState.FakeIPCIDRs)
 
 	svc.cmd = cmd

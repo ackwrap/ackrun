@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,8 +18,8 @@ type transitionGuardStub struct {
 	unblock func() error
 }
 
-func (g transitionGuardStub) Enable([]string, ...string) error { return g.block() }
-func (g transitionGuardStub) Disable() error                   { return g.unblock() }
+func (g transitionGuardStub) Enable([]string, []string, ...string) error { return g.block() }
+func (g transitionGuardStub) Disable() error                             { return g.unblock() }
 
 func TestProtectTransitionIncludesPreviousTUNMode(t *testing.T) {
 	for _, oldTUN := range []bool{false, true} {
@@ -35,6 +36,26 @@ func TestProtectTransitionIncludesPreviousTUNMode(t *testing.T) {
 			}
 			if blocked != oldTUN {
 				t.Fatalf("blocked=%t oldTUN=%t", blocked, oldTUN)
+			}
+		})
+	}
+}
+
+func TestUnsupportedTransitionProtectionDoesNotBlockCompatibility(t *testing.T) {
+	for _, required := range []bool{false, true} {
+		t.Run(fmt.Sprint(required), func(t *testing.T) {
+			db, g, _ := devicePolicyFixture(t)
+			settings, err := db.GetGeneralSettings()
+			if err != nil {
+				t.Fatal(err)
+			}
+			settings.DeviceProtectionEnabled = required
+			if err := db.SetGeneralSettings(settings); err != nil {
+				t.Fatal(err)
+			}
+			svc := &SingboxService{paths: g.paths, store: db, runningTUN: true, transitionGuard: transitionGuardStub{block: func() error { return fmt.Errorf("%w: custom offload backend", errTransitionProtectionUnsupported) }}}
+			if err := svc.protectCoreTransition(); (err != nil) != required {
+				t.Fatalf("required=%t error=%v", required, err)
 			}
 		})
 	}
