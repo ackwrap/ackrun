@@ -79,6 +79,7 @@ var managedIPRuleSpecs = []managedIPRuleSpec{
 	{id: "input_mark", priority: 9001, line: "from all fwmark 0x2023 lookup 2022", delete: []string{"rule", "del", "priority", "9001", "from", "all", "fwmark", "0x2023", "lookup", singboxRouteTable}},
 	{id: "redirect_nop", priority: 9002, line: "from all nop", delete: []string{"rule", "del", "priority", "9002", "from", "all", "type", "nop"}},
 	{id: "fallback", priority: 32768, line: "from all lookup 2022", delete: []string{"rule", "del", "priority", "32768", "from", "all", "lookup", singboxRouteTable}},
+	{id: "fallback_inverted", priority: 32768, line: "not from all fwmark 0x2024 lookup 2022", delete: []string{"rule", "del", "priority", "32768", "not", "from", "all", "fwmark", "0x2024", "lookup", singboxRouteTable}},
 	// Keep distinct persisted IDs so a format change after recording ownership
 	// cannot silently authorize deletion of a replacement rule.
 	{id: "output_mark_masked", priority: 9000, line: "from all fwmark 0x2024/0x2027 goto 9002", delete: []string{"rule", "del", "priority", "9000", "from", "all", "fwmark", "0x2024/0x2027", "goto", "9002"}},
@@ -88,6 +89,7 @@ var managedIPRuleSpecs = []managedIPRuleSpec{
 
 var managedIPRuleProfiles = [][]string{
 	{"output_mark", "input_mark", "redirect_nop", "fallback"},
+	{"output_mark", "input_mark", "redirect_nop", "fallback_inverted"},
 	{"output_mark_masked", "input_mark_masked", "redirect_nop", "fallback_masked"},
 }
 
