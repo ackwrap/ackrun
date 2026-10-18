@@ -278,12 +278,13 @@ onBeforeUnmount(() => clearInterval(protectionPoll));
           <span
             class="mt-1 block text-xs leading-5 text-[var(--text-secondary)]"
           >
-            保护已绑定设备。明确排除接口的入站流量保持直连，不受此开关或设备 DNS
-            接管影响。其他接口的设备流量在核心停止或异常退出后，阻断外网与 DNS
-            直连；本地网络仍可访问，FakeIP 地址池不作为本地网络放行。
+            保护已绑定设备。仅 IP 规则的明确排除接口保持直连，不受此开关或设备
+            DNS 接管影响。其他接口的设备流量在核心停止或异常退出后，阻断外网与
+            DNS 直连；本地网络仍可访问，FakeIP 地址池不作为本地网络放行。
             DNS（包括发往路由器的查询）继续由节点处理，
-            核心停止时阻断。关闭后解除保护。
-            切换开关、修改设备地址、接口排除或启停设备规则前，请先停止核心。
+            核心停止时阻断。关闭后解除保护。 MAC
+            规则需要常驻此保护，且不能与接口或来源直连排除同时启用。
+            切换开关、修改设备 MAC/IP、接口排除或启停设备规则前，请先停止核心。
           </span>
         </span>
         <input
@@ -306,7 +307,7 @@ onBeforeUnmount(() => clearInterval(protectionPoll));
       >
         {{ saving ? "正在保存…" : protectionLabel }}
         <span v-if="protection.device_protection_count">
-          · {{ protection.device_protection_count }} 个地址范围</span
+          · {{ protection.device_protection_count }} 个 MAC / 地址范围</span
         >
       </p>
       <p

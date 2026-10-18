@@ -21,6 +21,7 @@ type protectionNFTStub struct {
 	offload    bool
 	failApply  bool
 	failDelete bool
+	objects    []map[string]any
 }
 
 func (n *protectionNFTStub) run(input string, args ...string) ([]byte, error) {
@@ -39,7 +40,9 @@ func (n *protectionNFTStub) run(input string, args ...string) ([]byte, error) {
 		return json.Marshal(map[string]interface{}{"nftables": entries})
 	case "-c -f -":
 		return nil, nil
-	case "-f -":
+	case "-j list table inet " + deviceProtectionTable:
+		return json.Marshal(map[string]any{"nftables": n.objects})
+	case "-j -e -f -":
 		if n.failApply {
 			return nil, errors.New("apply rejected")
 		}
@@ -49,7 +52,24 @@ func (n *protectionNFTStub) run(input string, args ...string) ([]byte, error) {
 			}
 		}
 		n.count = strings.Count(input, "counter drop") + strings.Count(input, "counter return") + strings.Count(input, "redirect to")
-		return nil, nil
+		n.objects = []map[string]any{{"table": map[string]any{"family": "inet", "name": deviceProtectionTable, "comment": n.owner}}}
+		chain := ""
+		for _, line := range strings.Split(input, "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "chain ") {
+				chain = strings.Fields(line)[1]
+				n.objects = append(n.objects, map[string]any{"chain": map[string]any{"family": "inet", "table": deviceProtectionTable, "name": chain}})
+			} else if strings.Contains(line, "counter ") || strings.Contains(line, "redirect to") {
+				// Lifecycle tests only need distinguishable statements. Packet tests
+				// below use the real nft compiler and JSON expressions.
+				n.objects = append(n.objects, map[string]any{"rule": map[string]any{"family": "inet", "table": deviceProtectionTable, "chain": chain, "expr": []any{map[string]any{"synthetic_statement": line}}}})
+			}
+		}
+		echo := make([]map[string]any, 0, len(n.objects))
+		for _, object := range n.objects {
+			echo = append(echo, map[string]any{"add": object})
+		}
+		return json.Marshal(map[string]any{"nftables": echo})
 	case "delete table inet " + deviceProtectionTable:
 		if n.failDelete {
 			return nil, errors.New("delete rejected")

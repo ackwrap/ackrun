@@ -26,10 +26,9 @@ func isDeviceLocalDestination(prefix netip.Prefix) bool {
 }
 
 func deviceLocalRouteRule(sources, destinations []string) map[string]interface{} {
-	return map[string]interface{}{
-		"source_ip_cidr": sources,
-		"ip_cidr":        destinations,
-		"action":         "bypass",
-		"outbound":       "direct",
-	}
+	return deviceSourceRule(sources, map[string]interface{}{
+		"ip_cidr":  destinations,
+		"action":   "bypass",
+		"outbound": "direct",
+	})
 }

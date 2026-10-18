@@ -2229,6 +2229,19 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 	var ruleSets []map[string]interface{}
 	ruleSetTags := make(map[string]bool)
 	ruleModeFinalOutbound := SystemGlobalDirectRouteRuleName
+	deviceCIDRs, deviceMACs := splitDeviceSources(deviceRuleCIDRs(devices))
+	if len(deviceMACs) > 0 {
+		// The kernel has already selected a protected MAC. If the core has not
+		// learned its neighbor yet, fail here before DNS or any ordinary rule.
+		known := deviceSourceRule(deviceRuleCIDRs(devices), map[string]interface{}{})
+		known["invert"] = true
+		routeRules = append(routeRules, map[string]interface{}{
+			"type": "logical", "mode": "and", "rules": []map[string]interface{}{
+				{"inbound": deviceMACInbounds()}, known,
+			}, "action": "reject",
+		})
+		routeRules = append(routeRules, map[string]interface{}{"inbound": deviceMACDNSInboundTag, "action": "hijack-dns"})
+	}
 
 	// 标准 TCP/UDP DNS 必须在进程和节点直连白名单之前劫持，避免 DNS
 	// 目标与白名单地址重合时被 bypass 终止匹配。
@@ -2238,10 +2251,10 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 			return nil, fmt.Errorf("读取通用设置失败: %w", settingsErr)
 		}
 		if generalSettings.DNSMasqTakeoverEnabled && s.supportsDNSMasqTakeover() && (inboundMode == "tun" || inboundMode == "tun_mixed") {
-			routeRules = append(routeRules, map[string]interface{}{
+			routeRules = append([]map[string]interface{}{{
 				"inbound": dnsInboundTag,
 				"action":  "hijack-dns",
-			})
+			}}, routeRules...)
 		}
 		routeRules = append(routeRules, map[string]interface{}{
 			"port":   53,
@@ -2250,17 +2263,32 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 	}
 
 	// 内核级绕过必须先于 sniff；TCP 预匹配遇到 sniff 后不会继续匹配后续规则。
-	if len(devices) > 0 {
+	if len(deviceCIDRs) > 0 {
 		// Only selected source addresses can use the LAN DNS listener. Unknown
 		// clients must never fall through to the general DNS hijack or routing.
 		routeRules = append(routeRules,
-			map[string]interface{}{"inbound": deviceDNSInboundTag, "source_ip_cidr": deviceRuleCIDRs(devices), "action": "hijack-dns"},
+			map[string]interface{}{"inbound": deviceDNSInboundTag, "source_ip_cidr": deviceCIDRs, "action": "hijack-dns"},
 			map[string]interface{}{"inbound": deviceDNSInboundTag, "action": "reject"},
 		)
 	}
 	bypassRules, err := s.defaultBypassRules(runtime.GOOS == "linux" && inboundMode != "mixed")
 	if err != nil {
 		return nil, err
+	}
+	if len(deviceMACs) > 0 {
+		for i, rule := range bypassRules {
+			conditions := map[string]interface{}{}
+			wrapped := map[string]interface{}{"type": "logical", "mode": "and"}
+			for key, value := range rule {
+				if key == "action" || key == "outbound" {
+					wrapped[key] = value
+				} else {
+					conditions[key] = value
+				}
+			}
+			wrapped["rules"] = []map[string]interface{}{{"inbound": deviceMACInboundTag, "invert": true}, conditions}
+			bypassRules[i] = wrapped
+		}
 	}
 	routeRules = append(routeRules, bypassRules...)
 	route["find_process"] = true
@@ -2288,16 +2316,19 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 				routeRules = append(routeRules, deviceLocalRouteRule(device.Values, local))
 			}
 			routeRules = append(routeRules, deviceDirectRouteRules(device, fakeIPs)...)
-			routeRules = append(routeRules, map[string]interface{}{"source_ip_cidr": device.Values, "action": "resolve", "server": deviceDNSServerTag(device.ID)})
+			routeRules = append(routeRules, deviceSourceRule(device.Values, map[string]interface{}{"action": "resolve", "server": deviceDNSServerTag(device.ID)}))
 			// A domain (including an old FakeIP mapping) may resolve to LAN.
 			if len(local) > 0 {
 				routeRules = append(routeRules, deviceLocalRouteRule(device.Values, local))
 			}
 			routeRules = append(routeRules,
-				map[string]interface{}{"source_ip_cidr": device.Values, "ip_cidr": fakeIPs, "action": "reject"},
-				singboxRouteRule("source_ip_cidr", device.Values, outbound, false),
+				deviceSourceRule(device.Values, map[string]interface{}{"ip_cidr": fakeIPs, "action": "reject"}),
+				deviceSourceRule(device.Values, map[string]interface{}{"action": "route", "outbound": outbound}),
 			)
 		}
+	}
+	if len(deviceMACs) > 0 {
+		routeRules = append(routeRules, map[string]interface{}{"inbound": deviceMACInboundTag, "action": "reject"})
 	}
 	preSniffRuleCount := len(routeRules)
 
@@ -2925,7 +2956,7 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase(routeFinal ...string) (
 	}
 	// Device whitelist matching also needs domains for connections without HTTP/TLS sniff data.
 	for _, rule := range deviceDNSRules {
-		if _, ok := rule["domain_suffix"]; ok {
+		if _, ok := rule["domain_suffix"]; ok || rule["type"] == "logical" {
 			dns["reverse_mapping"] = true
 			break
 		}
@@ -3574,12 +3605,29 @@ func (s *ConfigGeneratorService) generateInbounds(listen string, port int, tunIP
 	if err != nil {
 		return nil, err
 	}
-	if len(devices) > 0 {
+	cidrs, macs := splitDeviceSources(deviceRuleCIDRs(devices))
+	if len(cidrs) > 0 {
 		if mode != "tun" && port == deviceDNSPort {
 			return nil, fmt.Errorf("Mixed 入站端口不能与设备 DNS 端口 %d 冲突", deviceDNSPort)
 		}
 		inbounds = append(inbounds, map[string]interface{}{
 			"type": "direct", "tag": deviceDNSInboundTag, "listen": "::", "listen_port": deviceDNSPort,
+		})
+	}
+	if len(macs) > 0 {
+		for _, raw := range inbounds {
+			if inbound, ok := raw.(map[string]interface{}); ok && inbound["type"] == "tun" {
+				inbound["exclude_mac_address"] = macs
+			}
+		}
+		if mode != "tun" && (port == deviceMACPort || port == deviceMACDNSPort) {
+			return nil, fmt.Errorf("Mixed 入站端口不能与设备 MAC 端口 %d 冲突", deviceMACPort)
+		}
+		inbounds = append(inbounds, map[string]interface{}{
+			"type": "tproxy", "tag": deviceMACInboundTag, "listen": "::", "listen_port": deviceMACPort,
+		})
+		inbounds = append(inbounds, map[string]interface{}{
+			"type": "direct", "tag": deviceMACDNSInboundTag, "listen": "::", "listen_port": deviceMACDNSPort,
 		})
 	}
 

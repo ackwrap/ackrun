@@ -316,6 +316,13 @@ func (svc *SingboxService) validateProtectedConfig(path string) error {
 		return err
 	}
 	if !settings.DeviceProtectionEnabled {
+		devices, deviceErr := enabledDeviceRules(svc.store)
+		if deviceErr != nil {
+			return deviceErr
+		}
+		if _, macs := splitDeviceSources(deviceRuleCIDRs(devices)); len(macs) > 0 {
+			return errors.New("MAC 设备绑定需要先开启常驻防泄漏保护")
+		}
 		if len(persisted) > 0 {
 			return errors.New("存在未完成的设备防泄漏操作，请先在设置中处理")
 		}
@@ -389,7 +396,8 @@ func (svc *SingboxService) validateProtectedConfig(path string) error {
 		return err
 	}
 	slices.Sort(state.DeviceDNSCIDRs)
-	if !reflect.DeepEqual(state.DeviceDNSCIDRs, desired) {
+	desiredCIDRs, macs := splitDeviceSources(desired)
+	if !slices.Equal(state.DeviceDNSCIDRs, desiredCIDRs) {
 		return errors.New("活动配置缺少受保护设备 DNS 来源，请重新生成配置")
 	}
 	var inbounds []struct {
@@ -413,6 +421,30 @@ func (svc *SingboxService) validateProtectedConfig(path string) error {
 			if !slices.Equal(actualExcluded, excluded) {
 				return errors.New("活动配置的接口排除与防泄漏策略不一致，请重新生成配置")
 			}
+		}
+	}
+	if len(macs) > 0 {
+		request, err := g.loadConfigGenerateRequest()
+		if err != nil {
+			return err
+		}
+		if request == nil {
+			request = &model.ConfigGenerateRequest{InboundListen: "0.0.0.0", InboundPort: model.DefaultMixedInboundPort, TUNIPv4Address: defaultTUNIPv4Address, TUNIPv6Address: defaultTUNIPv6Address}
+		}
+		expectedInbounds, err := g.generateInbounds(request.InboundListen, request.InboundPort, request.TUNIPv4Address, request.TUNIPv6Address)
+		if err != nil {
+			return err
+		}
+		encoded, err := json.Marshal(expectedInbounds)
+		if err != nil {
+			return err
+		}
+		var expected interface{}
+		if err := json.Unmarshal(encoded, &expected); err != nil {
+			return err
+		}
+		if !reflect.DeepEqual(actual["inbounds"], expected) {
+			return errors.New("MAC 设备保护要求入口与当前生成配置一致")
 		}
 	}
 	return nil

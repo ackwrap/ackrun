@@ -3,11 +3,13 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -47,7 +49,7 @@ func TestNFTGuardPackets(t *testing.T) {
 	}
 	newPeer := func(name, router4, peer4, router6, peer6 string) string {
 		t.Helper()
-		cmd := exec.Command("unshare", "-n", "sleep", "120")
+		cmd := exec.Command("unshare", "-n", "sleep", "240")
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
@@ -494,5 +496,207 @@ sys.exit(1 if leaked else 0)
 		for _, protocol := range []string{"tcp", "udp"} {
 			check(lan, address, "0", "pass", "53", protocol)
 		}
+	}
+
+	// MAC-only protection remains effective across a changed source address.
+	output, err = exec.Command("nsenter", "-t", lan, "-n", "ip", "-j", "link", "show", "guard-lan-peer").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var links []struct {
+		Address string `json:"address"`
+	}
+	if json.Unmarshal(output, &links) != nil || len(links) != 1 {
+		t.Fatal("missing synthetic peer MAC")
+	}
+	macSources := []string{links[0].Address}
+	// A stale DNAT to another LAN resolver at the same port as our new DNS
+	// listener must not inherit the local-network forwarding exception.
+	server(local, "10.44.0.2", "1056")
+	if _, err := newDaemon.run(`table inet mac_dns_legacy {
+ chain prerouting {
+ type nat hook prerouting priority dstnat; policy accept;
+ ip daddr 10.44.0.2 udp dport 53 dnat ip to 10.44.0.2:1056
+ }
+}`, "-f", "-"); err != nil {
+		t.Fatal(err)
+	}
+	checkLegacyDNS := func(want string) {
+		run("nsenter", "-t", lan, "-n", "python3", "-c", `import socket,sys
+s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.settimeout(.4)
+s.bind(('192.168.50.2',30123));s.sendto(b'legacy-dns',('10.44.0.2',53))
+try:r=s.recv(100);received=r==b'legacy-dns'
+except OSError:received=False
+assert received==(sys.argv[1]=='pass')
+`, want)
+	}
+	checkLegacyDNS("pass")
+	if err := newDaemon.Apply(macSources, nil); err != nil {
+		t.Fatal(err)
+	}
+	checkLegacyDNS("drop")
+	for _, address := range []string{"198.51.100.2", "2001:db8:2::2"} {
+		for _, protocol := range []string{"tcp", "udp"} {
+			check(lan, address, "0", "drop", "15153", protocol)
+			check(lan, address, "0", "drop", "53", protocol)
+			check(vpn, address, "0", "pass", "15153", protocol)
+		}
+	}
+	check(lan, "192.168.50.1", "0", "pass")
+	for _, address := range []string{"192.168.50.1", "fd12:3456::1"} {
+		check(lan, address, "0", "drop", "53")
+	}
+	run("nsenter", "-t", lan, "-n", "ip", "addr", "del", "192.168.50.2/24", "dev", "guard-lan-peer")
+	run("nsenter", "-t", lan, "-n", "ip", "addr", "add", "192.168.50.3/24", "dev", "guard-lan-peer")
+	run("nsenter", "-t", lan, "-n", "ip", "route", "replace", "default", "via", "192.168.50.1")
+	run("nsenter", "-t", lan, "-n", "ip", "-6", "addr", "del", "fd12:3456::2/64", "dev", "guard-lan-peer")
+	run("nsenter", "-t", lan, "-n", "ip", "-6", "addr", "add", "fd12:3456::3/64", "dev", "guard-lan-peer", "nodad")
+	for _, address := range []string{"198.51.100.2", "2001:db8:2::2"} {
+		check(lan, address, "0", "drop")
+	}
+	run("nft", "-f", newDaemon.path)
+	if err := newDaemon.Verify(macSources, nil); err != nil {
+		t.Fatal(err)
+	}
+	if binary := os.Getenv("ACKWRAP_SINGBOX_114_BIN"); binary != "" {
+		resolver := exec.Command("nsenter", "-t", wan, "-n", "python3", "-u", "-c", `import socket
+s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+s.bind(('198.51.100.2',15354))
+print('ready',flush=True)
+while True:
+ d,p=s.recvfrom(4096)
+ s.sendto(d[:2]+b'\x81\x80'+d[4:6]+b'\x00\x00\x00\x00\x00\x00'+d[12:],p)
+`)
+		stdout, err := resolver.StdoutPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := resolver.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = resolver.Process.Kill(); _ = resolver.Wait() })
+		var ready [6]byte
+		if _, err := stdout.Read(ready[:]); err != nil || string(ready[:]) != "ready\n" {
+			t.Fatal("DNS responder not ready")
+		}
+		run("ip", "route", "replace", "default", "via", "198.51.100.2")
+		run("ip", "-6", "route", "replace", "default", "via", "2001:db8:2::2")
+		startCore := func(identity []string) *exec.Cmd {
+			t.Helper()
+			known := deviceSourceRule(identity, map[string]interface{}{})
+			known["invert"] = true
+			tun := generatedTUNInbound(true, defaultTUNIPv4Address, defaultTUNIPv6Address, nil, nil)
+			tun["exclude_mac_address"] = macSources
+			config := map[string]interface{}{
+				"inbounds":  []map[string]interface{}{tun, {"type": "tproxy", "tag": deviceMACInboundTag, "listen": "::", "listen_port": deviceMACPort}, {"type": "direct", "tag": deviceMACDNSInboundTag, "listen": "::", "listen_port": deviceMACDNSPort}},
+				"outbounds": []map[string]interface{}{{"type": "direct", "tag": "direct"}},
+				"dns": map[string]interface{}{
+					"servers": []map[string]interface{}{{"type": "udp", "tag": "bound", "server": "198.51.100.2", "server_port": 15354}, {"type": "udp", "tag": "ordinary", "server": "198.51.100.2", "server_port": 15355}},
+					"rules":   []map[string]interface{}{deviceSourceRule(identity, map[string]interface{}{"server": "bound"}), {"inbound": deviceMACInbounds(), "action": "reject"}},
+					"final":   "ordinary",
+				},
+				"route": map[string]interface{}{"rules": []map[string]interface{}{
+					{"type": "logical", "mode": "and", "rules": []map[string]interface{}{{"inbound": deviceMACInbounds()}, known}, "action": "reject"},
+					{"inbound": deviceMACDNSInboundTag, "action": "hijack-dns"},
+					{"port": 53, "action": "hijack-dns"},
+					deviceSourceRule(identity, map[string]interface{}{"action": "route", "outbound": "direct"}),
+					{"inbound": deviceMACInboundTag, "action": "reject"},
+				}, "final": "direct", "auto_detect_interface": true},
+			}
+			data, _ := json.Marshal(config)
+			path := filepath.Join(t.TempDir(), "core.json")
+			if err := os.WriteFile(path, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command(binary, "run", "-c", path)
+			logFile, err := os.Create(filepath.Join(t.TempDir(), "core.log"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			cmd.Stdout, cmd.Stderr = logFile, logFile
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				_ = cmd.Process.Kill()
+				_ = cmd.Wait()
+				_ = logFile.Close()
+				if t.Failed() {
+					data, _ := os.ReadFile(logFile.Name())
+					t.Logf("synthetic core: %s", data)
+				}
+			})
+			time.Sleep(300 * time.Millisecond)
+			return cmd
+		}
+		// Model lookup failure with an identity absent from the core's match
+		// set; its ordinary final is deliberately direct to expose fallthrough.
+		core := startCore([]string{"02:00:00:00:ff:fe"})
+		for _, address := range []string{"198.51.100.2", "2001:db8:2::2"} {
+			for _, protocol := range []string{"tcp", "udp"} {
+				check(lan, address, "0", "drop", "15153", protocol)
+				check(lan, address, "0", "drop", "53", protocol)
+			}
+		}
+		_ = core.Process.Signal(syscall.SIGTERM)
+		_ = core.Wait()
+		core = startCore(macSources)
+		for _, address := range []string{"198.51.100.2", "2001:db8:2::2"} {
+			for _, protocol := range []string{"tcp", "udp"} {
+				check(lan, address, "0", "pass", "15153", protocol)
+				check(vpn, address, "0", "pass", "15153", protocol)
+			}
+		}
+		linkData, err := exec.Command("ip", "-j", "-6", "addr", "show", "dev", "guard-lan").Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var interfaces []struct {
+			Addresses []struct{ Local, Scope string } `json:"addr_info"`
+		}
+		if json.Unmarshal(linkData, &interfaces) != nil {
+			t.Fatal("link-local address parse failed")
+		}
+		dnsTargets := []string{"192.168.50.1", "198.51.100.2", "2001:db8:2::2"}
+		for _, iface := range interfaces {
+			for _, addr := range iface.Addresses {
+				if addr.Scope == "link" {
+					dnsTargets = append(dnsTargets, addr.Local+"%guard-lan-peer")
+				}
+			}
+		}
+		if len(dnsTargets) != 4 {
+			t.Fatal("missing IPv6 link-local DNS test target")
+		}
+		for _, address := range dnsTargets {
+			for _, network := range []string{"tcp", "udp"} {
+				run("nsenter", "-t", lan, "-n", "python3", "-c", `import socket,sys,struct
+tcp=sys.argv[2]=='tcp'
+family=socket.AF_INET6 if ':' in sys.argv[1] else socket.AF_INET
+kind=socket.SOCK_STREAM if tcp else socket.SOCK_DGRAM
+s=socket.socket(family,kind);s.settimeout(2)
+target=socket.getaddrinfo(sys.argv[1],53,family,kind)[0][4]
+q=b'\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x07example\x03com\x00\x00\x01\x00\x01'
+s.connect(target)
+s.sendall((struct.pack('!H',len(q)) if tcp else b'')+q)
+if tcp:
+ size=struct.unpack('!H',s.recv(2))[0]
+ r=s.recv(size)
+else:r=s.recv(4096)
+assert r[:2]==q[:2] and r[2]&128 and r[3]&15==0,repr(r)
+`, address, network)
+			}
+		}
+		_ = core.Process.Kill()
+		_ = core.Wait()
+		for _, address := range []string{"198.51.100.2", "2001:db8:2::2"} {
+			check(lan, address, "0", "drop")
+		}
+	}
+	if err := newDaemon.Disable(); err != nil {
+		t.Fatal(err)
+	}
+	for _, address := range []string{"198.51.100.2", "2001:db8:2::2"} {
+		check(lan, address, "0", "pass")
 	}
 }

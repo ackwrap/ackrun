@@ -5,6 +5,7 @@ import Modal from "@/components/ui/Modal.vue";
 import EmojiPicker, { defaultEmojis } from "@/components/ui/EmojiPicker.vue";
 import { api } from "@/services/api";
 import type { RouteRule, RouteRuleSubscription } from "@/services/types";
+import { deviceRulePreview } from "./deviceRulePreview";
 
 const props = defineProps<{
   editing: RouteRule | null;
@@ -36,7 +37,7 @@ const types = [
   ["domain_suffix", "域名后缀"],
   ["domain_keyword", "域名关键词"],
   ["ip_cidr", "IP CIDR"],
-  ["source_ip_cidr", "设备 IP / 网段（DNS 跟随）"],
+  ["source_ip_cidr", "设备 MAC / IP / 网段（DNS 跟随）"],
   ["process_name", "进程名称"],
   ["geoip", "GeoIP"],
   ["geosite", "GeoSite"],
@@ -198,27 +199,11 @@ function previewRules() {
     .map((value) => value.trim())
     .filter(Boolean);
   if (isDevice.value) {
-    const domains = props.directDomainsText
-      .split("\n")
-      .map((value) => value.trim().toLowerCase().replace(/\.$/, ""))
-      .filter(Boolean);
-    return [
-      ...(domains.length
-        ? [
-            {
-              source_ip_cidr: values,
-              domain_suffix: domains,
-              action: "route",
-              outbound: "direct",
-            },
-          ]
-        : []),
-      {
-        source_ip_cidr: values,
-        action: "route",
-        outbound: props.name || "设备固定节点",
-      },
-    ];
+    return deviceRulePreview(
+      values,
+      props.directDomainsText.split("\n"),
+      props.name || "设备固定节点",
+    );
   }
   if (props.ruleType !== "mixed") {
     const key = ["geoip", "geosite"].includes(props.ruleType)
@@ -268,7 +253,8 @@ function previewRules() {
 }
 
 function ruleValuePlaceholder(ruleType: string) {
-  if (ruleType === "source_ip_cidr") return "192.168.1.100\nfd12:3456::100/128";
+  if (ruleType === "source_ip_cidr")
+    return "02:11:22:33:44:55\n192.168.1.100\n192.168.1.0/24\nfd12:3456::100/128";
   if (ruleType === "rule_set") return "geosite-cn\ngeoip-cn";
   if (ruleType === "geosite") return "geolocation-!cn\nyoutube\ngoogle";
   if (ruleType === "geoip") return "cn\nprivate\nus";
@@ -278,6 +264,8 @@ function ruleValuePlaceholder(ruleType: string) {
 }
 
 function ruleValueHelp(ruleType: string) {
+  if (ruleType === "source_ip_cidr")
+    return "每行一个 MAC 或 IP/CIDR，可只填 MAC、只填 IP，也可混填；任一值命中即可（OR），MAC 无需配套填写 IP。至少填写一项。";
   if (ruleType === "geosite")
     return "填写或搜索 GeoSite 分类名；geolocation-!cn 中的 ! 是官方分类名的一部分，其他排除请使用“反向匹配”。";
   if (ruleType === "geoip")
@@ -497,26 +485,40 @@ onBeforeUnmount(() => {
           </label>
         </div>
 
-        <p
+        <div
           v-if="isDevice"
-          class="rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--bg-base)] p-3 text-xs leading-6 text-[var(--text-secondary)]"
+          class="space-y-2 rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--bg-base)] p-3 text-xs leading-6 text-[var(--text-secondary)]"
         >
-          每行填写一个设备 IP 或网段，例如 192.168.1.100 或 fd12:3456::100/128。
-          建议固定 DHCP 地址；同时填写设备实际使用的 IPv4 和 IPv6 地址。
-          保存后选择一个固定节点，非排除接口的外网流量默认走该节点，DNS
-          默认使用同一出口并优先于普通 DNS、FakeIP
-          和业务分流规则。本地网络自动直连：IPv4 私网、链路本地地址及 IPv6
-          ULA、链路本地地址，不强制经过节点。FakeIP
-          地址池会从本地直连范围中扣除， 还原为真实目标后再决定出口。需要
-          Linux/OpenWrt、规则模式、TUN 接管及 DNS 管理；设备网关须指向运行
-          Ackwrap 的路由器。明确排除接口的入站流量优先直连，不受设备绑定、设备
-          DNS 接管和防泄漏阻断影响。本地目标 IP/CIDR
-          和进程排除可保留；需移除外网目标
-          IP、域名排除及与设备重叠的来源排除，并关闭软/硬件流量卸载。
-          高级平台路由不能覆盖该设备；独立代理入口仍按各自策略转发。
-          未命中直连白名单的外网流量在节点失效时连接失败，不自动直连；本地网络仍可访问。
-          节点服务连接的防回环排除仍生效；UDP 等协议需节点支持。
-        </p>
+          <p>
+            支持单填 MAC、单填 IP/CIDR 或混填，任一值命中即识别为此设备。 MAC
+            无需配套 IP，但必须在路由器入口可见且保持稳定；随机 MAC、跨路由或
+            NAT 可能影响身份识别。使用 IP 时建议固定 DHCP
+            地址，并覆盖设备实际使用的 IPv4 和 IPv6 地址。
+          </p>
+          <p>
+            含 MAC 的规则运行需要开启并常驻“流量防泄漏”保护，以及系统 TProxy 和
+            ip-full
+            支持；受保护流量的设备身份暂不可识别时拒绝连接，不回落普通直连。 MAC
+            入口接管 TCP/UDP，其他外网协议保持阻断。
+            具体可用性取决于路由器入口与系统能力，配置预览不代表已通过实机验证。
+          </p>
+          <p>
+            保存后选择一个固定节点，非排除接口的外网流量默认走该节点，DNS
+            默认使用同一出口并优先于普通 DNS、FakeIP
+            和业务分流规则。本地网络自动直连：IPv4 私网、链路本地地址及 IPv6
+            ULA、链路本地地址，不强制经过节点。FakeIP
+            地址池会从本地直连范围中扣除， 还原为真实目标后再决定出口。需要
+            Linux/OpenWrt、规则模式、TUN 接管及 DNS 管理；设备网关须指向运行
+            Ackwrap 的路由器。仅 IP 规则的明确排除接口优先直连；MAC
+            规则不能与接口或来源直连排除同时启用。本地目标 IP/CIDR
+            和进程排除可保留；需移除外网目标
+            IP、域名排除及与设备重叠的来源排除，并关闭软/硬件流量卸载。
+            高级平台路由不能覆盖该设备；独立代理入口仍按各自策略转发。
+            未命中直连白名单的外网流量在节点失效时连接失败，不自动直连；本地网络仍可访问。
+            路由器自身节点连接仍保留防回环排除；MAC 设备入口不使用该豁免。UDP
+            等协议需节点支持。
+          </p>
+        </div>
 
         <div
           v-if="!isFinalStrategy && ruleType === 'mixed'"
@@ -621,7 +623,7 @@ onBeforeUnmount(() => {
         </div>
 
         <label v-else-if="!isFinalStrategy" class="block text-xs font-medium">
-          匹配值
+          {{ isDevice ? "设备 MAC / IP / 网段" : "匹配值" }}
           <textarea
             :value="valuesText"
             rows="9"
@@ -655,11 +657,13 @@ onBeforeUnmount(() => {
             class="mt-1.5 block text-[11px] font-normal leading-5 text-[var(--text-tertiary)]"
           >
             每行一个域名，包含该域名及其子域名；最多 256
-            个，不填协议、路径或通配符。 仅对上方设备生效：白名单流量和 DNS
-            直连，其余默认走绑定节点。 DNS 使用全局默认的远程上游（默认项非远程
-            DNS 时使用代理 DNS Final 上游），经直连查询。域名通过受管 DNS
+            个，不填协议、路径或通配符。必须同时命中上方任一 MAC/IP
+            条件和白名单域名（AND），流量和 DNS 直连，其余默认走绑定节点。 DNS
+            使用全局默认的远程上游（默认项非远程 DNS 时使用代理 DNS Final
+            上游），经直连查询。域名通过受管 DNS
             或连接嗅探识别；无法识别域名时仍走绑定节点。
-            开启流量防泄漏后，核心停止时白名单外网流量也会阻断。
+            流量防泄漏保护开启时（MAC
+            规则必需），核心停止后白名单外网流量也会阻断。
           </span>
         </label>
 
@@ -781,6 +785,12 @@ onBeforeUnmount(() => {
         >
           <FileJson2 :size="16" /> sing-box 规则预览
         </header>
+        <p
+          v-if="isDevice && !valuesText.trim()"
+          class="px-4 pt-3 text-xs leading-5 text-[var(--text-secondary)]"
+        >
+          请至少填写一个 MAC 或 IP/CIDR；空条件不会生成设备规则。
+        </p>
         <pre
           class="max-h-[480px] overflow-auto p-4 text-xs leading-6 text-[var(--text-secondary)]"
           >{{ preview }}</pre>
@@ -798,7 +808,7 @@ onBeforeUnmount(() => {
       <button
         v-if="!editing?.is_system || isFinalStrategy"
         class="aw-action-button aw-action-success"
-        :disabled="saving"
+        :disabled="saving || (isDevice && !valuesText.trim())"
         @click="emit('save')"
       >
         <Save :size="14" />{{ isFinalStrategy ? "保存最终策略" : "保存规则" }}
