@@ -132,7 +132,7 @@ function showMessage(v: string, t: "success" | "error" = "error") {
 const formatSize = (value: number) =>
   value < 1024 ? `${value} B` : `${(value / 1024).toFixed(1)} KiB`;
 const formatUpdatedAt = (value: number) =>
-  value ? new Date(value).toLocaleString() : "-";
+  value ? new Date(value).toLocaleString(undefined, { hourCycle: "h23" }) : "-";
 function backupSummary(configName: string) {
   const backups = configBackups.value.filter(
     (item) => item.config_name === configName,

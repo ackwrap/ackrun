@@ -256,7 +256,9 @@ async function remove() {
 }
 const address = (n: NodeItem) => `${n.server}:${n.server_port}`,
   formatUpdatedAt = (value: number) =>
-    value > 0 ? new Date(value).toLocaleString() : "--",
+    value > 0
+      ? new Date(value).toLocaleString(undefined, { hourCycle: "h23" })
+      : "--",
   pretty = (s: string) => {
     try {
       return JSON.stringify(JSON.parse(s || "{}"), null, 2);

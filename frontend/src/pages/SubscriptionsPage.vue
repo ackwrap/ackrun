@@ -87,7 +87,8 @@ const modes = [
     ["raw_json", "解析 JSON"],
   ];
 const show = (s: string) => (message.value = s),
-  formatTime = (v: number) => (v > 0 ? new Date(v).toLocaleString() : "--"),
+  formatTime = (v: number) =>
+    v > 0 ? new Date(v).toLocaleString(undefined, { hourCycle: "h23" }) : "--",
   traffic = (x: Subscription) =>
     x.traffic_total_bytes > 0
       ? `${(x.traffic_used_bytes / 1073741824).toFixed(1)} GB / ${(x.traffic_total_bytes / 1073741824).toFixed(1)} GB`

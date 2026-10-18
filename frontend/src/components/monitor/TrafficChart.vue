@@ -48,7 +48,8 @@ onMounted(async () => {
       axisLabel: {
         color: "#7B8AA2",
         fontSize: 10,
-        formatter: (v: string) => new Date(+v).toLocaleTimeString(),
+        formatter: (v: string) =>
+          new Date(+v).toLocaleTimeString(undefined, { hourCycle: "h23" }),
       },
     },
     yAxis: {

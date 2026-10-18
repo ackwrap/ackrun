@@ -10,7 +10,9 @@ export function formatTime(value?: number | string) {
   const normalized =
     typeof value === "number" && value < 10_000_000_000 ? value * 1000 : value;
   const date = new Date(normalized);
-  return Number.isNaN(date.getTime()) ? "--" : date.toLocaleString();
+  return Number.isNaN(date.getTime())
+    ? "--"
+    : date.toLocaleString(undefined, { hourCycle: "h23" });
 }
 
 export function dateTimeInput(value: number) {

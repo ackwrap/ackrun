@@ -81,7 +81,9 @@ const cachedCount = computed(() =>
   activeTab.value === "core" ? coreLogs.value.length : toolLogs.value.length,
 );
 const formatTime = (value: number) =>
-  value ? new Date(value).toLocaleTimeString() : "--:--:--";
+  value
+    ? new Date(value).toLocaleTimeString(undefined, { hourCycle: "h23" })
+    : "--:--:--";
 
 function coreLogIdentity(item: CoreLogEntry) {
   return JSON.stringify([item.id, item.time, item.source, item.line]);
