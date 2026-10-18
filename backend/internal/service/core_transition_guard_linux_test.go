@@ -17,6 +17,11 @@ func TestNFTTransitionGuardOwnershipOffloadAndAtomicRules(t *testing.T) {
 			var script string
 			present := scenario == "existing" || scenario == "foreign" || scenario == "remove-failure"
 			g := &nftTransitionGuard{statePath: filepath.Join(t.TempDir(), "guard")}
+			if present {
+				if err := os.WriteFile(g.statePath, []byte(legacyTransitionGuardOwner+"\n[]\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
 			g.run = func(input string, args ...string) ([]byte, error) {
 				call := strings.Join(args, " ")
 				calls = append(calls, call)
@@ -51,7 +56,7 @@ func TestNFTTransitionGuardOwnershipOffloadAndAtomicRules(t *testing.T) {
 				t.Fatalf("unexpected command: %s", call)
 				return nil, nil
 			}
-			err := g.Enable(nil)
+			err := g.Enable(nil, nil)
 			fails := scenario == "foreign" || scenario == "offload" || scenario == "apply-failure"
 			if (err != nil) != fails {
 				t.Fatalf("Enable error=%v", err)

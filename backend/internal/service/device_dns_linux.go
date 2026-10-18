@@ -33,25 +33,26 @@ func newDeviceDNSLifecycle(p *paths.Paths) deviceDNSLifecycle {
 	}}
 }
 
-func (d *nftDeviceDNS) inspect(activating bool) (bool, error) {
+func (d *nftDeviceDNS) inspect(activating bool, sources ...string) (bool, error) {
 	output, err := d.run("", "-j", "list", "ruleset")
 	if err != nil {
 		return false, fmt.Errorf("读取设备 DNS 接管状态失败，请确认 nftables 可用: %w", err)
 	}
 	var state struct {
 		NFTables []struct {
-			Table     *struct{ Family, Name, Comment string } `json:"table"`
-			Flowtable *json.RawMessage                        `json:"flowtable"`
+			Table *struct{ Family, Name, Comment string } `json:"table"`
 		} `json:"nftables"`
 	}
 	if err := json.Unmarshal(output, &state); err != nil {
 		return false, fmt.Errorf("解析设备 DNS 接管状态失败")
 	}
+	if activating {
+		if err := checkNFTFlowtables(output, sources); err != nil {
+			return false, err
+		}
+	}
 	present := false
 	for _, entry := range state.NFTables {
-		if activating && entry.Flowtable != nil {
-			return false, fmt.Errorf("设备规则需要关闭软/硬件流量卸载，请先关闭 flowtable 再启动核心")
-		}
 		if table := entry.Table; table != nil && table.Family == "inet" && table.Name == deviceDNSTable {
 			if table.Comment != deviceDNSOwner {
 				return false, fmt.Errorf("设备 DNS 接管表被其他程序占用，拒绝覆盖")
@@ -95,7 +96,11 @@ func deviceDNSNFTRules(cidrs []string, replace bool, excluded ...string) (string
 }
 
 func (d *nftDeviceDNS) Activate(cidrs []string, excluded ...string) error {
-	present, err := d.inspect(true)
+	cidrs, err := normalizeDeviceCIDRs(cidrs)
+	if err != nil {
+		return err
+	}
+	present, err := d.inspect(true, cidrs...)
 	if err != nil {
 		return err
 	}

@@ -19,6 +19,7 @@ type protectionNFTStub struct {
 	owner      string
 	count      int
 	offload    bool
+	flowtables []map[string]any
 	failApply  bool
 	failDelete bool
 	objects    []map[string]any
@@ -36,6 +37,9 @@ func (n *protectionNFTStub) run(input string, args ...string) ([]byte, error) {
 		}
 		if n.offload {
 			entries = append(entries, map[string]interface{}{"flowtable": map[string]string{"name": "ft"}})
+		}
+		for _, table := range n.flowtables {
+			entries = append(entries, map[string]any{"flowtable": table})
 		}
 		return json.Marshal(map[string]interface{}{"nftables": entries})
 	case "-c -f -":

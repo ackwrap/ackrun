@@ -255,7 +255,7 @@ sys.exit(0 if ok==(sys.argv[3]=='pass') else 1)
 		}
 	}
 	guard := newCoreTransitionGuard(&paths.Paths{DataDir: t.TempDir()})
-	if err := guard.Enable([]string{"guard-vpn"}, fakePools...); err != nil {
+	if err := guard.Enable(nil, []string{"guard-vpn"}, fakePools...); err != nil {
 		t.Fatal(err)
 	}
 	for _, address := range fakeTargets {
@@ -264,12 +264,12 @@ sys.exit(0 if ok==(sys.argv[3]=='pass') else 1)
 	}
 	checkExcluded("pass", true)
 	// Removing an exemption must close even connections established above.
-	if err := guard.Enable(nil, fakePools...); err != nil {
+	if err := guard.Enable(nil, nil, fakePools...); err != nil {
 		t.Fatal(err)
 	}
 	checkExcluded("drop", false)
 	// A subsequent reload retains the old pools as well as the replacement.
-	if err := guard.Enable(nil, "10.77.0.0/24", "fd77::/64"); err != nil {
+	if err := guard.Enable(nil, nil, "10.77.0.0/24", "fd77::/64"); err != nil {
 		t.Fatal(err)
 	}
 	for _, address := range append(fakeTargets, "10.77.0.2", "fd77::2") {
@@ -301,6 +301,76 @@ sys.exit(0 if ok==(sys.argv[3]=='pass') else 1)
 	if err != nil || strings.Contains(string(output), transitionGuardTable) {
 		t.Fatal("transition table retained after recovery")
 	}
+	t.Run("device-scoped-transition-and-flowtable", func(t *testing.T) {
+		// A real IPv6 flowtable must coexist with IPv4-only protection. It
+		// cannot be declared unrelated once an IPv6 or MAC identity is added.
+		cmd := exec.Command("nft", "-f", "-")
+		cmd.Stdin = strings.NewReader(`table ip6 guard_test_offload {
+ flowtable ft { hook ingress priority 0; devices = { guard-lan, guard-wan, guard-vpn }; }
+ chain forward { type filter hook forward priority 0; policy accept; meta l4proto { tcp, udp } flow add @ft; }
+}`)
+		if data, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("install isolated test flowtable: %v %s", err, data)
+		}
+		scoped := newCoreTransitionGuard(&paths.Paths{DataDir: t.TempDir()}).(*nftTransitionGuard)
+		if err := scoped.Enable([]string{"192.168.50.2"}, nil, fakePools...); err != nil {
+			t.Fatal(err)
+		}
+		check(lan, "198.51.100.2", "0", "drop")
+		check(lan, "2001:db8:2::2", "0", "pass") // IP-only does not cover IPv6.
+		check(lan, "192.168.60.1", "0", "drop", "53")
+		checkExcluded("pass", true)
+		check("", "198.51.100.2", "0", "pass") // Router output is unscoped.
+		before, err := os.ReadFile(scoped.statePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, values := range [][]string{{"fd12:3456::2"}, {"02:00:00:00:00:02"}} {
+			if err := scoped.Enable(values, nil); err == nil || !strings.Contains(err.Error(), "guard_test_offload") {
+				t.Fatalf("missing conflicting table diagnostic: %v", err)
+			}
+		}
+		after, err := os.ReadFile(scoped.statePath)
+		if err != nil || string(after) != string(before) {
+			t.Fatal("failed widening overwrote recovery state")
+		}
+		if err := scoped.Disable(); err != nil {
+			t.Fatal(err)
+		}
+		run("nft", "delete", "table", "ip6", "guard_test_offload")
+
+		data, err := exec.Command("nsenter", "-t", lan, "-n", "ip", "-j", "link", "show", "guard-lan-peer").Output()
+		var links []struct{ Address string }
+		if err != nil || json.Unmarshal(data, &links) != nil || len(links) != 1 || links[0].Address == "" {
+			t.Fatal("missing test device MAC")
+		}
+		for _, values := range [][]string{
+			{"192.168.50.0/24", "fd12:3456::2"},
+			{links[0].Address},
+			{"192.168.50.2", links[0].Address},
+		} {
+			if err := scoped.Enable(values, nil, fakePools...); err != nil {
+				t.Fatal(err)
+			}
+			for _, address := range []string{"198.51.100.2", "2001:db8:2::2"} {
+				for _, protocol := range []string{"tcp", "udp"} {
+					check(lan, address, "0", "drop", "15153", protocol)
+					check(vpn, address, "0", "pass", "15153", protocol)
+				}
+			}
+			for _, address := range []string{"192.168.60.1", "fd60::1", "10.44.0.2", "fd44:1::2"} {
+				check(lan, address, "0", "drop", "53")
+			}
+			for _, address := range []string{"10.66.0.2", "fd66::2"} {
+				check(lan, address, "0", "drop")
+			}
+			checkLocal()
+			check(lan, "192.168.50.1", "0", "pass")
+			if err := scoped.Disable(); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
 	const establishedProbe = `import socket,sys
 s=socket.socket(socket.AF_INET6 if ':' in sys.argv[1] else socket.AF_INET,socket.SOCK_STREAM)
 s.settimeout(1)
@@ -481,7 +551,7 @@ sys.exit(1 if leaked else 0)
 	}
 	transitionPaths := &paths.Paths{DataDir: t.TempDir()}
 	transition := newCoreTransitionGuard(transitionPaths)
-	if err := transition.Enable(nil); err != nil {
+	if err := transition.Enable(nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(transitionPaths.CoreTransitionGuardPath()); err != nil {
