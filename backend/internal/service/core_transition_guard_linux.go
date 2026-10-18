@@ -24,22 +24,25 @@ const (
 type nftTransitionGuard struct {
 	run       func(input string, args ...string) ([]byte, error)
 	statePath string
+	offload   *fw4OffloadPause
 }
 
 func newCoreTransitionGuard(p *paths.Paths) coreTransitionGuard {
-	return &nftTransitionGuard{statePath: p.CoreTransitionGuardPath(), run: func(input string, args ...string) ([]byte, error) {
+	g := &nftTransitionGuard{statePath: p.CoreTransitionGuardPath(), run: func(input string, args ...string) ([]byte, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), linuxNetworkCommandTimeout)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, "nft", args...)
 		cmd.Stdin = strings.NewReader(input)
 		return cmd.CombinedOutput()
 	}}
+	g.offload = newFW4OffloadPause(p, g.run)
+	return g
 }
 
 func (g *nftTransitionGuard) inspect() (present bool, rulesetData []byte, err error) {
 	output, err := g.run("", "-j", "list", "ruleset")
 	if err != nil {
-		// Mixed-only installations may not have nft. Enable still rejects that.
+		// Enable classifies a missing nft only when no recovery state is pending.
 		return false, nil, err
 	}
 	var ruleset struct {
@@ -70,8 +73,20 @@ func (g *nftTransitionGuard) Enable(sources, excluded []string, fakeIPs ...strin
 	if err != nil {
 		return err
 	}
+	pendingOffload := false
+	if g.offload != nil {
+		pendingOffload, err = g.offload.pending()
+		if err != nil {
+			return err
+		}
+	}
+	_, markerErr := os.Stat(g.statePath)
+	canSkip := os.IsNotExist(markerErr) && !pendingOffload
 	present, rulesetData, err := g.inspect()
 	if err != nil {
+		if canSkip && (errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist)) {
+			return fmt.Errorf("%w: nft 不可用", errTransitionProtectionUnsupported)
+		}
 		return fmt.Errorf("检查 nftables 防泄漏状态失败: %w", err)
 	}
 	// Preserve both identities and pools through failed reloads and restarts.
@@ -116,12 +131,38 @@ func (g *nftTransitionGuard) Enable(sources, excluded []string, fakeIPs ...strin
 			return err
 		}
 	}
-	if err := checkNFTFlowtables(rulesetData, sources); err != nil {
-		return err
-	}
 	fakeIPs, err = normalizeDeviceFakeIPCIDRs(fakeIPs...)
 	if err != nil {
 		return err
+	}
+	if flowErr := checkNFTFlowtables(rulesetData, sources); flowErr != nil || pendingOffload {
+		if flowErr != nil && !errors.Is(flowErr, errFlowtableConflict) {
+			return flowErr
+		}
+		if g.offload == nil {
+			if canSkip && !present {
+				return fmt.Errorf("%w: %v", errTransitionProtectionUnsupported, flowErr)
+			}
+			return flowErr
+		}
+		if err := g.offload.pause(rulesetData); err != nil {
+			if errors.Is(err, errTransitionProtectionUnsupported) && flowErr != nil {
+				err = errors.Join(err, flowErr)
+			}
+			if errors.Is(err, errTransitionProtectionUnsupported) && (!canSkip || present) {
+				return fmt.Errorf("已有保护不能跳过: %v", err)
+			}
+			return err
+		}
+		// Reloads can change tables and handles. Re-check ownership and fast
+		// paths before writing intent or stopping the still-running core.
+		present, rulesetData, err = g.inspect()
+		if err != nil {
+			return err
+		}
+		if err := checkNFTFlowtables(rulesetData, sources); err != nil {
+			return err
+		}
 	}
 	policyData, _ := json.Marshal(transitionGuardPolicy{Sources: append([]string{}, sources...), FakeIPs: append([]string{}, fakeIPs...)})
 	// Persist intent before the atomic nft operation. If Ackwrap exits after
@@ -198,6 +239,9 @@ func (g *nftTransitionGuard) Disable() error {
 func (g *nftTransitionGuard) disable(force bool) error {
 	if !force {
 		if _, err := os.Stat(g.statePath); os.IsNotExist(err) {
+			if g.offload != nil {
+				return g.offload.restore()
+			}
 			return nil
 		} else if err != nil {
 			return err
@@ -214,6 +258,9 @@ func (g *nftTransitionGuard) disable(force bool) error {
 	}
 	if err := os.Remove(g.statePath); err != nil && !os.IsNotExist(err) {
 		return err
+	}
+	if g.offload != nil {
+		return g.offload.restore()
 	}
 	return nil
 }

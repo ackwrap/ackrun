@@ -5,6 +5,7 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -370,6 +371,126 @@ sys.exit(0 if ok==(sys.argv[3]=='pass') else 1)
 				t.Fatal(err)
 			}
 		}
+	})
+	t.Run("fw4-offload-pause-and-restore", func(t *testing.T) {
+		f := newFW4OffloadFixture(t)
+		g := newCoreTransitionGuard(&paths.Paths{DataDir: t.TempDir()}).(*nftTransitionGuard)
+		// UCI is modeled in-memory; exercise fw4's actual atomic table rebuild
+		// and old-flow deletion with the real kernel, sockets and nft compiler.
+		f.manager.nft = g.run
+		// Some host kernels omit CONFIG_NF_CONNTRACK_PROCFS; the cached-flow
+		// probe below still verifies deletion with real packets on those hosts.
+		if _, err := os.Stat("/proc/net/nf_conntrack"); err == nil {
+			f.manager.drained = waitForFlowOffloadDrain
+		}
+		uciRun := f.manager.run
+		reload := func() ([]byte, error) {
+			var b strings.Builder
+			b.WriteString("add table inet fw4\nflush table inet fw4\n")
+			data, err := g.run("", "-j", "list", "ruleset")
+			if err != nil {
+				return nil, err
+			}
+			if strings.Contains(string(data), `"flowtable"`) {
+				b.WriteString("delete flowtable inet fw4 ft\n")
+			}
+			if f.options.Software != nil && *f.options.Software == "1" {
+				b.WriteString(`table inet fw4 {
+ flowtable ft { hook ingress priority 0; devices = { guard-lan, guard-wan, guard-vpn }; counter; }
+ chain forward { type filter hook forward priority 0; policy accept; meta l4proto { tcp, udp } flow add @ft; }
+}`)
+			}
+			return g.run(b.String(), "-f", "-")
+		}
+		f.manager.run = func(input, path string, args ...string) ([]byte, error) {
+			if path == fw4CommandPath {
+				if args[len(args)-1] == "reload" {
+					return reload()
+				}
+				return nil, nil
+			}
+			return uciRun(input, path, args...)
+		}
+		g.offload = f.manager
+		if output, err := reload(); err != nil {
+			t.Fatalf("test fw4 reload: %v %s", err, output)
+		}
+		const client = `import socket,sys,time
+s=socket.socket(socket.AF_INET6 if ':' in sys.argv[1] else socket.AF_INET,socket.SOCK_STREAM if sys.argv[2]=='tcp' else socket.SOCK_DGRAM)
+s.settimeout(1)
+s.connect((sys.argv[1],15153))
+for i in range(8):
+ s.send(b'before'); assert s.recv(1024)==b'before'; time.sleep(.02)
+print('ready',flush=True)
+sys.stdin.read(1)
+s.send(b'cached'); assert s.recv(1024)==b'cached'
+print('cached',flush=True)
+sys.stdin.read(1)
+try:
+ s.send(b'after'); leaked=s.recv(1024)==b'after'
+except OSError:leaked=False
+sys.exit(1 if leaked else 0)
+`
+		var clients []*exec.Cmd
+		var cachedProbes []func()
+		var releases []func()
+		for _, address := range []string{"198.51.100.2", "2001:db8:2::2"} {
+			for _, protocol := range []string{"tcp", "udp"} {
+				cmd := exec.Command("nsenter", "-t", lan, "-n", "python3", "-u", "-c", client, address, protocol)
+				out, err := cmd.StdoutPipe()
+				if err != nil {
+					t.Fatal(err)
+				}
+				in, err := cmd.StdinPipe()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := cmd.Start(); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+				var ready [6]byte
+				if _, err := out.Read(ready[:]); err != nil || string(ready[:]) != "ready\n" {
+					t.Fatal("flow client did not start", err)
+				}
+				clients = append(clients, cmd)
+				cachedProbes = append(cachedProbes, func() {
+					_, _ = in.Write([]byte("x"))
+					var reply [7]byte
+					if _, err := io.ReadFull(out, reply[:]); err != nil || string(reply[:]) != "cached\n" {
+						t.Fatalf("connection did not bypass the forward drop through offload: %v", err)
+					}
+				})
+				releases = append(releases, func() { _, _ = in.Write([]byte("x")); _ = in.Close() })
+			}
+		}
+		// A successful echo despite this drop proves that the warmed flows
+		// really entered the fast path, rather than only creating a flowtable.
+		run("nft", "insert", "rule", "inet", "fw4", "forward", "drop")
+		for _, probe := range cachedProbes {
+			probe()
+		}
+		if err := g.Enable(nil, []string{"guard-vpn"}); err != nil {
+			t.Fatal(err)
+		}
+		for i, cmd := range clients {
+			releases[i]()
+			if err := cmd.Wait(); err != nil {
+				t.Fatal("cached connection bypassed transition guard", err)
+			}
+		}
+		checkExcluded("pass", true)
+		if err := g.Disable(); err != nil {
+			t.Fatal(err)
+		}
+		data, err := g.run("", "-j", "list", "ruleset")
+		if err != nil || !strings.Contains(string(data), `"flowtable"`) {
+			t.Fatal("original flowtable was not restored", err)
+		}
+		for _, address := range []string{"198.51.100.2", "2001:db8:2::2"} {
+			check(lan, address, "0", "pass")
+		}
+		run("nft", "delete", "table", "inet", "fw4")
 	})
 	const establishedProbe = `import socket,sys
 s=socket.socket(socket.AF_INET6 if ':' in sys.argv[1] else socket.AF_INET,socket.SOCK_STREAM)

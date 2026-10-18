@@ -4,11 +4,14 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/netip"
 	"slices"
 	"strings"
 )
+
+var errFlowtableConflict = errors.New("检测到 flowtable 流量卸载")
 
 // A ruleset dump describes flow admission, not the connections already cached
 // in a flowtable. In particular, removing a flow-add rule, excluding a source,
@@ -74,5 +77,5 @@ func checkNFTFlowtables(data []byte, sources []string) error {
 	if len(sources) == 0 {
 		scope = "当前全局 TUN 保护范围"
 	}
-	return fmt.Errorf("flowtable %s 无法确认与%s隔离：已有卸载连接可能绕过防泄漏规则，仅修改加入条件或接口排除不足以确认安全；请关闭相关流量卸载并重载防火墙后重试", strings.Join(conflicts, "、"), scope)
+	return fmt.Errorf("%w: %s 无法确认与%s隔离：已有卸载连接可能绕过防泄漏规则，仅修改加入条件或接口排除不足以确认安全；请关闭相关流量卸载并重载防火墙后重试", errFlowtableConflict, strings.Join(conflicts, "、"), scope)
 }

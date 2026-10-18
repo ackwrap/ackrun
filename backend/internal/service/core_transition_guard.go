@@ -1,10 +1,13 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/ackwrap/ackrun/internal/logging"
 )
+
+var errTransitionProtectionUnsupported = errors.New("当前环境不支持自动重启防泄漏保护")
 
 // The independent firewall table must outlive sing-box's own route/fw4 cleanup.
 // Callers hold lifecycleMu. Without a ready recovered core, it remains in place.
@@ -58,10 +61,37 @@ func (svc *SingboxService) protectCoreTransition() error {
 		return err
 	}
 	if err := svc.transitionGuard.Enable(sources, excluded, fakeIPs...); err != nil {
+		if errors.Is(err, errTransitionProtectionUnsupported) {
+			required, checkErr := svc.requiresDeviceProtection()
+			if checkErr != nil {
+				return checkErr
+			}
+			if !required {
+				logging.Info("core.network_guard.skip", "跳过当前环境不支持的临时防泄漏保护，继续核心操作（不保证切换期间阻断）: %v", err)
+				return nil
+			}
+		}
 		logging.Error("core.network_guard", "无法启用防泄漏保护，取消停止核心: %v", err)
 		return fmt.Errorf("启用重启防泄漏保护失败，核心未停止: %w", err)
 	}
 	return nil
+}
+
+func (svc *SingboxService) requiresDeviceProtection() (bool, error) {
+	if svc.store != nil {
+		settings, err := svc.store.GetGeneralSettings()
+		if err != nil {
+			return false, err
+		}
+		if settings.DeviceProtectionEnabled {
+			return true, nil
+		}
+	}
+	if svc.deviceProtection != nil {
+		sources, err := svc.deviceProtection.Sources()
+		return len(sources) > 0, err
+	}
+	return false, nil
 }
 
 func (svc *SingboxService) transitionDeviceSources(sources []string) ([]string, error) {

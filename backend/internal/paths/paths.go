@@ -197,6 +197,10 @@ func (p *Paths) CoreTransitionGuardPath() string {
 	return filepath.Join(p.DataDir, ".core-transition-guard")
 }
 
+func (p *Paths) CoreTransitionOffloadPath() string {
+	return filepath.Join(p.DataDir, ".core-transition-offload.json")
+}
+
 func (p *Paths) CoreAPITokenPath() string {
 	return filepath.Join(p.ConfigDir, "core-api-token")
 }
