@@ -66,7 +66,7 @@ function assetFormat(item: GeoAsset) {
 function formatUpdatedAt(value: number) {
   if (!value) return "尚未更新";
   const timestamp = value < 1_000_000_000_000 ? value * 1000 : value;
-  return new Date(timestamp).toLocaleString();
+  return new Date(timestamp).toLocaleString(undefined, { hourCycle: "h23" });
 }
 async function lookup() {
   if (lookingUp.value) return;

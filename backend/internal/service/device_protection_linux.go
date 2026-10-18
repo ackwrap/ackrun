@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/ackwrap/ackrun/internal/logging"
 	"github.com/ackwrap/ackrun/internal/paths"
 )
 
@@ -30,6 +31,7 @@ type nftDeviceProtection struct {
 	supported func() bool
 	bootCheck func() error
 	run       func(string, ...string) ([]byte, error)
+	ipRun     func(...string) ([]byte, error)
 }
 
 func newDeviceProtection(p *paths.Paths) deviceProtectionFirewall {
@@ -62,7 +64,7 @@ func newDeviceProtection(p *paths.Paths) deviceProtectionFirewall {
 func (g *nftDeviceProtection) Supported() bool { return g.supported() }
 
 func protectionSources(values []string) ([]string, error) {
-	values, err := normalizeDeviceCIDRs(values)
+	values, err := normalizeDeviceSources(values)
 	if err != nil {
 		return nil, err
 	}
@@ -99,6 +101,10 @@ func renderDeviceProtectionRules(values []string, version string, excluded []str
 		digestData = append(digestData, interfaceData...)
 	}
 	owner := fmt.Sprintf("%s %x", version, sha256.Sum256(digestData))
+	cidrs, macs := splitDeviceSources(values)
+	if len(macs) > 0 && (version != deviceProtectionOwner || len(excluded) > 0) {
+		return "", "", fmt.Errorf("MAC 防泄漏不支持旧格式或接口排除")
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n# sources %s\n", version, data)
 	if version != legacyDeviceProtectionOwner {
@@ -109,6 +115,9 @@ func renderDeviceProtectionRules(values []string, version string, excluded []str
 	}
 	// Idempotent in a single nft transaction, including fw4 reloads and boots.
 	fmt.Fprintf(&b, "add table inet %s\ndelete table inet %s\ntable inet %s {\n comment %q\n", deviceProtectionTable, deviceProtectionTable, deviceProtectionTable, owner)
+	if len(macs) > 0 {
+		b.WriteString(deviceMACNFTChain(macs, fakeIPs))
+	}
 	b.WriteString(" chain forward {\n type filter hook forward priority -5; policy accept;\n")
 	if version == deviceProtectionOwner {
 		for _, name := range excluded {
@@ -116,7 +125,17 @@ func renderDeviceProtectionRules(values []string, version string, excluded []str
 			fmt.Fprintf(&b, " oifname %q ct direction reply counter return\n", name)
 		}
 	}
-	for _, value := range values {
+	for _, mac := range macs {
+		// Port 1056 alone does not prove a local redirect: an older DNAT may
+		// point at a LAN resolver using that port. DNS is never forward-exempt.
+		fmt.Fprintf(&b, " ether saddr %s meta l4proto { tcp, udp } th dport 53 counter drop\n", mac)
+		fmt.Fprintf(&b, " ether saddr %s meta l4proto { tcp, udp } ct original proto-dst 53 counter drop\n", mac)
+		for _, family := range []string{"ip", "ip6"} {
+			fmt.Fprintf(&b, " ether saddr %s %s counter return\n", mac, deviceLocalNFTMatch(family, fakeIPs...))
+		}
+		fmt.Fprintf(&b, " ether saddr %s counter drop\n", mac)
+	}
+	for _, value := range cidrs {
 		family := "ip"
 		if netip.MustParsePrefix(value).Addr().Is6() {
 			family = "ip6"
@@ -131,12 +150,19 @@ func renderDeviceProtectionRules(values []string, version string, excluded []str
 		fmt.Fprintf(&b, " %s saddr %s oifname != \"tun0\" counter drop\n", family, value)
 	}
 	b.WriteString(" }\n chain input {\n type filter hook input priority -5; policy accept;\n")
+	if len(macs) > 0 {
+		fmt.Fprintf(&b, " meta mark %s counter return\n", deviceMACMark)
+		for _, mac := range macs {
+			fmt.Fprintf(&b, " ether saddr %s meta l4proto { tcp, udp } ct original proto-dst 53 th dport %d counter return\n", mac, deviceMACDNSPort)
+		}
+		fmt.Fprintf(&b, " meta l4proto { tcp, udp } th dport { %d, %d } counter drop\n", deviceMACPort, deviceMACDNSPort)
+	}
 	if version == deviceProtectionOwner {
 		for _, name := range excluded {
 			fmt.Fprintf(&b, " iifname %q counter return\n", name)
 		}
 	}
-	for _, value := range values {
+	for _, value := range cidrs {
 		family := "ip"
 		if netip.MustParsePrefix(value).Addr().Is6() {
 			family = "ip6"
@@ -147,12 +173,20 @@ func renderDeviceProtectionRules(values []string, version string, excluded []str
 		fmt.Fprintf(&b, " %s saddr %s meta l4proto { tcp, udp } ct original proto-dst 53 th dport != %d counter drop\n", family, value, deviceDNSPort)
 	}
 	b.WriteString(" }\n chain prerouting {\n type nat hook prerouting priority -191; policy accept;\n")
+	if len(macs) > 0 {
+		fmt.Fprintf(&b, " meta mark %s counter return\n", deviceMACMark)
+		for _, mac := range macs {
+			for _, protocol := range []string{"tcp", "udp"} {
+				fmt.Fprintf(&b, " ether saddr %s %s dport 53 redirect to :%d\n", mac, protocol, deviceMACDNSPort)
+			}
+		}
+	}
 	if version == deviceProtectionOwner {
 		for _, name := range excluded {
 			fmt.Fprintf(&b, " iifname %q counter return\n", name)
 		}
 	}
-	for _, value := range values {
+	for _, value := range cidrs {
 		family := "ip"
 		if netip.MustParsePrefix(value).Addr().Is6() {
 			family = "ip6"
@@ -297,10 +331,16 @@ func (g *nftDeviceProtection) Verify(values, excluded []string, fakeIPs ...strin
 	if err != nil {
 		return err
 	}
-	if owner != expected || count != len(values)*8+len(excluded)*4 {
+	_, macs := splitDeviceSources(values)
+	if owner != expected || (len(macs) == 0 && count != len(values)*8+len(excluded)*4) {
 		return fmt.Errorf("设备防泄漏内核规则缺失或不完整，请停止核心后重新启用保护")
 	}
-	return nil
+	if len(macs) > 0 {
+		if err := g.macRoutes("verify"); err != nil {
+			return err
+		}
+	}
+	return g.verifyKernelPolicy(expected)
 }
 
 func (g *nftDeviceProtection) Apply(values, excluded []string, fakeIPs ...string) error {
@@ -320,11 +360,14 @@ func (g *nftDeviceProtection) Apply(values, excluded []string, fakeIPs ...string
 		return err
 	}
 	fakeIPs = append(previous, fakeIPs...)
-	rules, _, err := deviceProtectionRules(values, excluded, fakeIPs...)
+	rules, owner, err := deviceProtectionRules(values, excluded, fakeIPs...)
 	if err != nil {
 		return err
 	}
 	if _, err := g.run(rules, "-c", "-f", "-"); err != nil {
+		if _, macs := splitDeviceSources(values); len(macs) > 0 {
+			return fmt.Errorf("MAC 设备入口规则校验失败，请确认 nft TProxy 内核支持可用（OpenWrt: kmod-nft-tproxy）: %w", err)
+		}
 		return fmt.Errorf("设备防泄漏规则校验失败: %w", err)
 	}
 	// Durable intent precedes activation. A failed apply retains the intended
@@ -332,8 +375,20 @@ func (g *nftDeviceProtection) Apply(values, excluded []string, fakeIPs ...string
 	if err := writeProtectionFile(g.path, []byte(rules)); err != nil {
 		return err
 	}
-	if _, err := g.run(rules, "-f", "-"); err != nil {
+	echo, err := g.run(rules, "-j", "-e", "-f", "-")
+	if err != nil {
 		return fmt.Errorf("设备防泄漏规则安装失败，已保留持久阻断记录: %w", err)
+	}
+	if err := g.recordKernelPolicy(echo, owner); err != nil {
+		return fmt.Errorf("设备防泄漏已安装，但记录内核规则校验基线失败: %w", err)
+	}
+	if _, macs := splitDeviceSources(values); len(macs) > 0 {
+		if err := g.macRoutes("apply"); err != nil {
+			return err
+		}
+		logging.Info("device_protection.mac", "已安装 %d 个 MAC 的独立流量与 DNS 入口，未识别身份保持拒绝", len(macs))
+	} else if err := g.macRoutes("remove"); err != nil {
+		return err
 	}
 	return g.Verify(values, excluded, fakeIPs...)
 }
@@ -355,6 +410,11 @@ func (g *nftDeviceProtection) ForceDisable() error {
 	previous, readErr := os.ReadFile(g.path)
 	if readErr != nil && !os.IsNotExist(readErr) {
 		return readErr
+	}
+	// Keep the packet guard installed if policy-route cleanup refuses a foreign
+	// replacement or fails partway through. Missing routes only cause blocking.
+	if err := g.macRoutes("remove"); err != nil {
+		return err
 	}
 	// Remove boot intent first. If interrupted, the running kernel keeps its
 	// old guard until an explicit retry; normal lifecycle cleanup never removes it.

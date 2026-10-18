@@ -263,7 +263,9 @@ function endpoint(address?: string, port?: string) {
 
 function startedAt(connection: Connection) {
   const value = new Date(connection.start);
-  return Number.isNaN(value.getTime()) ? connection.start || "-" : value.toLocaleString();
+  return Number.isNaN(value.getTime())
+    ? connection.start || "-"
+    : value.toLocaleString(undefined, { hourCycle: "h23" });
 }
 
 function openDetailsFromKeyboard(event: KeyboardEvent, row: ConnectionRow) {

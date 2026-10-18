@@ -32,7 +32,7 @@ func deviceDirectRouteRules(device model.RouteRule, fakeIPs []string) []map[stri
 	if len(device.DirectDomains) == 0 {
 		return nil
 	}
-	return []map[string]interface{}{
+	rules := []map[string]interface{}{
 		map[string]interface{}{"source_ip_cidr": device.Values, "network": []string{"tcp", "udp"}, "action": "sniff"},
 		map[string]interface{}{"source_ip_cidr": device.Values, "domain_suffix": device.DirectDomains, "action": "resolve", "server": deviceDirectDNSServerTag(device.ID)},
 		// Never release an unresolved FakeIP, even when sniffing finds an allowed domain.
@@ -41,4 +41,9 @@ func deviceDirectRouteRules(device model.RouteRule, fakeIPs []string) []map[stri
 		// blocks it if the core exits. Kernel bypass here would defeat that contract.
 		map[string]interface{}{"source_ip_cidr": device.Values, "domain_suffix": device.DirectDomains, "action": "route", "outbound": "direct"},
 	}
+	for i, rule := range rules {
+		delete(rule, "source_ip_cidr")
+		rules[i] = deviceSourceRule(device.Values, rule)
+	}
+	return rules
 }

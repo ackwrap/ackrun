@@ -20,7 +20,7 @@ func normalizeDeviceRule(req *model.RouteRuleRequest) error {
 	if req.Outbound != "proxy" || req.Invert {
 		return fmt.Errorf("设备规则必须使用代理策略，且不能反向匹配")
 	}
-	values, err := normalizeDeviceCIDRs(req.Values)
+	values, err := normalizeDeviceSources(req.Values)
 	if err != nil {
 		return err
 	}
@@ -108,12 +108,14 @@ func validateDevicePlatformRoutes(devices []model.RouteRule, routes []model.Plat
 		}
 		for _, device := range devices {
 			conflict := len(route.SourceCIDRs) == 0
+			cidrs, macs := splitDeviceSources(device.Values)
+			conflict = conflict || len(macs) > 0
 			for _, source := range route.SourceCIDRs {
 				prefix, err := netip.ParsePrefix(source)
 				if err != nil {
 					return fmt.Errorf("平台路由 %d 的来源地址无效", route.ID)
 				}
-				for _, value := range device.Values {
+				for _, value := range cidrs {
 					conflict = conflict || prefix.Overlaps(netip.MustParsePrefix(value))
 				}
 			}
@@ -198,7 +200,21 @@ func (s *ConfigGeneratorService) validateDevicePolicies() error {
 		}
 	}
 	for i, rule := range rules {
-		for _, value := range rule.Values {
+		cidrs, macs := splitDeviceSources(rule.Values)
+		if len(macs) > 0 && (len(interfaces) > 0 || len(sources) > 0) {
+			return fmt.Errorf("MAC 设备规则不能与接口或来源直连排除同时启用，请移除冲突排除")
+		}
+		for _, prior := range rules[:i] {
+			_, previousMACs := splitDeviceSources(prior.Values)
+			for _, mac := range macs {
+				for _, previous := range previousMACs {
+					if mac == previous {
+						return fmt.Errorf("设备规则 %d 与 %d 的 MAC 重叠", rule.ID, prior.ID)
+					}
+				}
+			}
+		}
+		for _, value := range cidrs {
 			prefix := netip.MustParsePrefix(value)
 			for _, excluded := range sources {
 				other, err := netip.ParsePrefix(excluded)
@@ -207,7 +223,8 @@ func (s *ConfigGeneratorService) validateDevicePolicies() error {
 				}
 			}
 			for _, prior := range rules[:i] {
-				for _, other := range prior.Values {
+				previousCIDRs, _ := splitDeviceSources(prior.Values)
+				for _, other := range previousCIDRs {
 					if prefix.Overlaps(netip.MustParsePrefix(other)) {
 						return fmt.Errorf("设备规则 %d 与 %d 的地址范围重叠，请为设备保留唯一出口", rule.ID, prior.ID)
 					}
@@ -276,14 +293,15 @@ func (s *ConfigGeneratorService) appendDeviceDNS(servers []map[string]interface{
 			delete(directClone, "detour")
 			servers = append(servers, directClone)
 			tags[directTag] = true
-			rules = append(rules, map[string]interface{}{
-				"source_ip_cidr": device.Values, "domain_suffix": device.DirectDomains, "server": directTag,
-			})
+			rules = append(rules, deviceSourceRule(device.Values, map[string]interface{}{
+				"domain_suffix": device.DirectDomains, "server": directTag,
+			}))
 			logging.Info("config_generator.device", "设备规则 %d 生成 %d 个直连域名白名单", device.ID, len(device.DirectDomains))
 		}
-		rules = append(rules, map[string]interface{}{
-			"source_ip_cidr": device.Values, "server": tag,
-		})
+		rules = append(rules, deviceSourceRule(device.Values, map[string]interface{}{"server": tag}))
+	}
+	if _, macs := splitDeviceSources(deviceRuleCIDRs(devices)); len(macs) > 0 {
+		rules = append(rules, map[string]interface{}{"inbound": deviceMACInbounds(), "action": "reject"})
 	}
 	logging.Info("config_generator.device", "生成 %d 条设备路由与 DNS 出口绑定", len(devices))
 	return servers, rules, nil

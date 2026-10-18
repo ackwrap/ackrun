@@ -497,10 +497,11 @@ func (svc *RouteRuleService) PreviewWithBaseURL(baseURL string) (*model.RouteRul
 		}
 		generatedRule := singboxRouteRule(item.RuleType, item.Values, outbound, item.Invert)
 		if item.RuleType == "source_ip_cidr" {
+			generatedRule = deviceSourceRule(item.Values, map[string]interface{}{"action": "route", "outbound": outbound})
 			if len(item.DirectDomains) > 0 {
-				deviceRules = append(deviceRules, map[string]any{
-					"source_ip_cidr": item.Values, "domain_suffix": item.DirectDomains, "action": "route", "outbound": "direct",
-				})
+				deviceRules = append(deviceRules, deviceSourceRule(item.Values, map[string]any{
+					"domain_suffix": item.DirectDomains, "action": "route", "outbound": "direct",
+				}))
 			}
 			deviceRules = append(deviceRules, generatedRule)
 		} else if item.Outbound == "bypass" {

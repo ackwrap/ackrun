@@ -54,7 +54,7 @@ const statusLabel = computed(() => {
 
 function formatPublishedAt(value?: string) {
   if (!value) return "--";
-  return new Date(value).toLocaleString();
+  return new Date(value).toLocaleString(undefined, { hourCycle: "h23" });
 }
 
 async function loadSettings() {

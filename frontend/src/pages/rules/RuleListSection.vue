@@ -3,6 +3,7 @@ import { Eye, Plus, Share2, Trash2, Upload } from "lucide-vue-next";
 import FlagText from "@/components/ui/FlagText.vue";
 import OrderButtons from "@/components/ui/OrderButtons.vue";
 import type { RouteRule, RouteRuleSubscription } from "@/services/types";
+import { splitDeviceRuleValues } from "./deviceRulePreview";
 const props = defineProps<{
   rules: RouteRule[];
   subscriptions: RouteRuleSubscription[];
@@ -52,16 +53,32 @@ function moveDisabled(index: number, direction: -1 | 1) {
 }
 
 function typeLabel(rule: RouteRule) {
-  if (rule.rule_type === "source_ip_cidr") return "设备 IP · DNS 跟随";
+  if (rule.rule_type === "source_ip_cidr") {
+    const { macAddresses, ipCidrs } = splitDeviceRuleValues(rule.values);
+    const identity = [
+      ...(macAddresses.length ? ["MAC"] : []),
+      ...(ipCidrs.length ? ["IP/CIDR"] : []),
+    ].join(" 或 ");
+    return `设备${identity ? ` ${identity}` : ""} · DNS 跟随`;
+  }
   return isFinalStrategy(rule) ? "最终规则" : rule.rule_type;
 }
 
 function valueLabel(rule: RouteRule) {
   if (isFinalStrategy(rule)) return "未匹配流量";
   const values = rule.values.join(", ") || "无匹配值";
-  return rule.rule_type === "source_ip_cidr" && rule.direct_domains?.length
-    ? `${values} · 直连白名单 ${rule.direct_domains.length} 个域名`
-    : values;
+  if (rule.rule_type !== "source_ip_cidr") return values;
+  const { macAddresses, ipCidrs } = splitDeviceRuleValues(rule.values);
+  const identity = [
+    ...(macAddresses.length ? [`MAC: ${macAddresses.join(", ")}`] : []),
+    ...(ipCidrs.length ? [`IP/CIDR: ${ipCidrs.join(", ")}`] : []),
+  ].join(" 或 ");
+  return [
+    identity ? `${identity}（任一命中）` : "无设备匹配值",
+    ...(rule.direct_domains?.length
+      ? [`直连还需命中域名白名单（${rule.direct_domains.length} 项）`]
+      : []),
+  ].join(" · ");
 }
 
 function statusToggleTitle(rule: RouteRule) {
