@@ -208,7 +208,7 @@ def build_openwrt_packages(
                 package_version,
                 package_arch,
                 "libc, ca-bundle, kmod-tun, firewall4, luci-base, luci-compat, "
-                "kmod-nfnetlink-queue, kmod-nft-queue",
+                "kmod-nfnetlink-queue, kmod-nft-queue, ip-full, kmod-nft-tproxy",
                 "Ackwrap sing-box management service with LuCI and iStoreOS integration.",
             ),
             OPENWRT / "control" / "ackwrap",
@@ -228,7 +228,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--arch", choices=("amd64", "arm64"), default="amd64")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "dist")
-    parser.add_argument("--version", default="0.3.3")
+    parser.add_argument("--version", default="0.3.4")
     parser.add_argument("--skip-checks", action="store_true")
     return parser.parse_args()
 
