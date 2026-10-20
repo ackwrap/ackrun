@@ -23,6 +23,9 @@ func TestNFTGuardPackets(t *testing.T) {
 	if os.Getenv("ACKWRAP_NFT_GUARD_TEST") != "1" {
 		t.Skip("requires root, nft/ip/python3 and an isolated network namespace")
 	}
+	if os.Getenv("ACKWRAP_OPENWRT_INTEGRATION") == "1" {
+		requireOpenWrtOffloadIsolation(t)
+	}
 	self, err := os.Readlink("/proc/self/ns/net")
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +53,7 @@ func TestNFTGuardPackets(t *testing.T) {
 	}
 	newPeer := func(name, router4, peer4, router6, peer6 string) string {
 		t.Helper()
-		cmd := exec.Command("unshare", "-n", "sleep", "240")
+		cmd := exec.Command("unshare", "-n", "sleep", "1800")
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
@@ -372,48 +375,57 @@ sys.exit(0 if ok==(sys.argv[3]=='pass') else 1)
 			}
 		}
 	})
-	t.Run("fw4-offload-pause-and-restore", func(t *testing.T) {
-		f := newFW4OffloadFixture(t)
+	realOpenWrt := os.Getenv("ACKWRAP_OPENWRT_INTEGRATION") == "1"
+	offloadTestName := "fw4-offload-pause-and-restore"
+	if realOpenWrt {
+		offloadTestName = "openwrt-real-fw4"
+	}
+	t.Run(offloadTestName, func(t *testing.T) {
 		g := newCoreTransitionGuard(&paths.Paths{DataDir: t.TempDir()}).(*nftTransitionGuard)
-		// UCI is modeled in-memory; exercise fw4's actual atomic table rebuild
-		// and old-flow deletion with the real kernel, sockets and nft compiler.
-		f.manager.nft = g.run
-		// Some host kernels omit CONFIG_NF_CONNTRACK_PROCFS; the cached-flow
-		// probe below still verifies deletion with real packets on those hosts.
-		if _, err := os.Stat("/proc/net/nf_conntrack"); err == nil {
-			f.manager.drained = waitForFlowOffloadDrain
-		}
-		uciRun := f.manager.run
-		reload := func() ([]byte, error) {
-			var b strings.Builder
-			b.WriteString("add table inet fw4\nflush table inet fw4\n")
-			data, err := g.run("", "-j", "list", "ruleset")
-			if err != nil {
-				return nil, err
+		if realOpenWrt {
+			prepareOpenWrtFW4(t, g)
+		} else {
+			f := newFW4OffloadFixture(t)
+			// UCI is modeled in-memory; exercise fw4's actual atomic table rebuild
+			// and old-flow deletion with the real kernel, sockets and nft compiler.
+			f.manager.nft = g.run
+			// Some host kernels omit CONFIG_NF_CONNTRACK_PROCFS; the cached-flow
+			// probe below still verifies deletion with real packets on those hosts.
+			if _, err := os.Stat("/proc/net/nf_conntrack"); err == nil {
+				f.manager.drained = waitForFlowOffloadDrain
 			}
-			if strings.Contains(string(data), `"flowtable"`) {
-				b.WriteString("delete flowtable inet fw4 ft\n")
-			}
-			if f.options.Software != nil && *f.options.Software == "1" {
-				b.WriteString(`table inet fw4 {
- flowtable ft { hook ingress priority 0; devices = { guard-lan, guard-wan, guard-vpn }; counter; }
- chain forward { type filter hook forward priority 0; policy accept; meta l4proto { tcp, udp } flow add @ft; }
-}`)
-			}
-			return g.run(b.String(), "-f", "-")
-		}
-		f.manager.run = func(input, path string, args ...string) ([]byte, error) {
-			if path == fw4CommandPath {
-				if args[len(args)-1] == "reload" {
-					return reload()
+			uciRun := f.manager.run
+			reload := func() ([]byte, error) {
+				var b strings.Builder
+				b.WriteString("add table inet fw4\nflush table inet fw4\n")
+				data, err := g.run("", "-j", "list", "ruleset")
+				if err != nil {
+					return nil, err
 				}
-				return nil, nil
+				if strings.Contains(string(data), `"flowtable"`) {
+					b.WriteString("delete flowtable inet fw4 ft\n")
+				}
+				if f.options.Software != nil && *f.options.Software == "1" {
+					b.WriteString(`table inet fw4 {
+	 flowtable ft { hook ingress priority 0; devices = { guard-lan, guard-wan, guard-vpn }; counter; }
+	 chain forward { type filter hook forward priority 0; policy accept; meta l4proto { tcp, udp } flow add @ft; }
+	}`)
+				}
+				return g.run(b.String(), "-f", "-")
 			}
-			return uciRun(input, path, args...)
-		}
-		g.offload = f.manager
-		if output, err := reload(); err != nil {
-			t.Fatalf("test fw4 reload: %v %s", err, output)
+			f.manager.run = func(input, path string, args ...string) ([]byte, error) {
+				if path == fw4CommandPath {
+					if args[len(args)-1] == "reload" {
+						return reload()
+					}
+					return nil, nil
+				}
+				return uciRun(input, path, args...)
+			}
+			g.offload = f.manager
+			if output, err := reload(); err != nil {
+				t.Fatalf("test fw4 reload: %v %s", err, output)
+			}
 		}
 		const client = `import socket,sys,time
 s=socket.socket(socket.AF_INET6 if ':' in sys.argv[1] else socket.AF_INET,socket.SOCK_STREAM if sys.argv[2]=='tcp' else socket.SOCK_DGRAM)
@@ -470,7 +482,11 @@ sys.exit(1 if leaked else 0)
 		for _, probe := range cachedProbes {
 			probe()
 		}
-		if err := g.Enable(nil, []string{"guard-vpn"}); err != nil {
+		sources := []string(nil)
+		if realOpenWrt {
+			sources = []string{"192.168.50.2", "fd12:3456::2"}
+		}
+		if err := g.Enable(sources, []string{"guard-vpn"}, fakePools...); err != nil {
 			t.Fatal(err)
 		}
 		for i, cmd := range clients {
@@ -480,6 +496,28 @@ sys.exit(1 if leaked else 0)
 			}
 		}
 		checkExcluded("pass", true)
+		if realOpenWrt {
+			verifyOpenWrtPaused(t, g)
+			// A real fw4 reload must preserve the independent transition table.
+			run(fw4CommandPath, "reload")
+			for _, address := range []string{"198.51.100.2", "2001:db8:2::2"} {
+				for _, protocol := range []string{"tcp", "udp"} {
+					check(lan, address, "0", "drop", "15153", protocol)
+					check(lan, address, "0", "drop", "53", protocol)
+					check("", address, "0", "pass", "15153", protocol)
+				}
+			}
+			for _, address := range []string{"192.168.60.1", "fd60::1"} {
+				for _, protocol := range []string{"tcp", "udp"} {
+					check(lan, address, "0", "drop", "53", protocol)
+				}
+			}
+			for _, address := range fakeTargets {
+				check(lan, address, "0", "drop")
+			}
+			checkLocal()
+			check(lan, "192.168.50.1", "0", "pass")
+		}
 		if err := g.Disable(); err != nil {
 			t.Fatal(err)
 		}
@@ -490,8 +528,21 @@ sys.exit(1 if leaked else 0)
 		for _, address := range []string{"198.51.100.2", "2001:db8:2::2"} {
 			check(lan, address, "0", "pass")
 		}
+		if realOpenWrt {
+			verifyOpenWrtRestored(t, g)
+			testOpenWrtOffloadFaults(t, func(want string) {
+				for _, address := range []string{"198.51.100.2", "2001:db8:2::2"} {
+					for _, protocol := range []string{"tcp", "udp"} {
+						check(lan, address, "0", want, "15153", protocol)
+					}
+				}
+			})
+		}
 		run("nft", "delete", "table", "inet", "fw4")
 	})
+	if realOpenWrt {
+		return // Other packet scenarios are covered by the existing Linux mode.
+	}
 	const establishedProbe = `import socket,sys
 s=socket.socket(socket.AF_INET6 if ':' in sys.argv[1] else socket.AF_INET,socket.SOCK_STREAM)
 s.settimeout(1)

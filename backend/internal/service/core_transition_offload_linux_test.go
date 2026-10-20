@@ -352,6 +352,30 @@ func TestFW4OffloadRestoreHonorsDeviceProtectionAndExternalChanges(t *testing.T)
 	}
 }
 
+func TestFW4OffloadCorruptRecordDoesNotReleaseGuard(t *testing.T) {
+	for _, force := range []bool{false, true} {
+		t.Run(fmt.Sprint(force), func(t *testing.T) {
+			f := newFW4OffloadFixture(t)
+			g := f.guardInstance(t)
+			if err := g.Enable(nil, nil); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(f.manager.path, []byte(`{"version":99}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := g.disable(force); err == nil {
+				t.Fatal("corrupt recovery record accepted")
+			}
+			if !f.guard || f.flow {
+				t.Fatal("released protection before validating recovery state")
+			}
+			if _, err := os.Stat(g.statePath); err != nil {
+				t.Fatal("lost guard recovery intent", err)
+			}
+		})
+	}
+}
+
 func TestOffloadSnapshotAndConnectionStatus(t *testing.T) {
 	for _, input := range []string{"", "firewall.a=defaults\nfirewall.b=defaults", "firewall.a=defaults\nfirewall.a.flow_offloading='invalid'", "firewall.a=defaults\nfirewall.a.flow_offloading='1' '0'"} {
 		if _, err := parseFW4OffloadOptions(input); err == nil {

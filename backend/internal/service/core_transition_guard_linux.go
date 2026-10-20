@@ -237,6 +237,14 @@ func (g *nftTransitionGuard) Disable() error {
 }
 
 func (g *nftTransitionGuard) disable(force bool) error {
+	// Validate durable recovery state before removing any protection. In
+	// particular, a corrupt offload record must not turn a failed release into
+	// an unguarded transition, including explicit network-repair requests.
+	if g.offload != nil {
+		if _, err := g.offload.pending(); err != nil {
+			return err
+		}
+	}
 	if !force {
 		if _, err := os.Stat(g.statePath); os.IsNotExist(err) {
 			if g.offload != nil {
