@@ -298,12 +298,14 @@ func (svc *SingboxService) start(validateConfig func() (string, error)) (*coreSt
 	if svc.isRunning() {
 		return nil, fmt.Errorf("sing-box is already running (pid=%d)", svc.pid)
 	}
-	if err := svc.recoverStoppedState(false, true); err != nil {
-		return nil, err
+	// Restore protection before validating the replacement, but do not stop an
+	// existing core until the replacement binary and configuration are usable.
+	if err := svc.restoreDeviceProtection(); err != nil {
+		return nil, fmt.Errorf("恢复设备防泄漏失败，核心未停止: %w", err)
 	}
 
-	if _, err := os.Stat(svc.paths.BinaryPath); os.IsNotExist(err) {
-		return nil, fmt.Errorf("sing-box binary not found")
+	if _, err := os.Stat(svc.paths.BinaryPath); err != nil {
+		return nil, fmt.Errorf("check sing-box binary: %w", err)
 	}
 
 	configPath, err := validateConfig()
@@ -317,6 +319,10 @@ func (svc *SingboxService) start(validateConfig func() (string, error)) (*coreSt
 	}
 	if err := svc.validateProtectedConfig(configPath); err != nil {
 		return nil, fmt.Errorf("设备防泄漏启动校验失败: %w", err)
+	}
+	if err := svc.recoverBeforeStart(stopPlatformSingboxForStart); err != nil {
+		logging.Error("core.recover", "启动前恢复失败，取消启动: %v", err)
+		return nil, err
 	}
 	logging.Info("core.start", "starting sing-box")
 	svc.realtime.Broadcast("core.status", map[string]any{
@@ -377,7 +383,7 @@ func (svc *SingboxService) start(validateConfig func() (string, error)) (*coreSt
 		}
 	}
 
-	if err := cmd.Start(); err != nil {
+	if err := startRecoveredCore(cmd, verifyPlatformSingboxStopped); err != nil {
 		startErr := fmt.Errorf("start sing-box: %w", err)
 		if pendingOwnership {
 			if discardErr := discardPendingSingboxRouteTableState(svc.routeTableStatePath()); discardErr != nil {

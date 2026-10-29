@@ -118,6 +118,9 @@ func cleanupPlatformSingboxState(statePath string) (platformCleanupResult, error
 		}
 	}
 
+	if err := verifyPlatformSingboxStopped(); err != nil {
+		return platformCleanupResult{}, err
+	}
 	var cleanupErrors []error
 	if markerPresent {
 		if err := os.Rename(singboxOpenWrtNFTInclude, singboxStaleNFTMarker); err != nil {
@@ -136,17 +139,20 @@ func cleanupPlatformSingboxState(statePath string) (platformCleanupResult, error
 		if err := validateRecordedNFTTable(effectiveState.NFTTableHandle, currentNFTHandle, nftTablePresent); err != nil {
 			return platformCleanupResult{}, err
 		}
-		if output, commandErr := runLinuxNetworkCommand(linuxNetworkCommandTimeout, nftPath, "delete", "table", "inet", "sing-box"); commandErr != nil {
+		if output, commandErr := runLinuxCleanupCommand(linuxNetworkCommandTimeout, nftPath, "delete", "table", "inet", "sing-box"); commandErr != nil {
 			cleanupErrors = append(cleanupErrors, cleanupCommandError("delete sing-box nftables table", output, commandErr))
 		}
 	}
 	if staleMarkerPresent {
-		if output, commandErr := runLinuxNetworkCommand(linuxFW4CommandTimeout, fw4Path, "reload"); commandErr != nil {
+		if output, commandErr := runLinuxCleanupCommand(linuxFW4CommandTimeout, fw4Path, "reload"); commandErr != nil {
 			cleanupErrors = append(cleanupErrors, cleanupCommandError("reload fw4", output, commandErr))
 		}
 	}
 	cleanupErrors = append(cleanupErrors, cleanupIPRuleSnapshot(ipPath, false, ipv4Rules, ipv4Tables, effectiveState.IPv4Tables, effectiveState.IPv4Rules)...)
 	cleanupErrors = append(cleanupErrors, cleanupIPRuleSnapshot(ipPath, true, ipv6Rules, ipv6Tables, effectiveState.IPv6Tables, effectiveState.IPv6Rules)...)
+	if err := verifyPlatformSingboxStopped(); err != nil {
+		cleanupErrors = append(cleanupErrors, err)
+	}
 	if len(cleanupErrors) == 0 && staleMarkerPresent {
 		if err := os.Remove(singboxStaleNFTMarker); err != nil && !os.IsNotExist(err) {
 			cleanupErrors = append(cleanupErrors, fmt.Errorf("remove sing-box cleanup marker: %w", err))
@@ -165,47 +171,61 @@ func linuxSingboxProcessRunning() (bool, error) {
 }
 
 func linuxSingboxProcessRunningAt(procRoot string) (bool, error) {
+	pids, err := linuxSingboxProcessIDsAt(procRoot)
+	return len(pids) > 0, err
+}
+
+func linuxSingboxProcessIDsAt(procRoot string) ([]int, error) {
 	entries, err := os.ReadDir(procRoot)
 	if err != nil {
-		return false, fmt.Errorf("read /proc: %w", err)
+		return nil, fmt.Errorf("read process directory: %w", err)
 	}
+	var pids []int
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
-		if _, err := strconv.Atoi(entry.Name()); err != nil {
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil || pid <= 0 {
 			continue
 		}
-		commPath := filepath.Join(procRoot, entry.Name(), "comm")
-		name, err := os.ReadFile(commPath)
+		running, err := linuxSingboxProcessAliveAt(procRoot, pid)
 		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return false, fmt.Errorf("read process identity %s: %w", commPath, err)
+			return nil, err
 		}
-		if strings.TrimSpace(string(name)) == "sing-box" {
-			status, err := os.ReadFile(filepath.Join(procRoot, entry.Name(), "status"))
-			if os.IsNotExist(err) {
-				continue
-			}
-			if err != nil {
-				return false, fmt.Errorf("read sing-box process status: %w", err)
-			}
-			exited := false
-			for _, line := range strings.Split(string(status), "\n") {
-				fields := strings.Fields(line)
-				if len(fields) > 1 && fields[0] == "State:" && (fields[1] == "Z" || fields[1] == "X") {
-					exited = true
-				}
-			}
-			if exited {
-				continue
-			}
-			return true, nil
+		if running {
+			pids = append(pids, pid)
 		}
 	}
-	return false, nil
+	return pids, nil
+}
+
+func linuxSingboxProcessAliveAt(procRoot string, pid int) (bool, error) {
+	dir := filepath.Join(procRoot, strconv.Itoa(pid))
+	name, err := os.ReadFile(filepath.Join(dir, "comm"))
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read process identity (pid=%d): %w", pid, err)
+	}
+	if strings.TrimSpace(string(name)) != "sing-box" {
+		return false, nil
+	}
+	status, err := os.ReadFile(filepath.Join(dir, "status"))
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read sing-box process status (pid=%d): %w", pid, err)
+	}
+	for _, line := range strings.Split(string(status), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 1 && fields[0] == "State:" {
+			return fields[1] != "Z" && fields[1] != "X", nil
+		}
+	}
+	return false, fmt.Errorf("sing-box process state unavailable (pid=%d)", pid)
 }
 
 func snapshotPlatformPriorityOneTables(tunState activeTUNState) (platformNetworkBaseline, error) {
@@ -479,7 +499,7 @@ func cleanupIPRuleSnapshot(ipPath string, ipv6 bool, rules ipRuleSnapshot, exist
 	}
 	run := func(action string, args ...string) {
 		commandArgs := append(append([]string{}, prefix...), args...)
-		if output, err := runLinuxNetworkCommand(linuxNetworkCommandTimeout, ipPath, commandArgs...); err != nil {
+		if output, err := runLinuxCleanupCommand(linuxNetworkCommandTimeout, ipPath, commandArgs...); err != nil {
 			cleanupErrors = append(cleanupErrors, cleanupCommandError(action, output, err))
 		}
 	}
@@ -504,6 +524,13 @@ func cleanupIPRuleSnapshot(ipPath string, ipv6 bool, rules ipRuleSnapshot, exist
 		run("delete "+familyName+" managed "+ruleID+" rule", spec.delete...)
 	}
 	return cleanupErrors
+}
+
+func runLinuxCleanupCommand(timeout time.Duration, path string, args ...string) ([]byte, error) {
+	if err := verifyPlatformSingboxStopped(); err != nil {
+		return nil, err
+	}
+	return runLinuxNetworkCommand(timeout, path, args...)
 }
 
 func runLinuxNetworkCommand(timeout time.Duration, path string, args ...string) ([]byte, error) {
