@@ -726,6 +726,11 @@ func (svc *SingboxService) validateActiveConfigLocked() (string, error) {
 	if !ok {
 		return "", fmt.Errorf("config file not found")
 	}
+	// Repair stale managed sections before checking the active file. In a
+	// restart this preflight completes before the running core is stopped.
+	if err := svc.reconcileProtectedConfig(configPath); err != nil {
+		return "", fmt.Errorf("同步设备防泄漏配置失败: %w", err)
+	}
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return "", err

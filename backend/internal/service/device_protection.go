@@ -300,9 +300,10 @@ func (svc *SettingsService) setDeviceProtection(enabled bool, previous *model.Ge
 	return nil
 }
 
-// Before a core can use tun0, require its device routes and resolvers to be the
-// managed ones. This also rejects accidentally selecting an old/custom config.
-// Called with networkLifecycleMu held, without taking svc.mu recursively.
+// Before a core can use tun0, verify both the firewall and the managed sections
+// synchronized by validateActiveConfigLocked. Never relax protection on failure.
+// Startup holds networkLifecycleMu; read-only restart preflight also checks the
+// staged file under configFileMu. Do not acquire svc.mu recursively here.
 func (svc *SingboxService) validateProtectedConfig(path string) error {
 	if svc.deviceProtection == nil || svc.store == nil {
 		return nil
@@ -344,7 +345,8 @@ func (svc *SingboxService) validateProtectedConfig(path string) error {
 		return err
 	}
 	g := NewConfigGeneratorService(svc.store, svc.paths)
-	if err := g.validateDevicePolicies(); err != nil {
+	expected, err := g.protectedConfigSections()
+	if err != nil {
 		return err
 	}
 	data, err := os.ReadFile(path)
@@ -355,40 +357,9 @@ func (svc *SingboxService) validateProtectedConfig(path string) error {
 	if err := json.Unmarshal(data, &actual); err != nil {
 		return err
 	}
-	// Compare routing, DNS and outbounds against the same generator used by
-	// normal configuration. Other runtime/API/listen options remain independent.
-	expectedRoute, err := g.generateRoute("direct")
-	if err != nil {
-		return err
-	}
-	final, _ := expectedRoute["final"].(string)
-	expectedDNS, err := g.generateDNSFromDatabase(final)
-	if err != nil {
-		return err
-	}
-	required, err := g.dnsRequiresUsableProxy(final)
-	if err != nil {
-		return err
-	}
-	outbounds, endpoints, err := g.generateOutbounds(required)
-	if err != nil {
-		return err
-	}
-	expected := map[string]interface{}{"route": expectedRoute, "dns": expectedDNS, "outbounds": outbounds}
-	if len(endpoints) > 0 {
-		expected["endpoints"] = endpoints
-	}
-	for key, value := range expected {
-		encoded, err := json.Marshal(value)
-		if err != nil {
-			return err
-		}
-		var normalized interface{}
-		if err := json.Unmarshal(encoded, &normalized); err != nil {
-			return err
-		}
-		if !reflect.DeepEqual(actual[key], normalized) {
-			return fmt.Errorf("防泄漏保护已开启，%s 与当前设备策略不一致，请重新生成并应用配置", key)
+	for _, key := range protectedConfigKeys {
+		if !reflect.DeepEqual(actual[key], expected[key]) {
+			return fmt.Errorf("受管配置同步后 %s 仍与当前策略不一致，请重试启动", key)
 		}
 	}
 	state, err := readActiveTUNState(path)

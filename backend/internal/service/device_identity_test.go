@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -70,6 +71,9 @@ func TestDeviceIdentityORAndWhitelist(t *testing.T) {
 }
 
 func TestDeviceMACGeneratedConfig(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("MAC device protection requires Linux TUN/TPROXY")
+	}
 	db, g, devices := devicePolicyFixture(t)
 	settings, err := db.GetGeneralSettings()
 	if err != nil {
