@@ -765,6 +765,10 @@ func (s *ConfigGeneratorService) generateOutbounds(requireUsableProxy ...bool) (
 		}
 		nodeOutbound, err := s.generateNodeOutbound(&node, nodeTags[node.UID], nil)
 		if err != nil {
+			if node.Type == "hysteria" || node.Type == "hysteria2" {
+				logging.Error("config_generator.outbound", "节点 %s 生成失败: %v", node.Name, err)
+				return nil, nil, fmt.Errorf("节点 %s 生成失败: %w", node.Name, err)
+			}
 			logging.Info("config_generator.outbound", "节点 %s 生成失败: %v", node.Name, err)
 			continue
 		}
@@ -1600,6 +1604,13 @@ func normalizeLegacyOutboundFields(nodeData map[string]interface{}, outboundType
 		}
 		if outboundType != "ssh" {
 			delete(nodeData, "cipher")
+		}
+	}
+	if outboundType == "hysteria" || outboundType == "hysteria2" {
+		if ports, err := parser.NormalizeHysteriaPortRanges(nodeData["server_ports"]); err != nil {
+			return fmt.Errorf("%s server_ports 无效: %w", outboundType, err)
+		} else if ports != nil {
+			nodeData["server_ports"] = ports
 		}
 	}
 	switch outboundType {
