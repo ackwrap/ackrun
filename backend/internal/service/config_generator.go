@@ -444,8 +444,8 @@ func (s *ConfigGeneratorService) generateLockedTo(req *model.ConfigGenerateReque
 	if expSettings.ClashAPIExternalUI != "" {
 		clashAPI["external_ui"] = expSettings.ClashAPIExternalUI
 	}
-	if expSettings.ClashAPIExternalUIDownloadURL != "" {
-		clashAPI["external_ui_download_url"] = expSettings.ClashAPIExternalUIDownloadURL
+	if downloadURL := dashboardUpdateURL(expSettings, s.paths.DashboardsDir); downloadURL != "" {
+		clashAPI["external_ui_download_url"] = downloadURL
 	}
 	experimental["clash_api"] = clashAPI
 	logging.Info("config_generator.experimental", "Clash API 已强制启用: %s:%s, 模式: %s", controllerHost, port, proxyMode)

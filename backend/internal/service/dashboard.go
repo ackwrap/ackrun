@@ -216,6 +216,29 @@ func (svc *DashboardService) Delete(id string) (*model.ActionResponse, error) {
 	return &model.ActionResponse{Success: true, Message: "dashboard deleted"}, nil
 }
 
+// dashboardUpdateURL keeps the core's "update UI" action on the selected
+// dashboard instead of its implicit Yacd-meta default. Unrecognized directories
+// without an explicit source default to Zashboard.
+func dashboardUpdateURL(settings *model.ExperimentalSettingsResponse, dashboardsDir string) string {
+	if settings.ClashAPIExternalUIDownloadURL != "" || settings.ClashAPIExternalUI == "" {
+		return settings.ClashAPIExternalUIDownloadURL
+	}
+	item := findDashboardCatalogItem(settings.ClashAPIDashboard)
+	if item == nil && dashboardsDir != "" {
+		for i := range dashboardCatalog {
+			candidate := &dashboardCatalog[i]
+			if sameDashboardPath(settings.ClashAPIExternalUI, filepath.Join(dashboardsDir, candidate.ID)) {
+				item = candidate
+				break
+			}
+		}
+	}
+	if item == nil {
+		item = findDashboardCatalogItem("zashboard")
+	}
+	return fmt.Sprintf("https://github.com/%s/%s/archive/%s.zip", item.Owner, item.Repository, item.Branch)
+}
+
 func findDashboardCatalogItem(id string) *dashboardCatalogItem {
 	id = strings.TrimSpace(strings.ToLower(id))
 	for i := range dashboardCatalog {
