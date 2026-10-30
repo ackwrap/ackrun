@@ -349,7 +349,8 @@ export const api = {
     return request<NodeListResponse>(`/nodes${query ? `?${query}` : ""}`);
   },
   getNodeFacets: () => request<NodeFacetsResponse>("/nodes/facets"),
-  getNodeShare: (id: number) => request<NodeShareResponse>(`/nodes/${id}/share`),
+  getNodeShare: (id: number, signal?: AbortSignal) =>
+    request<NodeShareResponse>(`/nodes/${id}/share`, { signal }),
   previewImportNodes: (body: NodeImportRequest) =>
     request<NodeImportPreviewResponse>("/nodes/import/preview", {
       method: "POST",
