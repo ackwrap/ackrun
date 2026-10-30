@@ -20,6 +20,7 @@ import Toast from "@/components/ui/Toast.vue";
 import Modal from "@/components/ui/Modal.vue";
 import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
 import Pagination from "@/components/ui/Pagination.vue";
+import NodeBatchShareModal from "@/pages/nodes/NodeBatchShareModal.vue";
 import NodeTracerouteModal from "@/pages/nodes/NodeTracerouteModal.vue";
 import NodeExitIPModal from "@/pages/nodes/NodeExitIPModal.vue";
 import { api } from "@/services/api";
@@ -46,6 +47,7 @@ const total = ref(0),
   enabledFilter = ref(""),
   preferredFilter = ref("");
 const detail = ref<NodeItem | null>(null),
+  shareTargets = ref<Pick<NodeItem, "id" | "name">[]>([]),
   traceNode = ref<NodeItem | null>(null),
   exitIPNode = ref<NodeItem | null>(null),
   selected = ref(new Set<string>()),
@@ -279,6 +281,12 @@ async function shareNode(node: NodeItem) {
     sharingNode.value = null;
   }
 }
+function openBatchShare() {
+  shareTargets.value = selectedNodes.value.map(({ id, name }) => ({
+    id,
+    name,
+  }));
+}
 watch(
   [
     keyword,
@@ -337,6 +345,12 @@ onMounted(async () => {
             "
           >
             <RefreshCw :size="14" />同步外部订阅</button
+          ><button
+            class="aw-action-button aw-action-neutral"
+            :disabled="!selectedNodes.length"
+            @click="openBatchShare"
+          >
+            <Share2 :size="14" />批量分享</button
           ><button
             class="aw-action-button aw-action-neutral"
             :disabled="!selectedNodes.length"
@@ -596,6 +610,11 @@ onMounted(async () => {
         "
       />
     </section>
+    <NodeBatchShareModal
+      v-if="shareTargets.length"
+      :nodes="shareTargets"
+      @close="shareTargets = []"
+    />
     <Modal :open="!!detail" title="节点详情" size="lg" @close="detail = null"
       ><template #actions>
         <button
