@@ -229,7 +229,7 @@ func normalizeClashProxy(proxy map[string]any, typ string) (map[string]any, stri
 		if protocol := firstNonEmpty(getString(proxy, "obfs-protocol"), getString(proxy, "protocol")); protocol != "" && protocol != "udp" {
 			unsupportedReason = "Hysteria transport protocol is not supported by sing-box"
 		}
-		if ports, err := normalizeHysteriaPortRanges(firstNonNil(proxy["ports"], proxy["mport"])); err != nil {
+		if ports, err := NormalizeHysteriaPortRanges(firstNonNil(proxy["ports"], proxy["mport"])); err != nil {
 			unsupportedReason = "Hysteria port hopping range is invalid"
 		} else if len(ports) > 0 {
 			result["server_ports"] = ports
@@ -268,7 +268,7 @@ func normalizeClashProxy(proxy map[string]any, typ string) (map[string]any, stri
 
 	// Hysteria2 port hopping, obfuscation, bandwidth and QUIC options.
 	if typ == "hysteria2" {
-		if ports, err := normalizeHysteriaPortRanges(firstNonNil(proxy["ports"], proxy["mport"])); err != nil {
+		if ports, err := NormalizeHysteriaPortRanges(firstNonNil(proxy["ports"], proxy["mport"])); err != nil {
 			unsupportedReason = "Hysteria2 port hopping range is invalid"
 		} else if len(ports) > 0 {
 			result["server_ports"] = ports

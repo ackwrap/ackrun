@@ -99,7 +99,11 @@ func parseHysteriaGeneric(raw string, typ string) (*model.ParsedNode, error) {
 			node["obfs"] = obfs
 		}
 		if ports := firstQueryValue(query, "server_ports", "server-ports", "mport"); ports != "" {
-			node["server_ports"] = ports
+			normalizedPorts, err := NormalizeHysteriaPortRanges(ports)
+			if err != nil {
+				return nil, fmt.Errorf("invalid Hysteria2 server_ports: %w", err)
+			}
+			node["server_ports"] = normalizedPorts
 		}
 		for _, field := range []string{"hop_interval", "hop_interval_max", "bbr_profile"} {
 			if value := firstQueryValue(query, field, strings.ReplaceAll(field, "_", "-")); value != "" {

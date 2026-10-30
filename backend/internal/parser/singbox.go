@@ -46,6 +46,13 @@ func parseSingboxJSON(body []byte) []model.ParsedNode {
 		if !IsSupportedNodeProtocol(typ) {
 			unsupportedReason = UnsupportedNodeProtocolReason(typ)
 		}
+		if typ == "hysteria" || typ == "hysteria2" {
+			if ports, err := NormalizeHysteriaPortRanges(normalized["server_ports"]); err != nil {
+				unsupportedReason = fmt.Sprintf("%s port hopping range is invalid", typ)
+			} else if ports != nil {
+				normalized["server_ports"] = ports
+			}
+		}
 		if typ == "shadowsocks" {
 			if err := normalizeShadowsocksPlugin(normalized); err != nil {
 				unsupportedReason = err.Error()

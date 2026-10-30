@@ -18,52 +18,6 @@ func firstNonNil(values ...any) any {
 	return nil
 }
 
-func normalizeHysteriaPortRanges(value any) ([]string, error) {
-	if value == nil {
-		return nil, nil
-	}
-	var rawRanges []string
-	switch typed := value.(type) {
-	case string:
-		rawRanges = strings.Split(typed, ",")
-	case []string:
-		rawRanges = typed
-	case []any:
-		rawRanges = make([]string, 0, len(typed))
-		for _, item := range typed {
-			rawRanges = append(rawRanges, fmt.Sprint(item))
-		}
-	default:
-		return nil, fmt.Errorf("port hopping range must be a string or list")
-	}
-
-	ranges := make([]string, 0, len(rawRanges))
-	for _, rawRange := range rawRanges {
-		rawRange = strings.TrimSpace(rawRange)
-		if rawRange == "" {
-			return nil, fmt.Errorf("port hopping range contains an empty item")
-		}
-		separator := ""
-		if strings.Contains(rawRange, "-") {
-			separator = "-"
-		} else if strings.Contains(rawRange, ":") {
-			separator = ":"
-		}
-		startText, endText := rawRange, rawRange
-		if separator != "" {
-			parts := strings.SplitN(rawRange, separator, 2)
-			startText, endText = strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
-		}
-		start, startErr := strconv.Atoi(startText)
-		end, endErr := strconv.Atoi(endText)
-		if startErr != nil || endErr != nil || start < 1 || end > 65535 || start > end {
-			return nil, fmt.Errorf("invalid port hopping range")
-		}
-		ranges = append(ranges, fmt.Sprintf("%d:%d", start, end))
-	}
-	return ranges, nil
-}
-
 func normalizeHysteriaHopInterval(value string) (string, string, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
