@@ -116,7 +116,7 @@ onMounted(load);
 
 <template>
   <section
-    class="order-8 flex h-full flex-col rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-4 shadow-[var(--shadow-card)] xl:col-span-4"
+    class="flex h-full flex-col rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
   >
     <div class="mb-3 flex items-center justify-between gap-3">
       <h3 class="flex items-center gap-2 text-sm font-semibold">

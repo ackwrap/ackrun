@@ -76,11 +76,11 @@ async function save() {
 
 <template>
   <button
-    class="aw-action-button aw-action-neutral !h-[34px] shrink-0 px-2"
+    class="aw-action-button aw-action-neutral !h-[34px] px-3"
     :title="summary"
     @click="show"
   >
-    <Clock3 :size="14" />
+    <Clock3 :size="14" />{{ summary }}
   </button>
   <Modal
     :open="open"
@@ -114,14 +114,19 @@ async function save() {
           class="aw-input mt-1 w-full"
           :disabled="form.mode !== 'weekly'"
         >
-          <option v-for="item in weekdayOptions" :key="item[0]" :value="item[0]">
+          <option
+            v-for="item in weekdayOptions"
+            :key="item[0]"
+            :value="item[0]"
+          >
             {{ item[1] }}
           </option>
         </select>
       </label>
     </div>
     <p class="mt-4 text-xs leading-5 text-[var(--text-tertiary)]">
-      默认每天 04:00。只有核心正在运行时才会重启；核心已停止时自动跳过，不会主动启动。
+      默认每天
+      04:00。只有核心正在运行时才会重启；核心已停止时自动跳过，不会主动启动。
     </p>
     <template #footer>
       <Button :disabled="saving" @click="open = false">取消</Button>
