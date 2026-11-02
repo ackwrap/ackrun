@@ -81,38 +81,6 @@ export interface ToolLogEntry {
   message: string;
 }
 
-export interface MaintenanceCheck {
-  key: string;
-  label: string;
-  status: "pass" | "warn" | "fail";
-  message: string;
-}
-
-export interface MaintenanceCheckResponse {
-  success: boolean;
-  checks: MaintenanceCheck[];
-}
-
-export interface CoreDiagnosticsResponse {
-  generated_at: number;
-  platform: string;
-  architecture: string;
-  version?: string;
-  running: boolean;
-  pid?: number;
-  binary_path: string;
-  config_path?: string;
-  config_present: boolean;
-  config_valid: boolean;
-  network: MaintenanceCheckResponse;
-  logs: {
-    total: number;
-    stdout: number;
-    stderr: number;
-    error_lines: number;
-  };
-}
-
 export interface UpdateSettings {
   acceleration: string;
   custom_mirror_url?: string;

@@ -314,7 +314,7 @@ func (svc *SimpleSetupService) run(ctx context.Context, rawURL string) (runErr e
 		if stopErr != nil {
 			return errors.New("启动检查失败，网络恢复未完成，请在专业模式检查核心日志")
 		}
-		return errors.New("启动检查失败，已停止核心并恢复网络，请在专业模式检查诊断结果")
+		return errors.New("启动检查失败，已停止核心并恢复网络，请在专业模式检查核心日志")
 	}
 	items, err := svc.store.ListSubscriptions()
 	if err != nil {

@@ -108,14 +108,6 @@ func directHTTPTransport() *http.Transport {
 	return transport
 }
 
-func fetchLatestSingboxVersionWithSettings(settings *model.UpdateSettingsResponse, apiURL string) (string, error) {
-	release, err := fetchLatestSingboxReleaseWithSettings(settings, apiURL)
-	if err != nil {
-		return "", err
-	}
-	return release.Version, nil
-}
-
 func fetchLatestSingboxReleaseWithSettings(settings *model.UpdateSettingsResponse, apiURL string) (*singboxRelease, error) {
 	attempts, err := buildUpdateRequestAttempts(settings, apiURL)
 	if err != nil {

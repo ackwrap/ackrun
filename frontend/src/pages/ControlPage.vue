@@ -1,13 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import {
-  ChevronDown,
-  Play,
-  Power,
-  RefreshCw,
-  RotateCcw,
-  Square,
-} from "lucide-vue-next";
+import { Play, Power, RefreshCw, RotateCcw, Square } from "lucide-vue-next";
 import { useRealtimeSocket } from "@/composables/useRealtimeSocket";
 import { api } from "@/services/api";
 import type {
@@ -21,10 +14,9 @@ import PageHeader from "@/components/layout/PageHeader.vue";
 import Toast from "@/components/ui/Toast.vue";
 import ControlRuntimeStats from "./control/ControlRuntimeStats.vue";
 import ControlUpdateDialog from "./control/ControlUpdateDialog.vue";
-import ControlMaintenance from "./control/ControlMaintenance.vue";
 import ControlNetworkProbes from "./control/ControlNetworkProbes.vue";
 import ControlRestartSchedule from "./ControlRestartSchedule.vue";
-import ControlMixedProxyCard from "./ControlMixedProxyCard.vue";
+import ControlMixedProxyDialog from "./control/ControlMixedProxyDialog.vue";
 
 const runtime = ref<RuntimeResponse | null>(null);
 const configStatus = ref<ConfigStatus | null>(null);
@@ -38,8 +30,7 @@ const runtimeAction = ref("");
 const modeChanging = ref(false);
 const configChanging = ref(false);
 const installing = ref(false);
-const advancedOpen = ref(false);
-const advancedLoaded = ref(false);
+const mixedSaving = ref(false);
 const message = ref("");
 const messageType = ref<"success" | "error" | "info">("success");
 let cancelled = false;
@@ -67,6 +58,7 @@ const busy = computed(
     modeChanging.value ||
     configChanging.value ||
     installing.value ||
+    mixedSaving.value ||
     ["starting", "stopping"].includes(runtime.value?.status || ""),
 );
 const configReady = computed(
@@ -195,10 +187,6 @@ async function changeMode(kind: "inbound" | "proxy", mode: string) {
     modeChanging.value = false;
   }
 }
-function toggleAdvanced() {
-  advancedOpen.value = !advancedOpen.value;
-  if (advancedOpen.value) advancedLoaded.value = true;
-}
 useRealtimeSocket((event: WSEvent) => {
   const data: any = event.data;
   if (event.type === "runtime.status" || event.type === "core.status") {
@@ -310,6 +298,15 @@ onBeforeUnmount(() => {
             @busy="installing = $event"
             @installed="refresh"
           />
+          <ControlMixedProxyDialog
+            :proxy-port="runtime?.proxy_port || 0"
+            :inbound-mode="inboundMode"
+            :disabled="
+              (busy && !mixedSaving) || !runtime || notInstalled || !inboundMode
+            "
+            @message="notify"
+            @busy="mixedSaving = $event"
+          />
         </div>
       </div>
       <div
@@ -405,50 +402,6 @@ onBeforeUnmount(() => {
         :is-running="isRunning"
         :proxy-port="runtime?.proxy_port || 0"
       />
-    </div>
-
-    <div class="border-t border-[var(--border-light)] pt-2">
-      <button
-        class="flex w-full items-center justify-between gap-3 py-3 text-left text-sm text-[var(--text-secondary)]"
-        :aria-expanded="advancedOpen"
-        aria-controls="control-advanced"
-        @click="toggleAdvanced"
-      >
-        <span
-          >高级选项<span
-            v-if="installing"
-            class="ml-2 text-xs text-[var(--color-primary)]"
-            >更新安装中</span
-          ><span class="mt-1 block text-xs text-[var(--text-tertiary)]"
-            >网络维护、代理认证</span
-          ></span
-        >
-        <ChevronDown
-          :size="16"
-          class="shrink-0 transition-transform"
-          :class="advancedOpen && 'rotate-180'"
-        />
-      </button>
-      <div
-        id="control-advanced"
-        v-show="advancedOpen"
-        class="grid items-start gap-4 lg:grid-cols-2"
-      >
-        <ControlMaintenance
-          v-if="advancedLoaded"
-          :is-running="isRunning"
-          :platform="runtime?.platform"
-          :disabled="busy"
-          @notify="notify"
-          @busy="runtimeAction = $event"
-        />
-        <ControlMixedProxyCard
-          v-if="advancedLoaded"
-          :proxy-port="runtime?.proxy_port || 0"
-          :inbound-mode="inboundMode"
-          @message="notify"
-        />
-      </div>
     </div>
   </div>
 </template>
