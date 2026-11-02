@@ -22,6 +22,7 @@ import Toast from "@/components/ui/Toast.vue";
 import ControlLiveStatus from "./ControlLiveStatus.vue";
 import ControlInstaller from "./control/ControlInstaller.vue";
 import ControlMaintenance from "./control/ControlMaintenance.vue";
+import ControlNetworkProbes from "./control/ControlNetworkProbes.vue";
 import ControlRestartSchedule from "./ControlRestartSchedule.vue";
 import ControlMixedProxyCard from "./ControlMixedProxyCard.vue";
 
@@ -389,7 +390,12 @@ onBeforeUnmount(() => {
       </p>
     </section>
 
-    <ControlLiveStatus :is-running="isRunning" />
+    <div
+      class="grid items-stretch gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)]"
+    >
+      <ControlLiveStatus :is-running="isRunning" />
+      <ControlNetworkProbes @message="notify" />
+    </div>
 
     <div class="border-t border-[var(--border-light)] pt-2">
       <button
