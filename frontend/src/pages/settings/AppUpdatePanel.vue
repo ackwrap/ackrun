@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import {
   CheckCircle2,
   Download,
@@ -8,15 +8,20 @@ import {
   Rocket,
 } from "lucide-vue-next";
 import { api } from "@/services/api";
-import type {
-  AppUpdateInstallStatus,
-  AppUpdateStatus,
-} from "@/services/types";
+import type { AppUpdateInstallStatus, AppUpdateStatus } from "@/services/types";
 import Button from "@/components/ui/Button.vue";
 import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
 
+const props = withDefaults(
+  defineProps<{ compact?: boolean; disabled?: boolean }>(),
+  {
+    compact: false,
+    disabled: false,
+  },
+);
 const emit = defineEmits<{
   notify: [message: string, type?: "success" | "error" | "info"];
+  busy: [value: boolean];
 }>();
 
 const acceleration = ref("ghproxy");
@@ -29,6 +34,7 @@ const confirmOpen = ref(false);
 const checkError = ref("");
 let installPollTimer: number | undefined;
 let installPollGeneration = 0;
+let disposed = false;
 
 const panel =
   "rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-card)]";
@@ -45,12 +51,15 @@ const statusTone = computed(() => {
 
 const statusLabel = computed(() => {
   if (checking.value) return "正在检查";
-  if (checkError.value || status.value?.update_error) return "安装失败";
+  if (checkError.value) return "检查失败";
+  if (status.value?.update_error) return "安装失败";
   if (!status.value) return "尚未检查";
   if (installing.value || status.value.updating) return "正在安装";
   if (!checked.value) return "尚未检查";
   return status.value.update_available ? "发现新版本" : "已是最新版本";
 });
+const busy = computed(() => installing.value || !!status.value?.updating);
+watch(busy, (value) => emit("busy", value), { immediate: true });
 
 function formatPublishedAt(value?: string) {
   if (!value) return "--";
@@ -80,12 +89,17 @@ async function saveSettings() {
 }
 
 async function checkUpdate() {
+  if (checking.value || busy.value || props.disabled) return;
   checking.value = true;
   checkError.value = "";
   try {
-    status.value = await api.checkAppUpdate();
+    const value = await api.checkAppUpdate();
+    if (disposed) return;
+    status.value = value;
     checked.value = true;
+    if (value.updating) startInstallPolling(installPollGeneration);
   } catch (cause: any) {
+    if (disposed) return;
     checked.value = true;
     checkError.value = cause.message;
     emit("notify", `检查更新失败: ${cause.message}`, "error");
@@ -95,6 +109,13 @@ async function checkUpdate() {
 }
 
 async function installUpdate() {
+  if (
+    busy.value ||
+    props.disabled ||
+    !status.value?.update_available ||
+    !status.value.can_install
+  )
+    return;
   confirmOpen.value = false;
   installing.value = true;
   checkError.value = "";
@@ -138,7 +159,10 @@ function startInstallPolling(generation: number) {
     }
     try {
       const current = await api.getAppUpdateInstallStatus();
-      if (generation === installPollGeneration) applyInstallStatus(current);
+      if (generation === installPollGeneration) {
+        applyInstallStatus(current);
+        if (!current.updating && !installing.value) stopInstallPolling();
+      }
     } catch {
       // Dependency installation and service restart may briefly interrupt the API.
     }
@@ -196,29 +220,35 @@ async function waitForInstalledVersion(version: string, generation: number) {
     }
   }
   installing.value = false;
-  emit(
-    "notify",
-    "更新安装仍在进行，请稍后手动刷新页面查看版本",
-    "info",
-  );
+  emit("notify", "更新安装仍在进行，请稍后手动刷新页面查看版本", "info");
 }
 
 onMounted(async () => {
+  if (props.compact) {
+    await checkUpdate();
+    return;
+  }
   await loadSettings();
+  if (disposed) return;
   try {
-    applyInstallStatus(await api.getAppUpdateInstallStatus());
+    const value = await api.getAppUpdateInstallStatus();
+    if (disposed) return;
+    applyInstallStatus(value);
+    if (value.updating) startInstallPolling(installPollGeneration);
   } catch {
     // A manual update check will surface API errors.
   }
 });
 onUnmounted(() => {
+  disposed = true;
   installPollGeneration++;
   stopInstallPolling();
+  emit("busy", false);
 });
 </script>
 
 <template>
-  <div class="grid gap-4 lg:grid-cols-2">
+  <div :class="compact ? '' : 'grid gap-4 lg:grid-cols-2'">
     <section :class="panel" class="relative overflow-hidden">
       <div
         class="pointer-events-none absolute -right-16 -top-20 h-56 w-56 rounded-full bg-[var(--color-primary-bg)] blur-3xl"
@@ -232,7 +262,9 @@ onUnmounted(() => {
               <Rocket :size="22" />
             </div>
             <div>
-              <h2 class="text-base font-semibold">Ackwrap WebUI 更新</h2>
+              <h2 class="text-base font-semibold">
+                {{ compact ? "Ackrun" : "Ackwrap WebUI 更新" }}
+              </h2>
               <p class="mt-1 text-xs text-[var(--text-secondary)]">
                 WebUI 与后端打包为同一个 OpenWrt IPK，更新后自动重启管理服务。
               </p>
@@ -264,14 +296,20 @@ onUnmounted(() => {
               v{{ status?.current_version || "--" }}
             </p>
             <p class="mt-1 text-xs text-[var(--text-secondary)]">
-              {{ status ? `${status.platform} / ${status.architecture}` : "等待检查" }}
+              {{
+                status
+                  ? `${status.platform} / ${status.architecture}`
+                  : "等待检查"
+              }}
             </p>
           </div>
           <div
             class="rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--bg-page)] p-4"
           >
             <p class="text-xs text-[var(--text-tertiary)]">最新版本</p>
-            <p class="mt-2 font-mono text-xl font-semibold text-[var(--color-primary)]">
+            <p
+              class="mt-2 font-mono text-xl font-semibold text-[var(--color-primary)]"
+            >
               v{{ status?.latest_version || "--" }}
             </p>
             <p class="mt-1 text-xs text-[var(--text-secondary)]">
@@ -280,6 +318,16 @@ onUnmounted(() => {
           </div>
         </div>
 
+        <p
+          v-if="compact && checked && !checking && !checkError && !busy"
+          class="mt-4 text-sm text-[var(--text-secondary)]"
+        >
+          {{
+            status?.update_available
+              ? "发现 Ackrun 新版本，是否安装更新？"
+              : "Ackrun 已是最新版本。"
+          }}
+        </p>
         <div
           v-if="checkError || status?.update_error || status?.message"
           class="mt-4 rounded-[var(--radius-md)] p-3 text-xs"
@@ -303,19 +351,22 @@ onUnmounted(() => {
           </div>
           <pre
             class="max-h-52 overflow-auto whitespace-pre-wrap break-all p-3 font-mono text-xs leading-5 text-[var(--text-secondary)]"
-            >{{ status.install_log }}</pre
-          >
+            >{{ status.install_log }}</pre>
         </div>
 
         <div class="mt-5 flex flex-wrap items-center gap-2">
-          <Button :loading="checking" @click="checkUpdate">
+          <Button
+            :loading="checking"
+            :disabled="disabled || busy"
+            @click="checkUpdate"
+          >
             <template #icon><RefreshCw :size="14" /></template>
             {{ checked ? "重新检查" : "检查更新" }}
           </Button>
           <Button
             v-if="status?.update_available && !status?.updating"
             variant="primary"
-            :disabled="!status.can_install"
+            :disabled="disabled || checking || busy || !status.can_install"
             :loading="installing"
             @click="confirmOpen = true"
           >
@@ -335,7 +386,7 @@ onUnmounted(() => {
       </div>
     </section>
 
-    <section :class="panel" class="flex flex-col">
+    <section v-if="!compact" :class="panel" class="flex flex-col">
       <div class="mb-4 flex items-center gap-2">
         <Download :size="18" class="text-[var(--color-primary)]" />
         <h2 class="font-semibold">更新设置</h2>
@@ -361,7 +412,8 @@ onUnmounted(() => {
           <div class="flex gap-2">
             <CheckCircle2 :size="15" class="mt-0.5 shrink-0" />
             <span>
-              版本检查直接访问 GitHub API；下载 IPK 使用这里配置的代理。启用代理后不会回退直连。
+              版本检查直接访问 GitHub API；下载 IPK
+              使用这里配置的代理。启用代理后不会回退直连。
             </span>
           </div>
         </div>
@@ -374,9 +426,10 @@ onUnmounted(() => {
 
   <ConfirmDialog
     :open="confirmOpen"
-    title="安装 Ackwrap 更新"
+    :title="compact ? '安装 Ackrun 更新' : '安装 Ackwrap 更新'"
     :message="`将下载并安装 v${status?.latest_version || ''}。管理服务会短暂重启；如果核心当前正在运行，更新后会自动恢复。`"
     confirm-text="开始更新"
+    :above-modal="compact"
     @confirm="installUpdate"
     @cancel="confirmOpen = false"
   />

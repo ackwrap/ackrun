@@ -20,7 +20,7 @@ import Button from "@/components/ui/Button.vue";
 import PageHeader from "@/components/layout/PageHeader.vue";
 import Toast from "@/components/ui/Toast.vue";
 import ControlLiveStatus from "./ControlLiveStatus.vue";
-import ControlInstaller from "./control/ControlInstaller.vue";
+import ControlUpdateDialog from "./control/ControlUpdateDialog.vue";
 import ControlMaintenance from "./control/ControlMaintenance.vue";
 import ControlNetworkProbes from "./control/ControlNetworkProbes.vue";
 import ControlRestartSchedule from "./ControlRestartSchedule.vue";
@@ -248,7 +248,7 @@ onBeforeUnmount(() => {
       class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-card)]"
     >
       <div class="flex flex-wrap items-center justify-between gap-4">
-        <div class="flex items-center gap-3">
+        <div class="flex flex-wrap items-center gap-3">
           <Power :size="20" class="text-[var(--color-primary)]" />
           <h2 class="font-semibold">sing-box</h2>
           <span
@@ -272,6 +272,7 @@ onBeforeUnmount(() => {
             class="text-xs text-[var(--text-tertiary)]"
             >{{ runtime.version }}</span
           >
+          <ControlRestartSchedule @notify="notify" />
         </div>
         <div class="flex flex-wrap gap-2">
           <Button
@@ -301,6 +302,14 @@ onBeforeUnmount(() => {
             @click="action(api.reloadConfig, '重载配置')"
             ><RefreshCw :size="14" />重载配置</Button
           >
+          <ControlUpdateDialog
+            :current-version="runtime?.version"
+            :is-running="isRunning"
+            :disabled="busy && !installing"
+            @notify="notify"
+            @busy="installing = $event"
+            @installed="refresh"
+          />
         </div>
       </div>
       <div
@@ -309,7 +318,7 @@ onBeforeUnmount(() => {
       >
         <span>{{
           notInstalled
-            ? "sing-box 未安装，请先安装核心。"
+            ? "sing-box 未安装，请点击检查更新安装核心。"
             : "当前没有配置文件，请生成配置后启动。"
         }}</span>
         <Button
@@ -400,7 +409,7 @@ onBeforeUnmount(() => {
     <div class="border-t border-[var(--border-light)] pt-2">
       <button
         class="flex w-full items-center justify-between gap-3 py-3 text-left text-sm text-[var(--text-secondary)]"
-        :aria-expanded="advancedOpen || notInstalled"
+        :aria-expanded="advancedOpen"
         aria-controls="control-advanced"
         @click="toggleAdvanced"
       >
@@ -408,9 +417,9 @@ onBeforeUnmount(() => {
           >高级选项<span
             v-if="installing"
             class="ml-2 text-xs text-[var(--color-primary)]"
-            >核心安装中</span
+            >更新安装中</span
           ><span class="mt-1 block text-xs text-[var(--text-tertiary)]"
-            >核心安装与更新、网络维护、代理认证、定时重启</span
+            >网络维护、代理认证</span
           ></span
         >
         <ChevronDown
@@ -421,18 +430,9 @@ onBeforeUnmount(() => {
       </button>
       <div
         id="control-advanced"
-        v-show="advancedOpen || notInstalled"
+        v-show="advancedOpen"
         class="grid items-start gap-4 lg:grid-cols-2"
       >
-        <ControlInstaller
-          v-if="advancedLoaded || notInstalled"
-          :current-version="runtime?.version"
-          :is-running="isRunning"
-          :disabled="busy && !installing"
-          @notify="notify"
-          @busy="installing = $event"
-          @installed="refresh"
-        />
         <ControlMaintenance
           v-if="advancedLoaded"
           :is-running="isRunning"
@@ -447,13 +447,6 @@ onBeforeUnmount(() => {
           :inbound-mode="inboundMode"
           @message="notify"
         />
-        <section
-          v-if="advancedLoaded"
-          class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
-        >
-          <h3 class="mb-3 text-sm font-semibold">定时重启</h3>
-          <ControlRestartSchedule @notify="notify" />
-        </section>
       </div>
     </div>
   </div>

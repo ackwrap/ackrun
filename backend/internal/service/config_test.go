@@ -110,21 +110,14 @@ func TestConfigStatusCachesValidationUntilFileChanges(t *testing.T) {
 	if validationCount != 1 {
 		t.Fatalf("unchanged config validated %d times, want 1", validationCount)
 	}
-	if err := svc.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	if validationCount != 2 {
-		t.Fatalf("explicit validation count = %d, want 2", validationCount)
-	}
-
 	if err := os.WriteFile(configPath, []byte("{\n}\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.GetConfigStatus(); err != nil {
 		t.Fatal(err)
 	}
-	if validationCount != 3 {
-		t.Fatalf("changed config validation count = %d, want 3", validationCount)
+	if validationCount != 2 {
+		t.Fatalf("changed config validation count = %d, want 2", validationCount)
 	}
 }
 
@@ -168,7 +161,7 @@ func TestConfigMetadataReadsSkipValidation(t *testing.T) {
 	}
 }
 
-func TestExplicitConfigValidationRefreshesFailedCache(t *testing.T) {
+func TestConfigStatusRefreshesFailedCacheAfterFileChanges(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
 	if err := os.WriteFile(configPath, []byte("{}"), 0644); err != nil {
@@ -193,7 +186,14 @@ func TestExplicitConfigValidationRefreshesFailedCache(t *testing.T) {
 		t.Fatalf("initial status = %+v, validation count = %d", status, validationCount)
 	}
 	validationErr = nil
-	if err := svc.Validate(); err != nil {
+	status, err = svc.GetConfigStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Valid || validationCount != 1 {
+		t.Fatalf("unchanged status = %+v, validation count = %d", status, validationCount)
+	}
+	if err := os.WriteFile(configPath, []byte("{\n}\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	status, err = svc.GetConfigStatus()

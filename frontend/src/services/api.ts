@@ -137,8 +137,6 @@ export const api = {
     }),
   generateDefaultConfig: () =>
     request<ActionResponse>("/config/default", { method: "POST" }),
-  validateConfig: () =>
-    request<ConfigStatus>("/config/validate", { method: "POST" }),
   updateRules: () =>
     request<ActionResponse>("/config/rules/update", { method: "POST" }),
   backupConfig: () =>

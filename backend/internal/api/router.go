@@ -69,7 +69,6 @@ func RegisterRoutes(
 		v1.GET("/config/backups", configH.ListBackups)
 		v1.PUT("/config/active", configH.SetActive)
 		v1.POST("/config/default", configH.GenerateDefault)
-		v1.POST("/config/validate", configH.Validate)
 		v1.POST("/config/rules/update", configH.UpdateRules)
 		v1.POST("/config/backup", configH.Backup)
 		v1.POST("/config/restore", configH.Restore)
