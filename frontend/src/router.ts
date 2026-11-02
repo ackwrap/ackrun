@@ -4,7 +4,6 @@ import AppLayout from "@/components/layout/AppLayout.vue";
 const pages = {
   "/": () => import("@/pages/ControlPage.vue"),
   "/control": () => import("@/pages/ControlPage.vue"),
-  "/dashboard": () => import("@/pages/MonitorPage.vue"),
   "/subscriptions": () => import("@/pages/SubscriptionsPage.vue"),
   "/nodes": () => import("@/pages/NodesPage.vue"),
   "/collections": () => import("@/pages/CollectionsPage.vue"),

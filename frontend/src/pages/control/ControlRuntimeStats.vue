@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { Activity, Gauge } from "lucide-vue-next";
 import { getClashClient } from "@/services/clash";
-import { formatBytes, formatSpeed } from "../monitor/monitorUtils";
+import { formatBytes, formatSpeed } from "@/utils/traffic";
 
 const props = defineProps<{ isRunning: boolean; proxyPort: number }>();
 const totals = ref<{

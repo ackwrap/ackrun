@@ -7,13 +7,6 @@ export default defineConfig({
   build: {
     outDir: '../backend/internal/webui/dist',
     emptyOutDir: true,
-    rollupOptions: {
-      output: {
-        manualChunks(id) {
-          if (id.includes('node_modules/echarts')) return 'echarts'
-        },
-      },
-    },
   },
   resolve: {
     alias: {

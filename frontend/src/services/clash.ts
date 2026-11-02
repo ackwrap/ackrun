@@ -23,43 +23,6 @@ export interface ProxyGroup {
   history: { time: string; delay: number }[];
 }
 
-export interface Connection {
-  id: string;
-  metadata: {
-    network: string;
-    type: string;
-    sourceIP: string;
-    destinationIP: string;
-    sourcePort: string;
-    destinationPort: string;
-    host: string;
-    dnsMode: string;
-    processPath?: string;
-  };
-  upload: number;
-  download: number;
-  start: string;
-  chains: string[];
-  rule: string;
-  rulePayload: string;
-}
-
-export interface Rule {
-  type: string;
-  payload: string;
-  proxy: string;
-}
-
-export interface ClashConfig {
-  port: number;
-  "socks-port": number;
-  "redir-port": number;
-  "tproxy-port": number;
-  "mixed-port": number;
-  mode: "rule" | "global" | "direct";
-  "log-level": string;
-}
-
 class ClashAPIClient {
   private baseURL: string;
   private secret: string;
@@ -224,45 +187,12 @@ class ClashAPIClient {
 
   // 获取连接列表
   async getConnections(): Promise<{
-    connections: Connection[];
+    connections: unknown[];
     downloadTotal: number;
     uploadTotal: number;
     memory?: number;
   }> {
     return this.request("/connections");
-  }
-
-  // 关闭连接
-  async closeConnection(id: string): Promise<void> {
-    await this.request(`/connections/${id}`, { method: "DELETE" });
-  }
-
-  // 关闭所有连接
-  async closeAllConnections(): Promise<void> {
-    await this.request("/connections", { method: "DELETE" });
-  }
-
-  // 获取规则
-  async getRules(): Promise<{ rules: Rule[] }> {
-    return this.request("/rules");
-  }
-
-  // 获取配置
-  async getConfig(): Promise<ClashConfig> {
-    return this.request("/configs");
-  }
-
-  // 更新配置
-  async updateConfig(config: Partial<ClashConfig>): Promise<void> {
-    await this.request("/configs", {
-      method: "PATCH",
-      body: JSON.stringify(config),
-    });
-  }
-
-  // 切换模式
-  async setMode(mode: "rule" | "global" | "direct"): Promise<void> {
-    await this.updateConfig({ mode });
   }
 }
 

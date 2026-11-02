@@ -313,9 +313,6 @@ export interface ExperimentalSettings {
   clash_api_enabled: boolean;
   clash_api_port: string;
   clash_api_secret?: string;
-  clash_api_external_ui?: string;
-  clash_api_external_ui_download_url?: string;
-  clash_api_dashboard?: string;
   cache_file_enabled: boolean;
   cache_file_store_fakeip: boolean;
   cache_file_store_dns: boolean;
@@ -325,26 +322,9 @@ export interface ExperimentalSettingsResponse {
   clash_api_enabled: boolean;
   clash_api_port: string;
   clash_api_secret?: string;
-  clash_api_external_ui?: string;
-  clash_api_external_ui_download_url?: string;
-  clash_api_dashboard?: string;
   cache_file_enabled: boolean;
   cache_file_store_fakeip: boolean;
   cache_file_store_dns: boolean;
-}
-
-export interface Dashboard {
-  id: string;
-  name: string;
-  description: string;
-  installed: boolean;
-  selected: boolean;
-  local_path?: string;
-  updated_at?: number;
-  current_version?: string;
-  latest_version?: string;
-  update_available: boolean;
-  check_error?: string;
 }
 
 export interface NodeFilter {

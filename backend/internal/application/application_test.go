@@ -68,6 +68,55 @@ func TestApplicationServesEmbeddedSPAAndAssets(t *testing.T) {
 	}
 }
 
+func TestApplicationRemovesDashboardRoutesAndKeepsSharedClashRoutes(t *testing.T) {
+	app := testApplication(t)
+	defer app.Close()
+
+	for _, request := range []struct{ method, path string }{
+		{http.MethodGet, "/api/v1/settings/dashboards"},
+		{http.MethodPost, "/api/v1/settings/dashboards/check"},
+		{http.MethodPost, "/api/v1/settings/dashboards/yacd/install"},
+		{http.MethodDelete, "/api/v1/settings/dashboards/yacd"},
+		{http.MethodGet, "/api/v1/clash-status"},
+		{http.MethodGet, "/api/v1/clash/rules"},
+		{http.MethodGet, "/api/v1/clash/configs"},
+		{http.MethodPatch, "/api/v1/clash/configs"},
+		{http.MethodDelete, "/api/v1/clash/connections"},
+		{http.MethodDelete, "/api/v1/clash/connections/example"},
+	} {
+		recorder := httptest.NewRecorder()
+		app.Handler().ServeHTTP(recorder, httptest.NewRequest(request.method, request.path, nil))
+		if recorder.Code != http.StatusNotFound {
+			t.Errorf("%s %s status = %d, want 404", request.method, request.path, recorder.Code)
+		}
+	}
+
+	want := map[string]bool{
+		"GET /api/v1/clash/traffic":             false,
+		"GET /api/v1/clash/connections":         false,
+		"GET /api/v1/clash/proxies":             false,
+		"GET /api/v1/clash/proxies/:name":       false,
+		"PUT /api/v1/clash/proxies/:name":       false,
+		"GET /api/v1/clash/proxies/:name/delay": false,
+	}
+	for _, route := range app.Handler().(*gin.Engine).Routes() {
+		if !strings.HasPrefix(route.Path, "/api/v1/clash/") {
+			continue
+		}
+		key := route.Method + " " + route.Path
+		if _, exists := want[key]; !exists {
+			t.Errorf("unexpected Clash route: %s", key)
+		} else {
+			want[key] = true
+		}
+	}
+	for route, found := range want {
+		if !found {
+			t.Errorf("shared route missing: %s", route)
+		}
+	}
+}
+
 func TestGeneralSettingsAPIControlsCoreAutoStart(t *testing.T) {
 	app := testApplication(t)
 	defer app.Close()

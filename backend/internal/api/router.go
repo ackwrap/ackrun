@@ -27,7 +27,6 @@ func RegisterRoutes(
 	reconcileSvc *service.ConfigReconcileService,
 	coreRestartSvc *service.CoreRestartScheduler,
 	appUpdateSvc *service.AppUpdateService,
-	dashboardSvc *service.DashboardService,
 	advancedSvc *service.AdvancedRoutingService,
 	alertSvc *service.AlertService,
 	sshHostSvc *service.SSHHostService,
@@ -49,7 +48,6 @@ func RegisterRoutes(
 	nodeGroupH := handler.NewNodeGroupHandler(nodeGroupSvc)
 	coreRestartH := handler.NewCoreRestartHandler(coreRestartSvc)
 	appUpdateH := handler.NewAppUpdateHandler(appUpdateSvc)
-	dashboardH := handler.NewDashboardHandler(dashboardSvc)
 	advancedH := handler.NewAdvancedHandler(advancedSvc)
 	alertH := handler.NewAlertHandler(alertSvc)
 	sshHostH := handler.NewSSHHostHandler(sshHostSvc)
@@ -117,10 +115,6 @@ func RegisterRoutes(
 		v1.PUT("/settings/proxy-mode", settingsH.SetProxyMode)
 		v1.GET("/settings/experimental", settingsH.GetExperimentalSettings)
 		v1.PUT("/settings/experimental", settingsH.SetExperimentalSettings)
-		v1.GET("/settings/dashboards", dashboardH.List)
-		v1.POST("/settings/dashboards/check", dashboardH.CheckUpdates)
-		v1.POST("/settings/dashboards/:id/install", dashboardH.Install)
-		v1.DELETE("/settings/dashboards/:id", dashboardH.Delete)
 		v1.GET("/settings/node-filters", settingsH.ListNodeFilters)
 		v1.POST("/settings/node-filters", settingsH.CreateNodeFilter)
 		v1.PUT("/settings/node-filters/:id", settingsH.UpdateNodeFilter)
@@ -228,9 +222,13 @@ func RegisterRoutes(
 
 		v1.GET("/realtime/ws", realtimeH.HandleWS)
 
-		// Clash API 代理路由（所有请求通过后端代理）
-		v1.GET("/clash-status", clashProxyH.GetClashStatus)
-		v1.Any("/clash/*path", clashProxyH.Proxy)
+		// 控制面板统计和简易模式使用的 Clash API。
+		v1.GET("/clash/traffic", clashProxyH.Proxy)
+		v1.GET("/clash/connections", clashProxyH.Proxy)
+		v1.GET("/clash/proxies", clashProxyH.Proxy)
+		v1.GET("/clash/proxies/:name", clashProxyH.Proxy)
+		v1.PUT("/clash/proxies/:name", clashProxyH.Proxy)
+		v1.GET("/clash/proxies/:name/delay", clashProxyH.Proxy)
 	}
 }
 

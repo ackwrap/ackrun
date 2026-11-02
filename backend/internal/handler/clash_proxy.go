@@ -39,7 +39,7 @@ func (h *ClashProxyHandler) targetBase() (string, string) {
 	return "http://127.0.0.1:" + port, secret
 }
 
-// Proxy 代理所有 Clash API 请求
+// Proxy 代理已注册的 Clash API 请求。
 func (h *ClashProxyHandler) Proxy(c *gin.Context) {
 	if strings.EqualFold(c.GetHeader("Upgrade"), "websocket") {
 		h.ProxyWebSocket(c)
@@ -140,32 +140,4 @@ func (h *ClashProxyHandler) ProxyWebSocket(c *gin.Context) {
 	httpclient.SetBrowserUserAgent(c.Request)
 
 	proxy.ServeHTTP(c.Writer, c.Request)
-}
-
-// GetClashStatus 获取 Clash API 状态
-func (h *ClashProxyHandler) GetClashStatus(c *gin.Context) {
-	client := &http.Client{Timeout: 5 * time.Second}
-	clashURL, secret := h.targetBase()
-	req, _ := http.NewRequest("GET", clashURL+"/version", nil)
-	httpclient.SetBrowserUserAgent(req)
-	if secret != "" {
-		req.Header.Set("Authorization", "Bearer "+secret)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"connected": false,
-			"error":     err.Error(),
-			"target":    clashURL,
-		})
-		return
-	}
-	defer resp.Body.Close()
-
-	c.JSON(http.StatusOK, gin.H{
-		"connected": resp.StatusCode == http.StatusOK,
-		"status":    resp.StatusCode,
-		"target":    clashURL,
-	})
 }

@@ -13,7 +13,6 @@ import {
   FileCode,
   ChevronLeft,
   ChevronRight,
-  Gauge,
   Wrench,
   Route,
   ChevronDown,
@@ -28,7 +27,6 @@ const route = useRoute();
 const advancedOpen = ref(route.path.startsWith("/advanced"));
 const items = [
   ["控制面板", LayoutDashboard, "/"],
-  ["仪表盘", Gauge, "/dashboard"],
   ["订阅管理", RadioTower, "/subscriptions"],
   ["节点管理", Network, "/nodes"],
   ["规则管理", ListChecks, "/rules"],
