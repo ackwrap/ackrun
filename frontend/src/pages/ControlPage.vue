@@ -19,7 +19,7 @@ import type {
 import Button from "@/components/ui/Button.vue";
 import PageHeader from "@/components/layout/PageHeader.vue";
 import Toast from "@/components/ui/Toast.vue";
-import ControlLiveStatus from "./ControlLiveStatus.vue";
+import ControlRuntimeStats from "./control/ControlRuntimeStats.vue";
 import ControlUpdateDialog from "./control/ControlUpdateDialog.vue";
 import ControlMaintenance from "./control/ControlMaintenance.vue";
 import ControlNetworkProbes from "./control/ControlNetworkProbes.vue";
@@ -399,11 +399,12 @@ onBeforeUnmount(() => {
       </p>
     </section>
 
-    <div
-      class="grid items-stretch gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)]"
-    >
-      <ControlLiveStatus :is-running="isRunning" />
+    <div class="grid items-stretch gap-4 lg:grid-cols-3">
       <ControlNetworkProbes @message="notify" />
+      <ControlRuntimeStats
+        :is-running="isRunning"
+        :proxy-port="runtime?.proxy_port || 0"
+      />
     </div>
 
     <div class="border-t border-[var(--border-light)] pt-2">

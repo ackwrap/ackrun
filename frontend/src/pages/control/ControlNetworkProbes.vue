@@ -44,9 +44,11 @@ const access = ref<
     status: "checking" | "online" | "offline";
   }[]
 >(targets.map(([label]) => ({ label, latency: 0, status: "checking" })));
-const refreshing = ref(false);
+const refreshingIPs = ref(false);
+const refreshingAccess = ref(false);
 const controllers = new Set<AbortController>();
-let timer: number | undefined;
+let ipTimer: number | undefined;
+let accessTimer: number | undefined;
 let cancelled = false;
 
 async function timedFetch(url: string, options: RequestInit = {}) {
@@ -66,54 +68,60 @@ async function timedFetch(url: string, options: RequestInit = {}) {
     controllers.delete(controller);
   }
 }
-async function refresh() {
-  if (refreshing.value || cancelled) return;
-  clearTimeout(timer);
-  refreshing.value = true;
+async function refreshIPs() {
+  if (refreshingIPs.value || cancelled) return;
+  clearTimeout(ipTimer);
+  refreshingIPs.value = true;
+  const nextIPs = await Promise.all(
+    sources.map(async (source) => {
+      try {
+        const response = await timedFetch(source.url);
+        if (!response.ok) throw Error("request failed");
+        const value = String(source.parse(response.body)).trim();
+        if (!value || value.length > 80) throw Error("invalid response");
+        return { label: source.label, value, error: "" };
+      } catch (error: any) {
+        return {
+          label: source.label,
+          value: "",
+          error: error?.name === "AbortError" ? "请求超时" : "获取失败",
+        };
+      }
+    }),
+  );
+  if (cancelled) return;
+  ips.value = nextIPs;
+  refreshingIPs.value = false;
+  ipTimer = window.setTimeout(refreshIPs, 60000);
+}
+async function refreshAccess() {
+  if (refreshingAccess.value || cancelled) return;
+  clearTimeout(accessTimer);
+  refreshingAccess.value = true;
   access.value = targets.map(([label]) => ({
     label,
     latency: 0,
     status: "checking",
   }));
-  const [nextIPs, nextAccess] = await Promise.all([
-    Promise.all(
-      sources.map(async (source) => {
-        try {
-          const response = await timedFetch(source.url);
-          if (!response.ok) throw Error("request failed");
-          const value = String(source.parse(response.body)).trim();
-          if (!value || value.length > 80) throw Error("invalid response");
-          return { label: source.label, value, error: "" };
-        } catch (error: any) {
-          return {
-            label: source.label,
-            value: "",
-            error: error?.name === "AbortError" ? "请求超时" : "获取失败",
-          };
-        }
-      }),
-    ),
-    Promise.all(
-      targets.map(async ([label, url]) => {
-        const startedAt = performance.now();
-        try {
-          await timedFetch(url, { mode: "no-cors" });
-          return {
-            label,
-            latency: Math.max(1, Math.round(performance.now() - startedAt)),
-            status: "online" as const,
-          };
-        } catch {
-          return { label, latency: 0, status: "offline" as const };
-        }
-      }),
-    ),
-  ]);
+  const nextAccess = await Promise.all(
+    targets.map(async ([label, url]) => {
+      const startedAt = performance.now();
+      try {
+        await timedFetch(url, { mode: "no-cors" });
+        return {
+          label,
+          latency: Math.max(1, Math.round(performance.now() - startedAt)),
+          status: "online" as const,
+        };
+      } catch {
+        return { label, latency: 0, status: "offline" as const };
+      }
+    }),
+  );
   if (cancelled) return;
-  ips.value = nextIPs;
   access.value = nextAccess;
-  refreshing.value = false;
-  timer = window.setTimeout(refresh, 60000);
+  refreshingAccess.value = false;
+  accessTimer = window.setTimeout(refreshAccess, 60000);
 }
 async function copyIP(item: { label: string; value: string }) {
   if (!item.value) return;
@@ -125,36 +133,35 @@ async function copyIP(item: { label: string; value: string }) {
   }
 }
 onMounted(() => {
-  timer = window.setTimeout(refresh, 1200);
+  ipTimer = window.setTimeout(refreshIPs, 1200);
+  accessTimer = window.setTimeout(refreshAccess, 1200);
 });
 onBeforeUnmount(() => {
   cancelled = true;
-  clearTimeout(timer);
+  clearTimeout(ipTimer);
+  clearTimeout(accessTimer);
   controllers.forEach((controller) => controller.abort());
 });
 </script>
 
 <template>
   <section
-    class="min-w-0 rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-card)]"
+    class="flex min-w-0 flex-col rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-card)]"
   >
     <div class="mb-4 flex items-center justify-between gap-3">
-      <h2 class="font-semibold">网络探测</h2>
+      <h2 class="flex items-center gap-2 font-semibold">
+        <Globe2 :size="16" class="text-[var(--text-secondary)]" />IP 地址
+      </h2>
       <button
         class="focus-ring rounded-[var(--radius-md)] p-1 text-[var(--text-secondary)] disabled:opacity-50"
-        :disabled="refreshing"
-        aria-label="刷新网络探测"
-        @click="refresh"
+        :disabled="refreshingIPs"
+        aria-label="刷新 IP 地址"
+        @click="refreshIPs"
       >
-        <RefreshCw :size="15" :class="refreshing && 'animate-spin'" />
+        <RefreshCw :size="15" :class="refreshingIPs && 'animate-spin'" />
       </button>
     </div>
-    <h3
-      class="mb-2 flex items-center gap-2 text-xs text-[var(--text-secondary)]"
-    >
-      <Globe2 :size="14" />IP 地址
-    </h3>
-    <div class="space-y-1.5">
+    <div class="grid flex-1 grid-rows-4 gap-1.5">
       <button
         v-for="item in ips"
         :key="item.label"
@@ -177,12 +184,27 @@ onBeforeUnmount(() => {
         >
       </button>
     </div>
-    <h3
-      class="mb-2 mt-4 flex items-center gap-2 text-xs text-[var(--text-secondary)]"
-    >
-      <Wifi :size="14" />访问检查
-    </h3>
-    <div class="space-y-1.5" aria-live="polite">
+    <p class="mt-3 text-xs leading-5 text-[var(--text-tertiary)]">
+      从当前浏览器探测，每分钟刷新。
+    </p>
+  </section>
+  <section
+    class="flex min-w-0 flex-col rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-card)]"
+  >
+    <div class="mb-4 flex items-center justify-between gap-3">
+      <h2 class="flex items-center gap-2 font-semibold">
+        <Wifi :size="16" class="text-[var(--text-secondary)]" />访问检查
+      </h2>
+      <button
+        class="focus-ring rounded-[var(--radius-md)] p-1 text-[var(--text-secondary)] disabled:opacity-50"
+        :disabled="refreshingAccess"
+        aria-label="刷新访问检查"
+        @click="refreshAccess"
+      >
+        <RefreshCw :size="15" :class="refreshingAccess && 'animate-spin'" />
+      </button>
+    </div>
+    <div class="grid flex-1 grid-rows-4 gap-1.5" aria-live="polite">
       <div
         v-for="item in access"
         :key="item.label"
