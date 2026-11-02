@@ -1,6 +1,14 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { Play, Power, RefreshCw, RotateCcw, Square } from "lucide-vue-next";
+import {
+  ChevronDown,
+  MoreHorizontal,
+  Play,
+  Power,
+  RefreshCw,
+  RotateCcw,
+  Square,
+} from "lucide-vue-next";
 import { useRealtimeSocket } from "@/composables/useRealtimeSocket";
 import { api } from "@/services/api";
 import type {
@@ -31,6 +39,7 @@ const modeChanging = ref(false);
 const configChanging = ref(false);
 const installing = ref(false);
 const mixedSaving = ref(false);
+const actionsOpen = ref(false);
 const message = ref("");
 const messageType = ref<"success" | "error" | "info">("success");
 let cancelled = false;
@@ -235,8 +244,10 @@ onBeforeUnmount(() => {
     <section
       class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-card)]"
     >
-      <div class="flex flex-wrap items-center justify-between gap-4">
-        <div class="flex flex-wrap items-center gap-3">
+      <div class="flex flex-wrap items-center justify-between gap-2 sm:gap-4">
+        <div
+          class="flex min-w-0 flex-1 flex-wrap items-center gap-2 sm:flex-none sm:gap-3"
+        >
           <Power :size="20" class="text-[var(--color-primary)]" />
           <h2 class="font-semibold">sing-box</h2>
           <span
@@ -262,7 +273,22 @@ onBeforeUnmount(() => {
           >
           <ControlRestartSchedule @notify="notify" />
         </div>
-        <div class="flex flex-wrap gap-2">
+        <Button
+          class="w-8 shrink-0 !px-0 sm:hidden"
+          :aria-expanded="actionsOpen"
+          aria-controls="control-actions"
+          :aria-label="actionsOpen ? '收起操作' : '展开操作'"
+          :title="actionsOpen ? '收起操作' : '展开操作'"
+          @click="actionsOpen = !actionsOpen"
+        >
+          <ChevronDown v-if="actionsOpen" :size="16" />
+          <MoreHorizontal v-else :size="16" />
+        </Button>
+        <div
+          id="control-actions"
+          class="w-full flex-wrap gap-2 sm:flex sm:w-auto"
+          :class="actionsOpen ? 'flex' : 'hidden'"
+        >
           <Button
             v-if="!isRunning"
             variant="primary"
