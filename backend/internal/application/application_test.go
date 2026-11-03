@@ -81,6 +81,10 @@ func TestApplicationKeepsExternalPanelsAndSharedClashRoutes(t *testing.T) {
 		{http.MethodDelete, "/api/v1/clash/connections/example"},
 		{http.MethodGet, "/api/v1/clash/proxies/example"},
 		{http.MethodGet, "/api/v1/clash/proxies/example/delay"},
+		{http.MethodGet, "/api/v1/setup"},
+		{http.MethodPost, "/api/v1/setup"},
+		{http.MethodGet, "/api/v1/setup/options"},
+		{http.MethodPut, "/api/v1/setup/options"},
 	} {
 		recorder := httptest.NewRecorder()
 		app.Handler().ServeHTTP(recorder, httptest.NewRequest(request.method, request.path, nil))
