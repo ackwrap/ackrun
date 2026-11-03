@@ -183,6 +183,13 @@ def build_openwrt_packages(
         shutil.copytree(OPENWRT / "luci", package_root, dirs_exist_ok=True)
         shutil.copytree(OPENWRT / "meta", package_root, dirs_exist_ok=True)
 
+        # LuCI's template parser rejects CRLF emitted by Windows checkouts.
+        for source in (package_root / "usr" / "lib" / "lua" / "luci").rglob("*"):
+            if source.is_file() and source.suffix in {".lua", ".htm"}:
+                source.write_text(
+                    source.read_text(encoding="utf-8"), encoding="utf-8", newline="\n"
+                )
+
         binary_target = package_root / "usr" / "bin" / "ackwrap"
         binary_target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(binary, binary_target)
@@ -228,7 +235,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--arch", choices=("amd64", "arm64"), default="amd64")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "dist")
-    parser.add_argument("--version", default="1.0.0")
+    parser.add_argument("--version", default="1.0.1")
     parser.add_argument("--skip-checks", action="store_true")
     return parser.parse_args()
 
