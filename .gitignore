@@ -59,3 +59,9 @@ dist/
 backend/.dev/
 python-openwrt.py
 gui/windows.md
+
+# Local test screenshots and browser reports
+codex-clipboard-*
+**/codex-remote-attachments/
+**/test-results/
+**/playwright-report/
