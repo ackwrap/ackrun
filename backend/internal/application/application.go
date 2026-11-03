@@ -155,6 +155,7 @@ func New(options Options) (*Application, error) {
 	router.Use(api.SecurityMiddleware(options.APIToken))
 	api.RegisterSSHMCPRoutes(router, service.NewSSHMCPService(db), sshHostSvc)
 	api.RegisterRoutes(router, runtimeSvc, installerSvc, singboxSvc, configSvc, settingsSvc, subscriptionSvc, nodeSvc, nodeExposureSvc, routeRuleSvc, proxyCollectionSvc, configGenSvc, realtimeSvc, coreLogSvc, dnsSvc, nodeGroupSvc, reconcileSvc, coreRestartSvc, appUpdateSvc, dashboardSvc, sshHostSvc)
+	api.RegisterMCPRoutes(router, service.NewMCPService(db), options.APIToken)
 	if err := registerWebUI(router); err != nil {
 		reconcileSvc.Close()
 		stopToolLogEvents()

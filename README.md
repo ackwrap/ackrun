@@ -54,6 +54,27 @@ sing-box is powerful, but a production-sized JSON configuration is not pleasant 
 - **Operations**: core lifecycle control, WebSocket events, logs, connections, traffic, diagnostics, and update checks.
 - **Custom runtime**: integration with [ackwrap/sing-box-wrap](https://github.com/ackwrap/sing-box-wrap), including Ackwrap-specific VLESS encryption support.
 
+## Ackrun MCP
+
+Open **Settings > MCP** to enable application control and generate a dedicated token. The built-in Streamable HTTP endpoint is `/mcp` on the existing backend port; no separate process is needed.
+
+```json
+{
+  "mcpServers": {
+    "ackrun": {
+      "url": "http://127.0.0.1:8080/mcp",
+      "headers": { "Authorization": "Bearer <MCP_TOKEN>" }
+    }
+  }
+}
+```
+
+Use the actual listener port (8081 for the local test backend), or the server's LAN IP when connecting from another device. The settings page copies the current address and a client configuration. A newly generated token is shown once; only its hash is stored. This token grants read and write access to application management, including core control and updates. The service is disabled by default, requires its own bearer token on every request, and accepts direct local/LAN IP connections only. Public/domain Host headers, cross-origin and forwarded requests are rejected. Use a trusted LAN or local connection; this endpoint does not add transport encryption. The management API token, browser cookies and SSH MCP token do not authenticate it.
+
+Tools prefixed `ackrun_` cover runtime and core control, subscriptions, node imports and management, region groups, node entries, route rules and their strategies, rule subscriptions and Geo assets, DNS, configuration generation/apply/backup, logs and settings. They reuse existing API validation and runtime behavior. Rule and strategy changes remain database drafts until explicit generation; creating a proxy rule requires its strategy in the same call. Subscription synchronization and software installation return a started state; query the relevant status tool for the final outcome. Ordinary results omit raw node payloads and credential fields. Explicit share tools return complete credential-bearing links. Disabling or rotating the token rejects subsequent requests; an operation already running may finish.
+
+SSH commands and file transfers continue to use the separately configured `/mcp/ssh` service below.
+
 ## SSH MCP over HTTP
 
 Open **SSH Hosts > MCP Configuration** to enable the built-in MCP service and generate a dedicated token. No separate ssh-mcp2 process is required. The endpoint is `/mcp/ssh` on Ackwrap's existing HTTP port. A client configuration looks like:
