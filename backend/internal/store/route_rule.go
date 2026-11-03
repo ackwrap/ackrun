@@ -157,7 +157,9 @@ func (s *Store) DeleteRouteRule(id int64) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`UPDATE proxy_collections SET route_rule_id = 0, route_rule_ids = '[]', updated_at = ? WHERE route_rule_id = ?`, time.Now().UnixMilli(), id); err != nil {
+	// Strategies are owned by their canonical rule; deleting only the binding
+	// leaves an enabled orphan that has no entry point in rule management.
+	if _, err := tx.Exec(`DELETE FROM proxy_collections WHERE route_rule_id = ?`, id); err != nil {
 		return err
 	}
 	if _, err := updateIntJSONRefsTx(tx, "proxy_collections", "route_rule_ids", map[int64]bool{id: true}); err != nil {

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -348,7 +349,7 @@ func TestFinalStrategyOnlyAllowsOutboundChanges(t *testing.T) {
 	}
 }
 
-func TestProxyRuleChangesPreserveCollectionSettings(t *testing.T) {
+func TestProxyRuleUpdatesPreserveSettingsAndDeletionRemovesCollection(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -397,11 +398,7 @@ func TestProxyRuleChangesPreserveCollectionSettings(t *testing.T) {
 	if _, err := routeSvc.Delete(rule.ID); err != nil {
 		t.Fatal(err)
 	}
-	stored, err = db.GetProxyCollection(collection.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stored.RouteRuleID != 0 || stored.Type != "urltest" || stored.TestInterval != 600 || stored.NodeUIDs != `["test-node"]` {
-		t.Fatalf("rule deletion destroyed collection settings: %+v", stored)
+	if _, err := db.GetProxyCollection(collection.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("rule deletion left its bound strategy: err=%v", err)
 	}
 }

@@ -413,6 +413,7 @@ func (svc *RouteRuleService) Delete(id int64) (*model.ActionResponse, error) {
 		}
 		return nil, err
 	}
+	logging.Info("route_rule.delete", "route rule and its bound strategy deleted: %d", id)
 	return &model.ActionResponse{Success: true, Message: "route rule deleted"}, nil
 }
 

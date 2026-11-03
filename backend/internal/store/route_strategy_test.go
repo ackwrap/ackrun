@@ -143,7 +143,12 @@ func TestRouteRuleWritesRollbackWhenOrderNormalizationFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	original, err := db.CreateRouteRule(&model.RouteRuleRequest{Name: "Atomic Original", Enabled: true, RuleType: "domain", Values: []string{"original.example"}, Outbound: "direct"})
+	strategy := &model.ProxyCollection{Type: "selector", SourceType: "manual", ReferencedGroupIDs: "[]", NodeUIDs: `["direct"]`, Enabled: true}
+	original, err := db.CreateRouteRuleWithCollection(&model.RouteRuleRequest{Name: "Atomic Original", Enabled: true, RuleType: "domain", Values: []string{"original.example"}, Outbound: "proxy"}, strategy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	strategyBefore, err := db.GetProxyCollection(strategy.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,6 +179,10 @@ func TestRouteRuleWritesRollbackWhenOrderNormalizationFails(t *testing.T) {
 	stored, err = db.GetRouteRule(original.ID)
 	if err != nil || stored == nil {
 		t.Fatalf("failed delete was committed: item=%+v err=%v", stored, err)
+	}
+	strategyAfter, err := db.GetProxyCollection(strategy.ID)
+	if err != nil || *strategyAfter != *strategyBefore {
+		t.Fatalf("failed delete changed the bound strategy: strategy=%+v err=%v", strategyAfter, err)
 	}
 }
 
