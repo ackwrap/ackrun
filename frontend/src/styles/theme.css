@@ -188,6 +188,97 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Warm, matte surfaces and orange capsules for the night theme. */
+:root[data-theme="dark"] .aw-nav-item {
+  border-radius: 10px;
+}
+
+:root[data-theme="dark"] .aw-nav-item[data-active="true"]::before {
+  height: 16px;
+}
+
+:root[data-theme="dark"] .aw-button,
+:root[data-theme="dark"] .aw-action-button,
+:root[data-theme="dark"] .aw-control-action,
+:root[data-theme="dark"] main button:not([class]) {
+  border-radius: var(--radius-full);
+}
+
+:root[data-theme="dark"] .aw-button[data-variant="primary"]:hover:not(:disabled) {
+  box-shadow: none;
+}
+
+:root[data-theme="dark"] :where(
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]),
+  textarea,
+  select
+) {
+  border-color: transparent;
+}
+
+:root[data-theme="dark"] input:not([type="checkbox"]):not([type="radio"]):focus,
+:root[data-theme="dark"] textarea:focus,
+:root[data-theme="dark"] select:focus {
+  border-color: var(--color-primary);
+}
+
+:root[data-theme="dark"] select option:checked {
+  color: var(--button-primary-text);
+}
+
+:root[data-theme="dark"] [role="tab"] {
+  border-radius: var(--radius-full);
+  border-bottom-color: transparent;
+}
+
+:root[data-theme="dark"] [role="tab"][aria-selected="true"] {
+  background: var(--button-primary-bg);
+  color: var(--button-primary-text);
+}
+
+:root[data-theme="dark"] .aw-core-status > [role="status"] {
+  padding: 3px 9px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+:root[data-theme="dark"] .aw-control-mode {
+  font-weight: 600;
+}
+
+:root[data-theme="dark"] .aw-control-mode:has(input:not(:checked)) {
+  background: var(--button-secondary-bg);
+}
+
+:root[data-theme="dark"] .aw-probe-row,
+:root[data-theme="dark"] .aw-stat-tile {
+  border-radius: var(--radius-lg);
+}
+
+:root[data-theme="dark"] .aw-dialog,
+:root[data-theme="dark"] .aw-modal-panel {
+  border-color: var(--border-light);
+}
+
+:root[data-theme="dark"] .aw-toast::after {
+  opacity: 0.15;
+}
+
+:root[data-theme="dark"] .aw-toast-icon {
+  border-radius: var(--radius-full);
+  box-shadow: none;
+}
+
+:root[data-theme="dark"] .aw-toast-info {
+  --toast-from: #C87938;
+  --toast-to: #AC6029;
+  --toast-glow: var(--color-primary-bg);
+  --toast-label: var(--color-primary);
+  border-color: var(--button-primary-border);
+}
+
 @media (max-width: 639px) {
   :root[data-theme] .aw-core-header {
     flex-wrap: nowrap;
