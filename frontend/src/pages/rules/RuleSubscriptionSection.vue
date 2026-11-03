@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { Cloud, Plus, RefreshCw } from "lucide-vue-next";
+import { Cloud, Plus, RefreshCw, Settings2 } from "lucide-vue-next";
+import AdaptiveActionBar from "@/components/ui/AdaptiveActionBar.vue";
 import type { RouteRuleSubscription } from "@/services/types";
 
 defineProps<{
@@ -20,7 +21,9 @@ function syncStatusLabel(status: string) {
       updated: "已更新",
       failed: "失败",
       idle: "待同步",
-    }[status] || status || "待同步"
+    }[status] ||
+    status ||
+    "待同步"
   );
 }
 
@@ -38,49 +41,46 @@ function scheduleLabel(item: RouteRuleSubscription) {
   <section
     class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
   >
-    <header class="flex flex-wrap items-center justify-between gap-3">
-      <div>
+    <AdaptiveActionBar id="rule-subscription-actions" label="规则订阅操作">
+      <template #title>
         <h3 class="flex items-center gap-2 font-semibold">
           <Cloud :size="17" />规则订阅
         </h3>
-        <small class="text-[var(--text-secondary)]">
-          支持 sing-box binary/source 和 Clash Rule Provider YAML；选择 clash 或由 auto 按 .yml/.yaml 自动识别，转换后生成 sing-box rule_set 引用。不支持完整 Clash 节点订阅配置。
-        </small>
-      </div>
-      <div class="flex flex-wrap justify-end gap-2">
-        <button
-          class="aw-action-button aw-action-neutral"
-          @click="$emit('add')"
-        >
-          <Plus :size="13" />新增订阅
-        </button>
-        <button
-          class="aw-action-button aw-action-neutral"
-          :disabled="syncing || !subscriptions.length"
-          @click="$emit('syncAll')"
-        >
-          <RefreshCw :size="13" :class="syncing ? 'animate-spin' : ''" />同步全部
-        </button>
-      </div>
-    </header>
+      </template>
+      <button class="aw-action-button aw-action-neutral" @click="$emit('add')">
+        <Plus :size="13" />新增订阅
+      </button>
+      <button
+        class="aw-action-button aw-action-neutral"
+        :disabled="syncing || !subscriptions.length"
+        @click="$emit('syncAll')"
+      >
+        <RefreshCw :size="13" :class="syncing ? 'animate-spin' : ''" />同步全部
+      </button>
+    </AdaptiveActionBar>
+    <details class="mt-2 text-xs text-[var(--text-secondary)]">
+      <summary class="w-fit cursor-pointer">支持的格式</summary>
+      <p class="mt-2 leading-5">
+        支持 sing-box binary / source 和 Clash Rule Provider YAML。 auto 会按
+        .yml / .yaml 识别 Clash 格式并转换为规则集，不支持完整 Clash 节点订阅。
+      </p>
+    </details>
 
     <div class="aw-data-table-wrap mt-4">
-      <table class="aw-data-table min-w-[1080px]">
+      <table class="aw-data-table min-w-[840px]">
         <thead>
           <tr>
             <th>名称 / 地址</th>
             <th>规则集 Tag</th>
-            <th>格式</th>
-            <th>下载</th>
+            <th>格式 / 下载</th>
             <th>自动同步</th>
-            <th>同步状态</th>
             <th>状态</th>
             <th>操作</th>
           </tr>
         </thead>
         <tbody>
           <tr v-if="!subscriptions.length">
-            <td colspan="8" class="py-12 text-center">暂无规则订阅</td>
+            <td colspan="6" class="py-8 text-center">暂无规则订阅</td>
           </tr>
           <tr v-for="item in subscriptions" :key="item.id">
             <td class="max-w-[340px]">
@@ -108,12 +108,26 @@ function scheduleLabel(item: RouteRuleSubscription) {
                 {{ item.tag }}
               </span>
             </td>
-            <td>{{ item.format }}</td>
-            <td>{{ item.use_proxy ? "代理" : "直连" }}</td>
+            <td>
+              <div>{{ item.format }}</div>
+              <div class="mt-1 text-xs text-[var(--text-tertiary)]">
+                {{ item.use_proxy ? "代理下载" : "直连下载" }}
+              </div>
+            </td>
             <td>{{ scheduleLabel(item) }}</td>
             <td>
               <span
                 class="text-xs"
+                :class="
+                  item.enabled
+                    ? 'text-[var(--color-success)]'
+                    : 'text-[var(--text-tertiary)]'
+                "
+              >
+                {{ item.enabled ? "启用" : "停用" }}
+              </span>
+              <span
+                class="mt-1 block text-xs"
                 :class="
                   item.sync_status === 'failed'
                     ? 'text-[var(--color-error)]'
@@ -129,23 +143,11 @@ function scheduleLabel(item: RouteRuleSubscription) {
               </span>
             </td>
             <td>
-              <span
-                class="rounded-full px-2 py-1 text-xs"
-                :class="
-                  item.enabled
-                    ? 'bg-[var(--color-success-bg)] text-[var(--color-success)]'
-                    : 'bg-[var(--button-secondary-bg)] text-[var(--text-tertiary)]'
-                "
-              >
-                {{ item.enabled ? "启用" : "停用" }}
-              </span>
-            </td>
-            <td>
               <button
                 class="aw-action-button aw-action-neutral"
                 @click="$emit('manage', item)"
               >
-                管理
+                <Settings2 :size="13" />管理
               </button>
             </td>
           </tr>

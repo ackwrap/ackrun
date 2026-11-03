@@ -1,7 +1,14 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { Database } from "lucide-vue-next";
+import {
+  ChevronDown,
+  Clock3,
+  Database,
+  RefreshCw,
+  Search,
+} from "lucide-vue-next";
 import Modal from "@/components/ui/Modal.vue";
+import AdaptiveActionBar from "@/components/ui/AdaptiveActionBar.vue";
 import { api } from "@/services/api";
 import type {
   GeoAsset,
@@ -31,6 +38,9 @@ const activeSyncProgress = computed(() =>
     p.geoAssets.find((item) => item.sync_status === "syncing")?.sync_progress ||
       0,
   ),
+);
+const failedAssetCount = computed(
+  () => p.geoAssets.filter((item) => item.sync_status === "failed").length,
 );
 watch(
   [() => p.geoAssets, editing],
@@ -107,66 +117,101 @@ async function lookupTag(offset = 0) {
   <section
     class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
   >
-    <header class="mb-4 flex flex-wrap items-center justify-between gap-3">
-      <div>
+    <details class="geo-disclosure">
+      <summary
+        class="flex cursor-pointer list-none items-center justify-between gap-3 [&::-webkit-details-marker]:hidden"
+      >
         <h3 class="flex items-center gap-2 font-semibold">
-          <Database :size="17" /> Geo 数据库
+          <Database :size="17" />Geo 数据库
         </h3>
-        <p class="mt-1 text-xs leading-5 text-[var(--text-secondary)]">
-          在分流规则中选择 GeoIP / GeoSite
-          分类，此处可更新数据库并查询分类内容。
-        </p>
-      </div>
-      <button
-        class="aw-action-button aw-action-neutral"
-        :disabled="syncing"
-        @click="$emit('syncAll')"
+        <span
+          class="flex items-center gap-2 text-xs"
+          :class="
+            failedAssetCount && !syncing
+              ? 'text-[var(--color-error)]'
+              : 'text-[var(--text-secondary)]'
+          "
+        >
+          {{
+            syncing
+              ? `更新中 ${activeSyncProgress}%`
+              : failedAssetCount
+                ? `${failedAssetCount} 项更新失败`
+                : `${geoAssets.filter((x) => x.available).length} / ${geoAssets.length} 可用`
+          }}
+          <ChevronDown :size="16" class="disclosure-arrow shrink-0" />
+        </span>
+      </summary>
+      <AdaptiveActionBar
+        id="geo-database-actions"
+        label="数据库操作"
+        class="mb-4 mt-4"
       >
-        {{ syncing ? `更新中 ${activeSyncProgress}%` : "更新全部 Geo" }}
-      </button>
-    </header>
-    <div class="grid gap-3 lg:grid-cols-2">
-      <article
-        v-for="x in geoAssets"
-        :key="x.id"
-        class="min-w-0 rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--bg-base)] p-4"
-      >
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <div class="min-w-0">
-            <div class="flex flex-wrap items-center gap-2">
-              <b>{{ x.name }}</b>
-              <span
-                class="rounded-full bg-[var(--button-secondary-bg)] px-2 py-0.5 text-[11px] text-[var(--text-secondary)]"
-              >
-                {{ assetFormat(x) }}
-              </span>
-              <span class="text-[11px] text-[var(--text-secondary)]">
-                {{ x.source === "loyalsoldier" ? "Loyalsoldier" : "SagerNet" }}
-              </span>
-              <span
-                class="text-[11px]"
-                :class="
-                  x.sync_status === 'failed'
-                    ? 'text-red-400'
-                    : x.sync_status === 'syncing'
-                      ? 'text-blue-400'
-                      : 'text-[var(--text-tertiary)]'
-                "
-              >
-                {{
-                  x.sync_status === "syncing"
-                    ? `更新中 ${Math.round(x.sync_progress || 0)}%`
-                    : x.sync_status
-                }}
-              </span>
-            </div>
-          </div>
-          <div class="flex shrink-0 gap-2">
+        <template #title>
+          <h4 class="text-sm text-[var(--text-secondary)]">更新与查询</h4>
+        </template>
+        <button
+          class="aw-action-button aw-action-neutral"
+          :disabled="syncing"
+          @click="$emit('syncAll')"
+        >
+          <RefreshCw :size="13" :class="syncing ? 'animate-spin' : ''" />{{
+            syncing ? `更新中 ${activeSyncProgress}%` : "更新全部"
+          }}
+        </button>
+      </AdaptiveActionBar>
+      <div class="grid gap-3 lg:grid-cols-2">
+        <article
+          v-for="x in geoAssets"
+          :key="x.id"
+          class="min-w-0 rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--bg-base)] p-4"
+        >
+          <AdaptiveActionBar
+            :id="`geo-asset-actions-${x.id}`"
+            :label="`${x.name}操作`"
+          >
+            <template #title>
+              <div class="min-w-0">
+                <div class="flex flex-wrap items-center gap-2">
+                  <b>{{ x.name }}</b>
+                  <span
+                    class="rounded-full bg-[var(--button-secondary-bg)] px-2 py-0.5 text-[11px] text-[var(--text-secondary)]"
+                  >
+                    {{ assetFormat(x) }}
+                  </span>
+                  <span class="text-[11px] text-[var(--text-secondary)]">
+                    {{
+                      x.source === "loyalsoldier" ? "Loyalsoldier" : "SagerNet"
+                    }}
+                  </span>
+                  <span
+                    class="text-[11px]"
+                    :class="
+                      x.sync_status === 'failed'
+                        ? 'text-[var(--color-error)]'
+                        : x.sync_status === 'syncing'
+                          ? 'text-[var(--color-primary)]'
+                          : 'text-[var(--text-tertiary)]'
+                    "
+                  >
+                    {{
+                      x.sync_status === "syncing"
+                        ? `更新中 ${Math.round(x.sync_progress || 0)}%`
+                        : x.sync_status
+                    }}
+                  </span>
+                </div>
+              </div>
+            </template>
             <button
               class="aw-action-button aw-action-neutral"
               :disabled="syncing"
               @click="$emit('syncOne', x)"
             >
+              <RefreshCw
+                :size="13"
+                :class="x.sync_status === 'syncing' ? 'animate-spin' : ''"
+              />
               {{
                 x.sync_status === "syncing"
                   ? `${Math.round(x.sync_progress || 0)}%`
@@ -177,118 +222,128 @@ async function lookupTag(offset = 0) {
               class="aw-action-button aw-action-neutral"
               @click="editing = x.id"
             >
-              自动更新
+              <Clock3 :size="13" />自动更新
             </button>
-          </div>
-        </div>
-        <p class="mt-3 text-xs leading-5 text-[var(--text-tertiary)]">
-          {{
-            x.source === "loyalsoldier" && x.type === "geosite"
-              ? "GeoSite 分类由 DAT 数据库转换为 SRS，用于核心分流。"
-              : "分类分流使用上游提供的 SRS；查询数据库用于分类选择与内容查询。"
-          }}
-        </p>
-        <p v-if="x.sync_error" class="mt-2 text-xs text-red-400">
-          {{ x.sync_error }}
-        </p>
-        <div
-          v-if="x.sync_status === 'syncing'"
-          class="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--button-secondary-bg)]"
-        >
+          </AdaptiveActionBar>
+          <details class="mt-3 text-xs text-[var(--text-tertiary)]">
+            <summary class="w-fit cursor-pointer">数据说明</summary>
+            <p class="mt-2 leading-5">
+              {{
+                x.source === "loyalsoldier" && x.type === "geosite"
+                  ? "GeoSite 分类由 DAT 数据库转换为 SRS，用于核心分流。"
+                  : "分类分流使用上游提供的 SRS；查询数据库用于分类选择与内容查询。"
+              }}
+            </p>
+          </details>
+          <p v-if="x.sync_error" class="mt-2 text-xs text-[var(--color-error)]">
+            {{ x.sync_error }}
+          </p>
           <div
-            class="h-full rounded-full bg-[var(--color-info)] transition-[width] duration-200"
-            :style="{ width: `${Math.max(2, x.sync_progress || 0)}%` }"
-          />
-        </div>
-        <div
-          v-if="x.type === 'geoip'"
-          class="mt-4 border-t border-[var(--border-light)] pt-4"
-        >
-          <h4 class="font-medium">GeoIP 数据库深度查询</h4>
-          <div class="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_160px_auto]">
-            <input
-              v-model="target"
-              placeholder="域名或 IP"
-              @keydown.enter="lookup"
+            v-if="x.sync_status === 'syncing'"
+            class="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--button-secondary-bg)]"
+          >
+            <div
+              class="h-full rounded-full bg-[var(--color-info)] transition-[width] duration-200"
+              :style="{ width: `${Math.max(2, x.sync_progress || 0)}%` }"
             />
-            <select v-model="dns">
-              <option
-                v-for="server in [
-                  'cloudflare-doh',
-                  'google-doh',
-                  'aliyun-doh',
-                  'tencent-doh',
-                  'system',
-                ]"
-                :key="server"
+          </div>
+          <details
+            v-if="x.type === 'geoip'"
+            class="mt-4 border-t border-[var(--border-light)] pt-4"
+          >
+            <summary class="cursor-pointer text-sm font-medium">
+              GeoIP 查询
+            </summary>
+            <div
+              class="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_160px_auto]"
+            >
+              <input
+                v-model="target"
+                placeholder="域名或 IP"
+                @keydown.enter="lookup"
+              />
+              <select v-model="dns">
+                <option
+                  v-for="server in [
+                    'cloudflare-doh',
+                    'google-doh',
+                    'aliyun-doh',
+                    'tencent-doh',
+                    'system',
+                  ]"
+                  :key="server"
+                >
+                  {{ server }}
+                </option>
+              </select>
+              <button
+                class="aw-action-button aw-action-neutral"
+                :disabled="!x.available || lookingUp"
+                :title="
+                  x.available ? '查询 GeoIP' : '数据库文件不存在，请先更新'
+                "
+                @click="lookup"
               >
-                {{ server }}
-              </option>
-            </select>
-            <button
-              class="aw-action-button aw-action-neutral"
-              :disabled="!x.available || lookingUp"
-              :title="x.available ? '查询 GeoIP' : '数据库文件不存在，请先更新'"
-              @click="lookup"
+                <Search :size="13" />{{ lookingUp ? "查询中…" : "查询" }}
+              </button>
+            </div>
+            <p
+              v-if="!x.available"
+              class="mt-2 text-xs text-[var(--text-tertiary)]"
             >
-              {{ lookingUp ? "查询中…" : "查询" }}
-            </button>
-          </div>
-          <p
-            v-if="!x.available"
-            class="mt-2 text-xs text-[var(--text-tertiary)]"
-          >
-            数据库文件不存在，请先点击“更新”后查询。
-          </p>
-          <p
-            v-if="error"
-            role="alert"
-            class="mt-2 text-xs text-[var(--color-error)]"
-          >
-            {{ error }}
-          </p>
-        </div>
-        <div
-          v-else-if="x.type === 'geosite'"
-          class="mt-4 border-t border-[var(--border-light)] pt-4"
-        >
-          <h4 class="font-medium">GeoSite tag 条目反查</h4>
-          <div class="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-            <input
-              v-model="tag"
-              placeholder="输入 GeoSite tag"
-              @keydown.enter="lookupTag()"
-            />
-            <button
-              class="aw-action-button aw-action-neutral"
-              :disabled="!x.available || lookingUpTag"
-              :title="
-                x.available ? '反查 GeoSite 条目' : '数据库文件不存在，请先更新'
-              "
-              @click="lookupTag()"
+              数据库文件不存在，请先点击“更新”后查询。
+            </p>
+            <p
+              v-if="error"
+              role="alert"
+              class="mt-2 text-xs text-[var(--color-error)]"
             >
-              {{ lookingUpTag ? "查询中…" : "反查条目" }}
-            </button>
-          </div>
-          <p
-            v-if="!x.available"
-            class="mt-2 text-xs text-[var(--text-tertiary)]"
+              {{ error }}
+            </p>
+          </details>
+          <details
+            v-else-if="x.type === 'geosite'"
+            class="mt-4 border-t border-[var(--border-light)] pt-4"
           >
-            数据库文件不存在，请先点击“更新”后反查。
-          </p>
-          <p class="mt-2 text-xs text-[var(--text-tertiary)]">
-            查询标签包含的域名、CIDR 或关联条目。
-          </p>
-          <p
-            v-if="tagError"
-            role="alert"
-            class="mt-2 text-xs text-[var(--color-error)]"
-          >
-            {{ tagError }}
-          </p>
-        </div>
-      </article>
-    </div>
+            <summary class="cursor-pointer text-sm font-medium">
+              GeoSite 查询
+            </summary>
+            <div class="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+              <input
+                v-model="tag"
+                placeholder="输入 GeoSite tag"
+                @keydown.enter="lookupTag()"
+              />
+              <button
+                class="aw-action-button aw-action-neutral"
+                :disabled="!x.available || lookingUpTag"
+                :title="
+                  x.available
+                    ? '反查 GeoSite 条目'
+                    : '数据库文件不存在，请先更新'
+                "
+                @click="lookupTag()"
+              >
+                <Search :size="13" />{{ lookingUpTag ? "查询中…" : "查询" }}
+              </button>
+            </div>
+            <p
+              v-if="!x.available"
+              class="mt-2 text-xs text-[var(--text-tertiary)]"
+            >
+              数据库文件不存在，请先点击“更新”后反查。
+            </p>
+            <p
+              v-if="tagError"
+              role="alert"
+              class="mt-2 text-xs text-[var(--color-error)]"
+            >
+              {{ tagError }}
+            </p>
+          </details>
+        </article>
+      </div>
+    </details>
     <Modal
       :open="!!result"
       :title="geoLookupResultTitle"
@@ -554,3 +609,12 @@ async function lookupTag(offset = 0) {
     </div>
   </section>
 </template>
+
+<style scoped>
+.disclosure-arrow {
+  transition: transform 0.15s;
+}
+.geo-disclosure[open] > summary .disclosure-arrow {
+  transform: rotate(180deg);
+}
+</style>
