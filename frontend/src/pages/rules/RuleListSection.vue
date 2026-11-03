@@ -42,6 +42,10 @@ const { tableBody, displayRules, draggingId, start, keydown } = useRuleSort(
   (ids) => emit("reorder", ids),
 );
 
+function setTableBody(element: unknown) {
+  tableBody.value = element instanceof HTMLTableSectionElement ? element : null;
+}
+
 function isAdBlock(rule: RouteRule) {
   return (
     rule.system_key === "ad_block" ||
@@ -172,7 +176,7 @@ function actionLabel(rule: RouteRule) {
             <th>操作</th>
           </tr>
         </thead>
-        <tbody ref="tableBody">
+        <tbody :ref="setTableBody">
           <tr v-if="!rules.length">
             <td colspan="7" class="py-8 text-center">暂无路由规则</td>
           </tr>
