@@ -25,6 +25,8 @@ import { useAdaptiveActions } from "@/composables/useAdaptiveActions";
 import { useControlActivity } from "@/composables/useControlActivity";
 import ControlActivityCards from "./control/ControlActivityCards.vue";
 import ControlUsageSummary from "./control/ControlUsageSummary.vue";
+import CardTexture from "@/components/ui/CardTexture.vue";
+import { vSpotlight } from "@/directives/spotlight";
 
 const runtime = ref<RuntimeResponse | null>(null);
 const configStatus = ref<ConfigStatus | null>(null);
@@ -216,8 +218,10 @@ onBeforeUnmount(() => {
     </div>
 
     <section
-      class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-card)]"
+      v-spotlight
+      class="aw-textured rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-card)]"
     >
+      <CardTexture variant="mesh" />
       <div
         ref="headerRow"
         class="aw-core-header relative flex flex-wrap items-center justify-between gap-2 sm:gap-4"

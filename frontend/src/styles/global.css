@@ -5,6 +5,7 @@
 @import './theme.css';
 @import './mobile-tables.css';
 @import './interactions.css';
+@import './card-textures.css';
 @plugin 'daisyui' {
   themes: false;
 }

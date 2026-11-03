@@ -10,6 +10,7 @@ import { formatBytes, formatSpeed } from "@/utils/traffic";
 import AnimatedMetric from "@/components/ui/AnimatedMetric.vue";
 import MetricSparkline from "@/components/ui/MetricSparkline.vue";
 import { vSpotlight } from "@/directives/spotlight";
+import CardTexture from "@/components/ui/CardTexture.vue";
 import { appendTrafficSample } from "@/utils/metricMotion";
 
 const props = defineProps<{
@@ -127,8 +128,9 @@ onBeforeUnmount(stop);
 <template>
   <section
     v-spotlight
-    class="min-w-0 rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-4 shadow-[var(--shadow-card)]"
+    class="aw-textured min-w-0 rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-4 shadow-[var(--shadow-card)]"
   >
+    <CardTexture variant="dots" />
     <div class="mb-3 flex items-center justify-between gap-2">
       <h2 class="flex items-center gap-2 text-sm font-semibold">
         <Gauge :size="15" />运行统计

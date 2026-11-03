@@ -3,6 +3,13 @@ import { onBeforeUnmount, onMounted, ref } from "vue";
 import { Globe2, RefreshCw, Wifi } from "lucide-vue-next";
 import { writeClipboardText } from "@/utils/clipboard";
 import { vSpotlight } from "@/directives/spotlight";
+import CardTexture from "@/components/ui/CardTexture.vue";
+import FlagText from "@/components/ui/FlagText.vue";
+import {
+  createIPDetailsLookup,
+  normalizeIP,
+  type IPDetails,
+} from "@/utils/ipDetails";
 import baiduIcon from "@/assets/access-icons/baidu.ico";
 import chatGPTIcon from "@/assets/access-icons/chatgpt.ico";
 import githubIcon from "@/assets/access-icons/github.ico";
@@ -51,8 +58,21 @@ const targets = [
     icon: youtubeIcon,
   },
 ] as const;
-const ips = ref(
-  sources.map((source) => ({ label: source.label, value: "", error: "" })),
+interface IPProbe {
+  label: string;
+  value: string;
+  error: string;
+  details: IPDetails | null;
+  detailsState: "idle" | "checking" | "ready" | "unavailable";
+}
+const ips = ref<IPProbe[]>(
+  sources.map((source) => ({
+    label: source.label,
+    value: "",
+    error: "",
+    details: null,
+    detailsState: "idle",
+  })),
 );
 const access = ref<
   {
@@ -93,29 +113,63 @@ async function timedFetch(url: string, options: RequestInit = {}) {
     controllers.delete(controller);
   }
 }
+const lookupIPDetails = createIPDetailsLookup(async (url) => {
+  const response = await timedFetch(url);
+  if (!response.ok) throw Error("GeoIP request failed");
+  return JSON.parse(response.body);
+});
+async function enrichIP(item: IPProbe) {
+  try {
+    const details = await lookupIPDetails(item.value);
+    if (cancelled || !ips.value.includes(item)) return;
+    item.details = details;
+    item.detailsState = details ? "ready" : "unavailable";
+  } catch {
+    if (!cancelled && ips.value.includes(item))
+      item.detailsState = "unavailable";
+  }
+}
+function ipTitle(item: IPProbe) {
+  if (!item.value) return item.error;
+  const detail =
+    item.details?.description ||
+    (item.detailsState === "checking" ? "正在查询归属地" : "归属地暂不可用");
+  return `${item.value}\n${detail}\n点击复制 IP`;
+}
 async function refreshIPs() {
   if (refreshingIPs.value || cancelled) return;
   clearTimeout(ipTimer);
   refreshingIPs.value = true;
   const nextIPs = await Promise.all(
-    sources.map(async (source) => {
+    sources.map(async (source): Promise<IPProbe> => {
       try {
         const response = await timedFetch(source.url);
         if (!response.ok) throw Error("request failed");
         const value = String(source.parse(response.body)).trim();
-        if (!value || value.length > 80) throw Error("invalid response");
-        return { label: source.label, value, error: "" };
+        if (!normalizeIP(value)) throw Error("invalid response");
+        return {
+          label: source.label,
+          value,
+          error: "",
+          details: null,
+          detailsState: "checking",
+        };
       } catch (error: any) {
         return {
           label: source.label,
           value: "",
           error: error?.name === "AbortError" ? "请求超时" : "获取失败",
+          details: null,
+          detailsState: "idle",
         };
       }
     }),
   );
   if (cancelled) return;
   ips.value = nextIPs;
+  for (const item of ips.value) {
+    if (item.value) void enrichIP(item);
+  }
   refreshingIPs.value = false;
   ipTimer = window.setTimeout(refreshIPs, 60000);
 }
@@ -174,8 +228,9 @@ onBeforeUnmount(() => {
 <template>
   <section
     v-spotlight
-    class="flex min-w-0 flex-col rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-card)]"
+    class="aw-textured flex min-w-0 flex-col rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-card)]"
   >
+    <CardTexture variant="topographic" />
     <div class="mb-4 flex items-center justify-between gap-3">
       <h2 class="flex items-center gap-2 font-semibold">
         <Globe2 :size="16" class="text-[var(--text-secondary)]" />IP 地址
@@ -195,21 +250,40 @@ onBeforeUnmount(() => {
         :key="item.label"
         class="aw-probe-row flex min-h-8 w-full min-w-0 items-center justify-between gap-3 rounded-[var(--radius-md)] bg-[var(--bg-base)] px-2.5 py-1.5 text-xs"
         :disabled="!item.value"
-        :title="item.value ? `${item.value} · 点击复制` : item.error"
+        :title="ipTitle(item)"
         @click="copyIP(item)"
       >
         <span class="shrink-0 text-[var(--text-secondary)]">{{
           item.label
         }}</span>
         <span
-          class="truncate"
+          v-if="item.value"
+          class="min-w-0 flex-1 truncate text-left text-[var(--text-tertiary)]"
+          >{{
+            item.details?.summary ||
+            (item.detailsState === "checking"
+              ? "查询归属地…"
+              : "归属地暂不可用")
+          }}</span
+        >
+        <span
+          class="flex min-w-0 max-w-[55%] items-center justify-end gap-1.5"
           :class="
             item.error
               ? 'text-[var(--color-warning)]'
               : 'text-[var(--text-primary)]'
           "
-          >{{ item.value || item.error || "检查中…" }}</span
         >
+          <FlagText
+            v-if="item.details?.flag"
+            :text="item.details.flag"
+            :title="item.details.country"
+            class="shrink-0 text-sm"
+          />
+          <span class="truncate">{{
+            item.value || item.error || "检查中…"
+          }}</span>
+        </span>
       </button>
     </div>
     <p class="mt-3 text-xs leading-5 text-[var(--text-tertiary)]">
@@ -218,8 +292,9 @@ onBeforeUnmount(() => {
   </section>
   <section
     v-spotlight
-    class="flex min-w-0 flex-col rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-card)]"
+    class="aw-textured flex min-w-0 flex-col rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-card)]"
   >
+    <CardTexture variant="mesh" />
     <div class="mb-4 flex items-center justify-between gap-3">
       <h2 class="flex items-center gap-2 font-semibold">
         <Wifi :size="16" class="text-[var(--text-secondary)]" />访问检查

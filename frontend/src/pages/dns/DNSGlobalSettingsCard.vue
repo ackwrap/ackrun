@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { Save, ServerCog } from "lucide-vue-next";
+import CardTexture from "@/components/ui/CardTexture.vue";
+import { vSpotlight } from "@/directives/spotlight";
 
 interface GlobalSettings {
   enabled: boolean;
@@ -55,8 +57,10 @@ const proxyFinalUnavailable = computed(
 
 <template>
   <section
-    class="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
+    v-spotlight
+    class="aw-textured rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
   >
+    <CardTexture variant="circuit" />
     <div class="flex justify-between">
       <h3><ServerCog class="inline" /> 全局设置</h3>
       <label
