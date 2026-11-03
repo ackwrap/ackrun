@@ -390,6 +390,21 @@ export interface Subscription {
   updated_at: number;
 }
 
+export interface ControlSummary {
+  monthly_traffic: {
+    month: string;
+    upload_bytes: number;
+    download_bytes: number;
+    tracking_since: number;
+  };
+  traffic_error?: string;
+  subscription_total_bytes: number;
+  subscription_count: number;
+  traffic_reported_count: number;
+  expired_subscription_count: number;
+  next_expiry: { name: string; expire_at: number } | null;
+}
+
 export interface SubscriptionRequest {
   name: string;
   url: string;

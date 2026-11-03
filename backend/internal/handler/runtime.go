@@ -27,3 +27,14 @@ func (h *RuntimeHandler) GetStatus(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, resp)
 }
+
+func (h *RuntimeHandler) GetSummary(c *gin.Context) {
+	resp, err := h.svc.GetSummary()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
+			Error: model.APIError{Code: "SUMMARY_ERROR", Message: "加载流量与订阅概览失败"},
+		})
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}

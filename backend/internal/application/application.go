@@ -29,6 +29,7 @@ type Application struct {
 	store                  *store.Store
 	realtime               *service.RealtimeService
 	singbox                *service.SingboxService
+	runtime                *service.RuntimeService
 	appUpdate              *service.AppUpdateService
 	reconcile              *service.ConfigReconcileService
 	coreRestart            *service.CoreRestartScheduler
@@ -88,6 +89,7 @@ func New(options Options) (*Application, error) {
 		logging.Error("core.cleanup", "启动时清理 sing-box 网络残留失败: %v", err)
 	}
 	runtimeSvc := service.NewRuntimeService(options.Paths, db, singboxSvc)
+	singboxSvc.SetBeforeStopHook(runtimeSvc.SampleTraffic)
 	installerSvc := service.NewInstallerService(db, options.Paths, realtimeSvc)
 	configSvc := service.NewConfigService(options.Paths, db, realtimeSvc)
 	dnsSvc := service.NewDNSService(db, options.Paths)
@@ -169,6 +171,7 @@ func New(options Options) (*Application, error) {
 		store:                  db,
 		realtime:               realtimeSvc,
 		singbox:                singboxSvc,
+		runtime:                runtimeSvc,
 		appUpdate:              appUpdateSvc,
 		reconcile:              reconcileSvc,
 		coreRestart:            coreRestartSvc,
@@ -200,6 +203,7 @@ func (app *Application) Start() error {
 	app.subscription.StartScheduler()
 	app.routeRule.StartScheduler()
 	app.proxyCollection.StartScheduler()
+	app.runtime.StartTrafficRecording()
 	app.started = true
 	logging.Info("application.start", "backend schedulers started")
 	return nil
@@ -253,6 +257,7 @@ func (app *Application) PrepareShutdown() {
 			logging.Error("application.shutdown", "stop sing-box during shutdown: %v", err)
 		}
 	}
+	app.runtime.StopTrafficRecording()
 	logging.Info("application.shutdown", "backend background work stopped")
 }
 

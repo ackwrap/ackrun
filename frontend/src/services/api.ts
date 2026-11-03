@@ -1,5 +1,6 @@
 import type {
   RuntimeResponse,
+  ControlSummary,
   InstallStateResponse,
   ConfigStatus,
   ConfigFileItem,
@@ -117,6 +118,8 @@ export async function request<T>(
 
 export const api = {
   getRuntime: () => request<RuntimeResponse>("/runtime"),
+  getControlSummary: (signal?: AbortSignal) =>
+    request<ControlSummary>("/runtime/summary", { signal }),
 
   getInstallerStatus: () =>
     request<InstallStateResponse>("/installer/sing-box"),

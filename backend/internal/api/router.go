@@ -56,6 +56,7 @@ func RegisterRoutes(
 	v1.Use(configMutationMiddleware(reconcileSvc))
 	{
 		v1.GET("/runtime", runtimeH.GetStatus)
+		v1.GET("/runtime/summary", runtimeH.GetSummary)
 
 		v1.GET("/installer/sing-box", installerH.GetStatus)
 		v1.POST("/installer/sing-box/install", installerH.Install)

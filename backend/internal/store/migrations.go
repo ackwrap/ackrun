@@ -13,6 +13,19 @@ func (s *Store) migrate() error {
 			value TEXT NOT NULL,
 			updated_at INTEGER NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS monthly_traffic (
+			month TEXT PRIMARY KEY,
+			upload_bytes INTEGER NOT NULL DEFAULT 0,
+			download_bytes INTEGER NOT NULL DEFAULT 0,
+			tracking_since INTEGER NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS traffic_checkpoint (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			month TEXT NOT NULL,
+			session TEXT NOT NULL,
+			upload_total INTEGER NOT NULL,
+			download_total INTEGER NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS install_state (
 			id INTEGER PRIMARY KEY CHECK (id = 1),
 			status TEXT NOT NULL,

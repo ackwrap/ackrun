@@ -11,12 +11,7 @@ import {
 } from "lucide-vue-next";
 import { useRealtimeSocket } from "@/composables/useRealtimeSocket";
 import { api } from "@/services/api";
-import type {
-  ConfigFileItem,
-  ConfigStatus,
-  RuntimeResponse,
-  WSEvent,
-} from "@/services/types";
+import type { ConfigStatus, RuntimeResponse, WSEvent } from "@/services/types";
 import Button from "@/components/ui/Button.vue";
 import PageHeader from "@/components/layout/PageHeader.vue";
 import Toast from "@/components/ui/Toast.vue";
@@ -29,18 +24,17 @@ import ControlNodePanelDialog from "./control/ControlNodePanelDialog.vue";
 import { useAdaptiveActions } from "@/composables/useAdaptiveActions";
 import { useControlActivity } from "@/composables/useControlActivity";
 import ControlActivityCards from "./control/ControlActivityCards.vue";
+import ControlUsageSummary from "./control/ControlUsageSummary.vue";
 
 const runtime = ref<RuntimeResponse | null>(null);
 const configStatus = ref<ConfigStatus | null>(null);
-const configFiles = ref<ConfigFileItem[]>([]);
-const selectedConfig = ref("");
+const usageSummary = ref<InstanceType<typeof ControlUsageSummary> | null>(null);
 const inboundMode = ref("");
 const proxyMode = ref("");
 const loading = ref(false);
 const loadError = ref("");
 const runtimeAction = ref("");
 const modeChanging = ref(false);
-const configChanging = ref(false);
 const installing = ref(false);
 const mixedSaving = ref(false);
 const panelSaving = ref(false);
@@ -79,7 +73,6 @@ const busy = computed(
     loading.value ||
     !!runtimeAction.value ||
     modeChanging.value ||
-    configChanging.value ||
     installing.value ||
     mixedSaving.value ||
     panelSaving.value ||
@@ -118,6 +111,7 @@ function notify(value: string, type: "success" | "error" | "info" = "success") {
 }
 async function refresh() {
   if (loading.value) return;
+  void usageSummary.value?.refresh();
   loading.value = true;
   loadError.value = "";
   try {
@@ -129,11 +123,6 @@ async function refresh() {
       api.getConfigStatus(false).then((value) => {
         if (!cancelled) configStatus.value = value;
       }),
-      api.getConfigFiles(false).then((value) => {
-        if (cancelled) return;
-        configFiles.value = value;
-        selectedConfig.value = value.find((item) => item.active)?.name || "";
-      }),
       api.getInboundMode().then((value) => {
         if (!cancelled) inboundMode.value = value.mode;
       }),
@@ -142,7 +131,7 @@ async function refresh() {
       }),
     ]);
     if (cancelled) return;
-    const names = ["配置状态", "配置文件", "运行模式", "代理模式"];
+    const names = ["配置状态", "运行模式", "代理模式"];
     loadError.value = results
       .map((result, index) =>
         result.status === "rejected"
@@ -168,29 +157,6 @@ async function action(fn: () => Promise<unknown>, label: string) {
   } finally {
     await refresh();
     runtimeAction.value = "";
-  }
-}
-async function changeActiveConfig() {
-  const previous = configFiles.value.find((item) => item.active)?.name || "";
-  const next = selectedConfig.value;
-  if (!next || next === previous || busy.value) return;
-  configChanging.value = true;
-  try {
-    configStatus.value = await api.setActiveConfig(next);
-    configFiles.value = configFiles.value.map((item) => ({
-      ...item,
-      active: item.name === next,
-    }));
-    notify(
-      isRunning.value ? `已切换为 ${next}，重载配置后生效` : `已切换为 ${next}`,
-      isRunning.value ? "info" : "success",
-    );
-    await refresh();
-  } catch (error: any) {
-    selectedConfig.value = previous;
-    notify(`切换配置失败: ${error.message}`, "error");
-  } finally {
-    configChanging.value = false;
   }
 }
 async function changeMode(kind: "inbound" | "proxy", mode: string) {
@@ -219,13 +185,6 @@ useRealtimeSocket((event: WSEvent) => {
       notify(`核心异常: ${data.error}`, "error");
   } else if (event.type === "config.status") {
     configStatus.value = data;
-    if (data.file_name) {
-      selectedConfig.value = data.file_name;
-      configFiles.value = configFiles.value.map((item) => ({
-        ...item,
-        active: item.name === data.file_name,
-      }));
-    }
   } else if (event.type === "core.restart_schedule") {
     if (data.status === "succeeded") notify("核心定时重启完成");
     else if (data.status === "failed")
@@ -392,29 +351,11 @@ onBeforeUnmount(() => {
       <div
         class="mt-5 grid gap-4 border-t border-[var(--border-light)] pt-4 lg:grid-cols-3"
       >
-        <label class="min-w-0 text-xs text-[var(--text-secondary)]"
-          >当前配置文件
-          <select
-            v-model="selectedConfig"
-            class="aw-input mt-2 w-full"
-            :disabled="busy || notInstalled || !configFiles.length"
-            @change="changeActiveConfig"
-          >
-            <option value="" disabled>选择配置文件</option>
-            <option
-              v-for="item in configFiles"
-              :key="item.path"
-              :value="item.name"
-              :disabled="item.validated && !item.valid"
-            >
-              {{ item.name
-              }}{{ item.validated && !item.valid ? "（校验失败）" : "" }}
-            </option>
-          </select>
-        </label>
+        <ControlUsageSummary ref="usageSummary" />
         <fieldset
           v-for="group in modeGroups"
           :key="group.key"
+          class="min-w-0"
           :disabled="
             busy ||
             isRunning ||
@@ -422,11 +363,11 @@ onBeforeUnmount(() => {
             !(group.key === 'proxy' ? proxyMode : inboundMode)
           "
         >
-          <legend class="text-xs text-[var(--text-secondary)]">
+          <legend class="h-4 text-xs leading-4 text-[var(--text-secondary)]">
             {{ group.label }}
           </legend>
           <div
-            class="aw-control-modes mt-2 grid grid-cols-3 gap-1 rounded-[var(--radius-lg)] bg-[var(--bg-base)] p-1"
+            class="aw-control-modes mt-2 grid h-11 grid-cols-3 gap-1 rounded-[var(--radius-lg)] bg-[var(--bg-base)] p-1"
           >
             <label
               v-for="[value, label] in group.options"

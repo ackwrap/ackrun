@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/ackwrap/ackrun/internal/logging"
@@ -17,10 +18,56 @@ type RuntimeService struct {
 	store     *store.Store
 	singbox   *SingboxService
 	startedAt time.Time
+	traffic   *TrafficUsageService
 }
 
 func NewRuntimeService(p *paths.Paths, s *store.Store, sb *SingboxService) *RuntimeService {
-	return &RuntimeService{paths: p, store: s, singbox: sb, startedAt: time.Now()}
+	return &RuntimeService{paths: p, store: s, singbox: sb, startedAt: time.Now(), traffic: NewTrafficUsageService(s, sb)}
+}
+
+func (svc *RuntimeService) StartTrafficRecording() { svc.traffic.Start() }
+func (svc *RuntimeService) StopTrafficRecording()  { svc.traffic.Close() }
+func (svc *RuntimeService) SampleTraffic()         { svc.traffic.Sample() }
+
+func (svc *RuntimeService) GetSummary() (*model.ControlSummary, error) {
+	now := time.Now().In(svc.traffic.location)
+	traffic, err := svc.store.GetMonthlyTraffic(now)
+	if err != nil {
+		return nil, err
+	}
+	subscriptions, err := svc.store.ListSubscriptions()
+	if err != nil {
+		return nil, err
+	}
+	result := summarizeSubscriptions(subscriptions, now)
+	result.MonthlyTraffic = traffic
+	result.TrafficError = svc.traffic.Error()
+	return result, nil
+}
+
+func summarizeSubscriptions(subscriptions []model.Subscription, now time.Time) *model.ControlSummary {
+	result := &model.ControlSummary{}
+	for _, item := range subscriptions {
+		if strings.TrimSpace(item.URL) == "manual://local" {
+			continue
+		}
+		result.SubscriptionCount++
+		if item.TrafficTotalBytes > 0 {
+			result.SubscriptionTotalBytes += item.TrafficTotalBytes
+			result.TrafficReportedCount++
+		}
+		if item.ExpireAt <= 0 {
+			continue
+		}
+		if item.ExpireAt <= now.Unix() {
+			result.ExpiredSubscriptionCount++
+			continue
+		}
+		if result.NextExpiry == nil || item.ExpireAt < result.NextExpiry.ExpireAt {
+			result.NextExpiry = &model.SubscriptionExpiry{Name: item.Name, ExpireAt: item.ExpireAt}
+		}
+	}
+	return result
 }
 
 func (svc *RuntimeService) GetStatus() (*model.RuntimeResponse, error) {

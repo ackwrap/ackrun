@@ -51,6 +51,7 @@ type SingboxService struct {
 	beforeStart        func() error
 	waitReady          func(context.Context) error
 	afterStart         func() error
+	beforeStop         func()
 	transitionGuard    coreTransitionGuard
 	transitionHeld     bool                     // lifecycleMu: updates keep protection through rollback/DB commit
 	runningTUN         bool                     // lifecycleMu: capture old mode before config regeneration
@@ -79,6 +80,12 @@ func (svc *SingboxService) SetStartHooks(beforeStart func() error, waitReady fun
 	svc.beforeStart = beforeStart
 	svc.waitReady = waitReady
 	svc.afterStart = afterStart
+}
+
+func (svc *SingboxService) SetBeforeStopHook(hook func()) {
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
+	svc.beforeStop = hook
 }
 
 func (svc *SingboxService) Start() (*model.ActionResponse, error) {
@@ -544,6 +551,13 @@ func (svc *SingboxService) Shutdown() (*model.ActionResponse, error) {
 }
 
 func (svc *SingboxService) stop(reason string) (*model.ActionResponse, error) {
+	// Capture the last counters before graceful shutdown resets the core session.
+	svc.mu.Lock()
+	beforeStop := svc.beforeStop
+	svc.mu.Unlock()
+	if beforeStop != nil {
+		beforeStop()
+	}
 	svc.mu.Lock()
 	if !svc.isRunning() {
 		svc.mu.Unlock()
