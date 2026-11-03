@@ -1,14 +1,3 @@
-:root {
-  --duration-interaction: 200ms;
-  --spotlight-fill: rgba(255, 246, 232, 0.065);
-  --spotlight-border: rgba(255, 241, 222, 0.28);
-}
-
-:root[data-theme="light"] {
-  --spotlight-fill: rgba(83, 94, 116, 0.055);
-  --spotlight-border: rgba(83, 94, 116, 0.25);
-}
-
 /* Isolated, non-interactive layers preserve content contrast and dropdown overflow. */
 .aw-spotlight {
   position: relative;
@@ -67,10 +56,14 @@
 
   :root[data-theme] .card-interactive:hover {
     transform: translateY(-1px);
-    border-color: var(--border-strong);
-    box-shadow:
-      var(--shadow-card),
-      0 4px 12px var(--color-primary-bg);
+    border-color: var(--card-hover-border);
+    box-shadow: var(--shadow-card-hover);
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  :root[data-theme] .aw-probe-row:not(:disabled):hover {
+    background-color: var(--button-secondary-hover);
   }
 }
 

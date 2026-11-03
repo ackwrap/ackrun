@@ -1,5 +1,6 @@
 <script lang="ts">
-export type CardTextureVariant = "dots" | "topographic" | "mesh" | "circuit";
+export type CardTextureVariant =
+  "dots" | "topographic" | "topology" | "mesh" | "circuit";
 </script>
 
 <script setup lang="ts">

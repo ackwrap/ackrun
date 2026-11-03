@@ -294,7 +294,7 @@ onBeforeUnmount(() => {
     v-spotlight
     class="aw-textured flex min-w-0 flex-col rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-card)]"
   >
-    <CardTexture variant="mesh" />
+    <CardTexture variant="topology" />
     <div class="mb-4 flex items-center justify-between gap-3">
       <h2 class="flex items-center gap-2 font-semibold">
         <Wifi :size="16" class="text-[var(--text-secondary)]" />访问检查

@@ -1,19 +1,12 @@
-:root {
-  --card-texture-ink: #eadfd1;
-  --card-texture-opacity: 0.055;
-  --card-texture-highlight: 0.02;
-}
-
-:root[data-theme="light"] {
-  --card-texture-ink: #475569;
-  --card-texture-opacity: 0.04;
-  --card-texture-highlight: 0.015;
-}
-
 /* Isolate only the decoration: action dropdowns can still overflow the card. */
 .aw-textured {
   position: relative;
   isolation: isolate;
+  background-image: linear-gradient(
+    145deg,
+    var(--card-surface-tint),
+    transparent 65%
+  );
 }
 
 .aw-card-texture {
@@ -102,10 +95,20 @@
     #000,
     transparent 100%
   );
+  background: radial-gradient(
+    ellipse at 100% 100%,
+    var(--card-texture-wash),
+    transparent 70%
+  );
 }
 
 .aw-card-texture[data-texture="topographic"] {
   --texture-pattern: url("../assets/card-textures/topographic.svg");
+  --texture-size: 360px 240px;
+}
+
+.aw-card-texture[data-texture="topology"] {
+  --texture-pattern: url("../assets/card-textures/topology.svg");
   --texture-size: 360px 240px;
 }
 
