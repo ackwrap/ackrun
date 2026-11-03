@@ -11,6 +11,7 @@ import { writeClipboardText } from "@/utils/clipboard";
 import type {
   GeoAsset,
   RouteRule,
+  RouteRuleRequest,
   RouteRulePreviewResponse,
   RouteRuleSubscription,
   StrategyItem,
@@ -20,6 +21,7 @@ import GeoDatabaseSection from "./rules/GeoDatabaseSection.vue";
 import RuleListSection from "./rules/RuleListSection.vue";
 import { isFixedRouteRule } from "./rules/useRuleSort";
 import RouteRuleFormModal from "./rules/RouteRuleFormModal.vue";
+import NewRuleStrategyModal from "./rules/NewRuleStrategyModal.vue";
 import RouteRuleImportModal from "./rules/RouteRuleImportModal.vue";
 import RuleSubscriptionActionsModal from "./rules/RuleSubscriptionActionsModal.vue";
 import RuleSubscriptionFormModal from "./rules/RuleSubscriptionFormModal.vue";
@@ -32,6 +34,7 @@ const deviceEnabled = ref(true);
 const deviceSaving = ref(false);
 const deviceConnectivity = ref({ test_url: "", interval_seconds: 300 });
 const ruleSaving = ref(false);
+const newRuleDraft = ref<RouteRuleRequest | null>(null);
 const ruleOrderSaving = ref(false);
 const rules = ref<RouteRule[]>([]),
   subscriptions = ref<RouteRuleSubscription[]>([]),
@@ -169,6 +172,7 @@ function editRule(r: RouteRule) {
 }
 async function saveRule() {
   if (ruleSaving.value) return;
+  if (!name.value.trim()) return show("请填写规则名称", "error");
   if (!isFinalStrategyRule(editing.value) && !values.value.length)
     return show("请填写匹配值", "error");
   ruleSaving.value = true;
@@ -193,6 +197,10 @@ async function saveRule() {
       outbound: outbound.value,
       invert: invert.value,
     };
+    if (!editing.value && body.outbound === "proxy") {
+      beginNewRuleStrategy({ ...body, enabled: requestedEnabled });
+      return;
+    }
     const saved = editing.value
       ? await api.updateRouteRule(editing.value.id, body)
       : await api.createRouteRule(body);
@@ -231,6 +239,28 @@ async function saveRule() {
   } finally {
     ruleSaving.value = false;
   }
+}
+function beginNewRuleStrategy(body: RouteRuleRequest) {
+  resetRule();
+  name.value = body.name;
+  enabled.value = body.enabled;
+  ruleType.value = body.rule_type;
+  valuesText.value = body.values.join("\n");
+  directDomainsText.value = body.direct_domains?.join("\n") ?? "";
+  outbound.value = body.outbound;
+  invert.value = body.invert;
+  newRuleDraft.value = body;
+  formOpen.value = false;
+}
+function cancelNewRuleStrategy() {
+  newRuleDraft.value = null;
+  formOpen.value = true;
+}
+async function finishNewRule() {
+  newRuleDraft.value = null;
+  resetRule();
+  show("规则与代理策略已添加");
+  await load();
 }
 async function saveDeviceStrategy(payload: StrategyCollectionRequest) {
   if (!deviceStrategy.value || !deviceRule.value || deviceSaving.value) return;
@@ -389,12 +419,13 @@ function editSub(x: RouteRuleSubscription) {
 }
 async function saveSub() {
   try {
+    let generatedRule: RouteRuleRequest | null = null;
     if (subEdit.value)
       await api.updateRouteRuleSubscription(subEdit.value.id, sub.value);
     else {
       const x = await api.createRouteRuleSubscription(sub.value);
-      if (generate.value)
-        await api.createRouteRule({
+      if (generate.value) {
+        const body: RouteRuleRequest = {
           name: x.name,
           enabled: x.enabled,
           priority: 0,
@@ -402,12 +433,16 @@ async function saveSub() {
           values: [x.tag],
           outbound: referenceOutbound.value,
           invert: false,
-        });
+        };
+        if (body.outbound === "proxy") generatedRule = body;
+        else await api.createRouteRule(body);
+      }
     }
     show(subEdit.value ? "规则订阅已更新" : "规则订阅已添加");
     subFormOpen.value = false;
     resetSub();
     await load();
+    if (generatedRule) beginNewRuleStrategy(generatedRule);
   } catch (e: any) {
     show(`规则订阅保存失败: ${e.message}`, "error");
   }
@@ -460,16 +495,22 @@ async function createRef(x: RouteRuleSubscription, o: string) {
     )
   )
     return show("引用规则已存在", "error");
+  const body: RouteRuleRequest = {
+    name: x.name,
+    enabled: x.enabled,
+    priority: 0,
+    rule_type: "rule_set",
+    values: [x.tag],
+    outbound: o,
+    invert: false,
+  };
+  if (o === "proxy") {
+    actions.value = null;
+    beginNewRuleStrategy(body);
+    return;
+  }
   try {
-    await api.createRouteRule({
-      name: x.name,
-      enabled: x.enabled,
-      priority: 0,
-      rule_type: "rule_set",
-      values: [x.tag],
-      outbound: o,
-      invert: false,
-    });
+    await api.createRouteRule(body);
     actions.value = null;
     show("引用规则已生成");
     await load();
@@ -618,6 +659,12 @@ onBeforeUnmount(() => clearInterval(poll));
         resetRule();
       "
       @save="saveRule"
+    />
+    <NewRuleStrategyModal
+      v-if="newRuleDraft"
+      :rule="newRuleDraft"
+      @close="cancelNewRuleStrategy"
+      @saved="finishNewRule"
     />
     <StrategyFormModal
       v-if="deviceStrategy"

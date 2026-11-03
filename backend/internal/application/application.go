@@ -138,6 +138,7 @@ func New(options Options) (*Application, error) {
 	routeRuleSvc.SetDeviceProtectionCore(singboxSvc)
 	settingsSvc.SetGeoSourcePreparer(routeRuleSvc)
 	proxyCollectionSvc := service.NewProxyCollectionService(db, realtimeSvc)
+	routeRuleSvc.SetProxyCollectionService(proxyCollectionSvc)
 	configGenSvc := service.NewConfigGeneratorService(db, options.Paths, singboxSvc)
 	configGenSvc.SetRuntimeAPISecret(coreAPIToken)
 	nodeExposureSvc := service.NewNodeExposureService(db)

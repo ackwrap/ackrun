@@ -87,6 +87,7 @@ type RouteRuleService struct {
 	ruleSetValidator     func(context.Context, string) error
 	ruleSetCompiler      func(context.Context, []byte, string) error
 	deviceProtectionCore *SingboxService
+	proxyCollectionSvc   *ProxyCollectionService
 }
 
 func NewRouteRuleService(s *store.Store, p *paths.Paths, rt *RealtimeService) *RouteRuleService {
@@ -321,15 +322,23 @@ func (svc *RouteRuleService) Create(req *model.RouteRuleRequest) (*model.RouteRu
 	if err := svc.validateRouteRuleOutboundName(req, 0); err != nil {
 		return nil, err
 	}
+	collection, err := svc.prepareNewRuleStrategy(req)
+	if err != nil {
+		return nil, err
+	}
 	logging.Info("route_rule.create", "creating route rule: %s", req.Name)
 	var item *model.RouteRule
-	err := svc.mutateProtectedDevice(nil, req, func() error {
+	err = svc.mutateProtectedDevice(nil, req, func() error {
 		var err error
-		item, err = svc.store.CreateRouteRule(req)
+		item, err = svc.store.CreateRouteRuleWithCollection(req, collection)
 		return err
 	})
 	if err != nil {
 		return nil, normalizeRouteRuleNameConflict(err)
+	}
+	if collection != nil {
+		svc.proxyCollectionSvc.refreshHealthCheckJob(collection.ID)
+		logging.Info("route_rule.strategy.create", "规则 %d 与代理策略 %d 已一并保存", item.ID, collection.ID)
 	}
 	return item, nil
 }

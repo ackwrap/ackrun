@@ -84,7 +84,7 @@ func (h *RouteRuleHandler) Create(c *gin.Context) {
 		writeRouteRuleMutationError(c, http.StatusBadRequest, "ROUTE_RULE_CREATE_FAILED", err)
 		return
 	}
-	c.Set(ConfigReconcileContextKey, item.Outbound != "proxy")
+	c.Set(ConfigReconcileContextKey, item.Outbound != "proxy" || req.Strategy != nil)
 	c.JSON(http.StatusOK, item)
 }
 

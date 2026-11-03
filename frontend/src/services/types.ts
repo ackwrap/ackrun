@@ -642,6 +642,7 @@ export interface RouteRuleRequest {
   direct_domains?: string[];
   outbound: string;
   invert: boolean;
+  strategy?: ProxyCollectionRequest;
 }
 
 export interface RouteRulePreviewResponse {
@@ -805,6 +806,8 @@ export interface ProxyCollectionRequest {
   route_rule_id: number;
   route_rule_ids: number[];
   node_uids: string[];
+  source_type?: string;
+  referenced_group_ids?: number[];
 }
 
 export interface StrategyItem {
