@@ -569,8 +569,11 @@ onBeforeUnmount(() => {
         <KeyRound :size="34" class="mx-auto mb-3 text-[var(--text-tertiary)]" />
         暂无 SSH 凭据。秘密将由后端加密保存且不会回传。
       </div>
-      <div v-else class="aw-data-table-wrap rounded-none border-0">
-        <table class="aw-data-table min-w-[720px]">
+      <div
+        v-else
+        class="aw-data-table-wrap aw-mobile-table-wrap rounded-none border-0"
+      >
+        <table class="aw-data-table aw-mobile-table min-w-[720px]">
           <thead>
             <tr>
               <th>名称</th>
@@ -582,15 +585,23 @@ onBeforeUnmount(() => {
           </thead>
           <tbody>
             <tr v-for="item in credentials" :key="item.id">
-              <td class="font-medium">{{ item.name }}</td>
-              <td>{{ item.auth_type === "password" ? "密码" : "私钥" }}</td>
-              <td class="max-w-80 truncate font-mono text-xs">
+              <td class="aw-mobile-title font-medium">{{ item.name }}</td>
+              <td data-label="认证类型">
+                {{ item.auth_type === "password" ? "密码" : "私钥" }}
+              </td>
+              <td
+                data-label="公钥指纹"
+                class="aw-mobile-wide max-w-80 truncate font-mono text-xs"
+              >
                 {{ item.key_fingerprint || "--" }}
               </td>
-              <td class="text-xs text-[var(--text-secondary)]">
+              <td
+                data-label="更新时间"
+                class="text-xs text-[var(--text-secondary)]"
+              >
                 {{ formatTime(item.updated_at) }}
               </td>
-              <td>
+              <td class="aw-mobile-actions">
                 <div class="flex justify-end gap-1">
                   <Button
                     size="sm"

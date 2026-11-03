@@ -41,8 +41,8 @@ function formatTime(value: number) {
 </script>
 
 <template>
-  <div class="min-h-0 flex-1 overflow-auto">
-    <table class="w-full table-fixed text-left text-xs">
+  <div class="min-h-0 min-w-0 max-w-full flex-1 overflow-auto">
+    <table class="w-full min-w-[560px] table-fixed text-left text-xs">
       <thead
         class="sticky top-0 z-10 bg-[var(--bg-elevated)] text-[var(--text-tertiary)]"
       >

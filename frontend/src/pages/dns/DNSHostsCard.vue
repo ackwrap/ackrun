@@ -73,7 +73,14 @@ function openEdit(item: DNSHost) {
 }
 
 function addresses(text: string) {
-  return [...new Set(text.split(/[\n,，]+/).map((item) => item.trim()).filter(Boolean))];
+  return [
+    ...new Set(
+      text
+        .split(/[\n,，]+/)
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  ];
 }
 
 async function save() {
@@ -87,9 +94,7 @@ async function save() {
   saving.value = true;
   try {
     await request<DNSHost>(
-      current.id
-        ? `/api/v1/dns/hosts/${current.id}`
-        : "/api/v1/dns/hosts",
+      current.id ? `/api/v1/dns/hosts/${current.id}` : "/api/v1/dns/hosts",
       {
         method: current.id ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
@@ -101,7 +106,11 @@ async function save() {
         }),
       },
     );
-    emit("notify", current.id ? "Hosts 映射已更新" : "Hosts 映射已添加", "success");
+    emit(
+      "notify",
+      current.id ? "Hosts 映射已更新" : "Hosts 映射已添加",
+      "success",
+    );
     form.value = null;
     await load();
   } catch (error) {
@@ -167,9 +176,12 @@ onMounted(load);
   >
     <header class="flex flex-wrap items-center justify-between gap-3">
       <div>
-        <h3 class="font-semibold"><BookOpen class="inline" :size="18" /> Hosts 静态映射</h3>
+        <h3 class="font-semibold">
+          <BookOpen class="inline" :size="18" /> Hosts 静态映射
+        </h3>
         <p class="mt-1 text-xs text-[var(--text-tertiary)]">
-          为精确域名直接返回固定 IPv4/IPv6，不请求上游 DNS；优先于普通 DNS 规则和 FakeIP。
+          为精确域名直接返回固定 IPv4/IPv6，不请求上游 DNS；优先于普通 DNS
+          规则和 FakeIP。
         </p>
       </div>
       <button class="aw-action-button aw-action-neutral" @click="openCreate">
@@ -177,8 +189,8 @@ onMounted(load);
       </button>
     </header>
 
-    <div class="aw-data-table-wrap mt-4">
-      <table class="aw-data-table min-w-[760px]">
+    <div class="aw-data-table-wrap aw-mobile-table-wrap mt-4">
+      <table class="aw-data-table aw-mobile-table min-w-[760px]">
         <thead>
           <tr>
             <th>精确域名</th>
@@ -196,30 +208,39 @@ onMounted(load);
             <td colspan="5" class="py-10 text-center">暂无 Hosts 静态映射</td>
           </tr>
           <tr v-for="item in items" v-else :key="item.id">
-            <td class="font-medium text-[var(--text-primary)]">{{ item.domain }}</td>
-            <td>
+            <td class="aw-mobile-title font-medium text-[var(--text-primary)]">
+              {{ item.domain }}
+            </td>
+            <td data-label="返回地址" class="aw-mobile-wide">
               <div class="flex max-w-[460px] flex-wrap gap-1.5">
                 <code
                   v-for="address in item.addresses"
                   :key="address"
                   class="rounded bg-[var(--bg-sidebar-hover)] px-1.5 py-0.5 text-xs"
-                >{{ address }}</code>
+                  >{{ address }}</code
+                >
               </div>
             </td>
-            <td class="max-w-[260px] truncate" :title="item.comment">
+            <td
+              data-label="备注"
+              class="max-w-[260px] truncate"
+              :title="item.comment"
+            >
               {{ item.comment || "-" }}
             </td>
-            <td>
+            <td data-label="状态">
               <button
                 class="aw-action-button"
-                :class="item.enabled ? 'aw-action-success' : 'aw-action-neutral'"
+                :class="
+                  item.enabled ? 'aw-action-success' : 'aw-action-neutral'
+                "
                 :disabled="pendingID === item.id"
                 @click="toggle(item)"
               >
                 {{ item.enabled ? "启用" : "停用" }}
               </button>
             </td>
-            <td>
+            <td class="aw-mobile-actions">
               <div class="flex gap-2">
                 <button
                   class="aw-action-button aw-action-neutral"

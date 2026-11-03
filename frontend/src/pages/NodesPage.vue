@@ -551,8 +551,15 @@ onMounted(async () => {
           </select>
         </div>
       </div>
-      <div class="aw-data-table-wrap">
-        <table class="aw-data-table min-w-[1384px] table-fixed">
+      <label class="mb-3 flex items-center gap-2 text-xs sm:hidden">
+        <input
+          type="checkbox"
+          :checked="nodes.length > 0 && selected.size === nodes.length"
+          @change="toggleAll"
+        />选择当前页
+      </label>
+      <div class="aw-data-table-wrap aw-mobile-table-wrap">
+        <table class="aw-data-table aw-mobile-table min-w-[1384px] table-fixed">
           <colgroup>
             <col class="w-10" />
             <col class="w-44" />
@@ -606,28 +613,34 @@ onMounted(async () => {
               </td>
             </tr>
             <tr v-for="n in nodes" v-else :key="n.uid">
-              <td>
+              <td class="aw-mobile-selection">
                 <input
                   type="checkbox"
                   :checked="selected.has(n.uid)"
+                  :aria-label="`选择 ${n.name}`"
                   @change="toggle(n.uid)"
                 />
               </td>
-              <td class="truncate" :title="n.name">
+              <td class="aw-mobile-title truncate" :title="n.name">
                 <NodeFlagName :name="n.name" :flag="flags[n.uid]" />
               </td>
-              <td class="truncate" :title="n.type">{{ n.type }}</td>
-              <td class="truncate" :title="address(n)">{{ address(n) }}</td>
+              <td data-label="协议" class="truncate" :title="n.type">
+                {{ n.type }}
+              </td>
+              <td data-label="地址" class="truncate" :title="address(n)">
+                {{ address(n) }}
+              </td>
               <td
+                data-label="订阅"
                 class="truncate"
                 :title="String(n.subscription_name || n.subscription_id)"
               >
                 {{ n.subscription_name || n.subscription_id }}
               </td>
-              <td class="truncate font-mono" :title="n.uid">
+              <td data-label="UID" class="truncate font-mono" :title="n.uid">
                 {{ n.uid.slice(0, 12) }}…
               </td>
-              <td>
+              <td data-label="延迟">
                 <button @click="ping([n.uid])">
                   {{
                     tcping.has(n.uid)
@@ -638,24 +651,30 @@ onMounted(async () => {
                   }}
                 </button>
               </td>
-              <td class="truncate" :title="n.status">{{ n.status }}</td>
-              <td>
+              <td data-label="状态" class="truncate" :title="n.status">
+                {{ n.status }}
+              </td>
+              <td data-label="启用">
                 <button @click="enabled(n)">
                   {{ n.enabled ? "启用" : "禁用" }}
                 </button>
               </td>
-              <td>
+              <td data-label="首选">
                 <button @click="preferred(n)">
                   <Star :size="12" class="inline" />{{
                     n.preferred ? "首选" : "普通"
                   }}
                 </button>
               </td>
-              <td class="truncate" :title="formatUpdatedAt(n.updated_at)">
+              <td
+                data-label="更新时间"
+                class="truncate"
+                :title="formatUpdatedAt(n.updated_at)"
+              >
                 {{ formatUpdatedAt(n.updated_at) }}
               </td>
               <td
-                class="sticky right-0 z-[1] whitespace-nowrap bg-[var(--bg-surface)]"
+                class="aw-mobile-actions sticky right-0 z-[1] whitespace-nowrap bg-[var(--bg-surface)]"
               >
                 <div class="flex items-center gap-1.5">
                   <button

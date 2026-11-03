@@ -15,13 +15,13 @@ const start = computed(() => (p.total ? (p.page - 1) * p.pageSize + 1 : 0));
 </script>
 <template>
   <div
-    class="mt-4 flex items-center justify-between rounded-md border border-[var(--border-default)] px-3 py-3 text-sm"
+    class="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-[var(--border-default)] px-3 py-3 text-sm"
   >
     <span
       >显示 {{ start }}-{{ Math.min(total, page * pageSize) }} / 共
       {{ total }} 条</span
     >
-    <div class="flex items-center gap-2">
+    <div class="flex flex-wrap items-center gap-2">
       <select
         :value="pageSize"
         @change="

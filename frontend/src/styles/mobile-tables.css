@@ -1,0 +1,126 @@
+/* Management lists share the same record layout below the sm breakpoint. */
+@media (max-width: 639px) {
+  .aw-mobile-table-wrap {
+    min-width: 0;
+    max-width: 100%;
+    height: auto;
+    overflow-x: hidden;
+    border: 0 !important;
+    background: transparent !important;
+  }
+
+  .aw-mobile-table {
+    display: block;
+    width: 100%;
+    min-width: 0 !important;
+    height: auto;
+  }
+
+  .aw-mobile-table > colgroup,
+  .aw-mobile-table > thead {
+    display: none;
+  }
+
+  .aw-mobile-table > tbody {
+    display: grid;
+    gap: 0.75rem;
+  }
+
+  .aw-mobile-table > tbody > tr {
+    position: relative;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem 1rem;
+    padding: 1rem;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-lg);
+    background: var(--bg-inset);
+  }
+
+  .aw-mobile-table > tbody > tr > td {
+    position: static;
+    display: block;
+    min-width: 0;
+    max-width: 100%;
+    padding: 0;
+    border: 0 !important;
+    overflow-wrap: anywhere;
+    white-space: normal;
+    text-align: left;
+    background: transparent !important;
+  }
+
+  .aw-mobile-table td[data-label]::before {
+    display: block;
+    margin-bottom: 0.25rem;
+    color: var(--text-tertiary);
+    font-size: 10px;
+    font-weight: normal;
+    content: attr(data-label);
+  }
+
+  .aw-mobile-table > tbody > tr > .aw-mobile-title,
+  .aw-mobile-table > tbody > tr > .aw-mobile-wide,
+  .aw-mobile-table > tbody > tr > .aw-mobile-actions,
+  .aw-mobile-table > tbody > tr > td[colspan] {
+    grid-column: 1 / -1;
+  }
+
+  .aw-mobile-table > tbody > tr > .aw-mobile-title {
+    color: var(--text-primary);
+    font-weight: 600;
+  }
+
+  .aw-mobile-table > tbody > tr > .aw-mobile-selection {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+  }
+
+  .aw-mobile-table .aw-mobile-selection + .aw-mobile-title {
+    padding-right: 2rem;
+  }
+
+  .aw-mobile-table > tbody > tr > .aw-mobile-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--border-light) !important;
+  }
+
+  .aw-mobile-table > tbody > tr > td[colspan]:only-child {
+    padding: 1.5rem 0;
+    text-align: center;
+  }
+
+  :root[data-theme] .aw-mobile-table > tbody > tr:hover > td {
+    background: transparent !important;
+  }
+
+  .aw-mobile-table .aw-mobile-actions > div {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .aw-mobile-table .truncate {
+    max-width: 100%;
+    overflow: visible;
+    overflow-wrap: anywhere;
+    text-overflow: clip;
+    white-space: normal;
+  }
+
+  .aw-mobile-table .aw-action-button,
+  .aw-mobile-table button:not([class]) {
+    min-height: 32px;
+    height: auto;
+    max-width: 100%;
+  }
+
+  .aw-mobile-table input[type="checkbox"],
+  .aw-mobile-table input[type="radio"] {
+    width: 18px;
+    height: 18px;
+  }
+}

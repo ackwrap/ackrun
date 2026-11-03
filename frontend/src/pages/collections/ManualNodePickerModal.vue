@@ -79,14 +79,14 @@ watch(
     <div class="mb-3 flex gap-2">
       <input
         v-model="keyword"
-        class="aw-input flex-1"
+        class="aw-input min-w-0 flex-1"
         placeholder="搜索节点名称"
         @keyup.enter="load"
       />
       <button class="aw-action-button" @click="load">搜索</button>
     </div>
-    <div class="max-h-[55vh] overflow-auto">
-      <table class="aw-data-table min-w-[820px]">
+    <div class="aw-mobile-table-wrap max-h-[55vh] overflow-auto">
+      <table class="aw-data-table aw-mobile-table min-w-[820px]">
         <thead>
           <tr>
             <th>选择</th>
@@ -110,19 +110,22 @@ watch(
             </td>
           </tr>
           <tr v-for="node in nodes" v-else :key="node.uid">
-            <td>
+            <td class="aw-mobile-selection">
               <input
                 :type="single ? 'radio' : 'checkbox'"
                 :checked="selected.includes(node.uid)"
+                :aria-label="`选择 ${node.name}`"
                 @change="toggle(node.uid)"
               />
             </td>
-            <td><NodeFlagName :name="node.name" :flag="flags[node.uid]" /></td>
-            <td>{{ node.type }}</td>
-            <td>{{ node.subscription_name }}</td>
-            <td>{{ node.latency_ms || "-" }}</td>
-            <td>{{ node.status }}</td>
-            <td v-if="single" class="text-right">
+            <td class="aw-mobile-title">
+              <NodeFlagName :name="node.name" :flag="flags[node.uid]" />
+            </td>
+            <td data-label="协议">{{ node.type }}</td>
+            <td data-label="订阅来源">{{ node.subscription_name }}</td>
+            <td data-label="延迟">{{ node.latency_ms || "-" }}</td>
+            <td data-label="状态">{{ node.status }}</td>
+            <td v-if="single" class="aw-mobile-actions text-right">
               <button
                 type="button"
                 class="aw-action-button"

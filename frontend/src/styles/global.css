@@ -3,6 +3,7 @@
 @import './animations.css';
 @import './mixins.css';
 @import './theme.css';
+@import './mobile-tables.css';
 @plugin 'daisyui' {
   themes: false;
 }
@@ -398,7 +399,7 @@ button:disabled {
   }
 
   .aw-data-table-wrap {
-    @apply overflow-auto rounded-lg border;
+    @apply min-w-0 max-w-full overflow-auto rounded-lg border;
     background: var(--bg-surface);
     border-color: var(--border-default);
   }

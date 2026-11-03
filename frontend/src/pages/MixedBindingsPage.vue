@@ -281,8 +281,11 @@ onMounted(load);
             选择节点，分配 Mixed 端口。
           </p>
         </div>
-        <div v-else class="aw-data-table-wrap rounded-none border-0">
-          <table class="aw-data-table min-w-[820px]">
+        <div
+          v-else
+          class="aw-data-table-wrap aw-mobile-table-wrap rounded-none border-0"
+        >
+          <table class="aw-data-table aw-mobile-table min-w-[820px]">
             <thead>
               <tr>
                 <th>名称 / 状态</th>
@@ -294,7 +297,7 @@ onMounted(load);
             </thead>
             <tbody>
               <tr v-for="item in items" :key="item.id">
-                <td>
+                <td class="aw-mobile-title">
                   <p class="font-medium text-[var(--text-primary)]">
                     {{ item.name }}
                   </p>
@@ -318,7 +321,7 @@ onMounted(load);
                     }}
                   </span>
                 </td>
-                <td>
+                <td data-label="目标节点" class="aw-mobile-wide">
                   <p
                     class="max-w-60 truncate text-[var(--text-primary)]"
                     :title="item.node_name"
@@ -332,10 +335,13 @@ onMounted(load);
                     }}
                   </p>
                 </td>
-                <td class="font-mono text-[11px] text-[var(--text-primary)]">
+                <td
+                  data-label="代理入口"
+                  class="aw-mobile-wide font-mono text-[11px] text-[var(--text-primary)]"
+                >
                   {{ displayAddress(item) }}
                 </td>
-                <td>
+                <td data-label="认证">
                   <span
                     v-if="item.username && item.has_password"
                     class="inline-flex items-center gap-1.5"
@@ -345,7 +351,7 @@ onMounted(load);
                   </span>
                   <span v-else class="text-[var(--text-tertiary)]">无认证</span>
                 </td>
-                <td>
+                <td class="aw-mobile-actions">
                   <div class="flex justify-end gap-2">
                     <button
                       class="aw-control-action"

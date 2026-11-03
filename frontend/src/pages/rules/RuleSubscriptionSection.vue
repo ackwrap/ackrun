@@ -66,8 +66,8 @@ function scheduleLabel(item: RouteRuleSubscription) {
       </p>
     </details>
 
-    <div class="aw-data-table-wrap mt-4">
-      <table class="aw-data-table min-w-[840px]">
+    <div class="aw-data-table-wrap aw-mobile-table-wrap mt-4">
+      <table class="aw-data-table aw-mobile-table min-w-[840px]">
         <thead>
           <tr>
             <th>名称 / 地址</th>
@@ -83,7 +83,7 @@ function scheduleLabel(item: RouteRuleSubscription) {
             <td colspan="6" class="py-8 text-center">暂无规则订阅</td>
           </tr>
           <tr v-for="item in subscriptions" :key="item.id">
-            <td class="max-w-[340px]">
+            <td class="aw-mobile-title max-w-[340px]">
               <div class="font-medium text-[var(--text-primary)]">
                 {{ item.name }}
               </div>
@@ -101,21 +101,21 @@ function scheduleLabel(item: RouteRuleSubscription) {
                 {{ item.sync_error }}
               </div>
             </td>
-            <td>
+            <td data-label="规则集 Tag">
               <span
                 class="rounded bg-[var(--button-secondary-bg)] px-2 py-1 font-mono text-xs"
               >
                 {{ item.tag }}
               </span>
             </td>
-            <td>
+            <td data-label="格式 / 下载">
               <div>{{ item.format }}</div>
               <div class="mt-1 text-xs text-[var(--text-tertiary)]">
                 {{ item.use_proxy ? "代理下载" : "直连下载" }}
               </div>
             </td>
-            <td>{{ scheduleLabel(item) }}</td>
-            <td>
+            <td data-label="自动同步">{{ scheduleLabel(item) }}</td>
+            <td data-label="状态">
               <span
                 class="text-xs"
                 :class="
@@ -142,7 +142,7 @@ function scheduleLabel(item: RouteRuleSubscription) {
                 </template>
               </span>
             </td>
-            <td>
+            <td class="aw-mobile-actions">
               <button
                 class="aw-action-button aw-action-neutral"
                 @click="$emit('manage', item)"

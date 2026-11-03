@@ -501,8 +501,8 @@ onMounted(load);
             </button>
           </div>
         </header>
-        <div class="aw-data-table-wrap mt-4">
-          <table class="aw-data-table min-w-[760px]">
+        <div class="aw-data-table-wrap aw-mobile-table-wrap mt-4">
+          <table class="aw-data-table aw-mobile-table min-w-[760px]">
             <thead>
               <tr>
                 <th>排序</th>
@@ -519,7 +519,7 @@ onMounted(load);
                 <td colspan="7" class="py-10 text-center">暂无 DNS 服务器</td>
               </tr>
               <tr v-for="(s, i) in servers" :key="s.id">
-                <td>
+                <td data-label="排序">
                   <OrderButtons
                     :up-disabled="
                       i === 0 ||
@@ -535,7 +535,10 @@ onMounted(load);
                     @down="moveServer(i, 1)"
                   />
                 </td>
-                <td class="font-medium text-[var(--text-primary)]">
+                <td
+                  data-label="Tag"
+                  class="font-medium text-[var(--text-primary)]"
+                >
                   {{ s.tag }}
                   <small
                     v-if="isLegacyFakeIPServer(s)"
@@ -543,12 +546,16 @@ onMounted(load);
                     >旧版</small
                   >
                 </td>
-                <td>{{ s.server_type }}</td>
-                <td class="max-w-[420px] truncate" :title="s.address">
+                <td data-label="类型">{{ s.server_type }}</td>
+                <td
+                  data-label="地址"
+                  class="aw-mobile-wide max-w-[420px] truncate"
+                  :title="s.address"
+                >
                   {{ s.address }}
                 </td>
-                <td>{{ s.detour || "-" }}</td>
-                <td>
+                <td data-label="Detour">{{ s.detour || "-" }}</td>
+                <td data-label="状态">
                   <span
                     v-if="isLegacyFakeIPServer(s)"
                     class="text-xs text-[var(--color-warning)]"
@@ -565,7 +572,7 @@ onMounted(load);
                     {{ s.enabled ? "启用" : "停用" }}
                   </button>
                 </td>
-                <td>
+                <td class="aw-mobile-actions">
                   <div class="flex gap-2">
                     <button
                       v-if="!isLegacyFakeIPServer(s)"
@@ -583,28 +590,38 @@ onMounted(load);
                 </td>
               </tr>
               <tr v-if="global.fakeip_enabled">
-                <td>
+                <td data-label="排序">
                   <span
                     class="rounded-full bg-[var(--button-primary-bg)] px-2 py-0.5 text-[10px] text-[var(--button-primary-text)]"
                     >系统</span
                   >
                 </td>
-                <td class="font-medium text-[var(--text-primary)]">fakeip</td>
-                <td>fakeip</td>
                 <td
-                  class="max-w-[420px] truncate"
+                  data-label="Tag"
+                  class="font-medium text-[var(--text-primary)]"
+                >
+                  fakeip
+                </td>
+                <td data-label="类型">fakeip</td>
+                <td
+                  data-label="地址"
+                  class="aw-mobile-wide max-w-[420px] truncate"
                   :title="`${global.fakeip_inet4_range} / ${global.fakeip_inet6_range}`"
                 >
                   {{ global.fakeip_inet4_range }} /
                   {{ global.fakeip_inet6_range }}
                 </td>
-                <td>-</td>
-                <td>
+                <td data-label="Detour">-</td>
+                <td data-label="状态">
                   <span class="text-xs text-[var(--color-success)]"
                     >强制启用</span
                   >
                 </td>
-                <td class="text-xs text-[var(--text-tertiary)]">只读</td>
+                <td
+                  class="aw-mobile-actions text-xs text-[var(--text-tertiary)]"
+                >
+                  只读
+                </td>
               </tr>
             </tbody>
           </table>
@@ -626,8 +643,8 @@ onMounted(load);
             <Plus :size="13" />新增规则
           </button>
         </header>
-        <div class="aw-data-table-wrap mt-4">
-          <table class="aw-data-table min-w-[760px]">
+        <div class="aw-data-table-wrap aw-mobile-table-wrap mt-4">
+          <table class="aw-data-table aw-mobile-table min-w-[760px]">
             <thead>
               <tr>
                 <th>排序</th>
@@ -643,7 +660,7 @@ onMounted(load);
                 <td colspan="6" class="py-10 text-center">暂无 DNS 规则</td>
               </tr>
               <tr v-for="(r, i) in matchingRules" :key="r.id">
-                <td>
+                <td data-label="排序">
                   <OrderButtons
                     :up-disabled="
                       ruleOrderPending ||
@@ -661,7 +678,11 @@ onMounted(load);
                     @down="moveRule(i, 1)"
                   />
                 </td>
-                <td class="max-w-[520px] truncate" :title="conditionText(r)">
+                <td
+                  data-label="匹配条件"
+                  class="aw-mobile-wide max-w-[520px] truncate"
+                  :title="conditionText(r)"
+                >
                   {{ conditionText(r) }}
                   <small
                     v-if="isLegacyFakeIPRule(r)"
@@ -669,9 +690,11 @@ onMounted(load);
                     >旧版</small
                   >
                 </td>
-                <td>{{ r.server }}</td>
-                <td>{{ r.disable_cache ? "是" : "否" }}</td>
-                <td>
+                <td data-label="DNS 服务器">{{ r.server }}</td>
+                <td data-label="禁用缓存">
+                  {{ r.disable_cache ? "是" : "否" }}
+                </td>
+                <td data-label="状态">
                   <span
                     v-if="isLegacyFakeIPRule(r)"
                     class="text-xs text-[var(--color-warning)]"
@@ -688,7 +711,7 @@ onMounted(load);
                     {{ r.enabled ? "启用" : "停用" }}
                   </button>
                 </td>
-                <td>
+                <td class="aw-mobile-actions">
                   <div class="flex gap-2">
                     <button
                       v-if="!isLegacyFakeIPRule(r)"
@@ -706,23 +729,30 @@ onMounted(load);
                 </td>
               </tr>
               <tr v-if="global.fakeip_enabled">
-                <td>
+                <td data-label="排序">
                   <span
                     class="rounded-full bg-[var(--button-primary-bg)] px-2 py-0.5 text-[10px] text-[var(--button-primary-text)]"
                     >系统</span
                   >
                 </td>
-                <td class="max-w-[520px] truncate">
+                <td
+                  data-label="匹配条件"
+                  class="aw-mobile-wide max-w-[520px] truncate"
+                >
                   query_type: ["A", "AAAA"]
                 </td>
-                <td>fakeip</td>
-                <td>否</td>
-                <td>
+                <td data-label="DNS 服务器">fakeip</td>
+                <td data-label="禁用缓存">否</td>
+                <td data-label="状态">
                   <span class="text-xs text-[var(--color-success)]"
                     >强制启用</span
                   >
                 </td>
-                <td class="text-xs text-[var(--text-tertiary)]">只读</td>
+                <td
+                  class="aw-mobile-actions text-xs text-[var(--text-tertiary)]"
+                >
+                  只读
+                </td>
               </tr>
             </tbody>
           </table>
