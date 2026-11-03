@@ -2,6 +2,7 @@
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import { Globe2, RefreshCw, Wifi } from "lucide-vue-next";
 import { writeClipboardText } from "@/utils/clipboard";
+import { vSpotlight } from "@/directives/spotlight";
 import baiduIcon from "@/assets/access-icons/baidu.ico";
 import chatGPTIcon from "@/assets/access-icons/chatgpt.ico";
 import githubIcon from "@/assets/access-icons/github.ico";
@@ -172,6 +173,7 @@ onBeforeUnmount(() => {
 
 <template>
   <section
+    v-spotlight
     class="flex min-w-0 flex-col rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-card)]"
   >
     <div class="mb-4 flex items-center justify-between gap-3">
@@ -215,6 +217,7 @@ onBeforeUnmount(() => {
     </p>
   </section>
   <section
+    v-spotlight
     class="flex min-w-0 flex-col rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-card)]"
   >
     <div class="mb-4 flex items-center justify-between gap-3">

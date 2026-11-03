@@ -4,6 +4,7 @@
 @import './mixins.css';
 @import './theme.css';
 @import './mobile-tables.css';
+@import './interactions.css';
 @plugin 'daisyui' {
   themes: false;
 }

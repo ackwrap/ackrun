@@ -7,6 +7,10 @@ import {
   type ProxyMap,
 } from "@/services/clash";
 import { formatBytes, formatSpeed } from "@/utils/traffic";
+import AnimatedMetric from "@/components/ui/AnimatedMetric.vue";
+import MetricSparkline from "@/components/ui/MetricSparkline.vue";
+import { vSpotlight } from "@/directives/spotlight";
+import { appendTrafficSample } from "@/utils/metricMotion";
 
 const props = defineProps<{
   isRunning: boolean;
@@ -26,20 +30,48 @@ const upload = ref(0);
 const download = ref(0);
 const trafficReady = ref(false);
 const trafficError = ref("");
+const uploadTrend = ref<number[]>([]);
+const downloadTrend = ref<number[]>([]);
 const client = getClashClient();
 let generation = 0;
+const speed = (value: number) => formatSpeed(Math.round(value));
 const items = computed(() => [
-  ["上传", trafficReady.value ? formatSpeed(upload.value) : "--"],
-  ["下载", trafficReady.value ? formatSpeed(download.value) : "--"],
-  ["上传总量", totals.value ? formatBytes(totals.value.uploadTotal) : "--"],
-  ["下载总量", totals.value ? formatBytes(totals.value.downloadTotal) : "--"],
-  ["活动连接", totals.value?.connections.length ?? "--"],
-  [
-    "内存占用",
-    totals.value?.memory == null ? "--" : formatBytes(totals.value.memory),
-  ],
-  ["策略组", proxyGroups.value ?? "--"],
-  ["代理端口", props.proxyPort || "--"],
+  {
+    label: "上传",
+    value: trafficReady.value ? upload.value : null,
+    format: speed,
+    animate: true,
+    trend: uploadTrend.value,
+  },
+  {
+    label: "下载",
+    value: trafficReady.value ? download.value : null,
+    format: speed,
+    animate: true,
+    trend: downloadTrend.value,
+  },
+  {
+    label: "上传总量",
+    value: totals.value?.uploadTotal ?? null,
+    format: formatBytes,
+  },
+  {
+    label: "下载总量",
+    value: totals.value?.downloadTotal ?? null,
+    format: formatBytes,
+  },
+  {
+    label: "活动连接",
+    value: totals.value?.connections.length ?? null,
+    feedback: true,
+  },
+  {
+    label: "内存占用",
+    value: totals.value?.memory ?? null,
+    format: formatBytes,
+  },
+  { label: "策略组", value: proxyGroups.value },
+  { label: "代理端口", value: props.proxyPort || null },
 ]);
 const status = computed(() =>
   !props.isRunning
@@ -62,6 +94,8 @@ function start() {
   download.value = 0;
   trafficReady.value = false;
   trafficError.value = "";
+  uploadTrend.value = [];
+  downloadTrend.value = [];
   if (!props.isRunning) return;
   const run = generation;
   client.connectTraffic(
@@ -69,6 +103,11 @@ function start() {
       if (run !== generation) return;
       upload.value = value.up;
       download.value = value.down;
+      uploadTrend.value = appendTrafficSample(uploadTrend.value, value.up);
+      downloadTrend.value = appendTrafficSample(
+        downloadTrend.value,
+        value.down,
+      );
       trafficReady.value = true;
       trafficError.value = "";
     },
@@ -76,6 +115,8 @@ function start() {
       if (run !== generation) return;
       trafficReady.value = false;
       trafficError.value = "实时流量断开";
+      uploadTrend.value = [];
+      downloadTrend.value = [];
     },
   );
 }
@@ -85,6 +126,7 @@ onBeforeUnmount(stop);
 
 <template>
   <section
+    v-spotlight
     class="min-w-0 rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-4 shadow-[var(--shadow-card)]"
   >
     <div class="mb-3 flex items-center justify-between gap-2">
@@ -106,17 +148,24 @@ onBeforeUnmount(stop);
     </div>
     <dl class="grid grid-cols-4 gap-2">
       <div
-        v-for="[label, value] in items"
-        :key="label"
-        class="aw-stat-tile flex min-h-[76px] min-w-0 flex-col items-center justify-center rounded-[var(--radius-md)] border border-[var(--border-light)] bg-[var(--bg-base)] p-2 text-center"
+        v-for="item in items"
+        :key="item.label"
+        class="aw-stat-tile relative flex min-h-[76px] min-w-0 flex-col items-center justify-center rounded-[var(--radius-md)] border border-[var(--border-light)] bg-[var(--bg-base)] p-2 text-center"
       >
-        <dt class="text-[11px] text-[var(--text-secondary)]">{{ label }}</dt>
+        <dt class="text-[11px] text-[var(--text-secondary)]">
+          {{ item.label }}
+        </dt>
         <dd
           class="aw-stat-value mt-2 max-w-full break-words text-xs font-semibold text-[var(--color-success)]"
-          :title="String(value)"
         >
-          {{ value }}
+          <AnimatedMetric
+            :value="item.value"
+            :format="item.format"
+            :animate="!!item.animate"
+            :feedback="!!item.feedback"
+          />
         </dd>
+        <MetricSparkline v-if="item.trend" :samples="item.trend" />
       </div>
     </dl>
   </section>

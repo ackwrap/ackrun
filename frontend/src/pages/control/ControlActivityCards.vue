@@ -312,6 +312,19 @@ watch(
 .aw-activity-table tbody tr:nth-child(even) {
   background: var(--bg-inset);
 }
+.aw-activity-table tbody tr {
+  transition: background-color var(--duration-interaction) ease-out;
+}
+@media (hover: hover) and (pointer: fine) {
+  .aw-activity-table tbody tr:hover {
+    background: var(--table-row-hover);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .aw-activity-table tbody tr {
+    transition: none;
+  }
+}
 .aw-activity-table th:first-child,
 .aw-activity-table td:first-child {
   border-radius: 10px 0 0 10px;
