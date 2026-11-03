@@ -224,13 +224,10 @@ func RegisterRoutes(
 
 		v1.GET("/realtime/ws", realtimeH.HandleWS)
 
-		// 控制面板统计和简易模式使用的 Clash API。
+		// 控制面板统计使用的 Clash API。
 		v1.GET("/clash/traffic", clashProxyH.Proxy)
 		v1.GET("/clash/connections", clashProxyH.Proxy)
 		v1.GET("/clash/proxies", clashProxyH.Proxy)
-		v1.GET("/clash/proxies/:name", clashProxyH.Proxy)
-		v1.PUT("/clash/proxies/:name", clashProxyH.Proxy)
-		v1.GET("/clash/proxies/:name/delay", clashProxyH.Proxy)
 	}
 }
 

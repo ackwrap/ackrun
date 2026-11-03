@@ -36,7 +36,6 @@ type Application struct {
 	routeRule              *service.RouteRuleService
 	proxyCollection        *service.ProxyCollectionService
 	sshHost                *service.SSHHostService
-	simpleSetup            *service.SimpleSetupService
 	stopToolLogEvents      func()
 	toolLogEventsCompleted chan struct{}
 
@@ -146,7 +145,6 @@ func New(options Options) (*Application, error) {
 		logging.Error("node_group.auto_group", "启动时自动地域分组失败: %v", err)
 	}
 	subscriptionSvc.SetConfigReconciler(reconcileSvc)
-	simpleSetupSvc := service.NewSimpleSetupService(db, options.Paths, installerSvc, subscriptionSvc, routeRuleSvc, configGenSvc, singboxSvc, realtimeSvc)
 
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
@@ -155,8 +153,6 @@ func New(options Options) (*Application, error) {
 		gin.RecoveryWithWriter(accessTokenRedactingWriter{Writer: gin.DefaultErrorWriter}),
 	)
 	router.Use(api.SecurityMiddleware(options.APIToken))
-	router.Use(api.SimpleSetupMutationGuard(simpleSetupSvc))
-	api.RegisterSimpleSetupRoutes(router, simpleSetupSvc)
 	api.RegisterSSHMCPRoutes(router, service.NewSSHMCPService(db), sshHostSvc)
 	api.RegisterRoutes(router, runtimeSvc, installerSvc, singboxSvc, configSvc, settingsSvc, subscriptionSvc, nodeSvc, nodeExposureSvc, routeRuleSvc, proxyCollectionSvc, configGenSvc, realtimeSvc, coreLogSvc, dnsSvc, nodeGroupSvc, reconcileSvc, coreRestartSvc, appUpdateSvc, dashboardSvc, sshHostSvc)
 	if err := registerWebUI(router); err != nil {
@@ -179,7 +175,6 @@ func New(options Options) (*Application, error) {
 		routeRule:              routeRuleSvc,
 		proxyCollection:        proxyCollectionSvc,
 		sshHost:                sshHostSvc,
-		simpleSetup:            simpleSetupSvc,
 		stopToolLogEvents:      stopToolLogEvents,
 		toolLogEventsCompleted: toolLogEventsCompleted,
 	}, nil
@@ -198,16 +193,10 @@ func (app *Application) Start() error {
 	if app.started {
 		return nil
 	}
-	setupState, err := app.store.SimpleSetupState()
-	if err != nil {
-		return err
-	}
 	if err := app.coreRestart.StartScheduler(); err != nil {
 		logging.Error("core.restart_scheduler", "启动核心定时重启调度器失败: %v", err)
 	}
-	if setupState != "prepared" && setupState != "applied" {
-		app.subscription.StartScheduler()
-	}
+	app.subscription.StartScheduler()
 	app.routeRule.StartScheduler()
 	app.proxyCollection.StartScheduler()
 	app.started = true
@@ -230,14 +219,6 @@ func (app *Application) StartCoreIfConfigured() error {
 	if app.closed {
 		return ErrClosed
 	}
-	setupState, err := app.store.SimpleSetupState()
-	if err != nil {
-		return err
-	}
-	if setupState == "prepared" || setupState == "applied" {
-		logging.Info("core.autostart", "一键配置尚未完成，等待用户重试")
-		return nil
-	}
 	settings, err := app.store.GetGeneralSettings()
 	if err != nil {
 		return fmt.Errorf("load general settings: %w", err)
@@ -258,9 +239,6 @@ func (app *Application) PrepareShutdown() {
 		return
 	}
 	app.closed = true
-	if app.simpleSetup != nil {
-		app.simpleSetup.Close()
-	}
 	app.sshHost.Close()
 	if app.started {
 		app.coreRestart.StopScheduler()

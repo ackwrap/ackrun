@@ -260,10 +260,6 @@ func (svc *SubscriptionService) SyncAll() (*model.ActionResponse, error) {
 }
 
 func (svc *SubscriptionService) runSync(id int64) {
-	svc.runSyncWithReconcile(id, true)
-}
-
-func (svc *SubscriptionService) runSyncWithReconcile(id int64, reconcile bool) {
 	releaseConfigUpdate := svc.store.HoldConfigUpdate()
 	defer releaseConfigUpdate()
 	if !svc.beginSync(id) {
@@ -424,7 +420,7 @@ func (svc *SubscriptionService) runSyncWithReconcile(id int64, reconcile bool) {
 	} else {
 		svc.broadcastSubscription(updated, "updated", 100)
 	}
-	if hasChanges && reconcile && svc.reconciler != nil {
+	if hasChanges && svc.reconciler != nil {
 		svc.reconciler.Trigger("subscription.sync")
 	}
 }

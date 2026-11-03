@@ -19,10 +19,6 @@ export const router = createRouter({
   history: createWebHistory(),
   routes: [
     {
-      path: "/simple",
-      component: () => import("@/pages/SimplePage.vue"),
-    },
-    {
       path: "/",
       component: AppLayout,
       children: [
@@ -47,9 +43,4 @@ export const router = createRouter({
     },
     { path: "/:pathMatch(.*)*", redirect: "/" },
   ],
-});
-
-router.beforeEach((to) => {
-  if (to.path === "/" && localStorage.getItem("ackwrap.ui-mode") === "simple")
-    return "/simple";
 });

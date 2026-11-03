@@ -79,6 +79,9 @@ func TestApplicationKeepsExternalPanelsAndSharedClashRoutes(t *testing.T) {
 		{http.MethodPatch, "/api/v1/clash/configs"},
 		{http.MethodDelete, "/api/v1/clash/connections"},
 		{http.MethodDelete, "/api/v1/clash/connections/example"},
+		{http.MethodGet, "/api/v1/clash/proxies/example"},
+		{http.MethodPut, "/api/v1/clash/proxies/example"},
+		{http.MethodGet, "/api/v1/clash/proxies/example/delay"},
 	} {
 		recorder := httptest.NewRecorder()
 		app.Handler().ServeHTTP(recorder, httptest.NewRequest(request.method, request.path, nil))
@@ -95,9 +98,6 @@ func TestApplicationKeepsExternalPanelsAndSharedClashRoutes(t *testing.T) {
 		"GET /api/v1/clash/traffic":                    false,
 		"GET /api/v1/clash/connections":                false,
 		"GET /api/v1/clash/proxies":                    false,
-		"GET /api/v1/clash/proxies/:name":              false,
-		"PUT /api/v1/clash/proxies/:name":              false,
-		"GET /api/v1/clash/proxies/:name/delay":        false,
 	}
 	for _, route := range app.Handler().(*gin.Engine).Routes() {
 		if !strings.HasPrefix(route.Path, "/api/v1/clash/") && !strings.HasPrefix(route.Path, "/api/v1/settings/dashboards") {
