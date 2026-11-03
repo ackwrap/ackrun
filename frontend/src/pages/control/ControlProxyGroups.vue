@@ -3,7 +3,11 @@ import { computed, nextTick, ref, watch } from "vue";
 import { Check, ChevronRight, Layers, Search, X } from "lucide-vue-next";
 import Modal from "@/components/ui/Modal.vue";
 import { getClashClient, type ProxyMap } from "@/services/clash";
-import { isProxyGroup, resolveProxyName } from "@/utils/controlActivity";
+import {
+  activityInitial,
+  isProxyGroup,
+  resolveProxyName,
+} from "@/utils/controlActivity";
 
 const props = defineProps<{
   isRunning: boolean;
@@ -156,7 +160,7 @@ watch(
       >
         <span
           class="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[var(--button-secondary-bg)] text-xs font-bold text-[var(--text-secondary)]"
-          >{{ group.name.slice(0, 1).toUpperCase() }}</span
+          >{{ activityInitial(group.name) }}</span
         >
         <span class="min-w-0 flex-1"
           ><span class="block truncate text-sm font-semibold">{{
