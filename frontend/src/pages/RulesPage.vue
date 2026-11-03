@@ -18,6 +18,7 @@ import type {
 } from "@/services/types";
 import GeoDatabaseSection from "./rules/GeoDatabaseSection.vue";
 import RuleListSection from "./rules/RuleListSection.vue";
+import { isFixedRouteRule } from "./rules/useRuleSort";
 import RouteRuleFormModal from "./rules/RouteRuleFormModal.vue";
 import RouteRuleImportModal from "./rules/RouteRuleImportModal.vue";
 import RuleSubscriptionActionsModal from "./rules/RuleSubscriptionActionsModal.vue";
@@ -31,6 +32,7 @@ const deviceEnabled = ref(true);
 const deviceSaving = ref(false);
 const deviceConnectivity = ref({ test_url: "", interval_seconds: 300 });
 const ruleSaving = ref(false);
+const ruleOrderSaving = ref(false);
 const rules = ref<RouteRule[]>([]),
   subscriptions = ref<RouteRuleSubscription[]>([]),
   geoAssets = ref<GeoAsset[]>([]),
@@ -114,7 +116,9 @@ async function load() {
       api.getGeoAssets(),
     ]);
     if (version !== loadVersion) return;
-    [rules.value, subscriptions.value, geoAssets.value] = result;
+    if (!ruleOrderSaving.value) rules.value = result[0];
+    subscriptions.value = result[1];
+    geoAssets.value = result[2];
   } catch (e: any) {
     if (version !== loadVersion) return;
     show(`规则加载失败: ${e.message}`, "error");
@@ -287,23 +291,31 @@ async function removeRule() {
     show(`规则删除失败: ${e.message}`, "error");
   }
 }
-async function move(i: number, d: -1 | 1) {
-  const n = i + d;
-  if (n < 0 || n >= rules.value.length) return;
-  const protectedRule = (rule: RouteRule) =>
-    rule.system_key === "ad_block" ||
-    rule.system_key === "global_direct" ||
-    ["fallback", "final"].includes(rule.rule_type) ||
-    (rule.is_system && ["广告拦截", "全球直连"].includes(rule.name));
-  if (protectedRule(rules.value[i]) || protectedRule(rules.value[n])) return;
-  const next = [...rules.value];
-  [next[i], next[n]] = [next[n], next[i]];
-  rules.value = next;
+async function reorderRules(ids: number[]) {
+  if (ruleOrderSaving.value) return;
+  const previous = rules.value;
+  const byID = new Map(previous.map((rule) => [rule.id, rule]));
+  if (
+    ids.length !== previous.length ||
+    new Set(ids).size !== ids.length ||
+    ids.some((id) => !byID.has(id)) ||
+    previous.some(
+      (rule, index) => isFixedRouteRule(rule) && ids[index] !== rule.id,
+    ) ||
+    ids.every((id, index) => id === previous[index].id)
+  )
+    return;
+  ruleOrderSaving.value = true;
+  rules.value = ids.map((id) => byID.get(id)!);
+  ++loadVersion;
   try {
-    await api.reorderRouteRules(next.map((x) => x.id));
-    await load();
+    await api.reorderRouteRules(ids);
+    show("规则顺序已保存");
   } catch (e: any) {
+    rules.value = previous;
     show(`规则排序失败: ${e.message}`, "error");
+  } finally {
+    ruleOrderSaving.value = false;
     await load();
   }
 }
@@ -570,6 +582,7 @@ onBeforeUnmount(() => clearInterval(poll));
         @update="updateGeo" /><RuleListSection
         :rules="rules"
         :subscriptions="subscriptions"
+        :sorting="ruleOrderSaving"
         @refresh="load"
         @add-geo="addRule('geosite')"
         @add-device="addRule('source_ip_cidr')"
@@ -577,7 +590,7 @@ onBeforeUnmount(() => clearInterval(poll));
         @preview="openRulePreview"
         @share="shareRules"
         @import="openImport"
-        @move="move"
+        @reorder="reorderRules"
         @toggle="toggleRule"
         @edit="editRule"
         @remove="pending = $event"

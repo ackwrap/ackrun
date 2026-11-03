@@ -2,6 +2,7 @@
 import {
   Edit3,
   Eye,
+  GripVertical,
   Plus,
   RefreshCw,
   Share2,
@@ -10,14 +11,15 @@ import {
 } from "lucide-vue-next";
 import AdaptiveActionBar from "@/components/ui/AdaptiveActionBar.vue";
 import FlagText from "@/components/ui/FlagText.vue";
-import OrderButtons from "@/components/ui/OrderButtons.vue";
 import type { RouteRule, RouteRuleSubscription } from "@/services/types";
 import { splitDeviceRuleValues } from "./deviceRulePreview";
+import { useRuleSort } from "./useRuleSort";
 const props = defineProps<{
   rules: RouteRule[];
   subscriptions: RouteRuleSubscription[];
+  sorting: boolean;
 }>();
-defineEmits<{
+const emit = defineEmits<{
   refresh: [];
   addGeo: [];
   addDevice: [];
@@ -25,12 +27,17 @@ defineEmits<{
   preview: [];
   share: [];
   import: [];
-  move: [number, -1 | 1];
+  reorder: [number[]];
   toggle: [RouteRule];
   edit: [RouteRule];
   remove: [RouteRule];
   detail: [RouteRule];
 }>();
+const { tableBody, displayRules, draggingId, start, keydown } = useRuleSort(
+  () => props.rules,
+  () => props.sorting,
+  (ids) => emit("reorder", ids),
+);
 
 function isAdBlock(rule: RouteRule) {
   return (
@@ -44,20 +51,6 @@ function isFinalStrategy(rule: RouteRule) {
     rule.system_key === "global_direct" ||
     ["fallback", "final"].includes(rule.rule_type) ||
     (rule.is_system && ["全球直连", "最终策略"].includes(rule.name))
-  );
-}
-
-function moveDisabled(index: number, direction: -1 | 1) {
-  const target = index + direction;
-  const currentRule = props.rules[index];
-  const targetRule = props.rules[target];
-  return (
-    !currentRule ||
-    !targetRule ||
-    isAdBlock(currentRule) ||
-    isAdBlock(targetRule) ||
-    isFinalStrategy(currentRule) ||
-    isFinalStrategy(targetRule)
   );
 }
 
@@ -159,10 +152,18 @@ function actionLabel(rule: RouteRule) {
     <details class="mt-2 text-xs text-[var(--text-secondary)]">
       <summary class="w-fit cursor-pointer">排序说明</summary>
       <p class="mt-2 leading-5">
-        上移、下移后自动保存；设备规则优先于普通业务规则。
+        按住排序手柄上下拖动，松手后自动保存；也可聚焦手柄后用方向键调整。
+        广告拦截固定在首位，最终策略固定在末位；设备规则优先于普通业务规则。
       </p>
     </details>
-    <div class="aw-data-table-wrap mt-4">
+    <p
+      v-if="sorting"
+      role="status"
+      class="mt-2 text-xs text-[var(--text-secondary)]"
+    >
+      正在保存排序…
+    </p>
+    <div class="aw-data-table-wrap mt-4" :aria-busy="sorting">
       <table class="aw-data-table min-w-[760px]">
         <thead>
           <tr>
@@ -175,23 +176,34 @@ function actionLabel(rule: RouteRule) {
             <th>操作</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody ref="tableBody">
           <tr v-if="!rules.length">
             <td colspan="7" class="py-8 text-center">暂无路由规则</td>
           </tr>
-          <tr v-for="(r, i) in rules" :key="r.id">
+          <tr
+            v-for="(r, i) in displayRules"
+            :key="r.id"
+            :data-rule-id="r.id"
+            :class="{ 'rule-row-dragging': draggingId === r.id }"
+          >
             <td>
               <div class="flex items-center gap-1.5">
                 <span class="w-6 text-[var(--text-tertiary)]"
                   >#{{ i + 1 }}</span
                 >
-                <OrderButtons
+                <button
                   v-if="!isAdBlock(r) && !isFinalStrategy(r)"
-                  :up-disabled="moveDisabled(i, -1)"
-                  :down-disabled="moveDisabled(i, 1)"
-                  @up="$emit('move', i, -1)"
-                  @down="$emit('move', i, 1)"
-                />
+                  type="button"
+                  class="aw-action-button aw-action-neutral !h-7 !w-7 touch-none select-none !px-0 cursor-grab active:cursor-grabbing"
+                  :disabled="sorting"
+                  title="上下拖动排序，也可使用方向键"
+                  :aria-label="`调整 ${r.name} 的顺序`"
+                  @pointerdown="start($event, r)"
+                  @keydown="keydown($event, r)"
+                  @dragstart.prevent
+                >
+                  <GripVertical :size="15" />
+                </button>
               </div>
             </td>
             <td>
@@ -254,3 +266,13 @@ function actionLabel(rule: RouteRule) {
     </div>
   </section>
 </template>
+
+<style scoped>
+.rule-row-dragging > td {
+  background: var(--button-primary-bg) !important;
+}
+.rule-row-dragging {
+  cursor: grabbing;
+  user-select: none;
+}
+</style>
