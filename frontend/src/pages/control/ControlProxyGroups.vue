@@ -1,9 +1,13 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
-import { Check, ChevronRight, Layers } from "lucide-vue-next";
+import { computed, nextTick, ref, watch } from "vue";
+import { Check, ChevronRight, Layers, Search, X } from "lucide-vue-next";
 import Modal from "@/components/ui/Modal.vue";
 import { getClashClient, type ProxyMap } from "@/services/clash";
-import { isProxyGroup, resolveProxyName } from "@/utils/controlActivity";
+import {
+  activityInitial,
+  isProxyGroup,
+  resolveProxyName,
+} from "@/utils/controlActivity";
 
 const props = defineProps<{
   isRunning: boolean;
@@ -17,6 +21,16 @@ const emit = defineEmits<{
 const groups = computed(() =>
   Object.values(props.proxies || {}).filter(isProxyGroup),
 );
+const groupSearch = ref("");
+const groupSearchOpen = ref(false);
+const groupSearchInput = ref<HTMLInputElement | null>(null);
+const groupSearchToggle = ref<HTMLButtonElement | null>(null);
+const filteredGroups = computed(() => {
+  const keyword = groupSearch.value.trim().toLowerCase();
+  return groups.value.filter((group) =>
+    group.name.toLowerCase().includes(keyword),
+  );
+});
 const selectedName = ref("");
 const search = ref("");
 const saving = ref("");
@@ -36,6 +50,20 @@ const options = computed(() =>
 );
 const currentNode = (name: string) =>
   resolveProxyName(name, props.proxies || {});
+function closeGroupSearch() {
+  groupSearchOpen.value = false;
+  groupSearch.value = "";
+  groupSearchToggle.value?.focus();
+}
+async function toggleGroupSearch() {
+  if (groupSearchOpen.value) {
+    closeGroupSearch();
+    return;
+  }
+  groupSearchOpen.value = true;
+  await nextTick();
+  groupSearchInput.value?.focus();
+}
 function openGroup(name: string) {
   selectedName.value = name;
   search.value = "";
@@ -75,19 +103,45 @@ watch(
     aria-label="策略组"
   >
     <div class="mb-3 flex h-8 shrink-0 items-center justify-between gap-2">
-      <h2 class="flex items-center gap-2 text-xs font-semibold">
+      <h2 class="flex shrink-0 items-center gap-2 text-xs font-semibold">
         <Layers :size="16" class="text-[var(--text-secondary)]" />策略组<span
           class="rounded-full bg-[var(--bg-inset)] px-2 py-0.5 text-[11px] tabular-nums text-[var(--text-secondary)]"
           >{{ proxies ? groups.length : "—" }}</span
         >
       </h2>
-      <button
-        v-if="error"
-        class="text-xs text-[var(--color-primary)]"
-        @click="emit('refresh')"
-      >
-        重试
-      </button>
+      <div class="flex min-w-0 flex-1 items-center justify-end gap-2">
+        <button
+          v-if="error"
+          class="text-xs text-[var(--color-primary)]"
+          @click="emit('refresh')"
+        >
+          重试
+        </button>
+        <input
+          v-if="groupSearchOpen"
+          id="control-proxy-group-search"
+          ref="groupSearchInput"
+          v-model="groupSearch"
+          type="search"
+          class="h-8 w-full min-w-0 max-w-48"
+          placeholder="搜索策略组"
+          aria-label="按名称筛选策略组"
+          @keydown.esc.stop="closeGroupSearch"
+        />
+        <button
+          ref="groupSearchToggle"
+          type="button"
+          class="focus-ring flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] transition-colors hover:bg-[var(--button-secondary-hover)]"
+          :aria-label="groupSearchOpen ? '收起策略组搜索' : '搜索策略组'"
+          :title="groupSearchOpen ? '收起策略组搜索' : '搜索策略组'"
+          :aria-expanded="groupSearchOpen"
+          aria-controls="control-proxy-group-search"
+          @click="toggleGroupSearch"
+        >
+          <X v-if="groupSearchOpen" :size="16" />
+          <Search v-else :size="16" />
+        </button>
+      </div>
     </div>
     <div
       v-if="error"
@@ -98,7 +152,7 @@ watch(
     </div>
     <div class="min-h-0 flex-1 space-y-2 overflow-y-auto">
       <button
-        v-for="group in groups"
+        v-for="group in filteredGroups"
         :key="group.name"
         class="focus-ring flex w-full min-w-0 items-center gap-3 rounded-[var(--radius-lg)] bg-[var(--bg-inset)] px-3 py-2.5 text-left transition-colors hover:bg-[var(--button-secondary-hover)]"
         :aria-label="`查看策略组 ${group.name}`"
@@ -106,7 +160,7 @@ watch(
       >
         <span
           class="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[var(--button-secondary-bg)] text-xs font-bold text-[var(--text-secondary)]"
-          >{{ group.name.slice(0, 1).toUpperCase() }}</span
+          >{{ activityInitial(group.name) }}</span
         >
         <span class="min-w-0 flex-1"
           ><span class="block truncate text-sm font-semibold">{{
@@ -121,7 +175,7 @@ watch(
         <ChevronRight :size="15" class="shrink-0 text-[var(--text-tertiary)]" />
       </button>
       <div
-        v-if="!groups.length"
+        v-if="!filteredGroups.length"
         class="flex h-full min-h-36 items-center justify-center text-xs text-[var(--text-tertiary)]"
       >
         {{
@@ -129,9 +183,11 @@ watch(
             ? "核心未运行"
             : error
               ? "策略组暂不可用"
-              : proxies
-                ? "当前配置暂无策略组"
-                : "正在读取策略组…"
+              : groups.length
+                ? "没有匹配的策略组"
+                : proxies
+                  ? "当前配置暂无策略组"
+                  : "正在读取策略组…"
         }}
       </div>
     </div>

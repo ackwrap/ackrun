@@ -1,21 +1,33 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  activityInitial,
   connectionSource,
   connectionTarget,
-  parseDNSActivity,
   rememberConnections,
-  rememberDNS,
   resolveProxyName,
 } from "../src/utils/controlActivity.ts";
 
-const log = (id, line, time = id) => ({ id, time, source: "stdout", line });
 const connection = (id, start = "2026-11-03T10:00:00Z") => ({
   id,
   start,
   metadata: {},
   upload: 0,
   download: 0,
+});
+
+test("activity initials preserve whole emoji and composed characters", () => {
+  for (const [name, expected] of [
+    ["  proxy", "P"],
+    ["🎯 Apple", "🎯"],
+    ["🇭🇰 香港", "🇭🇰"],
+    ["👩🏽‍💻 工作", "👩🏽‍💻"],
+    ["e\u0301quipe", "E\u0301"],
+    ["节点", "节"],
+    [" ", "?"],
+  ]) {
+    assert.equal(activityInitial(name), expected);
+  }
 });
 
 test("connection labels handle Windows processes and IPv6", () => {
@@ -62,77 +74,4 @@ test("nested proxy selection resolves to the node and detects cycles", () => {
     }),
     "Proxy",
   );
-});
-
-test("DNS response records merge with the question and multiple answers", () => {
-  const question = parseDNSActivity(
-    log(1, "DEBUG [1234 0ms] dns: exchange example.test. IN A"),
-  );
-  const first = parseDNSActivity(
-    log(
-      2,
-      "\u001b[32mINFO\u001b[0m [1234 10ms] dns: exchanged A example.test. 60 IN A 198.51.100.10",
-    ),
-  );
-  const second = parseDNSActivity(
-    log(
-      3,
-      "INFO [1234 11ms] dns: exchanged A example.test. 60 IN A 198.51.100.11",
-    ),
-  );
-  let records = rememberDNS([], question);
-  records = rememberDNS(records, first);
-  records = rememberDNS(records, second);
-  assert.equal(records.length, 1);
-  assert.equal(records[0].domain, "example.test");
-  assert.equal(records[0].status, "success");
-  assert.match(records[0].result, /198\.51\.100\.10.*198\.51\.100\.11/);
-  assert.deepEqual(rememberDNS(records, question), records);
-});
-
-test("negative DNS responses and failures remain visible", () => {
-  const question = parseDNSActivity(
-    log(1, "DEBUG [2345 0ms] dns: exchange missing.test. IN AAAA"),
-  );
-  const negative = parseDNSActivity(
-    log(2, "DEBUG [2345 8ms] dns: exchanged missing.test NXDOMAIN 0"),
-  );
-  const records = rememberDNS(rememberDNS([], question), negative);
-  assert.equal(records.length, 1);
-  assert.equal(records[0].type, "AAAA");
-  assert.equal(records[0].status, "error");
-  assert.equal(records[0].result, "NXDOMAIN");
-  const failed = parseDNSActivity(
-    log(
-      3,
-      "ERROR [9999 1ms] dns: exchange failed for timeout.test. IN A: context deadline exceeded",
-    ),
-  );
-  assert.equal(failed.type, "A");
-  assert.equal(failed.status, "error");
-  assert.match(failed.result, /deadline exceeded/);
-  assert.equal(
-    parseDNSActivity(
-      log(4, "INFO outbound/direct: outbound connection to example.test:443"),
-    ),
-    null,
-  );
-});
-
-test("loading older DNS logs cannot push recent live records out of the bounded list", () => {
-  let records = [];
-  for (let index = 300; index > 0; index--) {
-    records = rememberDNS(records, {
-      id: String(index),
-      context: "",
-      time: index,
-      domain: "example.test",
-      type: "A",
-      result: "198.51.100.1",
-      status: "success",
-    });
-  }
-  assert.equal(records.length, 200);
-  assert.equal(records[0].time, 300);
-  assert.equal(records.at(-1).time, 101);
 });

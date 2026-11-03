@@ -1,20 +1,16 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from "vue";
-import { useRealtimeSocket } from "@/composables/useRealtimeSocket";
-import { api } from "@/services/api";
+import { computed, nextTick, ref, watch } from "vue";
+import { Search, X } from "lucide-vue-next";
 import type {
   ClashConnection,
   ConnectionsSnapshot,
   ProxyMap,
 } from "@/services/clash";
-import type { CoreLogEntry } from "@/services/types";
 import {
+  activityInitial,
   connectionSource,
   connectionTarget,
-  parseDNSActivity,
   rememberConnections,
-  rememberDNS,
-  type DNSActivity,
 } from "@/utils/controlActivity";
 import { formatBytes } from "@/utils/traffic";
 import ControlProxyGroups from "./ControlProxyGroups.vue";
@@ -30,12 +26,13 @@ const emit = defineEmits<{
   refresh: [];
   notify: [message: string, type: "success" | "error" | "info"];
 }>();
-type ActivityTab = "connections" | "requests" | "dns";
+type ActivityTab = "connections" | "requests";
 const activeTab = ref<ActivityTab>("connections");
 const history = ref<ClashConnection[]>([]);
-const dns = ref<DNSActivity[]>([]);
-const logError = ref("");
-let logGeneration = 0;
+const search = ref("");
+const searchOpen = ref(false);
+const searchInput = ref<HTMLInputElement | null>(null);
+const searchToggle = ref<HTMLButtonElement | null>(null);
 const activeIDs = computed(
   () => new Set(props.snapshot?.connections.map((item) => item.id)),
 );
@@ -44,6 +41,25 @@ const connections = computed(() =>
     ? history.value
     : props.snapshot?.connections || [],
 );
+const filteredConnections = computed(() => {
+  const keyword = search.value.trim().toLowerCase();
+  if (!keyword) return connections.value;
+  return connections.value.filter((connection) =>
+    [
+      connectionSource(connection),
+      connection.metadata.processPath,
+      connection.metadata.sourceIP,
+      connectionTarget(connection),
+      connection.metadata.destinationIP,
+      ...(connection.chains || []),
+      connection.rule,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase()
+      .includes(keyword),
+  );
+});
 const tabs = computed(() => [
   {
     id: "connections" as const,
@@ -57,24 +73,12 @@ const tabs = computed(() => [
     count: history.value.length,
     title: "本页最近观测到的连接，保留 200 条",
   },
-  {
-    id: "dns" as const,
-    label: "DNS 查询",
-    count: dns.value.length,
-    title: "核心日志中的最近 DNS 记录，保留 200 条",
-  },
 ]);
-const error = computed(() =>
-  activeTab.value === "dns"
-    ? logError.value ||
-      (props.isRunning && !connected.value ? "实时日志已断开，正在重连" : "")
-    : props.connectionError,
-);
 const emptyMessage = computed(() =>
   !props.isRunning
     ? "核心未运行"
-    : activeTab.value === "dns"
-      ? "暂无 DNS 记录，记录取决于核心日志级别"
+    : connections.value.length
+      ? "没有匹配的连接"
       : activeTab.value === "requests"
         ? "等待新的连接记录"
         : "暂无活动连接",
@@ -86,6 +90,20 @@ const timeLabel = (value: string | number) => {
     : date.toLocaleTimeString("zh-CN", { hour12: false });
 };
 
+function closeSearch() {
+  searchOpen.value = false;
+  search.value = "";
+  searchToggle.value?.focus();
+}
+async function toggleSearch() {
+  if (searchOpen.value) {
+    closeSearch();
+    return;
+  }
+  searchOpen.value = true;
+  await nextTick();
+  searchInput.value?.focus();
+}
 function navigateTabs(event: KeyboardEvent, id: ActivityTab) {
   const keys = ["ArrowLeft", "ArrowRight", "Home", "End"];
   if (!keys.includes(event.key)) return;
@@ -109,78 +127,71 @@ watch(
       history.value = rememberConnections(history.value, snapshot.connections);
   },
 );
-function appendLog(entry: CoreLogEntry) {
-  const record = parseDNSActivity(entry);
-  if (record) dns.value = rememberDNS(dns.value, record);
-}
-async function loadDNS() {
-  const run = ++logGeneration;
-  logError.value = "";
-  if (!props.isRunning) return;
-  try {
-    const logs = await api.getCoreLogs(1000);
-    if (run !== logGeneration) return;
-    logs.forEach(appendLog);
-  } catch (error: any) {
-    if (run === logGeneration)
-      logError.value = `DNS 记录读取失败: ${error.message}`;
-  }
-}
 watch(
   () => props.isRunning,
   (running) => {
-    if (running) {
-      history.value = [];
-      dns.value = [];
-    }
-    void loadDNS();
+    if (running) history.value = [];
   },
   { immediate: true },
 );
-const { connected } = useRealtimeSocket((event) => {
-  if (props.isRunning && event.type === "core.log") {
-    const entry = event.data as CoreLogEntry;
-    if (entry?.line) appendLog(entry);
-  }
-});
-watch(connected, (ready) => {
-  if (ready && props.isRunning) void loadDNS();
-});
-onBeforeUnmount(() => {
-  logGeneration++;
-});
 </script>
 
 <template>
   <div class="grid items-stretch gap-4 md:grid-cols-2">
     <section
       class="aw-card flex h-[320px] min-w-0 flex-col rounded-[var(--radius-xl)] bg-[var(--bg-surface)] p-4"
-      aria-label="连接与查询"
+      aria-label="连接记录"
     >
-      <div
-        class="flex shrink-0 gap-1 overflow-x-auto"
-        role="tablist"
-        aria-label="连接记录"
-      >
-        <button
-          v-for="tab in tabs"
-          :id="`control-tab-${tab.id}`"
-          :key="tab.id"
-          role="tab"
-          :aria-selected="activeTab === tab.id"
-          :aria-controls="`control-activity-${tab.id}`"
-          :tabindex="activeTab === tab.id ? 0 : -1"
-          :title="tab.title"
-          class="flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-[var(--bg-inset)] px-3 text-xs font-semibold text-[var(--text-secondary)]"
-          :class="
-            activeTab === tab.id &&
-            '!bg-[var(--button-primary-bg)] !text-[var(--button-primary-text)]'
-          "
-          @click="activeTab = tab.id"
-          @keydown="navigateTabs($event, tab.id)"
+      <div class="flex h-8 shrink-0 items-center gap-2">
+        <div
+          class="flex min-w-0 flex-1 gap-1 overflow-x-auto"
+          role="tablist"
+          aria-label="连接记录"
         >
-          <span class="tabular-nums">{{ tab.count }}</span
-          >{{ tab.label }}
+          <button
+            v-for="tab in tabs"
+            :id="`control-tab-${tab.id}`"
+            :key="tab.id"
+            role="tab"
+            :aria-selected="activeTab === tab.id"
+            :aria-controls="`control-activity-${tab.id}`"
+            :tabindex="activeTab === tab.id ? 0 : -1"
+            :title="tab.title"
+            class="flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-[var(--bg-inset)] px-3 text-xs font-semibold text-[var(--text-secondary)]"
+            :class="
+              activeTab === tab.id &&
+              '!bg-[var(--button-primary-bg)] !text-[var(--button-primary-text)]'
+            "
+            @click="activeTab = tab.id"
+            @keydown="navigateTabs($event, tab.id)"
+          >
+            <span class="tabular-nums">{{ tab.count }}</span
+            >{{ tab.label }}
+          </button>
+        </div>
+        <input
+          v-if="searchOpen"
+          id="control-connection-search"
+          ref="searchInput"
+          v-model="search"
+          type="search"
+          class="h-8 w-2/5 min-w-0 max-w-48 shrink-0"
+          placeholder="搜索连接"
+          aria-label="筛选连接记录"
+          @keydown.esc.stop="closeSearch"
+        />
+        <button
+          ref="searchToggle"
+          type="button"
+          class="focus-ring flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] transition-colors hover:bg-[var(--button-secondary-hover)]"
+          :aria-label="searchOpen ? '收起连接搜索' : '搜索连接'"
+          :title="searchOpen ? '收起连接搜索' : '搜索连接'"
+          :aria-expanded="searchOpen"
+          aria-controls="control-connection-search"
+          @click="toggleSearch"
+        >
+          <X v-if="searchOpen" :size="16" />
+          <Search v-else :size="16" />
         </button>
       </div>
       <div
@@ -190,20 +201,16 @@ onBeforeUnmount(() => {
         class="min-h-0 flex-1 overflow-auto"
       >
         <div
-          v-if="error"
+          v-if="connectionError"
           role="alert"
           class="mb-2 flex items-center justify-between gap-2 rounded-[var(--radius-md)] bg-[var(--color-error-bg)] p-2 text-xs text-[var(--color-error)]"
         >
-          <span>{{ error }}</span
-          ><button
-            class="shrink-0 underline"
-            @click="activeTab === 'dns' ? loadDNS() : emit('refresh')"
-          >
+          <span>{{ connectionError }}</span
+          ><button class="shrink-0 underline" @click="emit('refresh')">
             重试
           </button>
         </div>
         <table
-          v-if="activeTab !== 'dns'"
           class="aw-activity-table w-full min-w-[500px] table-fixed text-left text-[11px]"
         >
           <thead>
@@ -217,7 +224,7 @@ onBeforeUnmount(() => {
           </thead>
           <tbody>
             <tr
-              v-for="connection in connections"
+              v-for="connection in filteredConnections"
               :key="connection.id"
               :class="
                 activeTab === 'requests' &&
@@ -239,9 +246,7 @@ onBeforeUnmount(() => {
                 <div class="flex min-w-0 items-center gap-2">
                   <span
                     class="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-[var(--button-secondary-bg)] text-[10px] font-bold"
-                    >{{
-                      connectionSource(connection).slice(0, 1).toUpperCase()
-                    }}</span
+                    >{{ activityInitial(connectionSource(connection)) }}</span
                   ><span class="truncate">{{
                     connectionSource(connection)
                   }}</span>
@@ -265,50 +270,12 @@ onBeforeUnmount(() => {
                 {{ formatBytes(connection.upload || 0) }}
               </td>
             </tr>
-            <tr v-if="!connections.length">
+            <tr v-if="!filteredConnections.length">
               <td
                 colspan="5"
                 class="h-44 text-center text-[var(--text-tertiary)]"
               >
-                {{ error ? "连接记录暂不可用" : emptyMessage }}
-              </td>
-            </tr>
-          </tbody>
-        </table>
-        <table
-          v-else
-          class="aw-activity-table w-full min-w-[460px] table-fixed text-left text-[11px]"
-        >
-          <thead>
-            <tr>
-              <th class="w-[18%]">时间</th>
-              <th class="w-[33%]">域名</th>
-              <th class="w-[13%]">类型</th>
-              <th class="w-[36%]">结果</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="record in dns" :key="record.id">
-              <td class="tabular-nums">{{ timeLabel(record.time) }}</td>
-              <td :title="record.domain">
-                <div class="truncate">{{ record.domain }}</div>
-              </td>
-              <td>{{ record.type || "—" }}</td>
-              <td
-                :title="record.result"
-                :class="
-                  record.status === 'error' && 'text-[var(--color-error)]'
-                "
-              >
-                <div class="truncate">{{ record.result }}</div>
-              </td>
-            </tr>
-            <tr v-if="!dns.length">
-              <td
-                colspan="4"
-                class="h-44 text-center text-[var(--text-tertiary)]"
-              >
-                {{ error ? "DNS 记录暂不可用" : emptyMessage }}
+                {{ connectionError ? "连接记录暂不可用" : emptyMessage }}
               </td>
             </tr>
           </tbody>

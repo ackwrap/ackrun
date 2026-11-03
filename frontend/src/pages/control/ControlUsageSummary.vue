@@ -52,7 +52,7 @@ const remainingDays = computed(() => expiryDetails.value?.remainingDays ?? 0);
 const trackingTitle = computed(() => {
   const since = usage.value?.tracking_since;
   return since
-    ? `自 ${new Date(since * 1000).toLocaleString("zh-CN")} 开始记录核心上传与下载，每 5 秒累计；未记录的历史流量不补算。跨月首个采样间隔不计入。`
+    ? `自 ${new Date(since * 1000).toLocaleString("zh-CN")} 开始记录核心上传与下载，每 30 分钟累计；未记录的历史流量不补算。跨月首个采样间隔不计入。`
     : "后台按月累计核心上传与下载流量";
 });
 

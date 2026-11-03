@@ -46,7 +46,7 @@ func (svc *TrafficUsageService) Start() {
 	go func() {
 		defer close(svc.done)
 		svc.sample(ctx)
-		ticker := time.NewTicker(5 * time.Second)
+		ticker := time.NewTicker(30 * time.Minute)
 		defer ticker.Stop()
 		for {
 			select {
@@ -57,7 +57,7 @@ func (svc *TrafficUsageService) Start() {
 			}
 		}
 	}()
-	logging.Info("traffic.recording", "本月流量后台统计已启动，采样间隔 5 秒")
+	logging.Info("traffic.recording", "本月流量后台统计已启动，采样间隔 30 分钟")
 }
 
 func (svc *TrafficUsageService) Close() {
