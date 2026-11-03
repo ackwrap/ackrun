@@ -50,6 +50,7 @@ func TestShouldReconcileRequest(t *testing.T) {
 		{http.MethodPost, "/api/v1/nodes/uid/traceroute", false},
 		{http.MethodPost, "/api/v1/config/generate", false},
 		{http.MethodPost, "/api/v1/core/restart", false},
+		{http.MethodPut, "/api/v1/clash/proxies/example", false},
 		{http.MethodPost, "/api/v1/rules", false},
 		{http.MethodPost, "/api/v1/rules/import", false},
 		{http.MethodPut, "/api/v1/rules/1", false},

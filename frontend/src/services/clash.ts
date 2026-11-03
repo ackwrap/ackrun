@@ -23,6 +23,35 @@ export interface ProxyGroup {
   history: { time: string; delay: number }[];
 }
 
+export type ProxyMap = Record<string, ProxyNode | ProxyGroup>;
+
+export interface ClashConnection {
+  id: string;
+  metadata: {
+    network?: string;
+    type?: string;
+    sourceIP?: string;
+    destinationIP?: string;
+    sourcePort?: string | number;
+    destinationPort?: string | number;
+    host?: string;
+    process?: string;
+    processPath?: string;
+  };
+  upload: number;
+  download: number;
+  start: string;
+  chains?: string[];
+  rule?: string;
+}
+
+export interface ConnectionsSnapshot {
+  connections: ClashConnection[];
+  downloadTotal: number;
+  uploadTotal: number;
+  memory?: number;
+}
+
 class ClashAPIClient {
   private baseURL: string;
   private secret: string;
@@ -142,20 +171,23 @@ class ClashAPIClient {
   }
 
   // 获取所有代理
-  async getProxies(): Promise<{
-    proxies: Record<string, ProxyNode | ProxyGroup>;
-  }> {
-    return this.request("/proxies");
+  async getProxies(signal?: AbortSignal): Promise<{ proxies: ProxyMap }> {
+    return this.request("/proxies", { signal });
+  }
+
+  async selectProxy(group: string, name: string): Promise<void> {
+    return this.request(`/proxies/${encodeURIComponent(group)}`, {
+      method: "PUT",
+      body: JSON.stringify({ name }),
+    });
   }
 
   // 获取连接列表
-  async getConnections(): Promise<{
-    connections: unknown[];
-    downloadTotal: number;
-    uploadTotal: number;
-    memory?: number;
-  }> {
-    return this.request("/connections");
+  async getConnections(signal?: AbortSignal): Promise<ConnectionsSnapshot> {
+    const data = await this.request<ConnectionsSnapshot>("/connections", {
+      signal,
+    });
+    return { ...data, connections: data.connections || [] };
   }
 }
 

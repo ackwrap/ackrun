@@ -27,6 +27,8 @@ import ControlRestartSchedule from "./ControlRestartSchedule.vue";
 import ControlMixedProxyDialog from "./control/ControlMixedProxyDialog.vue";
 import ControlNodePanelDialog from "./control/ControlNodePanelDialog.vue";
 import { useAdaptiveActions } from "@/composables/useAdaptiveActions";
+import { useControlActivity } from "@/composables/useControlActivity";
+import ControlActivityCards from "./control/ControlActivityCards.vue";
 
 const runtime = ref<RuntimeResponse | null>(null);
 const configStatus = ref<ConfigStatus | null>(null);
@@ -65,6 +67,7 @@ const labels: Record<string, string> = {
   no_config: "无配置",
 };
 const isRunning = computed(() => runtime.value?.status === "running");
+const activity = useControlActivity(isRunning);
 const notInstalled = computed(() => runtime.value?.status === "not_installed");
 const noConfig = computed(
   () =>
@@ -462,7 +465,23 @@ onBeforeUnmount(() => {
       <ControlRuntimeStats
         :is-running="isRunning"
         :proxy-port="runtime?.proxy_port || 0"
+        :snapshot="activity.connections.value"
+        :proxies="activity.proxies.value"
+        :error="
+          [activity.connectionError.value, activity.proxyError.value]
+            .filter(Boolean)
+            .join('；')
+        "
       />
     </div>
+    <ControlActivityCards
+      :is-running="isRunning"
+      :snapshot="activity.connections.value"
+      :proxies="activity.proxies.value"
+      :connection-error="activity.connectionError.value"
+      :proxy-error="activity.proxyError.value"
+      @refresh="activity.refresh"
+      @notify="notify"
+    />
   </div>
 </template>

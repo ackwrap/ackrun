@@ -228,6 +228,7 @@ func RegisterRoutes(
 		v1.GET("/clash/traffic", clashProxyH.Proxy)
 		v1.GET("/clash/connections", clashProxyH.Proxy)
 		v1.GET("/clash/proxies", clashProxyH.Proxy)
+		v1.PUT("/clash/proxies/*name", clashProxyH.Proxy)
 	}
 }
 

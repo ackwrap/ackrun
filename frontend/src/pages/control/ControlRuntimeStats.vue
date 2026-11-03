@@ -1,31 +1,39 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { Activity, Gauge } from "lucide-vue-next";
-import { getClashClient } from "@/services/clash";
+import {
+  getClashClient,
+  type ConnectionsSnapshot,
+  type ProxyMap,
+} from "@/services/clash";
 import { formatBytes, formatSpeed } from "@/utils/traffic";
 
-const props = defineProps<{ isRunning: boolean; proxyPort: number }>();
-const totals = ref<{
-  uploadTotal: number;
-  downloadTotal: number;
-  connections: number;
-  memory?: number;
-} | null>(null);
-const proxyGroups = ref<number | null>(null);
-const error = ref("");
+const props = defineProps<{
+  isRunning: boolean;
+  proxyPort: number;
+  snapshot: ConnectionsSnapshot | null;
+  proxies: ProxyMap | null;
+  error: string;
+}>();
+const totals = computed(() => props.snapshot);
+const proxyGroups = computed(() =>
+  props.proxies
+    ? Object.values(props.proxies).filter((item) => Array.isArray(item.all))
+        .length
+    : null,
+);
 const upload = ref(0);
 const download = ref(0);
 const trafficReady = ref(false);
 const trafficError = ref("");
 const client = getClashClient();
 let generation = 0;
-let timer: number | undefined;
 const items = computed(() => [
   ["上传", trafficReady.value ? formatSpeed(upload.value) : "--"],
   ["下载", trafficReady.value ? formatSpeed(download.value) : "--"],
   ["上传总量", totals.value ? formatBytes(totals.value.uploadTotal) : "--"],
   ["下载总量", totals.value ? formatBytes(totals.value.downloadTotal) : "--"],
-  ["活动连接", totals.value?.connections ?? "--"],
+  ["活动连接", totals.value?.connections.length ?? "--"],
   [
     "内存占用",
     totals.value?.memory == null ? "--" : formatBytes(totals.value.memory),
@@ -37,7 +45,7 @@ const status = computed(() =>
   !props.isRunning
     ? "核心未运行"
     : trafficError.value ||
-      (error.value
+      (props.error
         ? "统计不可用"
         : !trafficReady.value || !totals.value
           ? "正在连接"
@@ -46,14 +54,10 @@ const status = computed(() =>
 
 function stop() {
   generation++;
-  clearTimeout(timer);
   client.disconnectTraffic();
 }
 function start() {
   stop();
-  totals.value = null;
-  proxyGroups.value = null;
-  error.value = "";
   upload.value = 0;
   download.value = 0;
   trafficReady.value = false;
@@ -74,37 +78,6 @@ function start() {
       trafficError.value = "实时流量断开";
     },
   );
-  const load = async () => {
-    const [connections, proxies] = await Promise.allSettled([
-      client.getConnections(),
-      client.getProxies(),
-    ]);
-    if (run !== generation) return;
-    const errors: string[] = [];
-    if (connections.status === "fulfilled") {
-      const value = connections.value;
-      totals.value = {
-        uploadTotal: value.uploadTotal,
-        downloadTotal: value.downloadTotal,
-        connections: value.connections.length,
-        memory: value.memory,
-      };
-    } else {
-      totals.value = null;
-      errors.push(`连接统计: ${connections.reason?.message || "请求失败"}`);
-    }
-    if (proxies.status === "fulfilled") {
-      proxyGroups.value = Object.values(proxies.value.proxies).filter((proxy) =>
-        Array.isArray(proxy.all),
-      ).length;
-    } else {
-      proxyGroups.value = null;
-      errors.push(`策略组: ${proxies.reason?.message || "请求失败"}`);
-    }
-    error.value = errors.join("；");
-    timer = window.setTimeout(load, 2500);
-  };
-  void load();
 }
 watch(() => props.isRunning, start, { immediate: true });
 onBeforeUnmount(stop);
