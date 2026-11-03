@@ -57,7 +57,7 @@ function toggleAdvanced() {
 </script>
 <template>
   <aside
-    class="h-screen shrink-0 flex-col bg-[var(--bg-sidebar)] text-[var(--text-sidebar)] transition-[width] duration-300"
+    class="aw-sidebar h-screen shrink-0 flex-col bg-[var(--bg-sidebar)] text-[var(--text-sidebar)] transition-[width] duration-300"
     :class="[
       mobileOpen
         ? 'fixed inset-y-0 left-0 z-50 flex w-64 shadow-[var(--shadow-xl)]'
@@ -74,15 +74,16 @@ function toggleAdvanced() {
         >AckWrap</b
       >
     </div>
-    <nav class="flex-1 space-y-0.5 overflow-y-auto px-4 py-5">
+    <nav class="aw-sidebar-nav flex-1 space-y-0.5 overflow-y-auto px-4 py-5">
       <RouterLink
         v-for="[label, icon, path] in items"
         :key="path"
         :to="path"
-        class="flex h-10 items-center gap-3 rounded-[var(--radius-lg)] border border-transparent px-4"
+        class="aw-nav-item flex h-10 items-center gap-3 rounded-[var(--radius-lg)] border border-transparent px-4"
+        :data-active="$route.path === path"
         :class="[
           $route.path === path
-            ? 'border-[var(--button-primary-border)] bg-[var(--button-primary-bg)] text-[var(--button-primary-text)]'
+            ? 'border-[var(--button-primary-border)] bg-[var(--nav-active-bg)] text-[var(--nav-active-text)]'
             : 'hover:bg-[var(--bg-sidebar-hover)]',
           collapsed && 'lg:justify-center lg:px-0',
         ]"
@@ -94,10 +95,11 @@ function toggleAdvanced() {
       >
       <div>
         <button
-          class="flex h-10 w-full items-center gap-3 rounded-[var(--radius-lg)] border border-transparent px-4 text-left"
+          class="aw-nav-item flex h-10 w-full items-center gap-3 rounded-[var(--radius-lg)] border border-transparent px-4 text-left"
+          :data-active="$route.path.startsWith('/advanced')"
           :class="[
             $route.path.startsWith('/advanced')
-              ? 'border-[var(--button-primary-border)] bg-[var(--button-primary-bg)] text-[var(--button-primary-text)]'
+              ? 'border-[var(--button-primary-border)] bg-[var(--nav-active-bg)] text-[var(--nav-active-text)]'
               : 'hover:bg-[var(--bg-sidebar-hover)]',
             collapsed && 'lg:justify-center lg:px-0',
           ]"

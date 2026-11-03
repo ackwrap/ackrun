@@ -10,11 +10,11 @@ withDefaults(
 );
 </script>
 <template>
-  <div class="mb-4" :class="$props.class">
+  <div class="aw-page-header mb-4" :class="$props.class">
     <div class="flex items-center justify-between">
       <component
         :is="embedded ? 'h2' : 'h1'"
-        class="text-lg font-bold text-[var(--text-primary)]"
+        class="aw-page-title text-lg font-bold text-[var(--text-primary)]"
         >{{ title }}</component
       >
       <div v-if="$slots.actions" class="flex items-center gap-2">

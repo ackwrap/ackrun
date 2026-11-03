@@ -135,11 +135,11 @@ onBeforeUnmount(stop);
       <div
         v-for="[label, value] in items"
         :key="label"
-        class="flex min-h-[76px] min-w-0 flex-col items-center justify-center rounded-[var(--radius-md)] border border-[var(--border-light)] bg-[var(--bg-base)] p-2 text-center"
+        class="aw-stat-tile flex min-h-[76px] min-w-0 flex-col items-center justify-center rounded-[var(--radius-md)] border border-[var(--border-light)] bg-[var(--bg-base)] p-2 text-center"
       >
         <dt class="text-[11px] text-[var(--text-secondary)]">{{ label }}</dt>
         <dd
-          class="mt-2 max-w-full break-words text-xs font-semibold text-[var(--color-success)]"
+          class="aw-stat-value mt-2 max-w-full break-words text-xs font-semibold text-[var(--color-success)]"
           :title="String(value)"
         >
           {{ value }}

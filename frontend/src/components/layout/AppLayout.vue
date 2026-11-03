@@ -91,7 +91,9 @@ onBeforeUnmount(() => {
 });
 </script>
 <template>
-  <div class="flex h-screen bg-[var(--bg-base)] text-[var(--text-primary)]">
+  <div
+    class="aw-app flex h-screen bg-[var(--bg-base)] text-[var(--text-primary)]"
+  >
     <Toast
       :message="reconcileError"
       type="error"
@@ -99,7 +101,7 @@ onBeforeUnmount(() => {
     />
     <div
       v-if="mobileOpen"
-      class="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm lg:hidden"
+      class="fixed inset-0 z-40 bg-[var(--bg-overlay)] backdrop-blur-sm lg:hidden"
       @click="mobileOpen = false"
     />
     <Sidebar
@@ -113,7 +115,7 @@ onBeforeUnmount(() => {
       class="flex min-w-0 flex-1 flex-col overflow-hidden"
     >
       <header
-        class="flex h-[62px] shrink-0 items-center justify-between border-b border-[var(--border-light)] bg-[var(--header-bg)] px-5 backdrop-blur-xl"
+        class="aw-topbar flex h-[62px] shrink-0 items-center justify-between border-b border-[var(--border-light)] bg-[var(--header-bg)] px-5 backdrop-blur-xl"
       >
         <button
           class="flex h-9 w-9 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--button-secondary-bg)] lg:hidden"
@@ -125,7 +127,7 @@ onBeforeUnmount(() => {
         <div class="hidden w-5 lg:block" />
         <div class="ml-auto flex items-center gap-2 text-sm sm:gap-3">
           <div
-            class="hidden h-9 items-center gap-2 rounded-full border border-[var(--border-default)] bg-[var(--button-secondary-bg)] px-3 sm:inline-flex"
+            class="aw-header-pill hidden h-9 items-center gap-2 rounded-full border border-[var(--border-default)] bg-[var(--button-secondary-bg)] px-3 sm:inline-flex"
             title="AckWrap 后端运行时间"
           >
             <Clock3 :size="15" class="text-[var(--text-secondary)]" />
@@ -137,7 +139,7 @@ onBeforeUnmount(() => {
             }}</span>
           </div>
           <div
-            class="hidden h-9 items-center gap-2 rounded-full border border-[var(--border-default)] bg-[var(--button-secondary-bg)] px-3 sm:inline-flex"
+            class="aw-header-pill hidden h-9 items-center gap-2 rounded-full border border-[var(--border-default)] bg-[var(--button-secondary-bg)] px-3 sm:inline-flex"
             title="sing-box 核心运行时间"
           >
             <Cpu :size="15" class="text-[var(--text-secondary)]" />
@@ -149,7 +151,7 @@ onBeforeUnmount(() => {
             }}</span>
           </div>
           <button
-            class="inline-flex h-9 items-center gap-2 rounded-full border border-[var(--border-default)] bg-[var(--button-secondary-bg)] px-3 text-xs"
+            class="aw-theme-toggle inline-flex h-9 items-center gap-2 rounded-full border border-[var(--border-default)] bg-[var(--button-secondary-bg)] px-3 text-xs"
             @click="theme = theme === 'dark' ? 'light' : 'dark'"
           >
             <Sun v-if="theme === 'dark'" :size="15" /><Moon
@@ -170,7 +172,7 @@ onBeforeUnmount(() => {
         </div>
       </header>
       <div class="flex-1 overflow-auto">
-        <div class="h-full px-4 py-5 sm:px-6 lg:px-7">
+        <div class="aw-page-content h-full px-4 py-5 sm:px-6 lg:px-7">
           <RouterView v-slot="{ Component }"
             ><ErrorBoundary
               ><Suspense

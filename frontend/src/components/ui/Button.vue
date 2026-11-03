@@ -35,7 +35,8 @@ const classes = computed(() => [
   <button
     :type="type"
     :disabled="disabled || loading"
-    class="btn-press focus-ring inline-flex items-center justify-center gap-1.5 rounded-[var(--radius-lg)] font-medium disabled:opacity-50"
+    :data-variant="variant"
+    class="aw-button btn-press focus-ring inline-flex items-center justify-center gap-1.5 rounded-[var(--radius-lg)] font-medium disabled:opacity-50"
     :class="classes"
   >
     <span

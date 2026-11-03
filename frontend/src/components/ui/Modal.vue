@@ -113,7 +113,7 @@ onBeforeUnmount(() => {
       <div
         ref="panel"
         tabindex="-1"
-        class="relative flex max-h-[calc(100vh-2rem)] w-full flex-col overflow-hidden rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-elevated)] shadow-[var(--shadow-xl)]"
+        class="aw-dialog relative flex max-h-[calc(100vh-2rem)] w-full flex-col overflow-hidden rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-elevated)] shadow-[var(--shadow-xl)]"
         :style="{ maxWidth: `${maxWidth}px` }"
         @click.stop
       >

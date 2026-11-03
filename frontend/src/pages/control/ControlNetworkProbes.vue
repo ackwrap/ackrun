@@ -165,7 +165,7 @@ onBeforeUnmount(() => {
       <button
         v-for="item in ips"
         :key="item.label"
-        class="flex min-h-8 w-full min-w-0 items-center justify-between gap-3 rounded-[var(--radius-md)] bg-[var(--bg-base)] px-2.5 py-1.5 text-xs"
+        class="aw-probe-row flex min-h-8 w-full min-w-0 items-center justify-between gap-3 rounded-[var(--radius-md)] bg-[var(--bg-base)] px-2.5 py-1.5 text-xs"
         :disabled="!item.value"
         :title="item.value ? `${item.value} · 点击复制` : item.error"
         @click="copyIP(item)"
@@ -208,7 +208,7 @@ onBeforeUnmount(() => {
       <div
         v-for="item in access"
         :key="item.label"
-        class="flex min-h-8 items-center justify-between gap-3 rounded-[var(--radius-md)] bg-[var(--bg-base)] px-2.5 py-1.5 text-xs"
+        class="aw-probe-row flex min-h-8 items-center justify-between gap-3 rounded-[var(--radius-md)] bg-[var(--bg-base)] px-2.5 py-1.5 text-xs"
       >
         <span class="text-[var(--text-secondary)]">{{ item.label }}</span>
         <span

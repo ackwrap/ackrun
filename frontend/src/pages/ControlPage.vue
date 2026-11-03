@@ -258,11 +258,11 @@ onBeforeUnmount(() => {
     >
       <div
         ref="headerRow"
-        class="relative flex flex-wrap items-center justify-between gap-2 sm:gap-4"
+        class="aw-core-header relative flex flex-wrap items-center justify-between gap-2 sm:gap-4"
       >
         <div
           ref="statusGroup"
-          class="flex min-w-0 flex-wrap items-center gap-2 sm:gap-3"
+          class="aw-core-status flex min-w-0 flex-wrap items-center gap-2 sm:gap-3"
         >
           <Power :size="20" class="text-[var(--color-primary)]" />
           <h2 class="font-semibold">sing-box</h2>
@@ -423,12 +423,12 @@ onBeforeUnmount(() => {
             {{ group.label }}
           </legend>
           <div
-            class="mt-2 grid grid-cols-3 gap-1 rounded-[var(--radius-lg)] bg-[var(--bg-base)] p-1"
+            class="aw-control-modes mt-2 grid grid-cols-3 gap-1 rounded-[var(--radius-lg)] bg-[var(--bg-base)] p-1"
           >
             <label
               v-for="[value, label] in group.options"
               :key="value"
-              class="relative flex h-8 items-center justify-center rounded-[var(--radius-md)] text-xs has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50 has-[:focus-visible]:outline has-[:focus-visible]:outline-[var(--color-primary)]"
+              class="aw-control-mode relative flex h-8 items-center justify-center rounded-[var(--radius-md)] text-xs has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50 has-[:focus-visible]:outline has-[:focus-visible]:outline-[var(--color-primary)]"
               :class="
                 (group.key === 'proxy' ? proxyMode : inboundMode) === value
                   ? 'bg-[var(--button-primary-bg)] text-[var(--button-primary-text)]'
