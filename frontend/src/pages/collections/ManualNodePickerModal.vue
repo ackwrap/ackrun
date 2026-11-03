@@ -109,7 +109,12 @@ watch(
               没有匹配的节点
             </td>
           </tr>
-          <tr v-for="node in nodes" v-else :key="node.uid">
+          <tr
+            v-for="node in nodes"
+            v-else
+            :key="node.uid"
+            :data-selected="selected.includes(node.uid)"
+          >
             <td class="aw-mobile-selection">
               <input
                 :type="single ? 'radio' : 'checkbox'"

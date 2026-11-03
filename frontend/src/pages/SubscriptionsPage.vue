@@ -11,6 +11,7 @@ import {
   Upload,
 } from "lucide-vue-next";
 import PageHeader from "@/components/layout/PageHeader.vue";
+import { vSpotlight } from "@/directives/spotlight";
 import NodeFlagName from "@/components/NodeFlagName.vue";
 import Toast from "@/components/ui/Toast.vue";
 import Modal from "@/components/ui/Modal.vue";
@@ -383,6 +384,7 @@ const pretty = (s: string) => {
       @dismiss="message = ''"
     />
     <section
+      v-spotlight
       class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
     >
       <div class="mb-4 flex flex-wrap justify-between gap-3">
@@ -594,6 +596,7 @@ const pretty = (s: string) => {
       </template>
     </Modal>
     <section
+      v-spotlight
       class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
     >
       <div class="mb-4 flex items-center justify-between gap-3">

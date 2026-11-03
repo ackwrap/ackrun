@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from "vue";
 import { Plus, Trash2 } from "lucide-vue-next";
 import PageHeader from "@/components/layout/PageHeader.vue";
+import { vSpotlight } from "@/directives/spotlight";
 import Toast from "@/components/ui/Toast.vue";
 import OrderButtons from "@/components/ui/OrderButtons.vue";
 import { authenticatedFetch } from "@/services/apiAuth";
@@ -477,6 +478,7 @@ onMounted(load);
         />
       </div>
       <section
+        v-spotlight
         class="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
       >
         <header class="flex flex-wrap items-center justify-between gap-3">
@@ -629,6 +631,7 @@ onMounted(load);
       </section>
       <DNSHostsCard @notify="show" />
       <section
+        v-spotlight
         class="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
       >
         <header class="flex items-center justify-between gap-3">

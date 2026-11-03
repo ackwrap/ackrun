@@ -21,6 +21,7 @@ import {
   Zap,
 } from "lucide-vue-next";
 import PageHeader from "@/components/layout/PageHeader.vue";
+import { vSpotlight } from "@/directives/spotlight";
 import NodeFlagName from "@/components/NodeFlagName.vue";
 import Toast from "@/components/ui/Toast.vue";
 import Modal from "@/components/ui/Modal.vue";
@@ -368,6 +369,7 @@ onMounted(async () => {
     </div>
     <Toast :message="message" :type="toastType" @dismiss="message = ''" />
     <section
+      v-spotlight
       v-show="activeTab === 'nodes'"
       id="nodes-panel-nodes"
       role="tabpanel"
@@ -612,7 +614,12 @@ onMounted(async () => {
                 {{ loading ? "加载中..." : "暂无节点，请先同步订阅。" }}
               </td>
             </tr>
-            <tr v-for="n in nodes" v-else :key="n.uid">
+            <tr
+              v-for="n in nodes"
+              v-else
+              :key="n.uid"
+              :data-selected="selected.has(n.uid)"
+            >
               <td class="aw-mobile-selection">
                 <input
                   type="checkbox"

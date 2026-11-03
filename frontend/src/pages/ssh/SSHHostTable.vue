@@ -87,7 +87,7 @@ function connectionLabel(host: SSHHost) {
 </script>
 
 <template>
-  <Card padding="none">
+  <Card padding="none" spotlight>
     <div
       v-if="loading"
       class="p-10 text-center text-sm text-[var(--text-secondary)]"
@@ -138,7 +138,11 @@ function connectionLabel(host: SSHHost) {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="host in hosts" :key="host.id">
+          <tr
+            v-for="host in hosts"
+            :key="host.id"
+            :data-selected="selected.has(host.id)"
+          >
             <td class="aw-mobile-selection" @click.stop>
               <input
                 type="checkbox"

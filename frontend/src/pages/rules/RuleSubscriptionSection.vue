@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Cloud, Plus, RefreshCw, Settings2 } from "lucide-vue-next";
 import AdaptiveActionBar from "@/components/ui/AdaptiveActionBar.vue";
+import { vSpotlight } from "@/directives/spotlight";
 import type { RouteRuleSubscription } from "@/services/types";
 
 defineProps<{
@@ -39,6 +40,7 @@ function scheduleLabel(item: RouteRuleSubscription) {
 
 <template>
   <section
+    v-spotlight
     class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
   >
     <AdaptiveActionBar id="rule-subscription-actions" label="规则订阅操作">

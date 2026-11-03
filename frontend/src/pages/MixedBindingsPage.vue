@@ -253,7 +253,7 @@ onMounted(load);
     <Toast :message="message" :type="messageType" @dismiss="message = ''" />
 
     <div class="grid gap-4">
-      <Card padding="none">
+      <Card padding="none" spotlight>
         <div
           class="flex items-center justify-between border-b border-[var(--border-light)] px-5 py-4"
         >

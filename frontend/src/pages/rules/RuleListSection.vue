@@ -3,6 +3,7 @@ import {
   Edit3,
   Eye,
   GripVertical,
+  LockKeyhole,
   Plus,
   RefreshCw,
   Settings2,
@@ -11,6 +12,7 @@ import {
   Upload,
 } from "lucide-vue-next";
 import AdaptiveActionBar from "@/components/ui/AdaptiveActionBar.vue";
+import { vSpotlight } from "@/directives/spotlight";
 import FlagText from "@/components/ui/FlagText.vue";
 import type { RouteRule, RouteRuleSubscription } from "@/services/types";
 import { splitDeviceRuleValues } from "./deviceRulePreview";
@@ -110,6 +112,7 @@ function actionLabel(rule: RouteRule) {
 </script>
 <template>
   <section
+    v-spotlight
     class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
   >
     <AdaptiveActionBar id="rule-list-actions" label="规则操作">
@@ -216,6 +219,15 @@ function actionLabel(rule: RouteRule) {
                 >
                   <GripVertical :size="15" />
                 </button>
+                <span
+                  v-else
+                  role="img"
+                  class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[var(--border-light)] text-[var(--text-tertiary)]"
+                  :aria-label="isAdBlock(r) ? '固定在首位' : '固定在末位'"
+                  :title="isAdBlock(r) ? '固定在首位' : '固定在末位'"
+                >
+                  <LockKeyhole :size="13" aria-hidden="true" />
+                </span>
               </div>
             </td>
             <td class="rule-name-cell">

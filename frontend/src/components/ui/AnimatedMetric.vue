@@ -25,6 +25,7 @@ const transition = createNumberTransition(
     request: (callback) => requestAnimationFrame(callback),
     cancel: (id) => cancelAnimationFrame(id),
   },
+  240,
 );
 function format(value: number | null) {
   return value === null

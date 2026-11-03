@@ -2,11 +2,7 @@
 import { ref } from "vue";
 import Modal from "@/components/ui/Modal.vue";
 import ManualNodePickerModal from "./ManualNodePickerModal.vue";
-import type {
-  FacetItem,
-  NodeGroup,
-  NodeGroupRequest,
-} from "./collectionTypes";
+import type { FacetItem, NodeGroup, NodeGroupRequest } from "./collectionTypes";
 
 const props = defineProps<{
   group: NodeGroup;
@@ -146,7 +142,7 @@ function submit() {
           <label
             v-for="item in protocols"
             :key="item.value"
-            class="flex min-w-0 cursor-pointer items-center gap-2 rounded-[var(--radius-md)] border px-3 py-2 text-xs transition-colors"
+            class="aw-choice-row flex min-w-0 cursor-pointer items-center gap-2 rounded-[var(--radius-md)] border px-3 py-2 text-xs transition-colors"
             :class="
               selectedProtocols.includes(item.value)
                 ? 'border-[var(--button-primary-border)] bg-[var(--button-primary-bg)] text-[var(--button-primary-text)]'
@@ -157,10 +153,16 @@ function submit() {
               type="checkbox"
               class="h-4 w-4 shrink-0"
               :checked="selectedProtocols.includes(item.value)"
-              @change="selectedProtocols = toggle(selectedProtocols, item.value)"
+              @change="
+                selectedProtocols = toggle(selectedProtocols, item.value)
+              "
             />
-            <span class="min-w-0 flex-1 truncate uppercase">{{ item.label }}</span>
-            <span class="shrink-0 tabular-nums opacity-70">{{ item.count }}</span>
+            <span class="min-w-0 flex-1 truncate uppercase">{{
+              item.label
+            }}</span>
+            <span class="shrink-0 tabular-nums opacity-70">{{
+              item.count
+            }}</span>
           </label>
         </div>
       </fieldset>
@@ -187,7 +189,7 @@ function submit() {
           <label
             v-for="item in subscriptions"
             :key="item.value"
-            class="flex min-w-0 cursor-pointer items-center gap-2 rounded-[var(--radius-md)] border px-3 py-2 text-xs transition-colors"
+            class="aw-choice-row flex min-w-0 cursor-pointer items-center gap-2 rounded-[var(--radius-md)] border px-3 py-2 text-xs transition-colors"
             :class="
               selectedSubscriptions.includes(item.value)
                 ? 'border-[var(--button-primary-border)] bg-[var(--button-primary-bg)] text-[var(--button-primary-text)]'
@@ -199,11 +201,16 @@ function submit() {
               class="h-4 w-4 shrink-0"
               :checked="selectedSubscriptions.includes(item.value)"
               @change="
-                selectedSubscriptions = toggle(selectedSubscriptions, item.value)
+                selectedSubscriptions = toggle(
+                  selectedSubscriptions,
+                  item.value,
+                )
               "
             />
             <span class="min-w-0 flex-1 truncate">{{ item.label }}</span>
-            <span class="shrink-0 tabular-nums opacity-70">{{ item.count }}</span>
+            <span class="shrink-0 tabular-nums opacity-70">{{
+              item.count
+            }}</span>
           </label>
           <p
             v-if="!subscriptions.length"
@@ -232,11 +239,7 @@ function submit() {
     </div>
     <template #footer>
       <button class="aw-action-button" @click="emit('close')">取消</button>
-      <button
-        class="aw-action-button"
-        :disabled="!name.trim()"
-        @click="submit"
-      >
+      <button class="aw-action-button" :disabled="!name.trim()" @click="submit">
         保存
       </button>
     </template>

@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import {
   appendTrafficSample,
   createNumberTransition,
-  trafficSparkline,
 } from "../src/utils/metricMotion.ts";
 
 function frames() {
@@ -101,7 +100,7 @@ test("disposing a metric cancels its frame and prevents later updates", () => {
   assert.equal(shown, 100);
 });
 
-test("traffic history stays bounded and curves stay within their viewport", () => {
+test("traffic history stays bounded and rejects invalid samples", () => {
   let samples = [];
   for (let index = 0; index < 1000; index++) {
     samples = appendTrafficSample(samples, index);
@@ -111,15 +110,4 @@ test("traffic history stays bounded and curves stay within their viewport", () =
   assert.equal(samples.at(-1), 999);
   assert.deepEqual(appendTrafficSample(samples, 10, 1), [10]);
   assert.equal(appendTrafficSample([], Infinity)[0], 0);
-  assert.equal(trafficSparkline([1]), "");
-  for (const history of [samples, [0, 0], [0, 100000, 0]]) {
-    const points = trafficSparkline(history)
-      .split(" ")
-      .map((point) => point.split(",").map(Number));
-    assert.equal(points[0][0], 0);
-    assert.equal(points.at(-1)[0], 100);
-    assert.ok(
-      points.every(([x, y]) => x >= 0 && x <= 100 && y >= 2 && y <= 11),
-    );
-  }
 });

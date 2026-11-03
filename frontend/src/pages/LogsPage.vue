@@ -22,10 +22,7 @@ interface ClearContext<T> {
 }
 
 const retainedLogLimit = 1000;
-const { activeTab, selectTab } = useHashTab<LogTab>(
-  ["core", "tool"],
-  "core",
-);
+const { activeTab, selectTab } = useHashTab<LogTab>(["core", "tool"], "core");
 const coreLogs = ref<CoreLogEntry[]>([]);
 const toolLogs = ref<ToolLogEntry[]>([]);
 const logFilter = ref<LogFilter>("all");
@@ -133,11 +130,7 @@ async function loadLogs(tab: LogTab = activeTab.value) {
       const liveEntries = coreLogs.value.filter(
         (entry) => !existingIdentities.has(coreLogIdentity(entry)),
       );
-      coreLogs.value = mergeLogEntries(
-        snapshot,
-        liveEntries,
-        coreLogIdentity,
-      );
+      coreLogs.value = mergeLogEntries(snapshot, liveEntries, coreLogIdentity);
     } else {
       const existingIdentities = new Set(toolLogs.value.map(toolLogIdentity));
       const snapshot = await api.getToolLogs(retainedLogLimit);
@@ -145,11 +138,7 @@ async function loadLogs(tab: LogTab = activeTab.value) {
       const liveEntries = toolLogs.value.filter(
         (entry) => !existingIdentities.has(toolLogIdentity(entry)),
       );
-      toolLogs.value = mergeLogEntries(
-        snapshot,
-        liveEntries,
-        toolLogIdentity,
-      );
+      toolLogs.value = mergeLogEntries(snapshot, liveEntries, toolLogIdentity);
     }
   } catch (e: any) {
     if (generation === requestGenerations[tab])
@@ -381,7 +370,7 @@ onMounted(() => void loadLogs());
           v-for="item in displayLogs"
           v-else
           :key="item.key"
-          class="grid grid-cols-[82px_58px_minmax(0,1fr)] gap-2 whitespace-pre-wrap break-all py-0.5 hover:bg-[var(--table-row-hover)]"
+          class="aw-log-row grid grid-cols-[82px_58px_minmax(0,1fr)] gap-2 whitespace-pre-wrap break-all py-0.5"
         >
           <span class="text-[var(--text-muted)]">{{
             formatTime(item.time)

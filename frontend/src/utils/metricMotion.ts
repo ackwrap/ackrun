@@ -37,7 +37,8 @@ export function createNumberTransition(
       const start = scheduler.now();
       function tick(time: number) {
         const progress = Math.min(1, Math.max(0, (time - start) / duration));
-        displayed = from + (target! - from) * (1 - (1 - progress) ** 3);
+        displayed =
+          from + ((target! - from) * (1 - Math.cos(Math.PI * progress))) / 2;
         render(displayed);
         frame = progress < 1 ? scheduler.request(tick) : null;
       }
@@ -58,17 +59,4 @@ export function appendTrafficSample(
   return [...samples, Number.isFinite(value) ? Math.max(0, value) : 0].slice(
     -Math.max(1, limit),
   );
-}
-
-/** A fixed baseline and bounded history keep the tiny curve stable between samples. */
-export function trafficSparkline(samples: readonly number[]): string {
-  if (samples.length < 2) return "";
-  const peak = Math.max(1, ...samples);
-  return samples
-    .map((value, index) => {
-      const x = (index / (samples.length - 1)) * 100;
-      const y = 11 - Math.min(1, Math.max(0, value / peak)) * 9;
-      return `${x.toFixed(2)},${y.toFixed(2)}`;
-    })
-    .join(" ");
 }

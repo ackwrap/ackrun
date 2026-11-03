@@ -28,7 +28,7 @@ select {
   padding: 0 0.625rem;
   font-size: 0.75rem;
   outline: none;
-  transition: border-color var(--duration-fast), background-color var(--duration-fast), box-shadow var(--duration-fast);
+  transition: border-color var(--duration-interaction), background-color var(--duration-interaction), box-shadow var(--duration-interaction);
 }
 
 textarea {
@@ -94,7 +94,7 @@ main button:not([class]) {
   font-size: 0.75rem;
   font-weight: 550;
   line-height: 1;
-  transition: border-color var(--duration-fast), background var(--duration-fast), color var(--duration-fast), opacity var(--duration-fast);
+  transition: border-color var(--duration-interaction), background-color var(--duration-interaction), color var(--duration-interaction), opacity var(--duration-interaction);
 }
 
 main button:not([class]):hover:not(:disabled) {
@@ -430,11 +430,6 @@ button:disabled {
     color: var(--text-secondary);
   }
 
-  .aw-data-table tbody tr:hover,
-  .aw-data-table tbody tr:hover > td {
-    background-color: var(--table-row-hover) !important;
-  }
-
   .aw-data-table .aw-action-button,
   .aw-data-table button:not([class]) {
     min-height: 28px;
@@ -593,11 +588,6 @@ button:disabled {
 :root[data-theme='light'] .aw-data-table tbody tr {
   border-color: var(--border-light) !important;
   color: var(--text-secondary) !important;
-}
-
-:root[data-theme='light'] .aw-data-table tbody tr:hover,
-:root[data-theme='light'] .aw-data-table tbody tr:hover > td {
-  background-color: var(--table-row-hover) !important;
 }
 
 :root[data-theme='light'] .aw-toast {

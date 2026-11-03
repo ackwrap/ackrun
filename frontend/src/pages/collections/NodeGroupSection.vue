@@ -150,7 +150,11 @@ function togglePage() {
               固定内置组
             </td>
           </tr>
-          <tr v-for="group in pagedGroups" :key="group.id">
+          <tr
+            v-for="group in pagedGroups"
+            :key="group.id"
+            :data-selected="selected.includes(group.id)"
+          >
             <td class="aw-mobile-selection">
               <input
                 type="checkbox"
