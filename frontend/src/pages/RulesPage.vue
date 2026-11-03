@@ -279,7 +279,7 @@ async function saveDeviceStrategy(payload: StrategyCollectionRequest) {
     }
     deviceStrategy.value = null;
     deviceRule.value = null;
-    show("设备固定节点与 DNS 跟随已保存，配置应用结果请查看控制台");
+    show("设备固定节点与 DNS 跟随已保存");
     await load();
   } catch (e: any) {
     show(`设备策略保存失败：${e.message}`, "error");

@@ -31,8 +31,10 @@ func TestShouldReconcileRequest(t *testing.T) {
 		{http.MethodPost, "/api/v1/nodes/import/preview", false},
 		{http.MethodPost, "/api/v1/nodes/flag", false},
 		{http.MethodPost, "/api/v1/nodes/flags", false},
-		{http.MethodPut, "/api/v1/collections/1", true},
-		{http.MethodPost, "/api/v1/collections/reorder", true},
+		{http.MethodPost, "/api/v1/collections", false},
+		{http.MethodPut, "/api/v1/collections/1", false},
+		{http.MethodDelete, "/api/v1/collections/1", false},
+		{http.MethodPost, "/api/v1/collections/reorder", false},
 		{http.MethodPost, "/api/v1/collections/1/test", false},
 		{http.MethodPost, "/api/v1/dns/servers/reorder", true},
 		{http.MethodPost, "/api/v1/dns/rules", true},
@@ -49,8 +51,11 @@ func TestShouldReconcileRequest(t *testing.T) {
 		{http.MethodPost, "/api/v1/config/generate", false},
 		{http.MethodPost, "/api/v1/core/restart", false},
 		{http.MethodPost, "/api/v1/rules", false},
-		{http.MethodPost, "/api/v1/rules/import", true},
-		{http.MethodPut, "/api/v1/rules/1", true},
+		{http.MethodPost, "/api/v1/rules/import", false},
+		{http.MethodPut, "/api/v1/rules/1", false},
+		{http.MethodDelete, "/api/v1/rules/1", false},
+		{http.MethodPost, "/api/v1/rules/reorder", false},
+		{http.MethodPost, "/api/v1/rules/subscriptions", false},
 		{http.MethodPut, "/api/v1/settings/traffic-bypass", true},
 		{http.MethodPost, "/api/v1/advanced/node-exposures", true},
 		{http.MethodDelete, "/api/v1/advanced/node-exposures/1", true},
@@ -72,7 +77,9 @@ func TestRouteRuleCreateReconcileDecision(t *testing.T) {
 	}
 	defer db.Close()
 
-	routeRuleHandler := handler.NewRouteRuleHandler(service.NewRouteRuleService(db, nil, nil))
+	routeRuleService := service.NewRouteRuleService(db, nil, nil)
+	routeRuleService.SetProxyCollectionService(service.NewProxyCollectionService(db, nil))
+	routeRuleHandler := handler.NewRouteRuleHandler(routeRuleService)
 	reasons := make([]string, 0, 3)
 	router := gin.New()
 	v1 := router.Group("/api/v1")
@@ -87,16 +94,18 @@ func TestRouteRuleCreateReconcileDecision(t *testing.T) {
 	tests := []struct {
 		name          string
 		outbound      string
+		strategy      string
 		wantReconcile bool
 	}{
-		{name: "direct", outbound: "direct", wantReconcile: true},
-		{name: "block", outbound: "block", wantReconcile: true},
+		{name: "direct", outbound: "direct", wantReconcile: false},
+		{name: "block", outbound: "block", wantReconcile: false},
 		{name: "proxy", outbound: "proxy", wantReconcile: false},
+		{name: "configured-proxy", outbound: "proxy", strategy: `,"strategy":{"type":"selector","source_type":"manual","node_uids":["direct"],"enabled":true}`, wantReconcile: false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			before := len(reasons)
-			body := []byte(`{"name":"` + test.name + ` rule","enabled":true,"rule_type":"domain","values":["` + test.name + `.example"],"outbound":"` + test.outbound + `"}`)
+			body := []byte(`{"name":"` + test.name + ` rule","enabled":true,"rule_type":"domain","values":["` + test.name + `.example"],"outbound":"` + test.outbound + `"` + test.strategy + `}`)
 			request := httptest.NewRequest(http.MethodPost, "/api/v1/rules", bytes.NewReader(body))
 			request.Header.Set("Content-Type", "application/json")
 			response := httptest.NewRecorder()
@@ -116,7 +125,7 @@ func TestRouteRuleCreateReconcileDecision(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("collection status = %d", response.Code)
 	}
-	if got := reasons[len(reasons)-1]; got != "PUT /api/v1/collections/1" {
-		t.Fatalf("last reconcile reason = %q, want collection configuration", got)
+	if len(reasons) != 0 {
+		t.Fatalf("rule and strategy saves unexpectedly triggered config generation: %v", reasons)
 	}
 }
