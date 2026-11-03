@@ -26,7 +26,7 @@ import ControlNetworkProbes from "./control/ControlNetworkProbes.vue";
 import ControlRestartSchedule from "./ControlRestartSchedule.vue";
 import ControlMixedProxyDialog from "./control/ControlMixedProxyDialog.vue";
 import ControlNodePanelDialog from "./control/ControlNodePanelDialog.vue";
-import { useControlActions } from "./control/useControlActions";
+import { useAdaptiveActions } from "@/composables/useAdaptiveActions";
 
 const runtime = ref<RuntimeResponse | null>(null);
 const configStatus = ref<ConfigStatus | null>(null);
@@ -45,10 +45,11 @@ const panelSaving = ref(false);
 const headerRow = ref<HTMLElement | null>(null);
 const statusGroup = ref<HTMLElement | null>(null);
 const actionsRow = ref<HTMLElement | null>(null);
-const { actionsCollapsed, actionsOpen, chooseAction } = useControlActions(
+const { actionsCollapsed, actionsOpen, chooseAction } = useAdaptiveActions(
   headerRow,
   statusGroup,
   actionsRow,
+  "control-actions",
 );
 const message = ref("");
 const messageType = ref<"success" | "error" | "info">("success");
@@ -307,7 +308,7 @@ onBeforeUnmount(() => {
           :class="
             actionsCollapsed
               ? actionsOpen
-                ? 'absolute right-0 top-full z-20 mt-2 flex w-max max-w-full flex-col items-start rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--bg-elevated)] p-2 shadow-[var(--shadow-card)]'
+                ? 'absolute right-0 top-full z-20 mt-2 flex w-max max-w-full flex-col items-stretch rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--bg-elevated)] p-2 shadow-[var(--shadow-card)] [&>button]:justify-start'
                 : 'invisible pointer-events-none absolute inset-x-0 top-0 flex h-0 w-full flex-wrap overflow-hidden'
               : 'flex flex-nowrap'
           "

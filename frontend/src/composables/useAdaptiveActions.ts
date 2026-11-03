@@ -1,9 +1,10 @@
 import { onBeforeUnmount, onMounted, ref, type Ref } from "vue";
 
-export function useControlActions(
+export function useAdaptiveActions(
   headerRow: Ref<HTMLElement | null>,
   statusGroup: Ref<HTMLElement | null>,
   actionsRow: Ref<HTMLElement | null>,
+  actionsId: string,
 ) {
   const actionsCollapsed = ref(true);
   const actionsOpen = ref(false);
@@ -11,6 +12,7 @@ export function useControlActions(
   let mutationObserver: MutationObserver | undefined;
   let frame = 0;
   let mounted = false;
+  let actionsWidth = 0;
 
   function contentWidth(element: HTMLElement) {
     const children = Array.from(element.children).filter(
@@ -28,9 +30,14 @@ export function useControlActions(
 
   function measure() {
     if (!headerRow.value || !statusGroup.value || !actionsRow.value) return;
+    // Dropdown buttons stretch to one width; measure their natural widths only
+    // while they are laid out horizontally, including the hidden measuring row.
+    if (getComputedStyle(actionsRow.value).flexDirection !== "column") {
+      actionsWidth = contentWidth(actionsRow.value);
+    }
     const gap = parseFloat(getComputedStyle(headerRow.value).columnGap) || 0;
     const collapsed =
-      contentWidth(statusGroup.value) + contentWidth(actionsRow.value) + gap >
+      contentWidth(statusGroup.value) + actionsWidth + gap >
       headerRow.value.clientWidth;
     if (collapsed !== actionsCollapsed.value) {
       actionsCollapsed.value = collapsed;
@@ -56,7 +63,7 @@ export function useControlActions(
     actionsOpen.value = false;
     if (focusTrigger) {
       headerRow.value
-        ?.querySelector<HTMLButtonElement>("[aria-controls='control-actions']")
+        ?.querySelector<HTMLButtonElement>(`[aria-controls='${actionsId}']`)
         ?.focus();
     }
   }

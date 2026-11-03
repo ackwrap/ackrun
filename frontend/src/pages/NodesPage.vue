@@ -2,9 +2,13 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
+  ChevronDown,
   Edit3,
   Eye,
   Globe2,
+  MoreHorizontal,
+  Power,
+  PowerOff,
   RefreshCw,
   Route as RouteIcon,
   Share2,
@@ -20,12 +24,23 @@ import Toast from "@/components/ui/Toast.vue";
 import Modal from "@/components/ui/Modal.vue";
 import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
 import Pagination from "@/components/ui/Pagination.vue";
+import { useAdaptiveActions } from "@/composables/useAdaptiveActions";
 import NodeBatchShareModal from "@/pages/nodes/NodeBatchShareModal.vue";
 import NodeTracerouteModal from "@/pages/nodes/NodeTracerouteModal.vue";
 import NodeExitIPModal from "@/pages/nodes/NodeExitIPModal.vue";
 import { api } from "@/services/api";
 import type { NodeFacetItem, NodeItem, Subscription } from "@/services/types";
 import { writeClipboardText } from "@/utils/clipboard";
+
+const headerRow = ref<HTMLElement | null>(null);
+const summaryGroup = ref<HTMLElement | null>(null);
+const actionsRow = ref<HTMLElement | null>(null);
+const { actionsCollapsed, actionsOpen, chooseAction } = useAdaptiveActions(
+  headerRow,
+  summaryGroup,
+  actionsRow,
+  "node-actions",
+);
 
 const route = useRoute(),
   router = useRouter(),
@@ -322,16 +337,52 @@ onMounted(async () => {
     <section
       class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
     >
-      <div class="mb-4 flex flex-wrap justify-between gap-3">
-        <div>
-          <h2 class="font-semibold text-[var(--text-primary)]">
-            节点列表 ({{ total }})
-          </h2>
-          <p class="text-xs text-[var(--text-secondary)]">
-            管理订阅解析后的节点，控制是否参与后续配置生成。
-          </p>
+      <div
+        ref="headerRow"
+        class="relative mb-4 flex items-center justify-between gap-3"
+      >
+        <div
+          ref="summaryGroup"
+          class="min-w-0 max-w-[calc(100%-2.75rem)] shrink-0"
+        >
+          <div class="w-max max-w-full">
+            <h2 class="font-semibold text-[var(--text-primary)]">
+              节点列表 ({{ total }})
+            </h2>
+            <p class="text-xs text-[var(--text-secondary)]">
+              管理订阅解析后的节点，控制是否参与后续配置生成。
+            </p>
+          </div>
         </div>
-        <div class="flex flex-wrap justify-end gap-2">
+        <button
+          v-if="actionsCollapsed"
+          class="aw-action-button w-8 !px-0"
+          :aria-expanded="actionsOpen"
+          aria-controls="node-actions"
+          :aria-label="actionsOpen ? '收起节点操作' : '展开节点操作'"
+          :title="actionsOpen ? '收起节点操作' : '展开节点操作'"
+          @click="actionsOpen = !actionsOpen"
+        >
+          <ChevronDown v-if="actionsOpen" :size="16" />
+          <MoreHorizontal v-else :size="16" />
+        </button>
+        <div
+          ref="actionsRow"
+          id="node-actions"
+          class="gap-2 [&>button]:shrink-0"
+          :class="
+            actionsCollapsed
+              ? actionsOpen
+                ? 'absolute right-0 top-full z-20 mt-2 flex max-h-[70vh] w-max max-w-full flex-col items-stretch overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--bg-elevated)] p-2 shadow-[var(--shadow-card)] [&>button]:justify-start'
+                : 'invisible pointer-events-none absolute inset-x-0 top-0 flex h-0 w-full flex-wrap overflow-hidden'
+              : 'flex flex-nowrap'
+          "
+          :inert="actionsCollapsed && !actionsOpen"
+          :aria-hidden="actionsCollapsed && !actionsOpen ? true : undefined"
+          role="group"
+          aria-label="节点操作"
+          @click="chooseAction"
+        >
           <button
             class="aw-action-button aw-action-neutral"
             :disabled="tcpingLoading || !nodes.length"
@@ -374,7 +425,7 @@ onMounted(async () => {
             :disabled="!selectedNodes.length"
             @click="batchEnabled(false)"
           >
-            批量禁用</button
+            <PowerOff :size="14" />批量禁用</button
           ><button
             class="aw-action-button aw-action-danger"
             :disabled="!selectedNodes.length"
@@ -386,7 +437,7 @@ onMounted(async () => {
             :disabled="!selectedNodes.length"
             @click="batchEnabled(true)"
           >
-            批量启用
+            <Power :size="14" />批量启用
           </button>
         </div>
       </div>

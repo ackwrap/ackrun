@@ -56,6 +56,9 @@ const content = ref(""),
   detailFormat = ref<"json" | "yaml">("json"),
   lastPreview = ref("");
 const editingFilter = ref<NodeFilter | null>(null),
+  filterOpen = ref(false),
+  filterSaving = ref(false),
+  filterError = ref(""),
   filterName = ref(""),
   filterTarget = ref("name"),
   filterPattern = ref(""),
@@ -257,14 +260,23 @@ async function remove() {
     show(`删除失败: ${e.message}`);
   }
 }
-function resetFilter() {
-  editingFilter.value = null;
-  filterName.value = "";
-  filterTarget.value = "name";
-  filterPattern.value = "";
-  filterEnabled.value = true;
+function openFilter(filter: NodeFilter | null = null) {
+  editingFilter.value = filter;
+  filterName.value = filter?.name || "";
+  filterTarget.value = filter?.target || "name";
+  filterPattern.value = filter?.pattern || "";
+  filterEnabled.value = filter?.enabled ?? true;
+  filterError.value = "";
+  filterOpen.value = true;
 }
 async function saveFilter() {
+  if (filterSaving.value) return;
+  filterError.value = "";
+  if (!filterName.value.trim() || !filterPattern.value.trim()) {
+    filterError.value = "请填写规则名称和正则表达式";
+    return;
+  }
+  filterSaving.value = true;
   try {
     const p = {
       name: filterName.value,
@@ -276,10 +288,12 @@ async function saveFilter() {
       ? await api.updateNodeFilter(editingFilter.value.id, p)
       : await api.createNodeFilter(p);
     show(editingFilter.value ? "过滤规则已更新" : "过滤规则已添加");
-    resetFilter();
+    filterOpen.value = false;
     await loadFilters();
   } catch (e: any) {
-    show(`过滤规则保存失败: ${e.message}`);
+    filterError.value = `过滤规则保存失败: ${e.message}`;
+  } finally {
+    filterSaving.value = false;
   }
 }
 async function deleteFilter(x: NodeFilter) {
@@ -569,31 +583,10 @@ const pretty = (s: string) => {
     <section
       class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
     >
-      <h2 class="font-semibold">节点过滤规则</h2>
-      <div class="my-4 grid gap-3 lg:grid-cols-[1fr_160px_1.5fr_110px]">
-        <input
-          v-model="filterName"
-          class="aw-input"
-          placeholder="规则名称"
-        /><select v-model="filterTarget" class="aw-input">
-          <option v-for="x in targets" :key="x[0]" :value="x[0]">
-            {{ x[1] }}
-          </option></select
-        ><input
-          v-model="filterPattern"
-          class="aw-input font-mono"
-          placeholder="Go 正则表达式"
-        /><label><input v-model="filterEnabled" type="checkbox" /> 启用</label>
-      </div>
-      <div class="mb-4 flex gap-2">
-        <button class="aw-action-button" @click="saveFilter">
-          {{ editingFilter ? "更新规则" : "添加规则" }}</button
-        ><button
-          v-if="editingFilter"
-          class="aw-action-button"
-          @click="resetFilter"
-        >
-          取消编辑
+      <div class="mb-4 flex items-center justify-between gap-3">
+        <h2 class="font-semibold">节点过滤规则</h2>
+        <button class="aw-action-button" @click="openFilter()">
+          <Plus :size="15" />添加规则
         </button>
       </div>
       <div class="overflow-x-auto">
@@ -630,17 +623,7 @@ const pretty = (s: string) => {
                 </button>
               </td>
               <td>
-                <button
-                  @click="
-                    editingFilter = x;
-                    filterName = x.name;
-                    filterTarget = x.target;
-                    filterPattern = x.pattern;
-                    filterEnabled = x.enabled;
-                  "
-                >
-                  编辑
-                </button>
+                <button @click="openFilter(x)">编辑</button>
                 <button @click="deleteFilter(x)">删除</button>
               </td>
             </tr>
@@ -648,6 +631,82 @@ const pretty = (s: string) => {
         </table>
       </div>
     </section>
+    <Modal
+      :open="filterOpen"
+      :title="editingFilter ? '编辑过滤规则' : '添加过滤规则'"
+      :closable="!filterSaving"
+      @close="filterOpen = false"
+    >
+      <form
+        id="node-filter-form"
+        class="space-y-4"
+        @submit.prevent="saveFilter"
+      >
+        <label class="block text-sm">
+          规则名称
+          <input
+            v-model="filterName"
+            class="aw-input mt-2 w-full"
+            placeholder="规则名称"
+            :disabled="filterSaving"
+            required
+          />
+        </label>
+        <label class="block text-sm">
+          目标字段
+          <select
+            v-model="filterTarget"
+            class="aw-input mt-2 w-full"
+            :disabled="filterSaving"
+          >
+            <option v-for="x in targets" :key="x[0]" :value="x[0]">
+              {{ x[1] }}
+            </option>
+          </select>
+        </label>
+        <label class="block text-sm">
+          正则表达式
+          <input
+            v-model="filterPattern"
+            class="aw-input mt-2 w-full font-mono"
+            placeholder="Go 正则表达式"
+            :disabled="filterSaving"
+            required
+          />
+        </label>
+        <label class="flex items-center gap-2 text-sm">
+          <input
+            v-model="filterEnabled"
+            type="checkbox"
+            :disabled="filterSaving"
+          />启用
+        </label>
+        <p
+          v-if="filterError"
+          role="alert"
+          class="text-sm text-[var(--color-error)]"
+        >
+          {{ filterError }}
+        </p>
+      </form>
+      <template #footer>
+        <button
+          class="aw-action-button"
+          :disabled="filterSaving"
+          @click="filterOpen = false"
+        >
+          取消
+        </button>
+        <button
+          class="aw-action-button"
+          type="submit"
+          form="node-filter-form"
+          :disabled="filterSaving"
+        >
+          {{ filterSaving ? "保存中..." : editingFilter ? "保存" : "导入规则" }}
+        </button>
+      </template>
+    </Modal>
     <Modal
       :open="formOpen"
       :title="editing ? '编辑订阅' : '添加订阅'"
