@@ -57,6 +57,9 @@ func shouldReconcileRequest(method, path string) bool {
 	if path == "/api/v1/settings/core-restart" {
 		return false
 	}
+	if strings.HasPrefix(path, "/api/v1/settings/dashboards") {
+		return false
+	}
 	if path == "/api/v1/settings/inbound-mode" || path == "/api/v1/settings/proxy-mode" {
 		return false
 	}

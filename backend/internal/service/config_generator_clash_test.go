@@ -13,10 +13,7 @@ func TestGeneratedClashAPIStaysLocalWithoutDashboard(t *testing.T) {
 	for _, secret := range []string{"", "synthetic-secret"} {
 		var settings model.ExperimentalSettings
 		if err := json.Unmarshal([]byte(`{
-			"clash_api_port":"9091",
-			"clash_api_dashboard":"yacd",
-			"clash_api_external_ui":"/synthetic/ui",
-			"clash_api_external_ui_download_url":"https://example.invalid/ui.zip"
+			"clash_api_port":"9091"
 		}`), &settings); err != nil {
 			t.Fatal(err)
 		}
@@ -37,7 +34,7 @@ func TestGeneratedClashAPIStaysLocalWithoutDashboard(t *testing.T) {
 		}
 		for _, field := range []string{"external_ui", "external_ui_download_url"} {
 			if _, exists := clashAPI[field]; exists {
-				t.Errorf("removed UI field is still generated: %s", field)
+				t.Errorf("disabled panel field is still generated: %s", field)
 			}
 		}
 		if secret != "" && clashAPI["secret"] != "[REDACTED]" {

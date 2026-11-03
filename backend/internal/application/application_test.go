@@ -68,15 +68,11 @@ func TestApplicationServesEmbeddedSPAAndAssets(t *testing.T) {
 	}
 }
 
-func TestApplicationRemovesDashboardRoutesAndKeepsSharedClashRoutes(t *testing.T) {
+func TestApplicationKeepsExternalPanelsAndSharedClashRoutes(t *testing.T) {
 	app := testApplication(t)
 	defer app.Close()
 
 	for _, request := range []struct{ method, path string }{
-		{http.MethodGet, "/api/v1/settings/dashboards"},
-		{http.MethodPost, "/api/v1/settings/dashboards/check"},
-		{http.MethodPost, "/api/v1/settings/dashboards/yacd/install"},
-		{http.MethodDelete, "/api/v1/settings/dashboards/yacd"},
 		{http.MethodGet, "/api/v1/clash-status"},
 		{http.MethodGet, "/api/v1/clash/rules"},
 		{http.MethodGet, "/api/v1/clash/configs"},
@@ -92,15 +88,19 @@ func TestApplicationRemovesDashboardRoutesAndKeepsSharedClashRoutes(t *testing.T
 	}
 
 	want := map[string]bool{
-		"GET /api/v1/clash/traffic":             false,
-		"GET /api/v1/clash/connections":         false,
-		"GET /api/v1/clash/proxies":             false,
-		"GET /api/v1/clash/proxies/:name":       false,
-		"PUT /api/v1/clash/proxies/:name":       false,
-		"GET /api/v1/clash/proxies/:name/delay": false,
+		"GET /api/v1/settings/dashboards":              false,
+		"POST /api/v1/settings/dashboards/check":       false,
+		"POST /api/v1/settings/dashboards/:id/install": false,
+		"DELETE /api/v1/settings/dashboards/:id":       false,
+		"GET /api/v1/clash/traffic":                    false,
+		"GET /api/v1/clash/connections":                false,
+		"GET /api/v1/clash/proxies":                    false,
+		"GET /api/v1/clash/proxies/:name":              false,
+		"PUT /api/v1/clash/proxies/:name":              false,
+		"GET /api/v1/clash/proxies/:name/delay":        false,
 	}
 	for _, route := range app.Handler().(*gin.Engine).Routes() {
-		if !strings.HasPrefix(route.Path, "/api/v1/clash/") {
+		if !strings.HasPrefix(route.Path, "/api/v1/clash/") && !strings.HasPrefix(route.Path, "/api/v1/settings/dashboards") {
 			continue
 		}
 		key := route.Method + " " + route.Path

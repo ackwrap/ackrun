@@ -126,22 +126,28 @@ type DNSSettingsResponse struct {
 
 // ExperimentalSettings 实验性功能设置
 type ExperimentalSettings struct {
-	ClashAPIEnabled      bool   `json:"clash_api_enabled"`
-	ClashAPIPort         string `json:"clash_api_port"`
-	ClashAPISecret       string `json:"clash_api_secret,omitempty"`
-	CacheFileEnabled     bool   `json:"cache_file_enabled"`
-	CacheFileStoreFakeIP bool   `json:"cache_file_store_fakeip"`
-	CacheFileStoreDNS    bool   `json:"cache_file_store_dns"`
+	ClashAPIEnabled               bool   `json:"clash_api_enabled"`
+	ClashAPIPort                  string `json:"clash_api_port"`
+	ClashAPISecret                string `json:"clash_api_secret,omitempty"`
+	ClashAPIExternalUI            string `json:"clash_api_external_ui,omitempty"`
+	ClashAPIExternalUIDownloadURL string `json:"clash_api_external_ui_download_url,omitempty"`
+	ClashAPIDashboard             string `json:"clash_api_dashboard,omitempty"`
+	CacheFileEnabled              bool   `json:"cache_file_enabled"`
+	CacheFileStoreFakeIP          bool   `json:"cache_file_store_fakeip"`
+	CacheFileStoreDNS             bool   `json:"cache_file_store_dns"`
 }
 
 // ExperimentalSettingsResponse 实验性功能设置响应
 type ExperimentalSettingsResponse struct {
-	ClashAPIEnabled      bool   `json:"clash_api_enabled"`
-	ClashAPIPort         string `json:"clash_api_port"`
-	ClashAPISecret       string `json:"clash_api_secret,omitempty"`
-	CacheFileEnabled     bool   `json:"cache_file_enabled"`
-	CacheFileStoreFakeIP bool   `json:"cache_file_store_fakeip"`
-	CacheFileStoreDNS    bool   `json:"cache_file_store_dns"`
+	ClashAPIEnabled               bool   `json:"clash_api_enabled"`
+	ClashAPIPort                  string `json:"clash_api_port"`
+	ClashAPISecret                string `json:"clash_api_secret,omitempty"`
+	ClashAPIExternalUI            string `json:"clash_api_external_ui,omitempty"`
+	ClashAPIExternalUIDownloadURL string `json:"clash_api_external_ui_download_url,omitempty"`
+	ClashAPIDashboard             string `json:"clash_api_dashboard,omitempty"`
+	CacheFileEnabled              bool   `json:"cache_file_enabled"`
+	CacheFileStoreFakeIP          bool   `json:"cache_file_store_fakeip"`
+	CacheFileStoreDNS             bool   `json:"cache_file_store_dns"`
 }
 
 type NodeFilter struct {

@@ -25,6 +25,8 @@ import ControlUpdateDialog from "./control/ControlUpdateDialog.vue";
 import ControlNetworkProbes from "./control/ControlNetworkProbes.vue";
 import ControlRestartSchedule from "./ControlRestartSchedule.vue";
 import ControlMixedProxyDialog from "./control/ControlMixedProxyDialog.vue";
+import ControlNodePanelDialog from "./control/ControlNodePanelDialog.vue";
+import { useControlActions } from "./control/useControlActions";
 
 const runtime = ref<RuntimeResponse | null>(null);
 const configStatus = ref<ConfigStatus | null>(null);
@@ -39,7 +41,15 @@ const modeChanging = ref(false);
 const configChanging = ref(false);
 const installing = ref(false);
 const mixedSaving = ref(false);
-const actionsOpen = ref(false);
+const panelSaving = ref(false);
+const headerRow = ref<HTMLElement | null>(null);
+const statusGroup = ref<HTMLElement | null>(null);
+const actionsRow = ref<HTMLElement | null>(null);
+const { actionsCollapsed, actionsOpen, chooseAction } = useControlActions(
+  headerRow,
+  statusGroup,
+  actionsRow,
+);
 const message = ref("");
 const messageType = ref<"success" | "error" | "info">("success");
 let cancelled = false;
@@ -68,6 +78,7 @@ const busy = computed(
     configChanging.value ||
     installing.value ||
     mixedSaving.value ||
+    panelSaving.value ||
     ["starting", "stopping"].includes(runtime.value?.status || ""),
 );
 const configReady = computed(
@@ -244,9 +255,13 @@ onBeforeUnmount(() => {
     <section
       class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-card)]"
     >
-      <div class="flex flex-wrap items-center justify-between gap-2 sm:gap-4">
+      <div
+        ref="headerRow"
+        class="relative flex flex-wrap items-center justify-between gap-2 sm:gap-4"
+      >
         <div
-          class="flex min-w-0 flex-1 flex-wrap items-center gap-2 sm:flex-none sm:gap-3"
+          ref="statusGroup"
+          class="flex min-w-0 flex-wrap items-center gap-2 sm:gap-3"
         >
           <Power :size="20" class="text-[var(--color-primary)]" />
           <h2 class="font-semibold">sing-box</h2>
@@ -274,7 +289,8 @@ onBeforeUnmount(() => {
           <ControlRestartSchedule @notify="notify" />
         </div>
         <Button
-          class="w-8 shrink-0 !px-0 sm:hidden"
+          v-if="actionsCollapsed"
+          class="w-8 shrink-0 !px-0"
           :aria-expanded="actionsOpen"
           aria-controls="control-actions"
           :aria-label="actionsOpen ? '收起操作' : '展开操作'"
@@ -285,9 +301,21 @@ onBeforeUnmount(() => {
           <MoreHorizontal v-else :size="16" />
         </Button>
         <div
+          ref="actionsRow"
           id="control-actions"
-          class="w-full flex-wrap gap-2 sm:flex sm:w-auto"
-          :class="actionsOpen ? 'flex' : 'hidden'"
+          class="gap-2 [&>button]:shrink-0"
+          :class="
+            actionsCollapsed
+              ? actionsOpen
+                ? 'absolute right-0 top-full z-20 mt-2 flex w-max max-w-full flex-col items-start rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--bg-elevated)] p-2 shadow-[var(--shadow-card)]'
+                : 'invisible pointer-events-none absolute inset-x-0 top-0 flex h-0 w-full flex-wrap overflow-hidden'
+              : 'flex flex-nowrap'
+          "
+          :inert="actionsCollapsed && !actionsOpen"
+          :aria-hidden="actionsCollapsed && !actionsOpen ? true : undefined"
+          role="group"
+          aria-label="核心操作"
+          @click="chooseAction"
         >
           <Button
             v-if="!isRunning"
@@ -308,7 +336,7 @@ onBeforeUnmount(() => {
             :disabled="busy || !isRunning"
             :loading="runtimeAction === '重启核心'"
             @click="action(api.restartCore, '重启核心')"
-            ><RotateCcw :size="14" />重启</Button
+            ><RotateCcw :size="14" />重启核心</Button
           >
           <Button
             :disabled="busy || !configReady"
@@ -332,6 +360,12 @@ onBeforeUnmount(() => {
             "
             @message="notify"
             @busy="mixedSaving = $event"
+          />
+          <ControlNodePanelDialog
+            :is-running="isRunning"
+            :disabled="busy && !panelSaving"
+            @notify="notify"
+            @busy="panelSaving = $event"
           />
         </div>
       </div>

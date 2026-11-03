@@ -430,7 +430,7 @@ func (s *ConfigGeneratorService) generateLockedTo(req *model.ConfigGenerateReque
 	}
 	// 使用 proxy.mode 作为 Clash API 的默认模式，与控制面板保持一致
 	proxyMode := s.store.GetProxyMode()
-	const controllerHost = "127.0.0.1"
+	controllerHost := clashAPIControllerHost(expSettings.ClashAPIExternalUI, expSettings.ClashAPISecret)
 	clashAPI := map[string]interface{}{
 		"external_controller": fmt.Sprintf("%s:%s", controllerHost, port),
 		"default_mode":        proxyMode,
@@ -440,6 +440,12 @@ func (s *ConfigGeneratorService) generateLockedTo(req *model.ConfigGenerateReque
 	}
 	if expSettings.ClashAPISecret != "" {
 		clashAPI["secret"] = expSettings.ClashAPISecret
+	}
+	if expSettings.ClashAPIExternalUI != "" {
+		clashAPI["external_ui"] = expSettings.ClashAPIExternalUI
+	}
+	if downloadURL := dashboardUpdateURL(expSettings, s.paths.DashboardsDir); downloadURL != "" {
+		clashAPI["external_ui_download_url"] = downloadURL
 	}
 	experimental["clash_api"] = clashAPI
 	logging.Info("config_generator.experimental", "Clash API 已强制启用: %s:%s, 模式: %s", controllerHost, port, proxyMode)
@@ -492,6 +498,13 @@ func (s *ConfigGeneratorService) generateLockedTo(req *model.ConfigGenerateReque
 func isSingboxRuntimeAPIPort(port string) bool {
 	parsed, err := strconv.Atoi(strings.TrimSpace(port))
 	return err == nil && parsed == singboxRuntimeAPIPort
+}
+
+func clashAPIControllerHost(externalUI, secret string) string {
+	if strings.TrimSpace(externalUI) != "" && strings.TrimSpace(secret) != "" {
+		return "0.0.0.0"
+	}
+	return "127.0.0.1"
 }
 
 func redactConfigAccessTokens(value interface{}) interface{} {

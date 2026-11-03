@@ -21,15 +21,16 @@ func IsConfigFileName(name string) bool {
 }
 
 type Paths struct {
-	DataDir      string
-	BinaryDir    string
-	BinaryPath   string
-	ConfigDir    string
-	ConfigPath   string
-	RulesDir     string
-	GeoDir       string
-	DownloadsDir string
-	DBPath       string
+	DataDir       string
+	BinaryDir     string
+	BinaryPath    string
+	ConfigDir     string
+	ConfigPath    string
+	RulesDir      string
+	GeoDir        string
+	DownloadsDir  string
+	DashboardsDir string
+	DBPath        string
 }
 
 func Default() *Paths {
@@ -64,22 +65,27 @@ func Default() *Paths {
 	rulesDir := filepath.Join(dataDir, "rules")
 	geoDir := filepath.Join(dataDir, "geo")
 	downloadsDir := filepath.Join(dataDir, "downloads")
+	dashboardsDir := filepath.Join(dataDir, "dash")
 
 	return &Paths{
-		DataDir:      dataDir,
-		BinaryDir:    binaryDir,
-		BinaryPath:   filepath.Join(binaryDir, binaryName),
-		ConfigDir:    configDir,
-		ConfigPath:   filepath.Join(configDir, "config.json"),
-		RulesDir:     rulesDir,
-		GeoDir:       geoDir,
-		DownloadsDir: downloadsDir,
-		DBPath:       filepath.Join(dataDir, "ackwrap.db"),
+		DataDir:       dataDir,
+		BinaryDir:     binaryDir,
+		BinaryPath:    filepath.Join(binaryDir, binaryName),
+		ConfigDir:     configDir,
+		ConfigPath:    filepath.Join(configDir, "config.json"),
+		RulesDir:      rulesDir,
+		GeoDir:        geoDir,
+		DownloadsDir:  downloadsDir,
+		DashboardsDir: dashboardsDir,
+		DBPath:        filepath.Join(dataDir, "ackwrap.db"),
 	}
 }
 
 func (p *Paths) EnsureDirs() error {
-	dirs := []string{p.DataDir, p.BinaryDir, p.ConfigDir, p.RulesDir, p.GeoDir, p.DownloadsDir}
+	if p.DashboardsDir == "" {
+		p.DashboardsDir = filepath.Join(p.DataDir, "dash")
+	}
+	dirs := []string{p.DataDir, p.BinaryDir, p.ConfigDir, p.RulesDir, p.GeoDir, p.DownloadsDir, p.DashboardsDir}
 	for _, d := range dirs {
 		if err := os.MkdirAll(d, 0755); err != nil {
 			return err

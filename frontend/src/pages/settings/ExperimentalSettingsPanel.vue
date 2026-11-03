@@ -59,7 +59,9 @@ async function save() {
   if (saving.value || loading.value || !loaded.value) return;
   saving.value = true;
   try {
+    const currentSettings = await api.getExperimentalSettings();
     await api.setExperimentalSettings({
+      ...currentSettings,
       clash_api_enabled: true,
       clash_api_port: clashApiPort.value,
       clash_api_secret: clashApiSecret.value,

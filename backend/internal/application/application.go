@@ -116,6 +116,7 @@ func New(options Options) (*Application, error) {
 	installerSvc.SetCoreUpdateService(singboxSvc)
 
 	settingsSvc := service.NewSettingsService(db)
+	settingsSvc.SetDashboardsDir(options.Paths.DashboardsDir)
 	experimentalSettings, _ := settingsSvc.GetExperimentalSettings()
 	if experimentalSettings == nil || experimentalSettings.ClashAPIPort == "" {
 		logging.Info("application.start", "初始化实验性功能默认配置")
@@ -151,6 +152,7 @@ func New(options Options) (*Application, error) {
 	reconcileSvc := service.NewConfigReconcileService(configGenSvc, realtimeSvc)
 	coreRestartSvc := service.NewCoreRestartScheduler(db, singboxSvc, configGenSvc, realtimeSvc)
 	appUpdateSvc := service.NewAppUpdateService(db, options.Paths, singboxSvc, realtimeSvc)
+	dashboardSvc := service.NewDashboardService(db, options.Paths)
 	nodeGroupSvc := service.NewNodeGroupService(db)
 	subscriptionSvc.SetConfigReconciler(reconcileSvc)
 	simpleSetupSvc := service.NewSimpleSetupService(db, options.Paths, installerSvc, subscriptionSvc, routeRuleSvc, configGenSvc, singboxSvc, realtimeSvc)
@@ -165,7 +167,7 @@ func New(options Options) (*Application, error) {
 	router.Use(api.SimpleSetupMutationGuard(simpleSetupSvc))
 	api.RegisterSimpleSetupRoutes(router, simpleSetupSvc)
 	api.RegisterSSHMCPRoutes(router, service.NewSSHMCPService(db), sshHostSvc)
-	api.RegisterRoutes(router, runtimeSvc, installerSvc, singboxSvc, configSvc, settingsSvc, subscriptionSvc, nodeSvc, nodeExposureSvc, routeRuleSvc, proxyCollectionSvc, configGenSvc, realtimeSvc, coreLogSvc, dnsSvc, nodeGroupSvc, reconcileSvc, coreRestartSvc, appUpdateSvc, advancedSvc, alertSvc, sshHostSvc)
+	api.RegisterRoutes(router, runtimeSvc, installerSvc, singboxSvc, configSvc, settingsSvc, subscriptionSvc, nodeSvc, nodeExposureSvc, routeRuleSvc, proxyCollectionSvc, configGenSvc, realtimeSvc, coreLogSvc, dnsSvc, nodeGroupSvc, reconcileSvc, coreRestartSvc, appUpdateSvc, dashboardSvc, advancedSvc, alertSvc, sshHostSvc)
 	if err := registerWebUI(router); err != nil {
 		reconcileSvc.Close()
 		alertSvc.Close()

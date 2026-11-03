@@ -718,6 +718,12 @@ func (s *Store) GetExperimentalSettings() (*model.ExperimentalSettingsResponse, 
 			r.ClashAPIPort = value
 		case "experimental.clash_api.secret":
 			r.ClashAPISecret = value
+		case "experimental.clash_api.external_ui":
+			r.ClashAPIExternalUI = value
+		case "experimental.clash_api.external_ui_download_url":
+			r.ClashAPIExternalUIDownloadURL = value
+		case "experimental.clash_api.dashboard":
+			r.ClashAPIDashboard = value
 		case "experimental.cache_file.enabled":
 			r.CacheFileEnabled = value == "true"
 		case "experimental.cache_file.store_fakeip":
@@ -744,12 +750,15 @@ func (s *Store) GetExperimentalSettings() (*model.ExperimentalSettingsResponse, 
 func (s *Store) SetExperimentalSettings(req *model.ExperimentalSettings) error {
 	now := time.Now().Unix()
 	settings := map[string]string{
-		"experimental.clash_api.enabled":       fmt.Sprintf("%t", req.ClashAPIEnabled),
-		"experimental.clash_api.port":          req.ClashAPIPort,
-		"experimental.clash_api.secret":        req.ClashAPISecret,
-		"experimental.cache_file.enabled":      fmt.Sprintf("%t", req.CacheFileEnabled),
-		"experimental.cache_file.store_fakeip": fmt.Sprintf("%t", req.CacheFileStoreFakeIP),
-		"experimental.cache_file.store_dns":    fmt.Sprintf("%t", req.CacheFileStoreDNS),
+		"experimental.clash_api.enabled":                  fmt.Sprintf("%t", req.ClashAPIEnabled),
+		"experimental.clash_api.port":                     req.ClashAPIPort,
+		"experimental.clash_api.secret":                   req.ClashAPISecret,
+		"experimental.clash_api.external_ui":              req.ClashAPIExternalUI,
+		"experimental.clash_api.external_ui_download_url": req.ClashAPIExternalUIDownloadURL,
+		"experimental.clash_api.dashboard":                req.ClashAPIDashboard,
+		"experimental.cache_file.enabled":                 fmt.Sprintf("%t", req.CacheFileEnabled),
+		"experimental.cache_file.store_fakeip":            fmt.Sprintf("%t", req.CacheFileStoreFakeIP),
+		"experimental.cache_file.store_dns":               fmt.Sprintf("%t", req.CacheFileStoreDNS),
 	}
 	for key, value := range settings {
 		if value == "" {
