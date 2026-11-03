@@ -188,7 +188,7 @@ async function save() {
     } else {
       await advancedApi.createNodeExposure(payload);
     }
-    show(editing.value ? "Mixed 端口绑定已更新" : "Mixed 端口绑定已创建");
+    show(editing.value ? "节点入口已更新" : "节点入口已创建");
     formOpen.value = false;
     await load();
   } catch (error) {
@@ -207,7 +207,7 @@ async function remove() {
   deleting.value = null;
   try {
     await advancedApi.deleteNodeExposure(item.id);
-    show("Mixed 端口绑定已删除");
+    show("节点入口已删除");
     await load();
   } catch (error) {
     show(
@@ -239,14 +239,14 @@ onMounted(load);
 
 <template>
   <div class="space-y-5">
-    <PageHeader title="Mixed 端口绑定">
+    <PageHeader title="节点入口">
       <template #actions>
         <Button
           variant="primary"
           :disabled="loading || !nodes.length"
           @click="openCreate"
         >
-          <template #icon><Plus :size="15" /></template>添加绑定
+          <template #icon><Plus :size="15" /></template>添加入口
         </Button>
       </template>
     </PageHeader>
@@ -258,13 +258,13 @@ onMounted(load);
           class="flex items-center justify-between border-b border-[var(--border-light)] px-5 py-4"
         >
           <div>
-            <h2 class="text-sm font-semibold">端口绑定</h2>
+            <h2 class="text-sm font-semibold">节点入口</h2>
             <p class="mt-1 text-xs text-[var(--text-tertiary)]">
               每个 Mixed 端口固定连接一个节点。
             </p>
           </div>
           <span class="font-mono text-xs text-[var(--text-tertiary)]"
-            >{{ items.length }} 个绑定</span
+            >{{ items.length }} 个入口</span
           >
         </div>
 
@@ -276,7 +276,7 @@ onMounted(load);
         </div>
         <div v-else-if="!items.length" class="p-10 text-center">
           <Radio :size="30" class="mx-auto text-[var(--text-tertiary)]" />
-          <p class="mt-3 text-sm font-medium">暂无端口绑定</p>
+          <p class="mt-3 text-sm font-medium">暂无节点入口</p>
           <p class="mt-1 text-xs text-[var(--text-tertiary)]">
             选择节点，分配 Mixed 端口。
           </p>
@@ -382,7 +382,7 @@ onMounted(load);
 
     <Modal
       :open="formOpen"
-      :title="editing ? '编辑端口绑定' : '添加端口绑定'"
+      :title="editing ? '编辑节点入口' : '添加节点入口'"
       size="lg"
       @close="formOpen = false"
     >
@@ -493,7 +493,7 @@ onMounted(load);
 
     <ConfirmDialog
       :open="!!deleting"
-      title="删除端口绑定"
+      title="删除节点入口"
       :message="`确定删除「${deleting?.name || ''}」吗？对应代理端口将停止监听。`"
       confirm-text="删除"
       danger
