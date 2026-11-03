@@ -28,6 +28,10 @@ import StrategyFormModal from "./collections/StrategyFormModal.vue";
 import StrategySection from "./collections/StrategySection.vue";
 import { collectionGroupNames } from "./collections/collectionSources";
 
+const props = withDefaults(defineProps<{ nodeGroupsOnly?: boolean }>(), {
+  nodeGroupsOnly: false,
+});
+
 interface MatchedNode {
   uid: string;
   name: string;
@@ -141,9 +145,11 @@ async function load() {
     const [groupItems, strategyItems, nodeFacets, connectivity] =
       await Promise.all([
         json("/api/v1/node-groups"),
-        api.getRouteStrategies(),
+        props.nodeGroupsOnly ? [] : api.getRouteStrategies(),
         api.getNodeFacets(),
-        api.getConnectivitySettings(),
+        props.nodeGroupsOnly
+          ? connectivitySettings.value
+          : api.getConnectivitySettings(),
       ]);
     groups.value = Array.isArray(groupItems) ? groupItems : [];
     strategies.value = Array.isArray(strategyItems) ? strategyItems : [];
@@ -334,9 +340,12 @@ onMounted(load);
 
 <template>
   <div class="space-y-4">
-    <PageHeader title="策略组管理" />
+    <PageHeader v-if="!nodeGroupsOnly" title="策略组管理" />
     <Toast :message="message" :type="messageType" @dismiss="message = ''" />
-    <div class="flex gap-2 border-b border-[var(--border-default)]">
+    <div
+      v-if="!nodeGroupsOnly"
+      class="flex gap-2 border-b border-[var(--border-default)]"
+    >
       <button
         class="px-4 py-2 text-[var(--text-secondary)]"
         :class="
@@ -363,7 +372,7 @@ onMounted(load);
 
     <div v-if="loading" class="py-20 text-center">加载中...</div>
     <NodeGroupSection
-      v-else-if="active === 'node-groups'"
+      v-else-if="nodeGroupsOnly || active === 'node-groups'"
       :groups="groups"
       :paged-groups="pagedGroups"
       :selected="selected"
