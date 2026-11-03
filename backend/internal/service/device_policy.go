@@ -98,35 +98,6 @@ func deviceRuleCIDRs(rules []model.RouteRule) []string {
 	return cidrs
 }
 
-// Runtime platform rules take precedence over static routing. Explicit proxy
-// exposures have their own routing, but an unscoped platform rule must not
-// silently redirect a device's TUN traffic or its dedicated DNS listener.
-func validateDevicePlatformRoutes(devices []model.RouteRule, routes []model.PlatformRoute) error {
-	for _, route := range routes {
-		if !route.Enabled || len(route.InboundExposureIDs) > 0 {
-			continue
-		}
-		for _, device := range devices {
-			conflict := len(route.SourceCIDRs) == 0
-			cidrs, macs := splitDeviceSources(device.Values)
-			conflict = conflict || len(macs) > 0
-			for _, source := range route.SourceCIDRs {
-				prefix, err := netip.ParsePrefix(source)
-				if err != nil {
-					return fmt.Errorf("平台路由 %d 的来源地址无效", route.ID)
-				}
-				for _, value := range cidrs {
-					conflict = conflict || prefix.Overlaps(netip.MustParsePrefix(value))
-				}
-			}
-			if conflict {
-				return fmt.Errorf("设备规则 %d 与高级平台路由 %d 冲突，请停用该平台路由或将其限定到独立代理入口/其他设备", device.ID, route.ID)
-			}
-		}
-	}
-	return nil
-}
-
 func (s *ConfigGeneratorService) validateDevicePolicies() error {
 	rules, err := s.deviceRules()
 	if err != nil || len(rules) == 0 {
@@ -138,19 +109,6 @@ func (s *ConfigGeneratorService) validateDevicePolicies() error {
 	}
 	if len(deviceRuleCIDRs(rules)) > 128 {
 		return fmt.Errorf("所有启用设备规则合计最多支持 128 个地址范围")
-	}
-	advanced, err := s.store.GetAdvancedSettings()
-	if err != nil {
-		return err
-	}
-	if advanced.RoutingEnabled {
-		routes, err := s.store.ListPlatformRoutes()
-		if err != nil {
-			return err
-		}
-		if err := validateDevicePlatformRoutes(rules, routes); err != nil {
-			return err
-		}
 	}
 	collections, err := s.store.ListProxyCollectionsWithNodes()
 	if err != nil {

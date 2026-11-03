@@ -35,8 +35,6 @@ type Application struct {
 	subscription           *service.SubscriptionService
 	routeRule              *service.RouteRuleService
 	proxyCollection        *service.ProxyCollectionService
-	advanced               *service.AdvancedRoutingService
-	alert                  *service.AlertService
 	sshHost                *service.SSHHostService
 	simpleSetup            *service.SimpleSetupService
 	stopToolLogEvents      func()
@@ -79,16 +77,8 @@ func New(options Options) (*Application, error) {
 
 	coreLogSvc := service.NewCoreLogService()
 	singboxSvc := service.NewSingboxService(options.Paths, realtimeSvc, coreLogSvc, db)
-	alertSvc, err := service.NewAlertService(db, options.Paths)
-	if err != nil {
-		stopToolLogEvents()
-		<-toolLogEventsCompleted
-		_ = db.Close()
-		return nil, fmt.Errorf("initialize alert service: %w", err)
-	}
 	sshHostSvc, err := service.NewSSHHostService(db, options.Paths, singboxSvc)
 	if err != nil {
-		alertSvc.Close()
 		stopToolLogEvents()
 		<-toolLogEventsCompleted
 		_ = db.Close()
@@ -144,10 +134,7 @@ func New(options Options) (*Application, error) {
 	nodeExposureSvc := service.NewNodeExposureService(db)
 	nodeExposureRuntime := service.NewNodeExposureRuntimeClient(coreAPIToken)
 	nodeExposureSvc.SetRuntimeDependencies(nodeExposureRuntime, singboxSvc)
-	advancedSvc := service.NewAdvancedRoutingService(db, nodeExposureRuntime, singboxSvc, realtimeSvc, coreAPIToken)
-	advancedSvc.SetAlertService(alertSvc)
-	subscriptionSvc.SetAlertService(alertSvc)
-	singboxSvc.SetStartHooks(configGenSvc.EnsureRuntimeAPIConfig, nodeExposureRuntime.WaitReady, combineStartHooks(nodeExposureSvc.SyncRuntime, advancedSvc.SyncRuntime))
+	singboxSvc.SetStartHooks(configGenSvc.EnsureRuntimeAPIConfig, nodeExposureRuntime.WaitReady, nodeExposureSvc.SyncRuntime)
 	settingsSvc.SetModeDependencies(singboxSvc, configGenSvc)
 	settingsSvc.SetConnectivitySettingsHook(proxyCollectionSvc.RefreshHealthCheckJobs)
 	reconcileSvc := service.NewConfigReconcileService(configGenSvc, realtimeSvc)
@@ -171,10 +158,9 @@ func New(options Options) (*Application, error) {
 	router.Use(api.SimpleSetupMutationGuard(simpleSetupSvc))
 	api.RegisterSimpleSetupRoutes(router, simpleSetupSvc)
 	api.RegisterSSHMCPRoutes(router, service.NewSSHMCPService(db), sshHostSvc)
-	api.RegisterRoutes(router, runtimeSvc, installerSvc, singboxSvc, configSvc, settingsSvc, subscriptionSvc, nodeSvc, nodeExposureSvc, routeRuleSvc, proxyCollectionSvc, configGenSvc, realtimeSvc, coreLogSvc, dnsSvc, nodeGroupSvc, reconcileSvc, coreRestartSvc, appUpdateSvc, dashboardSvc, advancedSvc, alertSvc, sshHostSvc)
+	api.RegisterRoutes(router, runtimeSvc, installerSvc, singboxSvc, configSvc, settingsSvc, subscriptionSvc, nodeSvc, nodeExposureSvc, routeRuleSvc, proxyCollectionSvc, configGenSvc, realtimeSvc, coreLogSvc, dnsSvc, nodeGroupSvc, reconcileSvc, coreRestartSvc, appUpdateSvc, dashboardSvc, sshHostSvc)
 	if err := registerWebUI(router); err != nil {
 		reconcileSvc.Close()
-		alertSvc.Close()
 		stopToolLogEvents()
 		<-toolLogEventsCompleted
 		_ = db.Close()
@@ -192,27 +178,11 @@ func New(options Options) (*Application, error) {
 		subscription:           subscriptionSvc,
 		routeRule:              routeRuleSvc,
 		proxyCollection:        proxyCollectionSvc,
-		advanced:               advancedSvc,
-		alert:                  alertSvc,
 		sshHost:                sshHostSvc,
 		simpleSetup:            simpleSetupSvc,
 		stopToolLogEvents:      stopToolLogEvents,
 		toolLogEventsCompleted: toolLogEventsCompleted,
 	}, nil
-}
-
-func combineStartHooks(hooks ...func() error) func() error {
-	return func() error {
-		for _, hook := range hooks {
-			if hook == nil {
-				continue
-			}
-			if err := hook(); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
 }
 
 func (app *Application) Handler() http.Handler {
@@ -240,7 +210,6 @@ func (app *Application) Start() error {
 	}
 	app.routeRule.StartScheduler()
 	app.proxyCollection.StartScheduler()
-	app.advanced.Start()
 	app.started = true
 	logging.Info("application.start", "backend schedulers started")
 	return nil
@@ -294,14 +263,12 @@ func (app *Application) PrepareShutdown() {
 	}
 	app.sshHost.Close()
 	if app.started {
-		app.advanced.Stop()
 		app.coreRestart.StopScheduler()
 		app.proxyCollection.StopScheduler()
 		app.routeRule.StopScheduler()
 		app.subscription.StopScheduler()
 		app.started = false
 	}
-	app.alert.Close()
 	if app.singbox.IsRunning() {
 		if _, err := app.singbox.Shutdown(); err != nil {
 			logging.Error("application.shutdown", "stop sing-box during shutdown: %v", err)

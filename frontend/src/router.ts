@@ -11,18 +11,9 @@ const pages = {
   "/config": () => import("@/pages/ConfigPage.vue"),
   "/logs": () => import("@/pages/LogsPage.vue"),
   "/settings": () => import("@/pages/SettingsPage.vue"),
-  "/advanced/routing": () => import("@/pages/AdvancedPage.vue"),
+  "/advanced/routing": () => import("@/pages/MixedBindingsPage.vue"),
   "/advanced/ssh": () => import("@/pages/SSHHostsPage.vue"),
 };
-
-const legacyAdvancedViews = {
-  "advanced/node-exposures": "node-exposures",
-  "advanced/platform-routing": "platform-routing",
-  "advanced/session-leases": "session-leases",
-  "advanced/health-scheduling": "health-scheduling",
-  "advanced/access-logs": "access-logs",
-  "advanced/settings": "settings",
-} as const;
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -39,10 +30,7 @@ export const router = createRouter({
           path: path === "/" ? "" : path.slice(1),
           component,
         })),
-        ...Object.entries(legacyAdvancedViews).map(([path, view]) => ({
-          path,
-          redirect: () => ({ path: "/advanced/routing", query: { view } }),
-        })),
+        { path: "advanced/node-exposures", redirect: "/advanced/routing" },
         {
           path: "collections",
           redirect: (to) =>

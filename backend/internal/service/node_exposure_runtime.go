@@ -51,59 +51,6 @@ type coreNodeExposureList struct {
 	} `json:"items"`
 }
 
-type RuntimeRoutingConfig struct {
-	Routes                  []RuntimeRoute `json:"routes"`
-	Leases                  []RuntimeLease `json:"leases"`
-	UnhealthyOutbounds      []string       `json:"unhealthy_outbounds"`
-	AccessEventsEnabled     bool           `json:"access_events_enabled"`
-	AccessEventsPrivacyMode string         `json:"access_events_privacy_mode"`
-}
-
-type RuntimeRoute struct {
-	ID                  string   `json:"id"`
-	Priority            int      `json:"priority"`
-	Platform            string   `json:"platform"`
-	InboundTags         []string `json:"inbound_tags"`
-	SourcePrefixes      []string `json:"source_prefixes"`
-	Domains             []string `json:"domains"`
-	DomainSuffixes      []string `json:"domain_suffixes"`
-	DomainKeywords      []string `json:"domain_keywords"`
-	DestinationPrefixes []string `json:"destination_prefixes"`
-	OutboundTag         string   `json:"outbound_tag"`
-	FallbackOutboundTag string   `json:"fallback_outbound_tag"`
-}
-
-type RuntimeLease struct {
-	ID                  string   `json:"id"`
-	SourcePrefix        string   `json:"source_prefix"`
-	InboundTags         []string `json:"inbound_tags"`
-	Platform            string   `json:"platform"`
-	OutboundTag         string   `json:"outbound_tag"`
-	FallbackOutboundTag string   `json:"fallback_outbound_tag"`
-	ExpiresAt           int64    `json:"expires_at"`
-}
-
-type RuntimeAccessEvent struct {
-	ID            uint64 `json:"id"`
-	Time          int64  `json:"time"`
-	Network       string `json:"network"`
-	Inbound       string `json:"inbound"`
-	SourceIP      string `json:"source_ip"`
-	DestinationIP string `json:"destination_ip"`
-	Domain        string `json:"domain"`
-	OutboundTag   string `json:"outbound_tag"`
-	Platform      string `json:"platform"`
-	RouteID       string `json:"route_id"`
-	LeaseID       string `json:"lease_id"`
-	Decision      string `json:"decision"`
-	Error         string `json:"error"`
-}
-
-type RuntimeAccessEventList struct {
-	Items    []RuntimeAccessEvent `json:"items"`
-	LatestID uint64               `json:"latest_id"`
-}
-
 type coreAPIErrorEnvelope struct {
 	Error struct {
 		Code    string `json:"code"`
@@ -263,43 +210,6 @@ func (c *NodeExposureRuntimeClient) Delete(id int64) error {
 		http.StatusNotFound,
 	)
 	return err
-}
-
-func (c *NodeExposureRuntimeClient) GetRuntimeRouting() (RuntimeRoutingConfig, error) {
-	content, err := c.request(http.MethodGet, "/runtime-routing", nil, http.StatusOK)
-	if err != nil {
-		return RuntimeRoutingConfig{}, err
-	}
-	var result RuntimeRoutingConfig
-	if err := json.Unmarshal(content, &result); err != nil {
-		return RuntimeRoutingConfig{}, fmt.Errorf("解析核心运行时路由响应: %w", err)
-	}
-	return result, nil
-}
-
-func (c *NodeExposureRuntimeClient) PutRuntimeRouting(config RuntimeRoutingConfig) error {
-	content, err := json.Marshal(config)
-	if err != nil {
-		return fmt.Errorf("编码核心运行时路由请求: %w", err)
-	}
-	_, err = c.request(http.MethodPut, "/runtime-routing", content, http.StatusOK)
-	return err
-}
-
-func (c *NodeExposureRuntimeClient) GetAccessEvents(after uint64, limit int) (RuntimeAccessEventList, error) {
-	if limit < 1 || limit > 500 {
-		return RuntimeAccessEventList{}, fmt.Errorf("核心访问事件 limit 必须在 1 到 500 之间")
-	}
-	path := fmt.Sprintf("/access-events?after=%d&limit=%d", after, limit)
-	content, err := c.request(http.MethodGet, path, nil, http.StatusOK)
-	if err != nil {
-		return RuntimeAccessEventList{}, err
-	}
-	var result RuntimeAccessEventList
-	if err := json.Unmarshal(content, &result); err != nil {
-		return RuntimeAccessEventList{}, fmt.Errorf("解析核心访问事件响应: %w", err)
-	}
-	return result, nil
 }
 
 func (c *NodeExposureRuntimeClient) WaitReady(ctx context.Context) error {

@@ -243,22 +243,10 @@ func TestDevicePoliciesRejectConflictsAndPreserveActiveConfig(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("Linux device policy validation")
 	}
-	for _, scenario := range []string{"overlap", "bypass", "dns-off", "mixed", "missing-binding", "direct-node", "disabled-node", "advanced-route"} {
+	for _, scenario := range []string{"overlap", "bypass", "dns-off", "mixed", "missing-binding", "direct-node", "disabled-node"} {
 		t.Run(scenario, func(t *testing.T) {
 			db, g, rules := devicePolicyFixture(t)
 			switch scenario {
-			case "advanced-route":
-				settings, err := db.GetAdvancedSettings()
-				if err != nil {
-					t.Fatal(err)
-				}
-				settings.RoutingEnabled = true
-				if err := db.SetAdvancedSettings(settings); err != nil {
-					t.Fatal(err)
-				}
-				if err := db.CreatePlatformRoute(&model.PlatformRoute{Name: "Catch all", Platform: "test", Enabled: true, Priority: 10, TargetType: "direct", FallbackType: "direct"}); err != nil {
-					t.Fatal(err)
-				}
 			case "overlap":
 				_, err := db.UpdateRouteRule(rules[1].ID, &model.RouteRuleRequest{Name: rules[1].Name, Enabled: true, RuleType: "source_ip_cidr", Values: []string{"192.168.50.0/24"}, Outbound: "proxy"})
 				if err != nil {
@@ -302,48 +290,6 @@ func TestDevicePoliciesRejectConflictsAndPreserveActiveConfig(t *testing.T) {
 			data, _ := os.ReadFile(active)
 			if string(data) != "working configuration" {
 				t.Fatal("failed generation replaced working config")
-			}
-		})
-	}
-}
-
-func TestDevicePolicyRejectsRuntimeOverrideAndRollsBack(t *testing.T) {
-	for _, test := range []struct {
-		name    string
-		sources []string
-		blocked bool
-	}{
-		{name: "catch-all", blocked: true},
-		{name: "overlapping", sources: []string{"192.168.50.0/24"}, blocked: true},
-		{name: "ipv6-overlapping", sources: []string{"fd12:3456::/64"}, blocked: true},
-		{name: "other-device", sources: []string{"192.168.60.0/24"}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			db, _, _ := devicePolicyFixture(t)
-			settings, err := db.GetAdvancedSettings()
-			if err != nil {
-				t.Fatal(err)
-			}
-			settings.RoutingEnabled = true
-			if err := db.SetAdvancedSettings(settings); err != nil {
-				t.Fatal(err)
-			}
-			runtime := &advancedRuntimeStub{}
-			svc := NewAdvancedRoutingService(db, runtime, &advancedCoreStub{running: true}, nil, "test")
-			_, err = svc.CreatePlatformRoute(model.PlatformRoute{
-				Name: "Platform route", Platform: "test", Enabled: true, Priority: 10,
-				SourceCIDRs: test.sources, TargetType: "direct", FallbackType: "direct",
-			})
-			if test.blocked {
-				if err == nil || !strings.Contains(err.Error(), "设备规则") {
-					t.Fatalf("missing device conflict error: %v", err)
-				}
-				routes, err := db.ListPlatformRoutes()
-				if err != nil || len(routes) != 0 || len(runtime.puts) != 0 {
-					t.Fatalf("conflicting mutation was not rolled back: routes=%d puts=%d err=%v", len(routes), len(runtime.puts), err)
-				}
-			} else if err != nil || len(runtime.puts) != 1 {
-				t.Fatalf("unrelated platform route rejected: %v", err)
 			}
 		})
 	}

@@ -35,7 +35,7 @@ const items = [
   ["设置", Settings, "/settings"],
 ] as const;
 const advancedItems = [
-  ["路由与调度", Route, "/advanced/routing"],
+  ["Mixed 端口绑定", Route, "/advanced/routing"],
   ["SSH 主机", SquareTerminal, "/advanced/ssh"],
 ] as const;
 

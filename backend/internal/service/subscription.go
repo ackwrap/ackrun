@@ -51,7 +51,6 @@ type SubscriptionService struct {
 	store      *store.Store
 	realtime   *RealtimeService
 	reconciler *ConfigReconcileService
-	alerts     *AlertService
 	cron       *cron.Cron
 	entries    map[int64]cron.EntryID
 	mu         sync.Mutex
@@ -73,10 +72,6 @@ func NewSubscriptionService(s *store.Store, rt *RealtimeService) *SubscriptionSe
 // SetConfigReconciler 注入统一配置协调器。
 func (svc *SubscriptionService) SetConfigReconciler(reconciler *ConfigReconcileService) {
 	svc.reconciler = reconciler
-}
-
-func (svc *SubscriptionService) SetAlertService(alerts *AlertService) {
-	svc.alerts = alerts
 }
 
 func (svc *SubscriptionService) StartScheduler() {
@@ -554,17 +549,6 @@ func nodeFilterValue(node model.ParsedNode, target string) string {
 }
 
 func (svc *SubscriptionService) broadcastSync(id int64, status string, progress float64, message string) {
-	if status == "failed" && svc.alerts != nil {
-		name := "订阅 #" + strconv.FormatInt(id, 10)
-		if item, err := svc.store.GetSubscription(id); err == nil && item != nil && item.Name != "" {
-			name = item.Name
-		}
-		svc.alerts.Notify(model.AlertEvent{
-			Type: model.AlertEventSubscriptionFailed, TargetKey: "subscription:" + strconv.FormatInt(id, 10),
-			SourceName: name, Title: "[Ackwrap] 订阅同步失败",
-			Message: "订阅「" + name + "」同步失败：" + message,
-		})
-	}
 	if svc.realtime == nil {
 		return
 	}

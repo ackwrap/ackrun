@@ -11,17 +11,13 @@ import { api } from "@/services/api";
 import { advancedApi } from "@/services/advancedApi";
 import type {
   NodeExposure,
-  NodeExposureInboundType,
   NodeExposureRequest,
 } from "@/services/advancedTypes";
 import type { NodeItem } from "@/services/types";
 
-withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false });
-
 interface ExposureForm {
   name: string;
   nodeKey: string;
-  inbound_type: NodeExposureInboundType;
   listen: string;
   listen_port: number;
   username: string;
@@ -74,7 +70,6 @@ function emptyForm(): ExposureForm {
   return {
     name: "",
     nodeKey: "",
-    inbound_type: "mixed",
     listen: "127.0.0.1",
     listen_port: 18080,
     username: "",
@@ -149,7 +144,6 @@ function openEdit(item: NodeExposure) {
   Object.assign(form, {
     name: item.name,
     nodeKey: nodeKey(item.subscription_id, item.node_uid),
-    inbound_type: item.inbound_type,
     listen: item.listen,
     listen_port: item.listen_port,
     username: item.username,
@@ -168,7 +162,7 @@ function buildRequest(): NodeExposureRequest {
     name: form.name.trim(),
     subscription_id: subscriptionID,
     node_uid: uid,
-    inbound_type: form.inbound_type,
+    inbound_type: "mixed",
     listen: form.listen.trim(),
     listen_port: Number(form.listen_port),
     username: form.clear_password ? "" : form.username.trim(),
@@ -192,7 +186,7 @@ async function save() {
     } else {
       await advancedApi.createNodeExposure(payload);
     }
-    show(editing.value ? "节点暴露已更新" : "节点暴露已创建");
+    show(editing.value ? "Mixed 端口绑定已更新" : "Mixed 端口绑定已创建");
     formOpen.value = false;
     await load();
   } catch (error) {
@@ -211,7 +205,7 @@ async function remove() {
   deleting.value = null;
   try {
     await advancedApi.deleteNodeExposure(item.id);
-    show("节点暴露已删除");
+    show("Mixed 端口绑定已删除");
     await load();
   } catch (error) {
     show(
@@ -226,14 +220,14 @@ onMounted(load);
 
 <template>
   <div class="space-y-5">
-    <PageHeader title="节点入口" :embedded="embedded">
+    <PageHeader title="Mixed 端口绑定">
       <template #actions>
         <Button
           variant="primary"
           :disabled="loading || !nodes.length"
           @click="openCreate"
         >
-          <template #icon><Plus :size="15" /></template>新增暴露
+          <template #icon><Plus :size="15" /></template>添加绑定
         </Button>
       </template>
     </PageHeader>
@@ -245,13 +239,13 @@ onMounted(load);
           class="flex items-center justify-between border-b border-[var(--border-light)] px-5 py-4"
         >
           <div>
-            <h2 class="text-sm font-semibold">独立代理入口</h2>
+            <h2 class="text-sm font-semibold">端口绑定</h2>
             <p class="mt-1 text-xs text-[var(--text-tertiary)]">
-              每个入口固定路由到一个节点，不跟随默认策略组切换。
+              每个 Mixed 端口固定连接一个节点。
             </p>
           </div>
           <span class="font-mono text-xs text-[var(--text-tertiary)]"
-            >{{ items.length }} entries</span
+            >{{ items.length }} 个绑定</span
           >
         </div>
 
@@ -263,9 +257,9 @@ onMounted(load);
         </div>
         <div v-else-if="!items.length" class="p-10 text-center">
           <Radio :size="30" class="mx-auto text-[var(--text-tertiary)]" />
-          <p class="mt-3 text-sm font-medium">尚未创建节点入口</p>
+          <p class="mt-3 text-sm font-medium">暂无端口绑定</p>
           <p class="mt-1 text-xs text-[var(--text-tertiary)]">
-            选择一个已启用节点，为它分配专用代理端口。
+            选择节点，分配 Mixed 端口。
           </p>
         </div>
         <div v-else class="aw-data-table-wrap rounded-none border-0">
@@ -359,7 +353,7 @@ onMounted(load);
 
     <Modal
       :open="formOpen"
-      :title="editing ? '编辑节点暴露' : '新增节点暴露'"
+      :title="editing ? '编辑端口绑定' : '添加端口绑定'"
       size="lg"
       @close="formOpen = false"
     >
@@ -405,16 +399,8 @@ onMounted(load);
             {{ selectedNode.type }} 节点
           </p>
         </label>
-        <label>
-          <span class="aw-modal-label text-xs">入口协议</span>
-          <select v-model="form.inbound_type" class="aw-input mt-1 w-full">
-            <option value="mixed">Mixed</option>
-            <option value="http">HTTP</option>
-            <option value="socks">SOCKS</option>
-          </select>
-        </label>
-        <label>
-          <span class="aw-modal-label text-xs">监听端口</span>
+        <label class="sm:col-span-2">
+          <span class="aw-modal-label text-xs">Mixed 端口</span>
           <input
             v-model.number="form.listen_port"
             class="aw-input mt-1 w-full"
@@ -478,7 +464,7 @@ onMounted(load);
 
     <ConfirmDialog
       :open="!!deleting"
-      title="删除节点暴露"
+      title="删除端口绑定"
       :message="`确定删除「${deleting?.name || ''}」吗？对应代理端口将停止监听。`"
       confirm-text="删除"
       danger
