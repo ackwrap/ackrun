@@ -17,7 +17,7 @@ const variants = {
   secondary:
     "bg-[var(--button-secondary-bg)] border border-[var(--border-default)]",
   ghost: "bg-transparent text-[var(--text-secondary)]",
-  danger: "bg-[var(--color-error)] text-white",
+  danger: "bg-[var(--color-error)] text-[var(--button-danger-text)]",
   link: "bg-transparent text-[var(--color-primary)]",
 };
 const sizes = {

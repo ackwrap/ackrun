@@ -2,7 +2,7 @@
 @import './tokens.css';
 @import './animations.css';
 @import './mixins.css';
-@import './light.css';
+@import './theme.css';
 @plugin 'daisyui' {
   themes: false;
 }
@@ -445,8 +445,8 @@ button:disabled {
   .aw-toast {
     @apply relative mx-auto flex w-fit min-w-[320px] max-w-full items-center gap-3.5 overflow-hidden rounded-2xl border px-4 py-3.5 backdrop-blur-xl;
     animation: aw-toast-enter 180ms ease-out;
-    background: linear-gradient(135deg, rgba(20, 30, 49, 0.97), rgba(10, 17, 30, 0.95));
-    box-shadow: 0 18px 55px rgba(2, 6, 23, 0.48), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+    background: var(--bg-elevated);
+    box-shadow: var(--shadow-xl);
   }
 
   .aw-toast::after {
@@ -475,7 +475,7 @@ button:disabled {
 
   .aw-toast-message {
     @apply relative z-[1] mt-0.5 block break-words text-[14px] font-normal leading-[21px];
-    color: #f8fafc;
+    color: var(--text-primary);
   }
 
   .aw-toast-success {
