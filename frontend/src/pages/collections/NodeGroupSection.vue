@@ -61,7 +61,7 @@ function togglePage() {
   <section class="space-y-4">
     <div class="flex flex-wrap justify-between gap-2">
       <p class="text-sm text-[var(--text-secondary)]">
-        普通组按关键词筛选节点；内置全球直连可供手动策略引用
+        默认按地域自动分组，新增节点、导入和订阅更新后自动归组；支持自定义节点组
       </p>
       <div class="flex gap-2">
         <button

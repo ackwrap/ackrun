@@ -28,8 +28,6 @@ func RegisterRoutes(
 	coreRestartSvc *service.CoreRestartScheduler,
 	appUpdateSvc *service.AppUpdateService,
 	dashboardSvc *service.DashboardService,
-	advancedSvc *service.AdvancedRoutingService,
-	alertSvc *service.AlertService,
 	sshHostSvc *service.SSHHostService,
 ) {
 	runtimeH := handler.NewRuntimeHandler(runtimeSvc)
@@ -50,8 +48,6 @@ func RegisterRoutes(
 	coreRestartH := handler.NewCoreRestartHandler(coreRestartSvc)
 	appUpdateH := handler.NewAppUpdateHandler(appUpdateSvc)
 	dashboardH := handler.NewDashboardHandler(dashboardSvc)
-	advancedH := handler.NewAdvancedHandler(advancedSvc)
-	alertH := handler.NewAlertHandler(alertSvc)
 	sshHostH := handler.NewSSHHostHandler(sshHostSvc)
 
 	clashProxyH := handler.NewClashProxyHandler(settingsSvc)
@@ -60,6 +56,7 @@ func RegisterRoutes(
 	v1.Use(configMutationMiddleware(reconcileSvc))
 	{
 		v1.GET("/runtime", runtimeH.GetStatus)
+		v1.GET("/runtime/summary", runtimeH.GetSummary)
 
 		v1.GET("/installer/sing-box", installerH.GetStatus)
 		v1.POST("/installer/sing-box/install", installerH.Install)
@@ -69,7 +66,6 @@ func RegisterRoutes(
 		v1.GET("/config/backups", configH.ListBackups)
 		v1.PUT("/config/active", configH.SetActive)
 		v1.POST("/config/default", configH.GenerateDefault)
-		v1.POST("/config/validate", configH.Validate)
 		v1.POST("/config/rules/update", configH.UpdateRules)
 		v1.POST("/config/backup", configH.Backup)
 		v1.POST("/config/restore", configH.Restore)
@@ -78,14 +74,6 @@ func RegisterRoutes(
 		v1.POST("/core/stop", coreH.Stop)
 		v1.POST("/core/restart", coreH.Restart)
 		v1.POST("/core/reload-config", coreH.ReloadConfig)
-		v1.POST("/core/close-connections", coreH.CloseConnections)
-		v1.POST("/core/flush-core-dns", coreH.FlushCoreDNS)
-		v1.POST("/core/flush-fakeip", coreH.FlushFakeIP)
-		v1.POST("/core/network-check", coreH.NetworkCheck)
-		v1.GET("/core/diagnostics", coreH.Diagnostics)
-		v1.POST("/core/reset-firewall", coreH.ResetFirewall)
-		v1.POST("/core/flush-dns", coreH.FlushDNS)
-		v1.POST("/core/check-update", coreH.CheckUpdate)
 		v1.GET("/settings/core-restart", coreRestartH.GetSettings)
 		v1.PUT("/settings/core-restart", coreRestartH.UpdateSettings)
 		v1.GET("/logs/core", logH.ListCore)
@@ -160,7 +148,7 @@ func RegisterRoutes(
 		v1.PUT("/nodes/:uid/enabled", nodeH.SetEnabled)
 		v1.PUT("/nodes/:uid/preferred", nodeH.SetPreferred)
 
-		registerAdvancedRoutes(v1, nodeExposureH, advancedH, alertH)
+		registerNodeExposureRoutes(v1, nodeExposureH)
 		registerSSHHostRoutes(v1, sshHostH)
 
 		v1.GET("/collections", proxyCollectionH.List)
@@ -237,48 +225,20 @@ func RegisterRoutes(
 
 		v1.GET("/realtime/ws", realtimeH.HandleWS)
 
-		// Clash API 代理路由（所有请求通过后端代理）
-		v1.GET("/clash-status", clashProxyH.GetClashStatus)
-		v1.Any("/clash/*path", clashProxyH.Proxy)
+		// 控制面板统计使用的 Clash API。
+		v1.GET("/clash/traffic", clashProxyH.Proxy)
+		v1.GET("/clash/connections", clashProxyH.Proxy)
+		v1.GET("/clash/proxies", clashProxyH.Proxy)
+		v1.PUT("/clash/proxies/*name", clashProxyH.Proxy)
 	}
 }
 
-func registerAdvancedRoutes(group *gin.RouterGroup, nodeExposureH *handler.NodeExposureHandler, handler *handler.AdvancedHandler, alerts ...*handler.AlertHandler) {
+func registerNodeExposureRoutes(group *gin.RouterGroup, nodeExposureH *handler.NodeExposureHandler) {
 	group.GET("/advanced/node-exposures", nodeExposureH.List)
+	group.GET("/advanced/node-exposures/:id/share", nodeExposureH.Share)
 	group.POST("/advanced/node-exposures", nodeExposureH.Create)
 	group.PUT("/advanced/node-exposures/:id", nodeExposureH.Update)
 	group.DELETE("/advanced/node-exposures/:id", nodeExposureH.Delete)
-	group.GET("/advanced/platform-routes", handler.ListPlatformRoutes)
-	group.POST("/advanced/platform-routes", handler.CreatePlatformRoute)
-	group.POST("/advanced/platform-routes/reorder", handler.ReorderPlatformRoutes)
-	group.PUT("/advanced/platform-routes/:id", handler.UpdatePlatformRoute)
-	group.DELETE("/advanced/platform-routes/:id", handler.DeletePlatformRoute)
-	group.GET("/advanced/session-leases", handler.ListSessionLeases)
-	group.POST("/advanced/session-leases", handler.CreateSessionLease)
-	group.PUT("/advanced/session-leases/:id", handler.UpdateSessionLease)
-	group.DELETE("/advanced/session-leases/:id", handler.DeleteSessionLease)
-	group.POST("/advanced/session-leases/:id/renew", handler.RenewSessionLease)
-	group.GET("/advanced/health-scheduling", handler.HealthScheduling)
-	group.POST("/advanced/health-scheduling/run", handler.RunHealth)
-	group.GET("/advanced/access-logs", handler.ListAccessLogs)
-	group.DELETE("/advanced/access-logs", handler.ClearAccessLogs)
-	group.GET("/advanced/settings", handler.GetSettings)
-	group.PUT("/advanced/settings", handler.UpdateSettings)
-	if len(alerts) == 0 || alerts[0] == nil {
-		return
-	}
-	alert := alerts[0]
-	group.GET("/advanced/alerts/channels", alert.ListChannels)
-	group.POST("/advanced/alerts/channels", alert.CreateChannel)
-	group.PUT("/advanced/alerts/channels/:id", alert.UpdateChannel)
-	group.DELETE("/advanced/alerts/channels/:id", alert.DeleteChannel)
-	group.POST("/advanced/alerts/channels/:id/test", alert.TestChannel)
-	group.GET("/advanced/alerts/rules", alert.ListRules)
-	group.POST("/advanced/alerts/rules", alert.CreateRule)
-	group.PUT("/advanced/alerts/rules/:id", alert.UpdateRule)
-	group.DELETE("/advanced/alerts/rules/:id", alert.DeleteRule)
-	group.GET("/advanced/alerts/deliveries", alert.ListDeliveries)
-	group.DELETE("/advanced/alerts/deliveries", alert.ClearDeliveries)
 }
 
 func registerSSHHostRoutes(group *gin.RouterGroup, sshHostH *handler.SSHHostHandler) {

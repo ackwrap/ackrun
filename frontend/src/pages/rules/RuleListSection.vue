@@ -1,14 +1,27 @@
 <script setup lang="ts">
-import { Eye, Plus, Share2, Trash2, Upload } from "lucide-vue-next";
+import {
+  Edit3,
+  Eye,
+  GripVertical,
+  Plus,
+  RefreshCw,
+  Settings2,
+  Share2,
+  Trash2,
+  Upload,
+} from "lucide-vue-next";
+import AdaptiveActionBar from "@/components/ui/AdaptiveActionBar.vue";
 import FlagText from "@/components/ui/FlagText.vue";
-import OrderButtons from "@/components/ui/OrderButtons.vue";
 import type { RouteRule, RouteRuleSubscription } from "@/services/types";
 import { splitDeviceRuleValues } from "./deviceRulePreview";
+import { useRuleSort } from "./useRuleSort";
 const props = defineProps<{
   rules: RouteRule[];
   subscriptions: RouteRuleSubscription[];
+  sorting: boolean;
+  strategyLoadingId: number | null;
 }>();
-defineEmits<{
+const emit = defineEmits<{
   refresh: [];
   addGeo: [];
   addDevice: [];
@@ -16,12 +29,22 @@ defineEmits<{
   preview: [];
   share: [];
   import: [];
-  move: [number, -1 | 1];
+  reorder: [number[]];
   toggle: [RouteRule];
   edit: [RouteRule];
+  editStrategy: [RouteRule];
   remove: [RouteRule];
   detail: [RouteRule];
 }>();
+const { tableBody, displayRules, draggingId, start, keydown } = useRuleSort(
+  () => props.rules,
+  () => props.sorting,
+  (ids) => emit("reorder", ids),
+);
+
+function setTableBody(element: unknown) {
+  tableBody.value = element instanceof HTMLTableSectionElement ? element : null;
+}
 
 function isAdBlock(rule: RouteRule) {
   return (
@@ -35,20 +58,6 @@ function isFinalStrategy(rule: RouteRule) {
     rule.system_key === "global_direct" ||
     ["fallback", "final"].includes(rule.rule_type) ||
     (rule.is_system && ["全球直连", "最终策略"].includes(rule.name))
-  );
-}
-
-function moveDisabled(index: number, direction: -1 | 1) {
-  const target = index + direction;
-  const currentRule = props.rules[index];
-  const targetRule = props.rules[target];
-  return (
-    !currentRule ||
-    !targetRule ||
-    isAdBlock(currentRule) ||
-    isAdBlock(targetRule) ||
-    isFinalStrategy(currentRule) ||
-    isFinalStrategy(targetRule)
   );
 }
 
@@ -103,60 +112,59 @@ function actionLabel(rule: RouteRule) {
   <section
     class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
   >
-    <header class="flex flex-wrap items-center justify-between gap-3">
-      <div>
+    <AdaptiveActionBar id="rule-list-actions" label="规则操作">
+      <template #title>
         <h3 class="font-semibold">规则列表</h3>
-        <small class="text-[var(--text-secondary)]"
-          >上移/下移会立即保存排序；设备规则始终优先于普通业务规则。</small
-        >
-      </div>
-      <div class="flex flex-wrap justify-end gap-2">
-        <button
-          class="aw-action-button aw-action-neutral"
-          @click="$emit('addDevice')"
-        >
-          <Plus :size="13" />添加设备规则
-        </button>
-        <button
-          class="aw-action-button aw-action-neutral"
-          @click="$emit('preview')"
-        >
-          <Eye :size="13" />预览
-        </button>
-        <button
-          class="aw-action-button aw-action-neutral"
-          @click="$emit('share')"
-        >
-          <Share2 :size="13" />分享
-        </button>
-        <button
-          class="aw-action-button aw-action-neutral"
-          @click="$emit('import')"
-        >
-          <Upload :size="13" />导入
-        </button>
-        <button
-          class="aw-action-button aw-action-neutral"
-          @click="$emit('addGeo')"
-        >
-          <Plus :size="13" />添加 GEO 规则
-        </button>
-        <button
-          class="aw-action-button aw-action-neutral"
-          @click="$emit('add')"
-        >
-          自定义规则
-        </button>
-        <button
-          class="aw-action-button aw-action-neutral"
-          @click="$emit('refresh')"
-        >
-          刷新
-        </button>
-      </div>
-    </header>
-    <div class="aw-data-table-wrap mt-4">
-      <table class="aw-data-table min-w-[880px]">
+      </template>
+      <button
+        class="aw-action-button aw-action-neutral"
+        @click="$emit('addDevice')"
+      >
+        <Plus :size="13" />设备规则
+      </button>
+      <button
+        class="aw-action-button aw-action-neutral"
+        @click="$emit('preview')"
+      >
+        <Eye :size="13" />预览
+      </button>
+      <button
+        class="aw-action-button aw-action-neutral"
+        @click="$emit('share')"
+      >
+        <Share2 :size="13" />分享
+      </button>
+      <button
+        class="aw-action-button aw-action-neutral"
+        @click="$emit('import')"
+      >
+        <Upload :size="13" />导入
+      </button>
+      <button
+        class="aw-action-button aw-action-neutral"
+        @click="$emit('addGeo')"
+      >
+        <Plus :size="13" />GEO 规则
+      </button>
+      <button class="aw-action-button aw-action-neutral" @click="$emit('add')">
+        <Plus :size="13" />自定义规则
+      </button>
+      <button
+        class="aw-action-button aw-action-neutral"
+        @click="$emit('refresh')"
+      >
+        <RefreshCw :size="13" />刷新
+      </button>
+    </AdaptiveActionBar>
+    <p
+      v-if="sorting"
+      role="status"
+      class="mt-2 text-xs text-[var(--text-secondary)]"
+    >
+      正在保存排序…
+    </p>
+    <div class="aw-data-table-wrap mt-4" :aria-busy="sorting">
+      <table class="aw-data-table min-w-[760px]">
         <thead>
           <tr>
             <th>排序</th>
@@ -168,22 +176,34 @@ function actionLabel(rule: RouteRule) {
             <th>操作</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody :ref="setTableBody">
           <tr v-if="!rules.length">
-            <td colspan="7" class="py-12 text-center">暂无路由规则</td>
+            <td colspan="7" class="py-8 text-center">暂无路由规则</td>
           </tr>
-          <tr v-for="(r, i) in rules" :key="r.id">
+          <tr
+            v-for="(r, i) in displayRules"
+            :key="r.id"
+            :data-rule-id="r.id"
+            :class="{ 'rule-row-placeholder': draggingId === r.id }"
+          >
             <td>
               <div class="flex items-center gap-1.5">
                 <span class="w-6 text-[var(--text-tertiary)]"
                   >#{{ i + 1 }}</span
                 >
-                <OrderButtons
-                  :up-disabled="moveDisabled(i, -1)"
-                  :down-disabled="moveDisabled(i, 1)"
-                  @up="$emit('move', i, -1)"
-                  @down="$emit('move', i, 1)"
-                />
+                <button
+                  v-if="!isAdBlock(r) && !isFinalStrategy(r)"
+                  type="button"
+                  class="aw-action-button aw-action-neutral !h-7 !w-7 touch-none select-none !px-0 cursor-grab active:cursor-grabbing"
+                  :disabled="sorting"
+                  title="上下拖动排序，也可使用方向键"
+                  :aria-label="`调整 ${r.name} 的顺序`"
+                  @pointerdown="start($event, r)"
+                  @keydown="keydown($event, r)"
+                  @dragstart.prevent
+                >
+                  <GripVertical :size="15" />
+                </button>
               </div>
             </td>
             <td>
@@ -224,8 +244,26 @@ function actionLabel(rule: RouteRule) {
                   class="aw-action-button aw-action-neutral"
                   @click="$emit('edit', r)"
                 >
-                  编辑</button
-                ><button
+                  <Edit3 :size="13" />编辑
+                </button>
+                <button
+                  v-if="
+                    r.outbound === 'proxy' &&
+                    !r.is_system &&
+                    !isFinalStrategy(r)
+                  "
+                  class="aw-action-button aw-action-neutral"
+                  :disabled="strategyLoadingId !== null"
+                  @click="$emit('editStrategy', r)"
+                >
+                  <RefreshCw
+                    v-if="strategyLoadingId === r.id"
+                    :size="13"
+                    class="animate-spin"
+                  />
+                  <Settings2 v-else :size="13" />编辑策略
+                </button>
+                <button
                   v-if="!r.is_system"
                   class="aw-action-button aw-action-danger"
                   @click="$emit('remove', r)"
@@ -246,3 +284,35 @@ function actionLabel(rule: RouteRule) {
     </div>
   </section>
 </template>
+
+<style scoped>
+.rule-row-placeholder > td {
+  background: var(--button-primary-bg) !important;
+  color: transparent !important;
+  box-shadow:
+    inset 0 1px 0 var(--color-primary),
+    inset 0 -1px 0 var(--color-primary);
+}
+.rule-row-placeholder > td > * {
+  visibility: hidden;
+}
+:global(.rule-sort-ghost) {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 60;
+  pointer-events: none;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-card);
+  outline: 1px solid var(--color-primary);
+  opacity: 0.8;
+  will-change: transform;
+}
+:global(body.rule-sort-active),
+:global(body.rule-sort-active *) {
+  cursor: grabbing !important;
+  user-select: none !important;
+}
+</style>

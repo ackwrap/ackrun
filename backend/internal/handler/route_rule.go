@@ -69,7 +69,6 @@ func (h *RouteRuleHandler) Import(c *gin.Context) {
 		writeRouteRuleMutationError(c, http.StatusBadRequest, "ROUTE_RULE_IMPORT_FAILED", err)
 		return
 	}
-	c.Set(ConfigReconcileContextKey, true)
 	c.JSON(http.StatusOK, resp)
 }
 
@@ -84,7 +83,6 @@ func (h *RouteRuleHandler) Create(c *gin.Context) {
 		writeRouteRuleMutationError(c, http.StatusBadRequest, "ROUTE_RULE_CREATE_FAILED", err)
 		return
 	}
-	c.Set(ConfigReconcileContextKey, item.Outbound != "proxy")
 	c.JSON(http.StatusOK, item)
 }
 

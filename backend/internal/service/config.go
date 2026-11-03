@@ -300,21 +300,6 @@ func (svc *ConfigService) GenerateDefault() error {
 	return nil
 }
 
-func (svc *ConfigService) Validate() error {
-	configPath, ok, err := svc.paths.ActiveConfigPath()
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return fmt.Errorf("no config file found")
-	}
-	info, err := os.Stat(configPath)
-	if err != nil {
-		return err
-	}
-	return svc.validateFileAndCache(configPath, info)
-}
-
 func (svc *ConfigService) UpdateRules() (*model.ActionResponse, error) {
 	logging.Info("config.rules_update", "rule update requested")
 	status, err := svc.GetConfigStatus()
@@ -471,12 +456,6 @@ func (svc *ConfigService) validateFileCached(path string, info os.FileInfo) erro
 		return cached.err
 	}
 	return svc.validateFileAndCacheLocked(key, path, info)
-}
-
-func (svc *ConfigService) validateFileAndCache(path string, info os.FileInfo) error {
-	svc.validationMu.Lock()
-	defer svc.validationMu.Unlock()
-	return svc.validateFileAndCacheLocked(filepath.Clean(path), path, info)
 }
 
 func (svc *ConfigService) validateFileAndCacheLocked(key, path string, info os.FileInfo) error {

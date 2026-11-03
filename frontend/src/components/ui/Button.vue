@@ -17,7 +17,7 @@ const variants = {
   secondary:
     "bg-[var(--button-secondary-bg)] border border-[var(--border-default)]",
   ghost: "bg-transparent text-[var(--text-secondary)]",
-  danger: "bg-[var(--color-error)] text-white",
+  danger: "bg-[var(--color-error)] text-[var(--button-danger-text)]",
   link: "bg-transparent text-[var(--color-primary)]",
 };
 const sizes = {
@@ -35,7 +35,8 @@ const classes = computed(() => [
   <button
     :type="type"
     :disabled="disabled || loading"
-    class="btn-press focus-ring inline-flex items-center justify-center gap-1.5 rounded-[var(--radius-lg)] font-medium disabled:opacity-50"
+    :data-variant="variant"
+    class="aw-button btn-press focus-ring inline-flex items-center justify-center gap-1.5 rounded-[var(--radius-lg)] font-medium disabled:opacity-50"
     :class="classes"
   >
     <span

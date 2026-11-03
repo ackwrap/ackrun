@@ -16,6 +16,7 @@ const props = defineProps<{
   groups: NodeGroup[];
   connectivity: { test_url: string; interval_seconds: number };
   saving: boolean;
+  saveError?: string;
 }>();
 const emit = defineEmits<{
   close: [];
@@ -292,6 +293,13 @@ function submit() {
         </p>
       </div>
     </div>
+    <p
+      v-if="saveError"
+      role="alert"
+      class="mt-4 text-sm text-[var(--color-error)]"
+    >
+      {{ saveError }}
+    </p>
     <template #footer>
       <button
         class="aw-action-button"

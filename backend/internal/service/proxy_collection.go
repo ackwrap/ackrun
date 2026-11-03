@@ -62,6 +62,18 @@ func (s *ProxyCollectionService) Create(req model.ProxyCollectionRequest) (*mode
 		return nil, err
 	}
 	logging.Info("proxy_collection.create", "创建代理集合: %s", req.Name)
+	pc, err := prepareProxyCollection(&req)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.store.CreateProxyCollection(pc); err != nil {
+		return nil, normalizeProxyCollectionRuleBindingError(err)
+	}
+	s.refreshHealthCheckJob(pc.ID)
+	return s.store.GetProxyCollectionWithNodes(pc.ID)
+}
+
+func prepareProxyCollection(req *model.ProxyCollectionRequest) (*model.ProxyCollection, error) {
 	if IsReservedProxyCollectionName(req.Name) {
 		return nil, ErrSystemProxyCollectionProtected
 	}
@@ -70,7 +82,7 @@ func (s *ProxyCollectionService) Create(req model.ProxyCollectionRequest) (*mode
 	if !isSupportedGroupType(req.Type) {
 		return nil, fmt.Errorf("无效的集合类型: %s", req.Type)
 	}
-	if err := normalizeCollectionHealthSettings(&req); err != nil {
+	if err := normalizeCollectionHealthSettings(req); err != nil {
 		return nil, err
 	}
 
@@ -79,7 +91,7 @@ func (s *ProxyCollectionService) Create(req model.ProxyCollectionRequest) (*mode
 		return nil, err
 	}
 
-	if err := validateCollectionMembers(&req, sourceType); err != nil {
+	if err := validateCollectionMembers(req, sourceType); err != nil {
 		return nil, err
 	}
 
@@ -102,12 +114,7 @@ func (s *ProxyCollectionService) Create(req model.ProxyCollectionRequest) (*mode
 		Enabled:            req.Enabled,
 	}
 
-	if err := s.store.CreateProxyCollection(pc); err != nil {
-		return nil, normalizeProxyCollectionRuleBindingError(err)
-	}
-	s.refreshHealthCheckJob(pc.ID)
-
-	return s.store.GetProxyCollectionWithNodes(pc.ID)
+	return pc, nil
 }
 
 // Get 获取代理集合
@@ -213,6 +220,17 @@ func (s *ProxyCollectionService) bindCollectionRequestToProxyRule(req *model.Pro
 	if rule == nil {
 		return ErrProxyCollectionRuleNotFound
 	}
+	bound, err := s.store.GetProxyCollectionByRouteRuleID(routeRuleID)
+	if err != nil {
+		return err
+	}
+	if bound != nil && bound.ID != collectionID {
+		return fmt.Errorf("%w: 代理规则已绑定到其他集合", ErrProxyCollectionRuleBindingConflict)
+	}
+	return s.prepareCollectionRuleBinding(req, rule, collectionID)
+}
+
+func (s *ProxyCollectionService) prepareCollectionRuleBinding(req *model.ProxyCollectionRequest, rule *model.RouteRule, collectionID int) error {
 	if rule.IsSystem || rule.Outbound != "proxy" {
 		return fmt.Errorf("%w: 代理集合只能绑定非系统代理规则", ErrProxyCollectionRuleBindingInvalid)
 	}
@@ -235,15 +253,8 @@ func (s *ProxyCollectionService) bindCollectionRequestToProxyRule(req *model.Pro
 			return fmt.Errorf("设备策略选择的节点不存在或未启用")
 		}
 	}
-	bound, err := s.store.GetProxyCollectionByRouteRuleID(routeRuleID)
-	if err != nil {
-		return err
-	}
-	if bound != nil && bound.ID != collectionID {
-		return fmt.Errorf("%w: 代理规则已绑定到其他集合", ErrProxyCollectionRuleBindingConflict)
-	}
-	req.RouteRuleID = routeRuleID
-	req.RouteRuleIDs = []int64{routeRuleID}
+	req.RouteRuleID = rule.ID
+	req.RouteRuleIDs = []int64{rule.ID}
 	req.Name = rule.Name
 	if IsReservedProxyCollectionName(req.Name) {
 		return ErrSystemProxyCollectionProtected

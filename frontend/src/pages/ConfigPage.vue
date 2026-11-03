@@ -3,9 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import {
   CheckCircle2,
   ChevronDown,
-  FileJson2,
   Play,
-  RefreshCw,
   Save,
   XCircle,
 } from "lucide-vue-next";
@@ -16,16 +14,10 @@ import Modal from "@/components/ui/Modal.vue";
 import Toast from "@/components/ui/Toast.vue";
 import { api } from "@/services/api";
 import { writeClipboardText } from "@/utils/clipboard";
-import type {
-  ConfigBackup,
-  ConfigFileItem,
-  ConfigGenerateRequest,
-} from "@/services/types";
+import type { ConfigGenerateRequest } from "@/services/types";
 const request = ref<ConfigGenerateRequest | null>(null);
 const generated = ref<any>(null),
-  configFiles = ref<ConfigFileItem[]>([]),
-  configBackups = ref<ConfigBackup[]>([]),
-  loadingFiles = ref(true),
+  activeConfigName = ref(""),
   generating = ref(false),
   applying = ref(false),
   applyDialog = ref(false),
@@ -35,9 +27,6 @@ const generated = ref<any>(null),
   message = ref(""),
   messageType = ref<"success" | "error">("error");
 const config = computed(() => generated.value?.config);
-const activeConfig = computed(() =>
-  configFiles.value.find((item) => item.active),
-);
 const moduleItems = computed(() => {
   const c = config.value,
     r = c?.route || {};
@@ -129,33 +118,12 @@ function showMessage(v: string, t: "success" | "error" = "error") {
   message.value = v;
   messageType.value = t;
 }
-const formatSize = (value: number) =>
-  value < 1024 ? `${value} B` : `${(value / 1024).toFixed(1)} KiB`;
-const formatUpdatedAt = (value: number) =>
-  value ? new Date(value).toLocaleString(undefined, { hourCycle: "h23" }) : "-";
-function backupSummary(configName: string) {
-  const backups = configBackups.value.filter(
-    (item) => item.config_name === configName,
-  );
-  return {
-    count: backups.length,
-    latest: backups[0]?.backup_date || "",
-  };
-}
-
-async function loadConfigFiles() {
-  loadingFiles.value = true;
+async function loadActiveConfigName() {
   try {
-    const [files, backups] = await Promise.all([
-      api.getConfigFiles(),
-      api.getConfigBackups(),
-    ]);
-    configFiles.value = files;
-    configBackups.value = backups;
+    const status = await api.getConfigStatus(false);
+    activeConfigName.value = status.file_name || "";
   } catch (e: any) {
-    showMessage(`加载配置文件失败: ${e.message}`);
-  } finally {
-    loadingFiles.value = false;
+    showMessage(`读取当前配置文件名失败: ${e.message}`);
   }
 }
 
@@ -179,7 +147,7 @@ async function generate() {
   }
 }
 function openApplyDialog() {
-  applyFileName.value = activeConfig.value?.name || "config.json";
+  applyFileName.value = activeConfigName.value || "config.json";
   applyDialog.value = true;
 }
 async function apply() {
@@ -192,7 +160,7 @@ async function apply() {
       file_name: applyFileName.value.trim(),
     });
     applyDialog.value = false;
-    await loadConfigFiles();
+    await loadActiveConfigName();
     showMessage("配置已应用", "success");
   } catch (e: any) {
     showMessage(`应用失败: ${e.message}`);
@@ -219,7 +187,7 @@ async function copy(value: any, label: string) {
 onMounted(async () => {
   const [requestResult] = await Promise.allSettled([
     api.getConfigGenerateRequest(),
-    loadConfigFiles(),
+    loadActiveConfigName(),
   ]);
   if (requestResult.status === "rejected") {
     showMessage(
@@ -259,158 +227,76 @@ onMounted(async () => {
       </div>
     </div>
     <Toast :message="message" :type="messageType" @dismiss="message = ''" />
-    <div class="grid gap-4 lg:grid-cols-2">
-      <section
-        class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
-      >
-        <div class="flex items-start justify-between gap-3">
-          <div>
-            <h3 class="flex items-center gap-2 text-sm font-semibold">
-              <FileJson2
-                :size="16"
-                class="text-[var(--color-primary)]"
-              />配置文件
-            </h3>
-            <p class="mt-1 text-xs text-[var(--text-tertiary)]">
-              当前使用：{{ activeConfig?.name || "未选择" }}
-            </p>
-          </div>
-          <Button size="sm" :loading="loadingFiles" @click="loadConfigFiles">
-            <RefreshCw :size="13" />刷新
-          </Button>
-        </div>
-        <div class="aw-data-table-wrap mt-4 max-h-[262px]">
-          <table class="aw-data-table min-w-[560px]">
-            <thead>
-              <tr>
-                <th>文件名</th>
-                <th>状态</th>
-                <th>备份</th>
-                <th>大小</th>
-                <th>更新时间</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-if="loadingFiles">
-                <td colspan="5" class="text-center">加载中...</td>
-              </tr>
-              <tr v-else-if="!configFiles.length">
-                <td colspan="5" class="text-center">暂无配置文件</td>
-              </tr>
-              <tr v-for="item in configFiles" v-else :key="item.path">
-                <td class="font-mono">
-                  {{ item.name }}
-                  <span
-                    v-if="item.active"
-                    class="ml-1 rounded-full bg-[var(--color-primary-bg)] px-2 py-0.5 text-[10px] text-[var(--color-primary)]"
-                  >
-                    当前使用
-                  </span>
-                </td>
-                <td
-                  :class="
-                    item.valid
-                      ? 'text-[var(--color-success)]'
-                      : 'text-[var(--color-error)]'
-                  "
-                  :title="item.error"
-                >
-                  {{ item.valid ? "校验通过" : "校验失败" }}
-                </td>
-                <td
-                  class="whitespace-nowrap"
-                  :title="
-                    backupSummary(item.name).latest
-                      ? `最近备份：${backupSummary(item.name).latest}`
-                      : '暂无备份'
-                  "
-                >
-                  {{
-                    backupSummary(item.name).count
-                      ? `${backupSummary(item.name).count} 天`
-                      : "无"
-                  }}
-                </td>
-                <td class="tabular-nums">{{ formatSize(item.size_bytes) }}</td>
-                <td class="whitespace-nowrap">
-                  {{ formatUpdatedAt(item.updated_at) }}
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-      <section
-        class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
-      >
-        <h3 class="text-sm font-semibold">生成参数</h3>
-        <p class="mt-1 text-xs text-[var(--text-tertiary)]">
-          生成结果先写入临时文件并通过 sing-box check，应用时再命名保存。
-        </p>
-        <div v-if="request" class="mt-4 grid gap-3 sm:grid-cols-2">
-          <label
-            ><span class="text-xs">默认出站</span
-            ><select
-              v-model="request.default_outbound"
-              class="aw-input mt-1 w-full"
-            >
-              <option value="proxy">proxy（策略）</option>
-              <option value="direct">direct（直连）</option>
-            </select></label
-          ><label
-            ><span class="text-xs">日志级别</span
-            ><select v-model="request.log_level" class="aw-input mt-1 w-full">
-              <option
-                v-for="l in [
-                  'trace',
-                  'debug',
-                  'info',
-                  'warn',
-                  'error',
-                  'fatal',
-                  'panic',
-                ]"
-                :key="l"
-              >
-                {{ l }}
-              </option>
-            </select></label
-          ><label
-            ><span class="text-xs">Mixed 监听地址</span
-            ><input
-              v-model="request.inbound_listen"
-              class="aw-input mt-1 w-full" /></label
-          ><label
-            ><span class="text-xs">Mixed 监听端口</span
-            ><input
-              v-model.number="request.inbound_port"
-              type="number"
-              class="aw-input mt-1 w-full" /></label
-          ><label
-            ><span class="text-xs">TUN IPv4 地址</span
-            ><input
-              v-model="request.tun_ipv4_address"
-              class="aw-input mt-1 w-full"
-              placeholder="172.31.255.1/30"
-            /><small class="mt-1 block text-[var(--text-tertiary)]"
-              >使用 CIDR，需避开 LAN、Docker 和 VPN 已占用网段。</small
-            ></label
-          ><label
-            ><span class="text-xs">TUN IPv6 地址</span
-            ><input
-              v-model="request.tun_ipv6_address"
-              class="aw-input mt-1 w-full"
-              placeholder="fdfe:dcba:9875::1/126"
-            /><small class="mt-1 block text-[var(--text-tertiary)]"
-              >使用 IPv6 CIDR；修改后需重新生成并应用配置。</small
-            ></label
+    <section
+      class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
+    >
+      <h3 class="text-sm font-semibold">生成参数</h3>
+      <p class="mt-1 text-xs text-[var(--text-tertiary)]">
+        生成结果先写入临时文件并通过 sing-box check，应用时再命名保存。
+      </p>
+      <div v-if="request" class="mt-4 grid gap-3 sm:grid-cols-2">
+        <label
+          ><span class="text-xs">默认出站</span
+          ><select
+            v-model="request.default_outbound"
+            class="aw-input mt-1 w-full"
           >
-        </div>
-        <p v-else class="mt-4 text-xs text-[var(--text-tertiary)]">
-          正在从后端加载配置生成参数...
-        </p>
-      </section>
-    </div>
+            <option value="proxy">proxy（策略）</option>
+            <option value="direct">direct（直连）</option>
+          </select></label
+        ><label
+          ><span class="text-xs">日志级别</span
+          ><select v-model="request.log_level" class="aw-input mt-1 w-full">
+            <option
+              v-for="l in [
+                'trace',
+                'debug',
+                'info',
+                'warn',
+                'error',
+                'fatal',
+                'panic',
+              ]"
+              :key="l"
+            >
+              {{ l }}
+            </option>
+          </select></label
+        ><label
+          ><span class="text-xs">Mixed 监听地址</span
+          ><input
+            v-model="request.inbound_listen"
+            class="aw-input mt-1 w-full" /></label
+        ><label
+          ><span class="text-xs">Mixed 监听端口</span
+          ><input
+            v-model.number="request.inbound_port"
+            type="number"
+            class="aw-input mt-1 w-full" /></label
+        ><label
+          ><span class="text-xs">TUN IPv4 地址</span
+          ><input
+            v-model="request.tun_ipv4_address"
+            class="aw-input mt-1 w-full"
+            placeholder="172.31.255.1/30"
+          /><small class="mt-1 block text-[var(--text-tertiary)]"
+            >使用 CIDR，需避开 LAN、Docker 和 VPN 已占用网段。</small
+          ></label
+        ><label
+          ><span class="text-xs">TUN IPv6 地址</span
+          ><input
+            v-model="request.tun_ipv6_address"
+            class="aw-input mt-1 w-full"
+            placeholder="fdfe:dcba:9875::1/126"
+          /><small class="mt-1 block text-[var(--text-tertiary)]"
+            >使用 IPv6 CIDR；修改后需重新生成并应用配置。</small
+          ></label
+        >
+      </div>
+      <p v-else class="mt-4 text-xs text-[var(--text-tertiary)]">
+        正在从后端加载配置生成参数...
+      </p>
+    </section>
     <section
       class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)]"
     >

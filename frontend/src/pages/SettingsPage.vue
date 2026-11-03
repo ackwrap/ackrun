@@ -11,19 +11,22 @@ import OtherSettingsPanel from "./settings/OtherSettingsPanel.vue";
 import TrafficBypassPanel from "./settings/TrafficBypassPanel.vue";
 import AppUpdatePanel from "./settings/AppUpdatePanel.vue";
 import ExperimentalSettingsPanel from "./settings/ExperimentalSettingsPanel.vue";
+import MCPPanel from "./settings/MCPPanel.vue";
 import {
   Clock3,
   FlaskConical,
+  Plug,
   RefreshCw,
   Settings,
   ShieldOff,
 } from "lucide-vue-next";
-type SettingsTab = "general" | "bypass" | "experimental" | "update";
+type SettingsTab = "general" | "bypass" | "experimental" | "update" | "mcp";
 const settingsTabs = [
   "general",
   "bypass",
   "experimental",
   "update",
+  "mcp",
 ] as const satisfies readonly SettingsTab[];
 const message = ref(""),
   messageType = ref<"success" | "error" | "info">("success");
@@ -73,7 +76,7 @@ const input =
   <div class="space-y-4">
     <PageHeader title="设置" />
     <div
-      class="flex gap-1 overflow-x-auto border-b border-[var(--border-default)]"
+      class="flex gap-1 overflow-x-auto whitespace-nowrap border-b border-[var(--border-default)] [&>button]:shrink-0"
       role="tablist"
       aria-label="设置分类"
     >
@@ -128,6 +131,19 @@ const input =
         @click="selectTab('update')"
       >
         <RefreshCw :size="16" />检查更新
+      </button>
+      <button
+        class="relative flex items-center gap-2 px-4 py-2.5 text-sm font-medium outline-none"
+        :class="
+          activeTab === 'mcp'
+            ? 'text-[var(--color-primary)]'
+            : 'text-[var(--text-secondary)] hover:bg-[var(--bg-sidebar-hover)]'
+        "
+        role="tab"
+        :aria-selected="activeTab === 'mcp'"
+        @click="selectTab('mcp')"
+      >
+        <Plug :size="16" />MCP
       </button>
     </div>
 
@@ -189,19 +205,16 @@ const input =
       </section>
 
       <OtherSettingsPanel @notify="notify" />
-
     </div>
 
-    <TrafficBypassPanel
-      v-else-if="activeTab === 'bypass'"
-      @notify="notify"
-    />
+    <TrafficBypassPanel v-else-if="activeTab === 'bypass'" @notify="notify" />
 
     <ExperimentalSettingsPanel
       v-else-if="activeTab === 'experimental'"
       @notify="notify"
     />
 
+    <MCPPanel v-else-if="activeTab === 'mcp'" @notify="notify" />
     <AppUpdatePanel v-else @notify="notify" />
   </div>
 </template>

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ackwrap/ackrun/internal/httpclient"
+	"github.com/ackwrap/ackrun/internal/logging"
 	"github.com/ackwrap/ackrun/internal/model"
 	"github.com/ackwrap/ackrun/internal/service"
 	"github.com/gin-gonic/gin"
@@ -39,7 +40,7 @@ func (h *ClashProxyHandler) targetBase() (string, string) {
 	return "http://127.0.0.1:" + port, secret
 }
 
-// Proxy 代理所有 Clash API 请求
+// Proxy 代理已注册的 Clash API 请求。
 func (h *ClashProxyHandler) Proxy(c *gin.Context) {
 	if strings.EqualFold(c.GetHeader("Upgrade"), "websocket") {
 		h.ProxyWebSocket(c)
@@ -53,19 +54,22 @@ func (h *ClashProxyHandler) Proxy(c *gin.Context) {
 	}
 
 	clashURL, secret := h.targetBase()
-	targetURL, err := url.Parse(clashURL + targetPath)
+	targetURL, err := url.Parse(clashURL)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
 			Error: model.APIError{Code: "CLASH_PROXY_ERROR", Message: "Invalid Clash API URL"},
 		})
 		return
 	}
+	// Preserve encoded group names, including spaces, slashes, '?' and '#'.
+	targetURL.Path = targetPath
+	targetURL.RawPath = strings.TrimPrefix(c.Request.URL.EscapedPath(), "/api/v1/clash")
 
 	// 复制查询参数
 	targetURL.RawQuery = c.Request.URL.RawQuery
 
 	// 创建代理请求
-	proxyReq, err := http.NewRequest(c.Request.Method, targetURL.String(), c.Request.Body)
+	proxyReq, err := http.NewRequestWithContext(c.Request.Context(), c.Request.Method, targetURL.String(), c.Request.Body)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
 			Error: model.APIError{Code: "CLASH_PROXY_ERROR", Message: "Failed to create proxy request"},
@@ -94,12 +98,22 @@ func (h *ClashProxyHandler) Proxy(c *gin.Context) {
 	// 发送请求
 	resp, err := client.Do(proxyReq)
 	if err != nil {
+		if c.Request.Method == http.MethodPut {
+			logging.Error("core.proxy_selection", "策略组切换失败：无法连接核心")
+		}
 		c.JSON(http.StatusBadGateway, model.ErrorResponse{
 			Error: model.APIError{Code: "CLASH_PROXY_ERROR", Message: "Failed to connect to Clash API (" + clashURL + "): " + err.Error()},
 		})
 		return
 	}
 	defer resp.Body.Close()
+	if c.Request.Method == http.MethodPut {
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			logging.Info("core.proxy_selection", "核心策略组节点已切换")
+		} else {
+			logging.Error("core.proxy_selection", "策略组切换失败：核心返回 HTTP %d", resp.StatusCode)
+		}
+	}
 
 	// 复制响应头
 	for key, values := range resp.Header {
@@ -140,32 +154,4 @@ func (h *ClashProxyHandler) ProxyWebSocket(c *gin.Context) {
 	httpclient.SetBrowserUserAgent(c.Request)
 
 	proxy.ServeHTTP(c.Writer, c.Request)
-}
-
-// GetClashStatus 获取 Clash API 状态
-func (h *ClashProxyHandler) GetClashStatus(c *gin.Context) {
-	client := &http.Client{Timeout: 5 * time.Second}
-	clashURL, secret := h.targetBase()
-	req, _ := http.NewRequest("GET", clashURL+"/version", nil)
-	httpclient.SetBrowserUserAgent(req)
-	if secret != "" {
-		req.Header.Set("Authorization", "Bearer "+secret)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"connected": false,
-			"error":     err.Error(),
-			"target":    clashURL,
-		})
-		return
-	}
-	defer resp.Body.Close()
-
-	c.JSON(http.StatusOK, gin.H{
-		"connected": resp.StatusCode == http.StatusOK,
-		"status":    resp.StatusCode,
-		"target":    clashURL,
-	})
 }

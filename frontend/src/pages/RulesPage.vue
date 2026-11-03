@@ -6,11 +6,12 @@ import Modal from "@/components/ui/Modal.vue";
 import Toast from "@/components/ui/Toast.vue";
 import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
 import { useRealtimeSocket } from "@/composables/useRealtimeSocket";
-import { api } from "@/services/api";
+import { api, request } from "@/services/api";
 import { writeClipboardText } from "@/utils/clipboard";
 import type {
   GeoAsset,
   RouteRule,
+  RouteRuleRequest,
   RouteRulePreviewResponse,
   RouteRuleSubscription,
   StrategyItem,
@@ -18,19 +19,29 @@ import type {
 } from "@/services/types";
 import GeoDatabaseSection from "./rules/GeoDatabaseSection.vue";
 import RuleListSection from "./rules/RuleListSection.vue";
+import { isFixedRouteRule } from "./rules/useRuleSort";
 import RouteRuleFormModal from "./rules/RouteRuleFormModal.vue";
+import NewRuleStrategyModal from "./rules/NewRuleStrategyModal.vue";
 import RouteRuleImportModal from "./rules/RouteRuleImportModal.vue";
 import RuleSubscriptionActionsModal from "./rules/RuleSubscriptionActionsModal.vue";
 import RuleSubscriptionFormModal from "./rules/RuleSubscriptionFormModal.vue";
 import RuleSubscriptionSection from "./rules/RuleSubscriptionSection.vue";
 import StrategyFormModal from "./collections/StrategyFormModal.vue";
-import type { StrategyCollectionRequest } from "./collections/collectionTypes";
-const deviceStrategy = ref<StrategyItem | null>(null);
-const deviceRule = ref<RouteRule | null>(null);
-const deviceEnabled = ref(true);
-const deviceSaving = ref(false);
-const deviceConnectivity = ref({ test_url: "", interval_seconds: 300 });
+import type {
+  NodeGroup,
+  StrategyCollectionRequest,
+} from "./collections/collectionTypes";
+const ruleStrategy = ref<StrategyItem | null>(null);
+const strategyRule = ref<RouteRule | null>(null);
+const strategyEnabled = ref(true);
+const strategySaving = ref(false);
+const strategyConnectivity = ref({ test_url: "", interval_seconds: 300 });
+const strategyGroups = ref<NodeGroup[]>([]);
+const strategyError = ref("");
+const strategyLoadingId = ref<number | null>(null);
 const ruleSaving = ref(false);
+const newRuleDraft = ref<RouteRuleRequest | null>(null);
+const ruleOrderSaving = ref(false);
 const rules = ref<RouteRule[]>([]),
   subscriptions = ref<RouteRuleSubscription[]>([]),
   geoAssets = ref<GeoAsset[]>([]),
@@ -114,7 +125,9 @@ async function load() {
       api.getGeoAssets(),
     ]);
     if (version !== loadVersion) return;
-    [rules.value, subscriptions.value, geoAssets.value] = result;
+    if (!ruleOrderSaving.value) rules.value = result[0];
+    subscriptions.value = result[1];
+    geoAssets.value = result[2];
   } catch (e: any) {
     if (version !== loadVersion) return;
     show(`规则加载失败: ${e.message}`, "error");
@@ -165,6 +178,7 @@ function editRule(r: RouteRule) {
 }
 async function saveRule() {
   if (ruleSaving.value) return;
+  if (!name.value.trim()) return show("请填写规则名称", "error");
   if (!isFinalStrategyRule(editing.value) && !values.value.length)
     return show("请填写匹配值", "error");
   ruleSaving.value = true;
@@ -189,6 +203,10 @@ async function saveRule() {
       outbound: outbound.value,
       invert: invert.value,
     };
+    if (!editing.value && body.outbound === "proxy") {
+      beginNewRuleStrategy({ ...body, enabled: requestedEnabled });
+      return;
+    }
     const saved = editing.value
       ? await api.updateRouteRule(editing.value.id, body)
       : await api.createRouteRule(body);
@@ -204,23 +222,7 @@ async function saveRule() {
     await load();
     if (isDevice) {
       show("设备规则已保存，请完成固定节点绑定；新规则在绑定后启用");
-      try {
-        const [strategies, connectivity] = await Promise.all([
-          api.getRouteStrategies(),
-          api.getConnectivitySettings(),
-        ]);
-        const strategy = strategies.find((item) => item.rule_id === saved.id);
-        if (!strategy) throw new Error("未找到设备策略");
-        deviceRule.value = saved;
-        deviceEnabled.value = requestedEnabled;
-        deviceConnectivity.value = connectivity;
-        deviceStrategy.value = strategy;
-      } catch (e: any) {
-        show(
-          `设备规则已保存，节点选择加载失败：${e.message}。可编辑规则重试或前往策略组配置。`,
-          "error",
-        );
-      }
+      await openRuleStrategy(saved, requestedEnabled);
     }
   } catch (e: any) {
     show(`规则保存失败: ${e.message}`, "error");
@@ -228,29 +230,89 @@ async function saveRule() {
     ruleSaving.value = false;
   }
 }
-async function saveDeviceStrategy(payload: StrategyCollectionRequest) {
-  if (!deviceStrategy.value || !deviceRule.value || deviceSaving.value) return;
-  deviceSaving.value = true;
+function beginNewRuleStrategy(body: RouteRuleRequest) {
+  resetRule();
+  name.value = body.name;
+  enabled.value = body.enabled;
+  ruleType.value = body.rule_type;
+  valuesText.value = body.values.join("\n");
+  directDomainsText.value = body.direct_domains?.join("\n") ?? "";
+  outbound.value = body.outbound;
+  invert.value = body.invert;
+  newRuleDraft.value = body;
+  formOpen.value = false;
+}
+function cancelNewRuleStrategy() {
+  newRuleDraft.value = null;
+  formOpen.value = true;
+}
+async function finishNewRule() {
+  newRuleDraft.value = null;
+  resetRule();
+  show("规则与代理策略已添加");
+  await load();
+}
+async function openRuleStrategy(
+  rule: RouteRule,
+  requestedEnabled = rule.enabled,
+) {
+  if (strategyLoadingId.value !== null || strategySaving.value) return;
+  strategyLoadingId.value = rule.id;
+  strategyError.value = "";
   try {
-    const current = deviceStrategy.value.collection;
+    const [strategies, connectivity, groups] = await Promise.all([
+      api.getRouteStrategies(),
+      api.getConnectivitySettings(),
+      rule.rule_type === "source_ip_cidr"
+        ? Promise.resolve<NodeGroup[]>([])
+        : request<NodeGroup[]>("/node-groups"),
+    ]);
+    const strategy = strategies.find(
+      (item) => item.rule_id === rule.id && item.kind === "proxy",
+    );
+    if (!strategy) throw new Error("未找到此规则的代理策略");
+    strategyRule.value = rule;
+    strategyEnabled.value = requestedEnabled;
+    strategyConnectivity.value = connectivity;
+    strategyGroups.value = groups ?? [];
+    ruleStrategy.value = strategy;
+  } catch (e) {
+    show(
+      `策略加载失败：${e instanceof Error ? e.message : "请求失败"}`,
+      "error",
+    );
+  } finally {
+    strategyLoadingId.value = null;
+  }
+}
+function closeRuleStrategy() {
+  ruleStrategy.value = null;
+  strategyRule.value = null;
+  strategyError.value = "";
+}
+async function saveRuleStrategy(payload: StrategyCollectionRequest) {
+  if (!ruleStrategy.value || !strategyRule.value || strategySaving.value)
+    return;
+  strategySaving.value = true;
+  strategyError.value = "";
+  try {
+    const current = ruleStrategy.value.collection;
     if (current) await api.updateProxyCollection(current.id, payload);
     else
-      deviceStrategy.value.collection =
-        await api.createProxyCollection(payload);
-    if (deviceRule.value.enabled !== deviceEnabled.value) {
-      await api.updateRouteRule(deviceRule.value.id, {
-        ...deviceRule.value,
-        enabled: deviceEnabled.value,
+      ruleStrategy.value.collection = await api.createProxyCollection(payload);
+    if (strategyRule.value.enabled !== strategyEnabled.value) {
+      await api.updateRouteRule(strategyRule.value.id, {
+        ...strategyRule.value,
+        enabled: strategyEnabled.value,
       });
     }
-    deviceStrategy.value = null;
-    deviceRule.value = null;
-    show("设备固定节点与 DNS 跟随已保存，配置应用结果请查看控制台");
+    closeRuleStrategy();
+    show("代理策略已保存");
     await load();
-  } catch (e: any) {
-    show(`设备策略保存失败：${e.message}`, "error");
+  } catch (e) {
+    strategyError.value = `策略保存失败：${e instanceof Error ? e.message : "请求失败"}`;
   } finally {
-    deviceSaving.value = false;
+    strategySaving.value = false;
   }
 }
 async function toggleRule(r: RouteRule) {
@@ -287,23 +349,31 @@ async function removeRule() {
     show(`规则删除失败: ${e.message}`, "error");
   }
 }
-async function move(i: number, d: -1 | 1) {
-  const n = i + d;
-  if (n < 0 || n >= rules.value.length) return;
-  const protectedRule = (rule: RouteRule) =>
-    rule.system_key === "ad_block" ||
-    rule.system_key === "global_direct" ||
-    ["fallback", "final"].includes(rule.rule_type) ||
-    (rule.is_system && ["广告拦截", "全球直连"].includes(rule.name));
-  if (protectedRule(rules.value[i]) || protectedRule(rules.value[n])) return;
-  const next = [...rules.value];
-  [next[i], next[n]] = [next[n], next[i]];
-  rules.value = next;
+async function reorderRules(ids: number[]) {
+  if (ruleOrderSaving.value) return;
+  const previous = rules.value;
+  const byID = new Map(previous.map((rule) => [rule.id, rule]));
+  if (
+    ids.length !== previous.length ||
+    new Set(ids).size !== ids.length ||
+    ids.some((id) => !byID.has(id)) ||
+    previous.some(
+      (rule, index) => isFixedRouteRule(rule) && ids[index] !== rule.id,
+    ) ||
+    ids.every((id, index) => id === previous[index].id)
+  )
+    return;
+  ruleOrderSaving.value = true;
+  rules.value = ids.map((id) => byID.get(id)!);
+  ++loadVersion;
   try {
-    await api.reorderRouteRules(next.map((x) => x.id));
-    await load();
+    await api.reorderRouteRules(ids);
+    show("规则顺序已保存");
   } catch (e: any) {
+    rules.value = previous;
     show(`规则排序失败: ${e.message}`, "error");
+  } finally {
+    ruleOrderSaving.value = false;
     await load();
   }
 }
@@ -377,12 +447,13 @@ function editSub(x: RouteRuleSubscription) {
 }
 async function saveSub() {
   try {
+    let generatedRule: RouteRuleRequest | null = null;
     if (subEdit.value)
       await api.updateRouteRuleSubscription(subEdit.value.id, sub.value);
     else {
       const x = await api.createRouteRuleSubscription(sub.value);
-      if (generate.value)
-        await api.createRouteRule({
+      if (generate.value) {
+        const body: RouteRuleRequest = {
           name: x.name,
           enabled: x.enabled,
           priority: 0,
@@ -390,12 +461,16 @@ async function saveSub() {
           values: [x.tag],
           outbound: referenceOutbound.value,
           invert: false,
-        });
+        };
+        if (body.outbound === "proxy") generatedRule = body;
+        else await api.createRouteRule(body);
+      }
     }
     show(subEdit.value ? "规则订阅已更新" : "规则订阅已添加");
     subFormOpen.value = false;
     resetSub();
     await load();
+    if (generatedRule) beginNewRuleStrategy(generatedRule);
   } catch (e: any) {
     show(`规则订阅保存失败: ${e.message}`, "error");
   }
@@ -448,16 +523,22 @@ async function createRef(x: RouteRuleSubscription, o: string) {
     )
   )
     return show("引用规则已存在", "error");
+  const body: RouteRuleRequest = {
+    name: x.name,
+    enabled: x.enabled,
+    priority: 0,
+    rule_type: "rule_set",
+    values: [x.tag],
+    outbound: o,
+    invert: false,
+  };
+  if (o === "proxy") {
+    actions.value = null;
+    beginNewRuleStrategy(body);
+    return;
+  }
   try {
-    await api.createRouteRule({
-      name: x.name,
-      enabled: x.enabled,
-      priority: 0,
-      rule_type: "rule_set",
-      values: [x.tag],
-      outbound: o,
-      invert: false,
-    });
+    await api.createRouteRule(body);
     actions.value = null;
     show("引用规则已生成");
     await load();
@@ -570,6 +651,8 @@ onBeforeUnmount(() => clearInterval(poll));
         @update="updateGeo" /><RuleListSection
         :rules="rules"
         :subscriptions="subscriptions"
+        :sorting="ruleOrderSaving"
+        :strategy-loading-id="strategyLoadingId"
         @refresh="load"
         @add-geo="addRule('geosite')"
         @add-device="addRule('source_ip_cidr')"
@@ -577,9 +660,10 @@ onBeforeUnmount(() => clearInterval(poll));
         @preview="openRulePreview"
         @share="shareRules"
         @import="openImport"
-        @move="move"
+        @reorder="reorderRules"
         @toggle="toggleRule"
         @edit="editRule"
+        @edit-strategy="openRuleStrategy"
         @remove="pending = $event"
         @detail="detailRule = $event" />
       <RuleSubscriptionSection
@@ -606,16 +690,23 @@ onBeforeUnmount(() => clearInterval(poll));
       "
       @save="saveRule"
     />
+    <NewRuleStrategyModal
+      v-if="newRuleDraft"
+      :rule="newRuleDraft"
+      @close="cancelNewRuleStrategy"
+      @saved="finishNewRule"
+    />
     <StrategyFormModal
-      v-if="deviceStrategy"
-      :key="deviceStrategy.rule_id"
-      :strategy="deviceStrategy"
-      :groups="[]"
-      :connectivity="deviceConnectivity"
-      :saving="deviceSaving"
-      @close="deviceStrategy = null"
-      @save="saveDeviceStrategy"
-      @error="show($event, 'error')"
+      v-if="ruleStrategy"
+      :key="ruleStrategy.rule_id"
+      :strategy="ruleStrategy"
+      :groups="strategyGroups"
+      :connectivity="strategyConnectivity"
+      :saving="strategySaving"
+      :save-error="strategyError"
+      @close="closeRuleStrategy"
+      @save="saveRuleStrategy"
+      @error="strategyError = $event"
     />
     <RouteRuleImportModal
       :open="importOpen"

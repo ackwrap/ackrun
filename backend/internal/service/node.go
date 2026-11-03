@@ -95,7 +95,23 @@ func (svc *NodeService) Import(req model.NodeImportRequest) (*model.NodeImportRe
 		return nil, err
 	}
 	logging.Info("node.import", "imported %d nodes into manual subscription %d", len(nodes), manual.ID)
-	return &model.NodeImportResponse{Imported: len(nodes), SubscriptionID: manual.ID}, nil
+	response := &model.NodeImportResponse{Imported: len(nodes), SubscriptionID: manual.ID}
+	if err := svc.syncRegionalGroups(); err != nil {
+		response.Warning = "节点已导入，但自动地域分组失败: " + err.Error()
+	}
+	return response, nil
+}
+
+func (svc *NodeService) syncRegionalGroups() error {
+	created, err := NewNodeGroupService(svc.store).AutoGroup()
+	if err != nil {
+		logging.Error("node_group.auto_group", "节点变更后自动地域分组失败: %v", err)
+		return err
+	}
+	if svc.realtime != nil {
+		svc.realtime.Broadcast("node_group.updated", map[string]interface{}{"created": created})
+	}
+	return nil
 }
 
 func (svc *NodeService) ImportPreview(req model.NodeImportRequest) (*model.NodeImportPreviewResponse, error) {
@@ -219,6 +235,9 @@ func (svc *NodeService) SetEnabled(uid string, enabled bool) (*model.ActionRespo
 	logging.Info("node.enabled", "setting node %s enabled=%v", uid, enabled)
 	if err := svc.store.SetNodeEnabled(uid, enabled); err != nil {
 		return nil, err
+	}
+	if enabled {
+		_ = svc.syncRegionalGroups()
 	}
 	return &model.ActionResponse{Success: true, Message: "node enabled updated"}, nil
 }
@@ -557,6 +576,9 @@ func (svc *NodeService) AddEmoji(uids []string) (*model.NodeBatchResult, error) 
 		}
 		result.Success++
 	}
+	if result.Success > 0 {
+		_ = svc.syncRegionalGroups()
+	}
 	return result, nil
 }
 
@@ -597,6 +619,9 @@ func (svc *NodeService) BatchRename(req model.NodeBatchRenameRequest) (*model.No
 			continue
 		}
 		result.Success++
+	}
+	if result.Success > 0 {
+		_ = svc.syncRegionalGroups()
 	}
 	return result, nil
 }

@@ -486,41 +486,6 @@ onBeforeUnmount(() => {
         </div>
 
         <div
-          v-if="isDevice"
-          class="space-y-2 rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--bg-base)] p-3 text-xs leading-6 text-[var(--text-secondary)]"
-        >
-          <p>
-            支持单填 MAC、单填 IP/CIDR 或混填，任一值命中即识别为此设备。 MAC
-            无需配套 IP，但必须在路由器入口可见且保持稳定；随机 MAC、跨路由或
-            NAT 可能影响身份识别。使用 IP 时建议固定 DHCP
-            地址，并覆盖设备实际使用的 IPv4 和 IPv6 地址。
-          </p>
-          <p>
-            含 MAC 的规则运行需要开启并常驻“流量防泄漏”保护，以及系统 TProxy 和
-            ip-full
-            支持；受保护流量的设备身份暂不可识别时拒绝连接，不回落普通直连。 MAC
-            入口接管 TCP/UDP，其他外网协议保持阻断。
-            具体可用性取决于路由器入口与系统能力，配置预览不代表已通过实机验证。
-          </p>
-          <p>
-            保存后选择一个固定节点，非排除接口的外网流量默认走该节点，DNS
-            默认使用同一出口并优先于普通 DNS、FakeIP
-            和业务分流规则。本地网络自动直连：IPv4 私网、链路本地地址及 IPv6
-            ULA、链路本地地址，不强制经过节点。FakeIP
-            地址池会从本地直连范围中扣除， 还原为真实目标后再决定出口。需要
-            Linux/OpenWrt、规则模式、TUN 接管及 DNS 管理；设备网关须指向运行
-            Ackwrap 的路由器。仅 IP 规则的明确排除接口优先直连；MAC
-            规则不能与接口或来源直连排除同时启用。本地目标 IP/CIDR
-            和进程排除可保留；需移除外网目标
-            IP、域名排除及与设备重叠的来源排除，并关闭软/硬件流量卸载。
-            高级平台路由不能覆盖该设备；独立代理入口仍按各自策略转发。
-            未命中直连白名单的外网流量在节点失效时连接失败，不自动直连；本地网络仍可访问。
-            路由器自身节点连接仍保留防回环排除；MAC 设备入口不使用该豁免。UDP
-            等协议需节点支持。
-          </p>
-        </div>
-
-        <div
           v-if="!isFinalStrategy && ruleType === 'mixed'"
           class="space-y-3 rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--bg-base)] p-3"
         >

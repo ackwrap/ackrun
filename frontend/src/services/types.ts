@@ -81,38 +81,6 @@ export interface ToolLogEntry {
   message: string;
 }
 
-export interface MaintenanceCheck {
-  key: string;
-  label: string;
-  status: "pass" | "warn" | "fail";
-  message: string;
-}
-
-export interface MaintenanceCheckResponse {
-  success: boolean;
-  checks: MaintenanceCheck[];
-}
-
-export interface CoreDiagnosticsResponse {
-  generated_at: number;
-  platform: string;
-  architecture: string;
-  version?: string;
-  running: boolean;
-  pid?: number;
-  binary_path: string;
-  config_path?: string;
-  config_present: boolean;
-  config_valid: boolean;
-  network: MaintenanceCheckResponse;
-  logs: {
-    total: number;
-    stdout: number;
-    stderr: number;
-    error_lines: number;
-  };
-}
-
 export interface UpdateSettings {
   acceleration: string;
   custom_mirror_url?: string;
@@ -422,6 +390,21 @@ export interface Subscription {
   updated_at: number;
 }
 
+export interface ControlSummary {
+  monthly_traffic: {
+    month: string;
+    upload_bytes: number;
+    download_bytes: number;
+    tracking_since: number;
+  };
+  traffic_error?: string;
+  subscription_total_bytes: number;
+  subscription_count: number;
+  traffic_reported_count: number;
+  expired_subscription_count: number;
+  next_expiry: { name: string; expire_at: number } | null;
+}
+
 export interface SubscriptionRequest {
   name: string;
   url: string;
@@ -624,6 +607,7 @@ export interface NodeImportRequest {
 }
 
 export interface NodeImportResponse {
+  warning?: string;
   imported: number;
   subscription_id: number;
 }
@@ -673,6 +657,7 @@ export interface RouteRuleRequest {
   direct_domains?: string[];
   outbound: string;
   invert: boolean;
+  strategy?: ProxyCollectionRequest;
 }
 
 export interface RouteRulePreviewResponse {
@@ -836,6 +821,8 @@ export interface ProxyCollectionRequest {
   route_rule_id: number;
   route_rule_ids: number[];
   node_uids: string[];
+  source_type?: string;
+  referenced_group_ids?: number[];
 }
 
 export interface StrategyItem {

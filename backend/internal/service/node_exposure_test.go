@@ -18,10 +18,10 @@ func TestNodeExposureServiceValidatesAuthenticationAndListenerConflicts(t *testi
 	svc := NewNodeExposureService(db)
 
 	created, err := svc.Create(model.NodeExposureRequest{
-		Name:           "local socks",
+		Name:           "local mixed",
 		SubscriptionID: subscriptionID,
 		NodeUID:        nodeUID,
-		InboundType:    "socks",
+		InboundType:    "mixed",
 		Listen:         "127.0.0.1",
 		ListenPort:     18080,
 		Enabled:        true,
@@ -44,7 +44,7 @@ func TestNodeExposureServiceValidatesAuthenticationAndListenerConflicts(t *testi
 		Name:           "unsafe remote",
 		SubscriptionID: subscriptionID,
 		NodeUID:        nodeUID,
-		InboundType:    "http",
+		InboundType:    "mixed",
 		Listen:         "0.0.0.0",
 		ListenPort:     18081,
 		Enabled:        true,
@@ -57,7 +57,7 @@ func TestNodeExposureServiceValidatesAuthenticationAndListenerConflicts(t *testi
 		Name:           "blank password",
 		SubscriptionID: subscriptionID,
 		NodeUID:        nodeUID,
-		InboundType:    "socks",
+		InboundType:    "mixed",
 		Listen:         "127.0.0.1",
 		ListenPort:     18083,
 		Password:       " ",
@@ -147,7 +147,7 @@ func TestNodeExposureMutationRollsBackWhenRuntimeApplyFails(t *testing.T) {
 	svc := NewNodeExposureService(db)
 	created, err := svc.Create(model.NodeExposureRequest{
 		Name: "original", SubscriptionID: subscriptionID, NodeUID: nodeUID,
-		InboundType: "socks", Listen: "127.0.0.1", ListenPort: 18100, Enabled: true,
+		InboundType: "mixed", Listen: "127.0.0.1", ListenPort: 18100, Enabled: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -157,7 +157,7 @@ func TestNodeExposureMutationRollsBackWhenRuntimeApplyFails(t *testing.T) {
 	svc.SetRuntimeDependencies(runtime, &nodeExposureCoreStub{running: true})
 	_, err = svc.Update(created.ID, model.NodeExposureRequest{
 		Name: "changed", SubscriptionID: subscriptionID, NodeUID: nodeUID,
-		InboundType: "http", Listen: "127.0.0.1", ListenPort: 18101, Enabled: true,
+		InboundType: "mixed", Listen: "127.0.0.1", ListenPort: 18101, Enabled: true,
 	})
 	if !errors.Is(err, ErrNodeExposureApply) {
 		t.Fatalf("update error = %v", err)
@@ -166,7 +166,7 @@ func TestNodeExposureMutationRollsBackWhenRuntimeApplyFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if restored.Name != "original" || restored.InboundType != "socks" || restored.ListenPort != 18100 {
+	if restored.Name != "original" || restored.InboundType != "mixed" || restored.ListenPort != 18100 {
 		t.Fatalf("update rollback = %+v", restored)
 	}
 	if len(runtime.upserts) != 2 || runtime.upserts[0].Name != "changed" || runtime.upserts[1].Name != "original" {
@@ -194,7 +194,7 @@ func TestNodeExposureCreateRestoresRuntimeAfterApplyFailure(t *testing.T) {
 
 	_, err := svc.Create(model.NodeExposureRequest{
 		Name: "restart rollback", SubscriptionID: subscriptionID, NodeUID: nodeUID,
-		InboundType: "socks", Listen: "127.0.0.1", ListenPort: 18110, Enabled: true,
+		InboundType: "mixed", Listen: "127.0.0.1", ListenPort: 18110, Enabled: true,
 	})
 	if !errors.Is(err, ErrNodeExposureApply) {
 		t.Fatalf("create error = %v", err)
@@ -223,7 +223,7 @@ func TestNodeExposureApplyErrorRedactsPassword(t *testing.T) {
 
 	_, err := svc.Create(model.NodeExposureRequest{
 		Name: "redaction", SubscriptionID: subscriptionID, NodeUID: nodeUID,
-		InboundType: "socks", Listen: "127.0.0.1", ListenPort: 18111,
+		InboundType: "mixed", Listen: "127.0.0.1", ListenPort: 18111,
 		Username: "test-user", Password: password, Enabled: true,
 	})
 	if !errors.Is(err, ErrNodeExposureApply) {
@@ -243,7 +243,7 @@ func TestNodeExposureDefersRuntimeApplyWhileCoreIsStopped(t *testing.T) {
 
 	if _, err := svc.Create(model.NodeExposureRequest{
 		Name: "stopped core", SubscriptionID: subscriptionID, NodeUID: nodeUID,
-		InboundType: "socks", Listen: "127.0.0.1", ListenPort: 18112, Enabled: true,
+		InboundType: "mixed", Listen: "127.0.0.1", ListenPort: 18112, Enabled: true,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +260,7 @@ func TestNodeExposureSyncRuntimeUsesStoredItems(t *testing.T) {
 		Name:           "sync item",
 		SubscriptionID: subscriptionID,
 		NodeUID:        nodeUID,
-		InboundType:    "socks",
+		InboundType:    "mixed",
 		Listen:         "127.0.0.1",
 		ListenPort:     18082,
 		Enabled:        true,
@@ -285,7 +285,7 @@ func TestNodeExposureSyncRuntimeRedactsStoredPassword(t *testing.T) {
 	svc := NewNodeExposureService(db)
 	if _, err := svc.Create(model.NodeExposureRequest{
 		Name: "sync redaction", SubscriptionID: subscriptionID, NodeUID: nodeUID,
-		InboundType: "socks", Listen: "127.0.0.1", ListenPort: 18113,
+		InboundType: "mixed", Listen: "127.0.0.1", ListenPort: 18113,
 		Username: "test-user", Password: password, Enabled: true,
 	}); err != nil {
 		t.Fatal(err)

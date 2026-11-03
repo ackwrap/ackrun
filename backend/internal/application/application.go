@@ -29,16 +29,14 @@ type Application struct {
 	store                  *store.Store
 	realtime               *service.RealtimeService
 	singbox                *service.SingboxService
+	runtime                *service.RuntimeService
 	appUpdate              *service.AppUpdateService
 	reconcile              *service.ConfigReconcileService
 	coreRestart            *service.CoreRestartScheduler
 	subscription           *service.SubscriptionService
 	routeRule              *service.RouteRuleService
 	proxyCollection        *service.ProxyCollectionService
-	advanced               *service.AdvancedRoutingService
-	alert                  *service.AlertService
 	sshHost                *service.SSHHostService
-	simpleSetup            *service.SimpleSetupService
 	stopToolLogEvents      func()
 	toolLogEventsCompleted chan struct{}
 
@@ -79,16 +77,8 @@ func New(options Options) (*Application, error) {
 
 	coreLogSvc := service.NewCoreLogService()
 	singboxSvc := service.NewSingboxService(options.Paths, realtimeSvc, coreLogSvc, db)
-	alertSvc, err := service.NewAlertService(db, options.Paths)
-	if err != nil {
-		stopToolLogEvents()
-		<-toolLogEventsCompleted
-		_ = db.Close()
-		return nil, fmt.Errorf("initialize alert service: %w", err)
-	}
 	sshHostSvc, err := service.NewSSHHostService(db, options.Paths, singboxSvc)
 	if err != nil {
-		alertSvc.Close()
 		stopToolLogEvents()
 		<-toolLogEventsCompleted
 		_ = db.Close()
@@ -99,6 +89,7 @@ func New(options Options) (*Application, error) {
 		logging.Error("core.cleanup", "启动时清理 sing-box 网络残留失败: %v", err)
 	}
 	runtimeSvc := service.NewRuntimeService(options.Paths, db, singboxSvc)
+	singboxSvc.SetBeforeStopHook(runtimeSvc.SampleTraffic)
 	installerSvc := service.NewInstallerService(db, options.Paths, realtimeSvc)
 	configSvc := service.NewConfigService(options.Paths, db, realtimeSvc)
 	dnsSvc := service.NewDNSService(db, options.Paths)
@@ -138,15 +129,13 @@ func New(options Options) (*Application, error) {
 	routeRuleSvc.SetDeviceProtectionCore(singboxSvc)
 	settingsSvc.SetGeoSourcePreparer(routeRuleSvc)
 	proxyCollectionSvc := service.NewProxyCollectionService(db, realtimeSvc)
+	routeRuleSvc.SetProxyCollectionService(proxyCollectionSvc)
 	configGenSvc := service.NewConfigGeneratorService(db, options.Paths, singboxSvc)
 	configGenSvc.SetRuntimeAPISecret(coreAPIToken)
 	nodeExposureSvc := service.NewNodeExposureService(db)
 	nodeExposureRuntime := service.NewNodeExposureRuntimeClient(coreAPIToken)
 	nodeExposureSvc.SetRuntimeDependencies(nodeExposureRuntime, singboxSvc)
-	advancedSvc := service.NewAdvancedRoutingService(db, nodeExposureRuntime, singboxSvc, realtimeSvc, coreAPIToken)
-	advancedSvc.SetAlertService(alertSvc)
-	subscriptionSvc.SetAlertService(alertSvc)
-	singboxSvc.SetStartHooks(configGenSvc.EnsureRuntimeAPIConfig, nodeExposureRuntime.WaitReady, combineStartHooks(nodeExposureSvc.SyncRuntime, advancedSvc.SyncRuntime))
+	singboxSvc.SetStartHooks(configGenSvc.EnsureRuntimeAPIConfig, nodeExposureRuntime.WaitReady, nodeExposureSvc.SyncRuntime)
 	settingsSvc.SetModeDependencies(singboxSvc, configGenSvc)
 	settingsSvc.SetConnectivitySettingsHook(proxyCollectionSvc.RefreshHealthCheckJobs)
 	reconcileSvc := service.NewConfigReconcileService(configGenSvc, realtimeSvc)
@@ -154,8 +143,10 @@ func New(options Options) (*Application, error) {
 	appUpdateSvc := service.NewAppUpdateService(db, options.Paths, singboxSvc, realtimeSvc)
 	dashboardSvc := service.NewDashboardService(db, options.Paths)
 	nodeGroupSvc := service.NewNodeGroupService(db)
+	if _, err := nodeGroupSvc.AutoGroup(); err != nil {
+		logging.Error("node_group.auto_group", "启动时自动地域分组失败: %v", err)
+	}
 	subscriptionSvc.SetConfigReconciler(reconcileSvc)
-	simpleSetupSvc := service.NewSimpleSetupService(db, options.Paths, installerSvc, subscriptionSvc, routeRuleSvc, configGenSvc, singboxSvc, realtimeSvc)
 
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
@@ -164,13 +155,11 @@ func New(options Options) (*Application, error) {
 		gin.RecoveryWithWriter(accessTokenRedactingWriter{Writer: gin.DefaultErrorWriter}),
 	)
 	router.Use(api.SecurityMiddleware(options.APIToken))
-	router.Use(api.SimpleSetupMutationGuard(simpleSetupSvc))
-	api.RegisterSimpleSetupRoutes(router, simpleSetupSvc)
 	api.RegisterSSHMCPRoutes(router, service.NewSSHMCPService(db), sshHostSvc)
-	api.RegisterRoutes(router, runtimeSvc, installerSvc, singboxSvc, configSvc, settingsSvc, subscriptionSvc, nodeSvc, nodeExposureSvc, routeRuleSvc, proxyCollectionSvc, configGenSvc, realtimeSvc, coreLogSvc, dnsSvc, nodeGroupSvc, reconcileSvc, coreRestartSvc, appUpdateSvc, dashboardSvc, advancedSvc, alertSvc, sshHostSvc)
+	api.RegisterRoutes(router, runtimeSvc, installerSvc, singboxSvc, configSvc, settingsSvc, subscriptionSvc, nodeSvc, nodeExposureSvc, routeRuleSvc, proxyCollectionSvc, configGenSvc, realtimeSvc, coreLogSvc, dnsSvc, nodeGroupSvc, reconcileSvc, coreRestartSvc, appUpdateSvc, dashboardSvc, sshHostSvc)
+	api.RegisterMCPRoutes(router, service.NewMCPService(db), options.APIToken)
 	if err := registerWebUI(router); err != nil {
 		reconcileSvc.Close()
-		alertSvc.Close()
 		stopToolLogEvents()
 		<-toolLogEventsCompleted
 		_ = db.Close()
@@ -182,33 +171,17 @@ func New(options Options) (*Application, error) {
 		store:                  db,
 		realtime:               realtimeSvc,
 		singbox:                singboxSvc,
+		runtime:                runtimeSvc,
 		appUpdate:              appUpdateSvc,
 		reconcile:              reconcileSvc,
 		coreRestart:            coreRestartSvc,
 		subscription:           subscriptionSvc,
 		routeRule:              routeRuleSvc,
 		proxyCollection:        proxyCollectionSvc,
-		advanced:               advancedSvc,
-		alert:                  alertSvc,
 		sshHost:                sshHostSvc,
-		simpleSetup:            simpleSetupSvc,
 		stopToolLogEvents:      stopToolLogEvents,
 		toolLogEventsCompleted: toolLogEventsCompleted,
 	}, nil
-}
-
-func combineStartHooks(hooks ...func() error) func() error {
-	return func() error {
-		for _, hook := range hooks {
-			if hook == nil {
-				continue
-			}
-			if err := hook(); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
 }
 
 func (app *Application) Handler() http.Handler {
@@ -224,19 +197,13 @@ func (app *Application) Start() error {
 	if app.started {
 		return nil
 	}
-	setupState, err := app.store.SimpleSetupState()
-	if err != nil {
-		return err
-	}
 	if err := app.coreRestart.StartScheduler(); err != nil {
 		logging.Error("core.restart_scheduler", "启动核心定时重启调度器失败: %v", err)
 	}
-	if setupState != "prepared" && setupState != "applied" {
-		app.subscription.StartScheduler()
-	}
+	app.subscription.StartScheduler()
 	app.routeRule.StartScheduler()
 	app.proxyCollection.StartScheduler()
-	app.advanced.Start()
+	app.runtime.StartTrafficRecording()
 	app.started = true
 	logging.Info("application.start", "backend schedulers started")
 	return nil
@@ -256,14 +223,6 @@ func (app *Application) StartCoreIfConfigured() error {
 	defer app.lifecycleMu.Unlock()
 	if app.closed {
 		return ErrClosed
-	}
-	setupState, err := app.store.SimpleSetupState()
-	if err != nil {
-		return err
-	}
-	if setupState == "prepared" || setupState == "applied" {
-		logging.Info("core.autostart", "一键配置尚未完成，等待用户重试")
-		return nil
 	}
 	settings, err := app.store.GetGeneralSettings()
 	if err != nil {
@@ -285,24 +244,20 @@ func (app *Application) PrepareShutdown() {
 		return
 	}
 	app.closed = true
-	if app.simpleSetup != nil {
-		app.simpleSetup.Close()
-	}
 	app.sshHost.Close()
 	if app.started {
-		app.advanced.Stop()
 		app.coreRestart.StopScheduler()
 		app.proxyCollection.StopScheduler()
 		app.routeRule.StopScheduler()
 		app.subscription.StopScheduler()
 		app.started = false
 	}
-	app.alert.Close()
 	if app.singbox.IsRunning() {
 		if _, err := app.singbox.Shutdown(); err != nil {
 			logging.Error("application.shutdown", "stop sing-box during shutdown: %v", err)
 		}
 	}
+	app.runtime.StopTrafficRecording()
 	logging.Info("application.shutdown", "backend background work stopped")
 }
 

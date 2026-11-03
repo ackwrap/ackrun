@@ -27,6 +27,21 @@ func (h *NodeExposureHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, items)
 }
 
+func (h *NodeExposureHandler) Share(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{Error: model.APIError{Code: "INVALID_ID", Message: "无效的端口绑定 ID"}})
+		return
+	}
+	resp, err := h.service.Share(id, c.Request.Host)
+	if err != nil {
+		writeNodeExposureError(c, "NODE_EXPOSURE_SHARE_FAILED", err)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
 func (h *NodeExposureHandler) Create(c *gin.Context) {
 	var req model.NodeExposureRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

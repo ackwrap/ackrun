@@ -182,9 +182,9 @@ func (s *NodeExposureService) normalize(req model.NodeExposureRequest, existing 
 		return nil, fmt.Errorf("%w: 必须选择目标节点", ErrNodeExposureInvalid)
 	}
 	switch item.InboundType {
-	case "http", "socks", "mixed":
+	case "mixed":
 	default:
-		return nil, fmt.Errorf("%w: 入站协议必须是 http、socks 或 mixed", ErrNodeExposureInvalid)
+		return nil, fmt.Errorf("%w: 端口绑定仅支持 mixed 协议", ErrNodeExposureInvalid)
 	}
 	ip := net.ParseIP(item.Listen)
 	if ip == nil {

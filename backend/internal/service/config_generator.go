@@ -180,9 +180,6 @@ func (s *ConfigGeneratorService) ReconcileCurrentWithCallback(afterApply func() 
 	defer releaseConfigSnapshot()
 	s.configMu.Lock()
 	defer s.configMu.Unlock()
-	if err := s.checkSimpleSetupPending(); err != nil {
-		return nil, err
-	}
 	defer s.discardGeneratedConfig()
 	result, err := s.generateCurrentLocked()
 	if err != nil {
@@ -222,9 +219,6 @@ func (s *ConfigGeneratorService) ReconcileCurrentForScheduledRestart(observedRes
 	defer releaseConfigSnapshot()
 	s.configMu.Lock()
 	defer s.configMu.Unlock()
-	if err := s.checkSimpleSetupPending(); err != nil {
-		return nil, err
-	}
 	defer s.discardGeneratedConfig()
 	result, err := s.generateCurrentLocked()
 	if err != nil {
@@ -2394,12 +2388,7 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 			return nil, err
 		}
 
-		setupState, err := s.store.SimpleSetupState()
-		if err != nil {
-			return nil, err
-		}
 		var userBypassRules []map[string]interface{}
-		var preBypassRejectRules []map[string]interface{}
 		for _, rule := range rules {
 			if !rule.Enabled || rule.RuleType == "source_ip_cidr" {
 				continue
@@ -2433,8 +2422,6 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 			for _, ruleMap := range ruleMaps {
 				if rule.Outbound == "bypass" {
 					userBypassRules = append(userBypassRules, ruleMap)
-				} else if setupState != "" && rule.SystemKey == SystemRuleAdBlockKey {
-					preBypassRejectRules = append(preBypassRejectRules, ruleMap)
 				} else {
 					routeRules = append(routeRules, ruleMap)
 				}
@@ -2446,10 +2433,9 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 				ruleSets = addMixedGeneratedRuleSets(ruleSets, ruleSetTags, rule.Values, apiBaseURL, apiToken)
 			}
 		}
-		if len(userBypassRules) > 0 || len(preBypassRejectRules) > 0 {
-			orderedRules := make([]map[string]interface{}, 0, len(routeRules)+len(userBypassRules)+len(preBypassRejectRules))
+		if len(userBypassRules) > 0 {
+			orderedRules := make([]map[string]interface{}, 0, len(routeRules)+len(userBypassRules))
 			orderedRules = append(orderedRules, routeRules[:preSniffRuleCount]...)
-			orderedRules = append(orderedRules, preBypassRejectRules...)
 			orderedRules = append(orderedRules, userBypassRules...)
 			orderedRules = append(orderedRules, routeRules[preSniffRuleCount:]...)
 			routeRules = orderedRules
@@ -2898,24 +2884,6 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase(routeFinal ...string) (
 			"query_type": []string{"A", "AAAA"},
 			"server":     hostsServerTag,
 		})
-	}
-	setupState, err := s.store.SimpleSetupState()
-	if err != nil {
-		return nil, err
-	}
-	if setupState != "" && s.store.GetProxyMode() == "rule" {
-		routeRules, err := s.store.ListRouteRules()
-		if err != nil {
-			return nil, fmt.Errorf("读取广告拦截规则失败: %w", err)
-		}
-		for _, rule := range routeRules {
-			if rule.Enabled && rule.SystemKey == SystemRuleAdBlockKey && rule.RuleType == "geosite" && rule.Outbound == "block" {
-				rules = append(rules, map[string]interface{}{
-					"rule_set": generatedGeoRuleSetTags("geosite", rule.Values),
-					"action":   "reject",
-				})
-			}
-		}
 	}
 	for _, rule := range dnsRules {
 		if !rule.Enabled {

@@ -1,5 +1,6 @@
 import type {
   RuntimeResponse,
+  ControlSummary,
   InstallStateResponse,
   ConfigStatus,
   ConfigFileItem,
@@ -72,8 +73,6 @@ import type {
   CoreRestartSettings,
   CoreLogEntry,
   ToolLogEntry,
-  MaintenanceCheckResponse,
-  CoreDiagnosticsResponse,
   ApiError,
 } from "./types";
 import { authenticatedFetch } from "./apiAuth";
@@ -119,6 +118,8 @@ export async function request<T>(
 
 export const api = {
   getRuntime: () => request<RuntimeResponse>("/runtime"),
+  getControlSummary: (signal?: AbortSignal) =>
+    request<ControlSummary>("/runtime/summary", { signal }),
 
   getInstallerStatus: () =>
     request<InstallStateResponse>("/installer/sing-box"),
@@ -137,8 +138,6 @@ export const api = {
     }),
   generateDefaultConfig: () =>
     request<ActionResponse>("/config/default", { method: "POST" }),
-  validateConfig: () =>
-    request<ConfigStatus>("/config/validate", { method: "POST" }),
   updateRules: () =>
     request<ActionResponse>("/config/rules/update", { method: "POST" }),
   backupConfig: () =>
@@ -159,23 +158,6 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(data),
     }),
-  closeConnections: () =>
-    request<ActionResponse>("/core/close-connections", { method: "POST" }),
-  flushCoreDNS: () =>
-    request<ActionResponse>("/core/flush-core-dns", { method: "POST" }),
-  flushFakeIP: () =>
-    request<ActionResponse>("/core/flush-fakeip", { method: "POST" }),
-  networkCheck: () =>
-    request<MaintenanceCheckResponse>("/core/network-check", {
-      method: "POST",
-    }),
-  getDiagnostics: () => request<CoreDiagnosticsResponse>("/core/diagnostics"),
-  resetFirewall: () =>
-    request<ActionResponse>("/core/reset-firewall", { method: "POST" }),
-  flushDNS: () =>
-    request<ActionResponse>("/core/flush-dns", { method: "POST" }),
-  checkUpdate: () =>
-    request<ActionResponse>("/core/check-update", { method: "POST" }),
   getCoreLogs: (limit = 500) =>
     request<CoreLogEntry[]>(`/logs/core?limit=${limit}`),
   clearCoreLogs: () =>

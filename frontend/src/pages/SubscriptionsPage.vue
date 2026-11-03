@@ -33,6 +33,7 @@ const manualURL = "manual://local",
   loading = ref(false),
   message = ref(""),
   formOpen = ref(false),
+  importOpen = ref(false),
   editing = ref<Subscription | null>(null),
   deleteTarget = ref<Subscription | null>(null);
 const name = ref(""),
@@ -46,6 +47,7 @@ const name = ref(""),
   syncTimeout = ref(60),
   syncErrors = ref<Record<number, string>>({});
 const content = ref(""),
+  importing = ref(false),
   preview = ref<NodeImportPreviewItem[]>([]),
   previewLoading = ref(false),
   previewError = ref(""),
@@ -54,6 +56,9 @@ const content = ref(""),
   detailFormat = ref<"json" | "yaml">("json"),
   lastPreview = ref("");
 const editingFilter = ref<NodeFilter | null>(null),
+  filterOpen = ref(false),
+  filterSaving = ref(false),
+  filterError = ref(""),
   filterName = ref(""),
   filterTarget = ref("name"),
   filterPattern = ref(""),
@@ -225,14 +230,21 @@ async function parse(silent = false) {
   }
 }
 async function importNodes() {
+  if (importing.value || !content.value.trim()) return;
+  importing.value = true;
   try {
     const r = await api.importNodes({ content: content.value });
-    show(`手动导入完成：导入 ${r.imported} 个节点`);
+    show(
+      `手动导入完成：导入 ${r.imported} 个节点${r.warning ? `；${r.warning}` : ""}`,
+    );
     content.value = "";
     preview.value = [];
+    importOpen.value = false;
     await load();
   } catch (e: any) {
     show(`手动导入失败: ${e.message}`);
+  } finally {
+    importing.value = false;
   }
 }
 async function remove() {
@@ -250,14 +262,23 @@ async function remove() {
     show(`删除失败: ${e.message}`);
   }
 }
-function resetFilter() {
-  editingFilter.value = null;
-  filterName.value = "";
-  filterTarget.value = "name";
-  filterPattern.value = "";
-  filterEnabled.value = true;
+function openFilter(filter: NodeFilter | null = null) {
+  editingFilter.value = filter;
+  filterName.value = filter?.name || "";
+  filterTarget.value = filter?.target || "name";
+  filterPattern.value = filter?.pattern || "";
+  filterEnabled.value = filter?.enabled ?? true;
+  filterError.value = "";
+  filterOpen.value = true;
 }
 async function saveFilter() {
+  if (filterSaving.value) return;
+  filterError.value = "";
+  if (!filterName.value.trim() || !filterPattern.value.trim()) {
+    filterError.value = "请填写规则名称和正则表达式";
+    return;
+  }
+  filterSaving.value = true;
   try {
     const p = {
       name: filterName.value,
@@ -269,10 +290,12 @@ async function saveFilter() {
       ? await api.updateNodeFilter(editingFilter.value.id, p)
       : await api.createNodeFilter(p);
     show(editingFilter.value ? "过滤规则已更新" : "过滤规则已添加");
-    resetFilter();
+    filterOpen.value = false;
     await loadFilters();
   } catch (e: any) {
-    show(`过滤规则保存失败: ${e.message}`);
+    filterError.value = `过滤规则保存失败: ${e.message}`;
+  } finally {
+    filterSaving.value = false;
   }
 }
 async function deleteFilter(x: NodeFilter) {
@@ -366,7 +389,7 @@ const pretty = (s: string) => {
         <p class="text-sm text-[var(--text-secondary)]">
           管理外部订阅源，用于从第三方订阅同步节点
         </p>
-        <div class="flex gap-2">
+        <div class="flex flex-wrap gap-2">
           <button class="aw-action-button" @click="openCreate">
             <Plus :size="17" /></button
           ><button
@@ -375,6 +398,9 @@ const pretty = (s: string) => {
             @click="syncAll"
           >
             <RefreshCw :size="15" />同步所有订阅
+          </button>
+          <button class="aw-action-button" @click="importOpen = true">
+            <Upload :size="15" />本地订阅导入
           </button>
         </div>
       </div>
@@ -473,21 +499,20 @@ const pretty = (s: string) => {
         </table>
       </div>
     </section>
-    <section
-      class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
+    <Modal
+      :open="importOpen && !previewDetail"
+      title="本地订阅导入"
+      size="xl"
+      :closable="!importing"
+      @close="importOpen = false"
     >
-      <div class="mb-4">
-        <div>
-          <h2 class="font-semibold">本地订阅导入</h2>
-          <p class="mt-1 text-xs text-[var(--text-secondary)]">
-            支持 URI List、Clash YAML 和 sing-box JSON；UID 已存在时追加/更新。
-          </p>
-        </div>
-      </div>
+      <p class="mb-4 text-xs text-[var(--text-secondary)]">
+        支持 URI List、Clash YAML 和 sing-box JSON；UID 已存在时追加/更新。
+      </p>
       <div class="mb-3 flex flex-wrap justify-end gap-2">
         <button
           class="aw-action-button"
-          :disabled="!content.trim()"
+          :disabled="importing || !content.trim()"
           @click="
             content = '';
             preview = [];
@@ -496,7 +521,7 @@ const pretty = (s: string) => {
           <Trash2 :size="14" />清空</button
         ><button
           class="aw-action-button"
-          :disabled="!content.trim() || previewLoading"
+          :disabled="importing || !content.trim() || previewLoading"
           @click="parse(false)"
         >
           <FileJson :size="15" />{{
@@ -504,21 +529,23 @@ const pretty = (s: string) => {
           }}</button
         ><button
           class="aw-action-button"
-          :disabled="!content.trim()"
+          :disabled="importing || !content.trim()"
           @click="importNodes"
         >
-          <Upload :size="15" />导入节点
+          <Upload :size="15" />{{ importing ? "导入中..." : "导入节点" }}
         </button>
       </div>
-      <div class="grid gap-4 xl:grid-cols-[3fr_2fr]">
+      <div class="grid gap-4 md:grid-cols-[3fr_2fr]">
         <textarea
           v-model="content"
           rows="12"
-          class="aw-input min-h-[300px] w-full font-mono"
+          class="aw-input min-h-[300px] w-full min-w-0 font-mono"
+          aria-label="本地订阅内容"
+          :disabled="importing"
           placeholder="粘贴 URI / Clash YAML / sing-box JSON"
         />
         <aside
-          class="min-h-[300px] overflow-auto rounded-md border border-[var(--border-default)] p-4"
+          class="min-h-[300px] min-w-0 overflow-auto rounded-md border border-[var(--border-default)] p-4"
         >
           <p class="mb-3 text-xs">
             {{
@@ -545,35 +572,23 @@ const pretty = (s: string) => {
           </button>
         </aside>
       </div>
-    </section>
+      <template #footer>
+        <button
+          class="aw-action-button"
+          :disabled="importing"
+          @click="importOpen = false"
+        >
+          关闭
+        </button>
+      </template>
+    </Modal>
     <section
       class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
     >
-      <h2 class="font-semibold">节点过滤规则</h2>
-      <div class="my-4 grid gap-3 lg:grid-cols-[1fr_160px_1.5fr_110px]">
-        <input
-          v-model="filterName"
-          class="aw-input"
-          placeholder="规则名称"
-        /><select v-model="filterTarget" class="aw-input">
-          <option v-for="x in targets" :key="x[0]" :value="x[0]">
-            {{ x[1] }}
-          </option></select
-        ><input
-          v-model="filterPattern"
-          class="aw-input font-mono"
-          placeholder="Go 正则表达式"
-        /><label><input v-model="filterEnabled" type="checkbox" /> 启用</label>
-      </div>
-      <div class="mb-4 flex gap-2">
-        <button class="aw-action-button" @click="saveFilter">
-          {{ editingFilter ? "更新规则" : "添加规则" }}</button
-        ><button
-          v-if="editingFilter"
-          class="aw-action-button"
-          @click="resetFilter"
-        >
-          取消编辑
+      <div class="mb-4 flex items-center justify-between gap-3">
+        <h2 class="font-semibold">节点过滤规则</h2>
+        <button class="aw-action-button" @click="openFilter()">
+          <Plus :size="15" />添加规则
         </button>
       </div>
       <div class="overflow-x-auto">
@@ -610,17 +625,7 @@ const pretty = (s: string) => {
                 </button>
               </td>
               <td>
-                <button
-                  @click="
-                    editingFilter = x;
-                    filterName = x.name;
-                    filterTarget = x.target;
-                    filterPattern = x.pattern;
-                    filterEnabled = x.enabled;
-                  "
-                >
-                  编辑
-                </button>
+                <button @click="openFilter(x)">编辑</button>
                 <button @click="deleteFilter(x)">删除</button>
               </td>
             </tr>
@@ -628,6 +633,82 @@ const pretty = (s: string) => {
         </table>
       </div>
     </section>
+    <Modal
+      :open="filterOpen"
+      :title="editingFilter ? '编辑过滤规则' : '添加过滤规则'"
+      :closable="!filterSaving"
+      @close="filterOpen = false"
+    >
+      <form
+        id="node-filter-form"
+        class="space-y-4"
+        @submit.prevent="saveFilter"
+      >
+        <label class="block text-sm">
+          规则名称
+          <input
+            v-model="filterName"
+            class="aw-input mt-2 w-full"
+            placeholder="规则名称"
+            :disabled="filterSaving"
+            required
+          />
+        </label>
+        <label class="block text-sm">
+          目标字段
+          <select
+            v-model="filterTarget"
+            class="aw-input mt-2 w-full"
+            :disabled="filterSaving"
+          >
+            <option v-for="x in targets" :key="x[0]" :value="x[0]">
+              {{ x[1] }}
+            </option>
+          </select>
+        </label>
+        <label class="block text-sm">
+          正则表达式
+          <input
+            v-model="filterPattern"
+            class="aw-input mt-2 w-full font-mono"
+            placeholder="Go 正则表达式"
+            :disabled="filterSaving"
+            required
+          />
+        </label>
+        <label class="flex items-center gap-2 text-sm">
+          <input
+            v-model="filterEnabled"
+            type="checkbox"
+            :disabled="filterSaving"
+          />启用
+        </label>
+        <p
+          v-if="filterError"
+          role="alert"
+          class="text-sm text-[var(--color-error)]"
+        >
+          {{ filterError }}
+        </p>
+      </form>
+      <template #footer>
+        <button
+          class="aw-action-button"
+          :disabled="filterSaving"
+          @click="filterOpen = false"
+        >
+          取消
+        </button>
+        <button
+          class="aw-action-button"
+          type="submit"
+          form="node-filter-form"
+          :disabled="filterSaving"
+        >
+          {{ filterSaving ? "保存中..." : editingFilter ? "保存" : "导入规则" }}
+        </button>
+      </template>
+    </Modal>
     <Modal
       :open="formOpen"
       :title="editing ? '编辑订阅' : '添加订阅'"

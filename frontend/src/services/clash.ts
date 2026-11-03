@@ -23,41 +23,33 @@ export interface ProxyGroup {
   history: { time: string; delay: number }[];
 }
 
-export interface Connection {
+export type ProxyMap = Record<string, ProxyNode | ProxyGroup>;
+
+export interface ClashConnection {
   id: string;
   metadata: {
-    network: string;
-    type: string;
-    sourceIP: string;
-    destinationIP: string;
-    sourcePort: string;
-    destinationPort: string;
-    host: string;
-    dnsMode: string;
+    network?: string;
+    type?: string;
+    sourceIP?: string;
+    destinationIP?: string;
+    sourcePort?: string | number;
+    destinationPort?: string | number;
+    host?: string;
+    process?: string;
     processPath?: string;
   };
   upload: number;
   download: number;
   start: string;
-  chains: string[];
-  rule: string;
-  rulePayload: string;
+  chains?: string[];
+  rule?: string;
 }
 
-export interface Rule {
-  type: string;
-  payload: string;
-  proxy: string;
-}
-
-export interface ClashConfig {
-  port: number;
-  "socks-port": number;
-  "redir-port": number;
-  "tproxy-port": number;
-  "mixed-port": number;
-  mode: "rule" | "global" | "direct";
-  "log-level": string;
+export interface ConnectionsSnapshot {
+  connections: ClashConnection[];
+  downloadTotal: number;
+  uploadTotal: number;
+  memory?: number;
 }
 
 class ClashAPIClient {
@@ -179,90 +171,23 @@ class ClashAPIClient {
   }
 
   // 获取所有代理
-  async getProxies(): Promise<{
-    proxies: Record<string, ProxyNode | ProxyGroup>;
-  }> {
-    return this.request("/proxies");
+  async getProxies(signal?: AbortSignal): Promise<{ proxies: ProxyMap }> {
+    return this.request("/proxies", { signal });
   }
 
-  // 获取单个代理
-  async getProxy(name: string): Promise<ProxyNode | ProxyGroup> {
-    return this.request(`/proxies/${encodeURIComponent(name)}`);
-  }
-
-  // 切换节点（仅对 Selector 类型有效）
-  async selectProxy(group: string, proxy: string): Promise<void> {
-    await this.request(`/proxies/${encodeURIComponent(group)}`, {
+  async selectProxy(group: string, name: string): Promise<void> {
+    return this.request(`/proxies/${encodeURIComponent(group)}`, {
       method: "PUT",
-      body: JSON.stringify({ name: proxy }),
+      body: JSON.stringify({ name }),
     });
-  }
-
-  // 测速
-  async delayTest(
-    proxy: string,
-    testURL: string = "https://www.gstatic.com/generate_204",
-    timeout: number = 5000,
-  ): Promise<{ delay: number }> {
-    try {
-      return await this.request(
-        `/proxies/${encodeURIComponent(proxy)}/delay?timeout=${timeout}&url=${encodeURIComponent(testURL)}`,
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (
-        message === "An error occurred in the delay test" ||
-        message.includes("503 Service Unavailable")
-      ) {
-        throw new Error(
-          "真实出站测试失败：节点协议握手、TLS/认证或测试地址访问失败（DNS 成功不代表代理可用）",
-        );
-      }
-      throw error;
-    }
   }
 
   // 获取连接列表
-  async getConnections(): Promise<{
-    connections: Connection[];
-    downloadTotal: number;
-    uploadTotal: number;
-    memory?: number;
-  }> {
-    return this.request("/connections");
-  }
-
-  // 关闭连接
-  async closeConnection(id: string): Promise<void> {
-    await this.request(`/connections/${id}`, { method: "DELETE" });
-  }
-
-  // 关闭所有连接
-  async closeAllConnections(): Promise<void> {
-    await this.request("/connections", { method: "DELETE" });
-  }
-
-  // 获取规则
-  async getRules(): Promise<{ rules: Rule[] }> {
-    return this.request("/rules");
-  }
-
-  // 获取配置
-  async getConfig(): Promise<ClashConfig> {
-    return this.request("/configs");
-  }
-
-  // 更新配置
-  async updateConfig(config: Partial<ClashConfig>): Promise<void> {
-    await this.request("/configs", {
-      method: "PATCH",
-      body: JSON.stringify(config),
+  async getConnections(signal?: AbortSignal): Promise<ConnectionsSnapshot> {
+    const data = await this.request<ConnectionsSnapshot>("/connections", {
+      signal,
     });
-  }
-
-  // 切换模式
-  async setMode(mode: "rule" | "global" | "direct"): Promise<void> {
-    await this.updateConfig({ mode });
+    return { ...data, connections: data.connections || [] };
   }
 }
 

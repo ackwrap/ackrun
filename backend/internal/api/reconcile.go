@@ -39,8 +39,11 @@ func shouldReconcileRequest(method, path string) bool {
 	if method == http.MethodGet || strings.HasPrefix(path, "/api/v1/config/") || strings.HasPrefix(path, "/api/v1/core/") {
 		return false
 	}
-	if method == http.MethodPost && path == "/api/v1/rules" {
-		return false
+	// Rule and strategy edits are drafts in the database until explicit config generation.
+	for _, prefix := range []string{"/api/v1/rules", "/api/v1/collections"} {
+		if path == prefix || strings.HasPrefix(path, prefix+"/") {
+			return false
+		}
 	}
 	if path == "/api/v1/nodes/flag" || path == "/api/v1/nodes/flags" || path == "/api/v1/nodes/import/preview" {
 		return false
@@ -63,17 +66,12 @@ func shouldReconcileRequest(method, path string) bool {
 	if path == "/api/v1/settings/inbound-mode" || path == "/api/v1/settings/proxy-mode" {
 		return false
 	}
-	if strings.HasPrefix(path, "/api/v1/collections/") && strings.HasSuffix(path, "/test") {
-		return false
-	}
 	if strings.HasPrefix(path, "/api/v1/subscriptions") {
 		return method == http.MethodDelete
 	}
 	configPrefixes := []string{
 		"/api/v1/settings/",
 		"/api/v1/nodes/",
-		"/api/v1/collections",
-		"/api/v1/rules",
 		"/api/v1/dns/",
 		"/api/v1/node-groups",
 		"/api/v1/advanced/node-exposures",

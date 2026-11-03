@@ -12,14 +12,26 @@ import (
 
 // CreateProxyCollection 创建代理集合
 func (s *Store) CreateProxyCollection(pc *model.ProxyCollection) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := createProxyCollectionInTx(tx, pc); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func createProxyCollectionInTx(tx *sql.Tx, pc *model.ProxyCollection) error {
 	now := time.Now().UnixMilli()
 	pc.CreatedAt = now
 	pc.UpdatedAt = now
-	if err := s.db.QueryRow(`SELECT COALESCE(MAX(priority), -1) + 1 FROM proxy_collections`).Scan(&pc.Priority); err != nil {
+	if err := tx.QueryRow(`SELECT COALESCE(MAX(priority), -1) + 1 FROM proxy_collections`).Scan(&pc.Priority); err != nil {
 		return err
 	}
 
-	result, err := s.db.Exec(
+	result, err := tx.Exec(
 		`INSERT INTO proxy_collections (name, type, source_type, referenced_group_ids, route_rule_id, route_rule_ids, node_uids, test_url, test_interval, tolerance, enabled, priority, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		pc.Name, pc.Type, pc.SourceType, pc.ReferencedGroupIDs, pc.RouteRuleID, pc.RouteRuleIDs, pc.NodeUIDs, pc.TestURL, pc.TestInterval, pc.Tolerance, boolToInt(pc.Enabled), pc.Priority, pc.CreatedAt, pc.UpdatedAt,
@@ -28,7 +40,10 @@ func (s *Store) CreateProxyCollection(pc *model.ProxyCollection) error {
 		return err
 	}
 
-	id, _ := result.LastInsertId()
+	id, err := result.LastInsertId()
+	if err != nil {
+		return err
+	}
 	pc.ID = int(id)
 	return nil
 }

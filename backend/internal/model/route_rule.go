@@ -29,6 +29,8 @@ type RouteRuleRequest struct {
 	Invert        bool     `json:"invert"`
 	// SystemKey is internal-only. User API requests must not set system rule identity.
 	SystemKey string `json:"-"`
+	// Strategy is committed with a new rule after the configuration dialog completes.
+	Strategy *ProxyCollectionRequest `json:"strategy,omitempty"`
 }
 
 type RouteRuleReorderRequest struct {

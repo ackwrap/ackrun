@@ -51,7 +51,6 @@ type SubscriptionService struct {
 	store      *store.Store
 	realtime   *RealtimeService
 	reconciler *ConfigReconcileService
-	alerts     *AlertService
 	cron       *cron.Cron
 	entries    map[int64]cron.EntryID
 	mu         sync.Mutex
@@ -73,10 +72,6 @@ func NewSubscriptionService(s *store.Store, rt *RealtimeService) *SubscriptionSe
 // SetConfigReconciler 注入统一配置协调器。
 func (svc *SubscriptionService) SetConfigReconciler(reconciler *ConfigReconcileService) {
 	svc.reconciler = reconciler
-}
-
-func (svc *SubscriptionService) SetAlertService(alerts *AlertService) {
-	svc.alerts = alerts
 }
 
 func (svc *SubscriptionService) StartScheduler() {
@@ -265,10 +260,6 @@ func (svc *SubscriptionService) SyncAll() (*model.ActionResponse, error) {
 }
 
 func (svc *SubscriptionService) runSync(id int64) {
-	svc.runSyncWithReconcile(id, true)
-}
-
-func (svc *SubscriptionService) runSyncWithReconcile(id int64, reconcile bool) {
 	releaseConfigUpdate := svc.store.HoldConfigUpdate()
 	defer releaseConfigUpdate()
 	if !svc.beginSync(id) {
@@ -402,6 +393,14 @@ func (svc *SubscriptionService) runSyncWithReconcile(id int64, reconcile bool) {
 	} else {
 		logging.Info("subscription.sync", "订阅 %d 节点无变化，跳过配置更新", id)
 	}
+	createdGroups, groupErr := NewNodeGroupService(svc.store).AutoGroup()
+	if groupErr != nil {
+		logging.Error("node_group.auto_group", "订阅 %d 更新后自动地域分组失败: %v", id, groupErr)
+		warningMsg = appendSubscriptionWarning(warningMsg, "自动地域分组失败: "+groupErr.Error())
+	}
+	if createdGroups > 0 {
+		hasChanges = true
+	}
 	svc.nodeSyncMu.Unlock()
 
 	if !svc.updateSyncProgress(id, 95) {
@@ -421,7 +420,7 @@ func (svc *SubscriptionService) runSyncWithReconcile(id int64, reconcile bool) {
 	} else {
 		svc.broadcastSubscription(updated, "updated", 100)
 	}
-	if hasChanges && reconcile && svc.reconciler != nil {
+	if hasChanges && svc.reconciler != nil {
 		svc.reconciler.Trigger("subscription.sync")
 	}
 }
@@ -546,17 +545,6 @@ func nodeFilterValue(node model.ParsedNode, target string) string {
 }
 
 func (svc *SubscriptionService) broadcastSync(id int64, status string, progress float64, message string) {
-	if status == "failed" && svc.alerts != nil {
-		name := "订阅 #" + strconv.FormatInt(id, 10)
-		if item, err := svc.store.GetSubscription(id); err == nil && item != nil && item.Name != "" {
-			name = item.Name
-		}
-		svc.alerts.Notify(model.AlertEvent{
-			Type: model.AlertEventSubscriptionFailed, TargetKey: "subscription:" + strconv.FormatInt(id, 10),
-			SourceName: name, Title: "[Ackwrap] 订阅同步失败",
-			Message: "订阅「" + name + "」同步失败：" + message,
-		})
-	}
 	if svc.realtime == nil {
 		return
 	}

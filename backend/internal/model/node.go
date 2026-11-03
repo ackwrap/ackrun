@@ -199,8 +199,9 @@ type NodeImportRequest struct {
 }
 
 type NodeImportResponse struct {
-	Imported       int   `json:"imported"`
-	SubscriptionID int64 `json:"subscription_id"`
+	Warning        string `json:"warning,omitempty"`
+	Imported       int    `json:"imported"`
+	SubscriptionID int64  `json:"subscription_id"`
 }
 
 type NodeImportPreviewItem struct {

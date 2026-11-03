@@ -68,6 +68,59 @@ func TestApplicationServesEmbeddedSPAAndAssets(t *testing.T) {
 	}
 }
 
+func TestApplicationKeepsExternalPanelsAndSharedClashRoutes(t *testing.T) {
+	app := testApplication(t)
+	defer app.Close()
+
+	for _, request := range []struct{ method, path string }{
+		{http.MethodGet, "/api/v1/clash-status"},
+		{http.MethodGet, "/api/v1/clash/rules"},
+		{http.MethodGet, "/api/v1/clash/configs"},
+		{http.MethodPatch, "/api/v1/clash/configs"},
+		{http.MethodDelete, "/api/v1/clash/connections"},
+		{http.MethodDelete, "/api/v1/clash/connections/example"},
+		{http.MethodGet, "/api/v1/clash/proxies/example"},
+		{http.MethodGet, "/api/v1/clash/proxies/example/delay"},
+		{http.MethodGet, "/api/v1/setup"},
+		{http.MethodPost, "/api/v1/setup"},
+		{http.MethodGet, "/api/v1/setup/options"},
+		{http.MethodPut, "/api/v1/setup/options"},
+	} {
+		recorder := httptest.NewRecorder()
+		app.Handler().ServeHTTP(recorder, httptest.NewRequest(request.method, request.path, nil))
+		if recorder.Code != http.StatusNotFound {
+			t.Errorf("%s %s status = %d, want 404", request.method, request.path, recorder.Code)
+		}
+	}
+
+	want := map[string]bool{
+		"GET /api/v1/settings/dashboards":              false,
+		"POST /api/v1/settings/dashboards/check":       false,
+		"POST /api/v1/settings/dashboards/:id/install": false,
+		"DELETE /api/v1/settings/dashboards/:id":       false,
+		"GET /api/v1/clash/traffic":                    false,
+		"GET /api/v1/clash/connections":                false,
+		"GET /api/v1/clash/proxies":                    false,
+		"PUT /api/v1/clash/proxies/*name":              false,
+	}
+	for _, route := range app.Handler().(*gin.Engine).Routes() {
+		if !strings.HasPrefix(route.Path, "/api/v1/clash/") && !strings.HasPrefix(route.Path, "/api/v1/settings/dashboards") {
+			continue
+		}
+		key := route.Method + " " + route.Path
+		if _, exists := want[key]; !exists {
+			t.Errorf("unexpected Clash route: %s", key)
+		} else {
+			want[key] = true
+		}
+	}
+	for route, found := range want {
+		if !found {
+			t.Errorf("shared route missing: %s", route)
+		}
+	}
+}
+
 func TestGeneralSettingsAPIControlsCoreAutoStart(t *testing.T) {
 	app := testApplication(t)
 	defer app.Close()
@@ -129,39 +182,5 @@ func TestGinAccessLogRedactsQueryToken(t *testing.T) {
 				t.Fatalf("Gin access log was not redacted: %q", got)
 			}
 		})
-	}
-}
-
-func TestAdvancedApplicationIntegrationAndSafeDefaults(t *testing.T) {
-	app := testApplication(t)
-	defer app.Close()
-	if app.advanced == nil {
-		t.Fatal("advanced service was not injected")
-	}
-	recorder := httptest.NewRecorder()
-	app.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/advanced/settings", nil))
-	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"routing_enabled":false`) ||
-		!strings.Contains(recorder.Body.String(), `"leases_enabled":false`) || !strings.Contains(recorder.Body.String(), `"health_enabled":false`) ||
-		!strings.Contains(recorder.Body.String(), `"access_logs_enabled":false`) {
-		t.Fatalf("advanced defaults response = %d %s", recorder.Code, recorder.Body.String())
-	}
-	if err := app.Start(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestCombinedRuntimeStartHooksPreserveOrderAndStopOnFailure(t *testing.T) {
-	order := make([]string, 0, 3)
-	wantErr := errors.New("advanced sync failed")
-	hook := combineStartHooks(
-		func() error { order = append(order, "node-exposure"); return nil },
-		func() error { order = append(order, "advanced"); return wantErr },
-		func() error { order = append(order, "unexpected"); return nil },
-	)
-	if err := hook(); !errors.Is(err, wantErr) {
-		t.Fatalf("combined hook error = %v", err)
-	}
-	if strings.Join(order, ",") != "node-exposure,advanced" {
-		t.Fatalf("combined hook order = %v", order)
 	}
 }

@@ -28,6 +28,14 @@ func (s *Store) ListRouteRules() ([]model.RouteRule, error) {
 }
 
 func (s *Store) CreateRouteRule(req *model.RouteRuleRequest) (*model.RouteRule, error) {
+	return s.createRouteRule(req, nil)
+}
+
+func (s *Store) CreateRouteRuleWithCollection(req *model.RouteRuleRequest, collection *model.ProxyCollection) (*model.RouteRule, error) {
+	return s.createRouteRule(req, collection)
+}
+
+func (s *Store) createRouteRule(req *model.RouteRuleRequest, collection *model.ProxyCollection) (*model.RouteRule, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
@@ -63,6 +71,15 @@ func (s *Store) CreateRouteRule(req *model.RouteRuleRequest) (*model.RouteRule, 
 	item, err := scanRouteRule(tx.QueryRow(`SELECT id, name, enabled, priority, rule_type, values_json, outbound, invert, system_key, created_at, updated_at, direct_domains_json FROM route_rules WHERE id = ?`, id))
 	if err != nil {
 		return nil, err
+	}
+	if collection != nil {
+		collection.Name = item.Name
+		collection.RouteRuleID = item.ID
+		idsJSON, _ := json.Marshal([]int64{item.ID})
+		collection.RouteRuleIDs = string(idsJSON)
+		if err := createProxyCollectionInTx(tx, collection); err != nil {
+			return nil, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
