@@ -6,7 +6,7 @@ import Modal from "@/components/ui/Modal.vue";
 import Toast from "@/components/ui/Toast.vue";
 import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
 import { useRealtimeSocket } from "@/composables/useRealtimeSocket";
-import { api } from "@/services/api";
+import { api, request } from "@/services/api";
 import { writeClipboardText } from "@/utils/clipboard";
 import type {
   GeoAsset,
@@ -27,12 +27,18 @@ import RuleSubscriptionActionsModal from "./rules/RuleSubscriptionActionsModal.v
 import RuleSubscriptionFormModal from "./rules/RuleSubscriptionFormModal.vue";
 import RuleSubscriptionSection from "./rules/RuleSubscriptionSection.vue";
 import StrategyFormModal from "./collections/StrategyFormModal.vue";
-import type { StrategyCollectionRequest } from "./collections/collectionTypes";
-const deviceStrategy = ref<StrategyItem | null>(null);
-const deviceRule = ref<RouteRule | null>(null);
-const deviceEnabled = ref(true);
-const deviceSaving = ref(false);
-const deviceConnectivity = ref({ test_url: "", interval_seconds: 300 });
+import type {
+  NodeGroup,
+  StrategyCollectionRequest,
+} from "./collections/collectionTypes";
+const ruleStrategy = ref<StrategyItem | null>(null);
+const strategyRule = ref<RouteRule | null>(null);
+const strategyEnabled = ref(true);
+const strategySaving = ref(false);
+const strategyConnectivity = ref({ test_url: "", interval_seconds: 300 });
+const strategyGroups = ref<NodeGroup[]>([]);
+const strategyError = ref("");
+const strategyLoadingId = ref<number | null>(null);
 const ruleSaving = ref(false);
 const newRuleDraft = ref<RouteRuleRequest | null>(null);
 const ruleOrderSaving = ref(false);
@@ -216,23 +222,7 @@ async function saveRule() {
     await load();
     if (isDevice) {
       show("设备规则已保存，请完成固定节点绑定；新规则在绑定后启用");
-      try {
-        const [strategies, connectivity] = await Promise.all([
-          api.getRouteStrategies(),
-          api.getConnectivitySettings(),
-        ]);
-        const strategy = strategies.find((item) => item.rule_id === saved.id);
-        if (!strategy) throw new Error("未找到设备策略");
-        deviceRule.value = saved;
-        deviceEnabled.value = requestedEnabled;
-        deviceConnectivity.value = connectivity;
-        deviceStrategy.value = strategy;
-      } catch (e: any) {
-        show(
-          `设备规则已保存，节点选择加载失败：${e.message}。可编辑规则重试或前往策略组配置。`,
-          "error",
-        );
-      }
+      await openRuleStrategy(saved, requestedEnabled);
     }
   } catch (e: any) {
     show(`规则保存失败: ${e.message}`, "error");
@@ -262,29 +252,67 @@ async function finishNewRule() {
   show("规则与代理策略已添加");
   await load();
 }
-async function saveDeviceStrategy(payload: StrategyCollectionRequest) {
-  if (!deviceStrategy.value || !deviceRule.value || deviceSaving.value) return;
-  deviceSaving.value = true;
+async function openRuleStrategy(
+  rule: RouteRule,
+  requestedEnabled = rule.enabled,
+) {
+  if (strategyLoadingId.value !== null || strategySaving.value) return;
+  strategyLoadingId.value = rule.id;
+  strategyError.value = "";
   try {
-    const current = deviceStrategy.value.collection;
+    const [strategies, connectivity, groups] = await Promise.all([
+      api.getRouteStrategies(),
+      api.getConnectivitySettings(),
+      rule.rule_type === "source_ip_cidr"
+        ? Promise.resolve<NodeGroup[]>([])
+        : request<NodeGroup[]>("/node-groups"),
+    ]);
+    const strategy = strategies.find(
+      (item) => item.rule_id === rule.id && item.kind === "proxy",
+    );
+    if (!strategy) throw new Error("未找到此规则的代理策略");
+    strategyRule.value = rule;
+    strategyEnabled.value = requestedEnabled;
+    strategyConnectivity.value = connectivity;
+    strategyGroups.value = groups ?? [];
+    ruleStrategy.value = strategy;
+  } catch (e) {
+    show(
+      `策略加载失败：${e instanceof Error ? e.message : "请求失败"}`,
+      "error",
+    );
+  } finally {
+    strategyLoadingId.value = null;
+  }
+}
+function closeRuleStrategy() {
+  ruleStrategy.value = null;
+  strategyRule.value = null;
+  strategyError.value = "";
+}
+async function saveRuleStrategy(payload: StrategyCollectionRequest) {
+  if (!ruleStrategy.value || !strategyRule.value || strategySaving.value)
+    return;
+  strategySaving.value = true;
+  strategyError.value = "";
+  try {
+    const current = ruleStrategy.value.collection;
     if (current) await api.updateProxyCollection(current.id, payload);
     else
-      deviceStrategy.value.collection =
-        await api.createProxyCollection(payload);
-    if (deviceRule.value.enabled !== deviceEnabled.value) {
-      await api.updateRouteRule(deviceRule.value.id, {
-        ...deviceRule.value,
-        enabled: deviceEnabled.value,
+      ruleStrategy.value.collection = await api.createProxyCollection(payload);
+    if (strategyRule.value.enabled !== strategyEnabled.value) {
+      await api.updateRouteRule(strategyRule.value.id, {
+        ...strategyRule.value,
+        enabled: strategyEnabled.value,
       });
     }
-    deviceStrategy.value = null;
-    deviceRule.value = null;
-    show("设备固定节点与 DNS 跟随已保存");
+    closeRuleStrategy();
+    show("代理策略已保存");
     await load();
-  } catch (e: any) {
-    show(`设备策略保存失败：${e.message}`, "error");
+  } catch (e) {
+    strategyError.value = `策略保存失败：${e instanceof Error ? e.message : "请求失败"}`;
   } finally {
-    deviceSaving.value = false;
+    strategySaving.value = false;
   }
 }
 async function toggleRule(r: RouteRule) {
@@ -624,6 +652,7 @@ onBeforeUnmount(() => clearInterval(poll));
         :rules="rules"
         :subscriptions="subscriptions"
         :sorting="ruleOrderSaving"
+        :strategy-loading-id="strategyLoadingId"
         @refresh="load"
         @add-geo="addRule('geosite')"
         @add-device="addRule('source_ip_cidr')"
@@ -634,6 +663,7 @@ onBeforeUnmount(() => clearInterval(poll));
         @reorder="reorderRules"
         @toggle="toggleRule"
         @edit="editRule"
+        @edit-strategy="openRuleStrategy"
         @remove="pending = $event"
         @detail="detailRule = $event" />
       <RuleSubscriptionSection
@@ -667,15 +697,16 @@ onBeforeUnmount(() => clearInterval(poll));
       @saved="finishNewRule"
     />
     <StrategyFormModal
-      v-if="deviceStrategy"
-      :key="deviceStrategy.rule_id"
-      :strategy="deviceStrategy"
-      :groups="[]"
-      :connectivity="deviceConnectivity"
-      :saving="deviceSaving"
-      @close="deviceStrategy = null"
-      @save="saveDeviceStrategy"
-      @error="show($event, 'error')"
+      v-if="ruleStrategy"
+      :key="ruleStrategy.rule_id"
+      :strategy="ruleStrategy"
+      :groups="strategyGroups"
+      :connectivity="strategyConnectivity"
+      :saving="strategySaving"
+      :save-error="strategyError"
+      @close="closeRuleStrategy"
+      @save="saveRuleStrategy"
+      @error="strategyError = $event"
     />
     <RouteRuleImportModal
       :open="importOpen"

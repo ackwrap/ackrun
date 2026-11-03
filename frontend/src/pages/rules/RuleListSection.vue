@@ -5,6 +5,7 @@ import {
   GripVertical,
   Plus,
   RefreshCw,
+  Settings2,
   Share2,
   Trash2,
   Upload,
@@ -18,6 +19,7 @@ const props = defineProps<{
   rules: RouteRule[];
   subscriptions: RouteRuleSubscription[];
   sorting: boolean;
+  strategyLoadingId: number | null;
 }>();
 const emit = defineEmits<{
   refresh: [];
@@ -30,6 +32,7 @@ const emit = defineEmits<{
   reorder: [number[]];
   toggle: [RouteRule];
   edit: [RouteRule];
+  editStrategy: [RouteRule];
   remove: [RouteRule];
   detail: [RouteRule];
 }>();
@@ -237,8 +240,26 @@ function actionLabel(rule: RouteRule) {
                   class="aw-action-button aw-action-neutral"
                   @click="$emit('edit', r)"
                 >
-                  <Edit3 :size="13" />编辑</button
-                ><button
+                  <Edit3 :size="13" />编辑
+                </button>
+                <button
+                  v-if="
+                    r.outbound === 'proxy' &&
+                    !r.is_system &&
+                    !isFinalStrategy(r)
+                  "
+                  class="aw-action-button aw-action-neutral"
+                  :disabled="strategyLoadingId !== null"
+                  @click="$emit('editStrategy', r)"
+                >
+                  <RefreshCw
+                    v-if="strategyLoadingId === r.id"
+                    :size="13"
+                    class="animate-spin"
+                  />
+                  <Settings2 v-else :size="13" />编辑策略
+                </button>
+                <button
                   v-if="!r.is_system"
                   class="aw-action-button aw-action-danger"
                   @click="$emit('remove', r)"
