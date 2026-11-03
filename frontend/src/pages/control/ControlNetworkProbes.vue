@@ -30,7 +30,7 @@ const sources = [
 ];
 const targets = [
   ["百度搜索", "https://www.baidu.com/favicon.ico"],
-  ["网易云音乐", "https://s1.music.126.net/style/favicon.ico"],
+  ["ChatGPT", "https://chatgpt.com/favicon.ico"],
   ["GitHub", "https://github.com/favicon.ico"],
   ["YouTube", "https://www.youtube.com/favicon.ico"],
 ] as const;
