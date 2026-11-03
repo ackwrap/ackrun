@@ -2,6 +2,10 @@
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import { Globe2, RefreshCw, Wifi } from "lucide-vue-next";
 import { writeClipboardText } from "@/utils/clipboard";
+import baiduIcon from "@/assets/access-icons/baidu.ico";
+import chatGPTIcon from "@/assets/access-icons/chatgpt.ico";
+import githubIcon from "@/assets/access-icons/github.ico";
+import youtubeIcon from "@/assets/access-icons/youtube.ico";
 
 const emit = defineEmits<{
   message: [message: string, type: "success" | "error" | "info"];
@@ -29,10 +33,22 @@ const sources = [
   },
 ];
 const targets = [
-  ["百度搜索", "https://www.baidu.com/favicon.ico"],
-  ["ChatGPT", "https://chatgpt.com/favicon.ico"],
-  ["GitHub", "https://github.com/favicon.ico"],
-  ["YouTube", "https://www.youtube.com/favicon.ico"],
+  {
+    label: "百度搜索",
+    url: "https://www.baidu.com/favicon.ico",
+    icon: baiduIcon,
+  },
+  {
+    label: "ChatGPT",
+    url: "https://chatgpt.com/favicon.ico",
+    icon: chatGPTIcon,
+  },
+  { label: "GitHub", url: "https://github.com/favicon.ico", icon: githubIcon },
+  {
+    label: "YouTube",
+    url: "https://www.youtube.com/favicon.ico",
+    icon: youtubeIcon,
+  },
 ] as const;
 const ips = ref(
   sources.map((source) => ({ label: source.label, value: "", error: "" })),
@@ -40,10 +56,18 @@ const ips = ref(
 const access = ref<
   {
     label: string;
+    icon: string;
     latency: number;
     status: "checking" | "online" | "offline";
   }[]
->(targets.map(([label]) => ({ label, latency: 0, status: "checking" })));
+>(
+  targets.map(({ label, icon }) => ({
+    label,
+    icon,
+    latency: 0,
+    status: "checking",
+  })),
+);
 const refreshingIPs = ref(false);
 const refreshingAccess = ref(false);
 const controllers = new Set<AbortController>();
@@ -98,23 +122,25 @@ async function refreshAccess() {
   if (refreshingAccess.value || cancelled) return;
   clearTimeout(accessTimer);
   refreshingAccess.value = true;
-  access.value = targets.map(([label]) => ({
+  access.value = targets.map(({ label, icon }) => ({
     label,
+    icon,
     latency: 0,
     status: "checking",
   }));
   const nextAccess = await Promise.all(
-    targets.map(async ([label, url]) => {
+    targets.map(async ({ label, url, icon }) => {
       const startedAt = performance.now();
       try {
         await timedFetch(url, { mode: "no-cors" });
         return {
           label,
+          icon,
           latency: Math.max(1, Math.round(performance.now() - startedAt)),
           status: "online" as const,
         };
       } catch {
-        return { label, latency: 0, status: "offline" as const };
+        return { label, icon, latency: 0, status: "offline" as const };
       }
     }),
   );
@@ -210,7 +236,17 @@ onBeforeUnmount(() => {
         :key="item.label"
         class="aw-probe-row flex min-h-8 items-center justify-between gap-3 rounded-[var(--radius-md)] bg-[var(--bg-base)] px-2.5 py-1.5 text-xs"
       >
-        <span class="text-[var(--text-secondary)]">{{ item.label }}</span>
+        <span
+          class="flex min-w-0 items-center gap-2 text-[var(--text-secondary)]"
+        >
+          <span
+            class="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-md bg-white"
+            aria-hidden="true"
+          >
+            <img :src="item.icon" alt="" class="h-3.5 w-3.5 object-contain" />
+          </span>
+          <span class="truncate">{{ item.label }}</span>
+        </span>
         <span
           :class="
             item.status === 'online'
