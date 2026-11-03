@@ -41,14 +41,21 @@ const emit = defineEmits<{
 
 const selected = computed(() => new Set(props.selectedIds));
 const allSelected = computed(
-  () => props.hosts.length > 0 && props.hosts.every((host) => selected.value.has(host.id)),
+  () =>
+    props.hosts.length > 0 &&
+    props.hosts.every((host) => selected.value.has(host.id)),
 );
 const partiallySelected = computed(
-  () => !allSelected.value && props.hosts.some((host) => selected.value.has(host.id)),
+  () =>
+    !allSelected.value &&
+    props.hosts.some((host) => selected.value.has(host.id)),
 );
 
 function toggleAll() {
-  emit("update:selectedIds", allSelected.value ? [] : props.hosts.map((host) => host.id));
+  emit(
+    "update:selectedIds",
+    allSelected.value ? [] : props.hosts.map((host) => host.id),
+  );
 }
 
 function toggleHost(host: SSHHost) {
@@ -80,19 +87,36 @@ function connectionLabel(host: SSHHost) {
 </script>
 
 <template>
-  <Card padding="none">
-    <div v-if="loading" class="p-10 text-center text-sm text-[var(--text-secondary)]">
+  <Card padding="none" spotlight>
+    <div
+      v-if="loading"
+      class="p-10 text-center text-sm text-[var(--text-secondary)]"
+    >
       加载中...
     </div>
     <div
       v-else-if="!hosts.length"
       class="p-12 text-center text-sm text-[var(--text-secondary)]"
     >
-      <SquareTerminal :size="34" class="mx-auto mb-3 text-[var(--text-tertiary)]" />
+      <SquareTerminal
+        :size="34"
+        class="mx-auto mb-3 text-[var(--text-tertiary)]"
+      />
       暂无 SSH 主机。新增主机时可直接创建并选择登录凭据。
     </div>
-    <div v-else class="aw-data-table-wrap rounded-none border-0">
-      <table class="aw-data-table min-w-[1280px]">
+    <div
+      v-else
+      class="aw-data-table-wrap aw-mobile-table-wrap rounded-none border-0"
+    >
+      <label class="mb-3 flex items-center gap-2 px-4 pt-4 text-xs sm:hidden">
+        <input
+          type="checkbox"
+          :checked="allSelected"
+          :indeterminate="partiallySelected"
+          @change="toggleAll"
+        />选择全部主机
+      </label>
+      <table class="aw-data-table aw-mobile-table min-w-[1280px]">
         <thead>
           <tr>
             <th class="w-10">
@@ -114,8 +138,12 @@ function connectionLabel(host: SSHHost) {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="host in hosts" :key="host.id">
-            <td @click.stop>
+          <tr
+            v-for="host in hosts"
+            :key="host.id"
+            :data-selected="selected.has(host.id)"
+          >
+            <td class="aw-mobile-selection" @click.stop>
               <input
                 type="checkbox"
                 class="h-3.5 w-3.5 accent-[var(--color-primary)]"
@@ -124,7 +152,7 @@ function connectionLabel(host: SSHHost) {
                 @change="toggleHost(host)"
               />
             </td>
-            <td>
+            <td class="aw-mobile-title">
               <p class="font-medium">{{ host.name }}</p>
               <p class="mt-1 font-mono text-xs text-[var(--text-tertiary)]">
                 {{ host.username }}@{{ host.host }}:{{ host.port }}
@@ -134,16 +162,17 @@ function connectionLabel(host: SSHHost) {
                   v-for="tag in host.tags"
                   :key="tag"
                   class="rounded-full bg-[var(--color-primary-bg)] px-2 py-0.5 text-[10px] text-[var(--color-primary-hover)]"
-                >{{ tag }}</span>
+                  >{{ tag }}</span
+                >
               </div>
             </td>
-            <td>
+            <td data-label="连接路径">
               <div class="flex items-center gap-2 text-sm">
                 <Route :size="14" class="text-[var(--text-tertiary)]" />
                 {{ connectionLabel(host) }}
               </div>
             </td>
-            <td>
+            <td data-label="凭据 / Host Key">
               <p class="text-sm">{{ host.credential_name }}</p>
               <button
                 v-if="host.host_key_status === 'trusted'"
@@ -152,9 +181,11 @@ function connectionLabel(host: SSHHost) {
               >
                 Host Key 已信任
               </button>
-              <p v-else class="mt-1 text-xs text-[var(--color-warning)]">Host Key 待确认</p>
+              <p v-else class="mt-1 text-xs text-[var(--color-warning)]">
+                Host Key 待确认
+              </p>
             </td>
-            <td>
+            <td data-label="状态">
               <StatusBadge
                 :status="hostStatus(host).status"
                 :label="hostStatus(host).label"
@@ -168,14 +199,19 @@ function connectionLabel(host: SSHHost) {
                 {{ host.last_error_message }}
               </p>
             </td>
-            <td class="text-xs text-[var(--text-secondary)]">
+            <td
+              data-label="最近检查"
+              class="text-xs text-[var(--text-secondary)]"
+            >
               {{ formatTime(host.last_checked_at) }}
             </td>
-            <td>
+            <td class="aw-mobile-actions">
               <div class="flex justify-end gap-1">
                 <Button
                   size="sm"
-                  :loading="detailsMode === 'details' && loadingDetailsId === host.id"
+                  :loading="
+                    detailsMode === 'details' && loadingDetailsId === host.id
+                  "
                   :disabled="
                     !host.enabled ||
                     testingId > 0 ||
@@ -189,7 +225,9 @@ function connectionLabel(host: SSHHost) {
                 </Button>
                 <Button
                   size="sm"
-                  :loading="detailsMode === 'singbox' && loadingDetailsId === host.id"
+                  :loading="
+                    detailsMode === 'singbox' && loadingDetailsId === host.id
+                  "
                   :disabled="
                     !host.enabled ||
                     testingId > 0 ||
@@ -252,7 +290,11 @@ function connectionLabel(host: SSHHost) {
                 >
                   <template #icon><Share2 :size="13" /></template>
                 </Button>
-                <Button size="sm" variant="ghost" @click="$emit('delete', host)">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  @click="$emit('delete', host)"
+                >
                   <template #icon><Trash2 :size="13" /></template>
                 </Button>
               </div>

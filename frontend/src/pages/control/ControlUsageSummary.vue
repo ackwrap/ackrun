@@ -5,6 +5,7 @@ import type { ControlSummary } from "@/services/types";
 import { useRealtimeSocket } from "@/composables/useRealtimeSocket";
 import { formatBytes } from "@/utils/traffic";
 import { subscriptionExpiry } from "@/utils/subscriptionExpiry";
+import CardTexture from "@/components/ui/CardTexture.vue";
 
 const summary = ref<ControlSummary | null>(null);
 const error = ref("");
@@ -76,8 +77,9 @@ defineExpose({ refresh });
 </script>
 
 <template>
-  <div class="min-w-0 space-y-2">
-    <div class="grid grid-cols-3 gap-2">
+  <div class="aw-textured aw-usage-summary min-w-0 space-y-2">
+    <CardTexture variant="mesh" />
+    <div class="aw-usage-grid grid grid-cols-3 gap-2">
       <div class="min-w-0" :title="trackingTitle">
         <h2
           class="h-4 whitespace-nowrap text-xs font-normal leading-4 text-[var(--text-secondary)]"
@@ -85,7 +87,7 @@ defineExpose({ refresh });
           本月已用流量
         </h2>
         <div
-          class="mt-2 flex h-11 items-center rounded-[var(--radius-full)] bg-[var(--bg-inset)] px-3 text-sm font-semibold tabular-nums"
+          class="aw-usage-value mt-2 flex h-11 items-center text-base font-semibold tabular-nums"
         >
           <span class="truncate">{{ totalUsed }}</span>
         </div>
@@ -100,7 +102,7 @@ defineExpose({ refresh });
           订阅总流量
         </h2>
         <div
-          class="mt-2 flex h-11 items-center rounded-[var(--radius-full)] bg-[var(--bg-inset)] px-3 text-sm font-semibold tabular-nums"
+          class="aw-usage-value mt-2 flex h-11 items-center text-base font-semibold tabular-nums"
         >
           <span class="truncate">{{
             summary
@@ -125,7 +127,7 @@ defineExpose({ refresh });
           最近到期订阅
         </h2>
         <div
-          class="mt-2 flex h-11 items-center rounded-[var(--radius-full)] bg-[var(--bg-inset)] px-3 text-sm font-semibold"
+          class="aw-usage-value mt-2 flex h-11 items-center text-base font-semibold"
           :class="
             expiry && remainingDays <= 7 ? 'text-[var(--color-warning)]' : ''
           "

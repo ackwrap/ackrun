@@ -75,8 +75,8 @@ const subscriptionLabel = computed(() =>
         }}</b>
       </div>
     </div>
-    <div class="aw-data-table-wrap max-h-[60vh]">
-      <table class="aw-data-table min-w-[820px]">
+    <div class="aw-data-table-wrap aw-mobile-table-wrap max-h-[60vh]">
+      <table class="aw-data-table aw-mobile-table min-w-[820px]">
         <thead>
           <tr>
             <th
@@ -95,15 +95,17 @@ const subscriptionLabel = computed(() =>
             <td colspan="5" class="py-10 text-center">没有匹配到节点</td>
           </tr>
           <tr v-for="node in nodes" v-else :key="node.uid">
-            <td class="max-w-[420px] truncate font-medium">
+            <td class="aw-mobile-title max-w-[420px] truncate font-medium">
               <NodeFlagName :name="node.name" :flag="flags[node.uid]" />
             </td>
-            <td class="uppercase">{{ node.type }}</td>
-            <td>
+            <td data-label="协议" class="uppercase">{{ node.type }}</td>
+            <td data-label="订阅来源">
               {{ node.subscription_name || `订阅 ${node.subscription_id}` }}
             </td>
-            <td>{{ node.latency_ms > 0 ? `${node.latency_ms} ms` : "-" }}</td>
-            <td>{{ node.status || "unknown" }}</td>
+            <td data-label="延迟">
+              {{ node.latency_ms > 0 ? `${node.latency_ms} ms` : "-" }}
+            </td>
+            <td data-label="状态">{{ node.status || "unknown" }}</td>
           </tr>
         </tbody>
       </table>

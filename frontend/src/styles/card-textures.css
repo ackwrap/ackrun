@@ -1,0 +1,145 @@
+/* Isolate only the decoration: action dropdowns can still overflow the card. */
+.aw-textured {
+  position: relative;
+  isolation: isolate;
+  background-image: linear-gradient(
+    145deg,
+    var(--card-surface-tint),
+    transparent 65%
+  );
+}
+
+.aw-card-texture {
+  --texture-pattern: linear-gradient(#fff, #fff);
+  --texture-size: 100% 100%;
+  --texture-repeat: no-repeat;
+  --texture-fade: radial-gradient(
+    ellipse 340px 230px at 100% 0,
+    #000,
+    transparent 100%
+  );
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  display: block;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+  user-select: none;
+  -webkit-mask-image: var(--texture-fade);
+  mask-image: var(--texture-fade);
+}
+
+.aw-card-texture::before,
+.aw-card-texture::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+  background: var(--texture-fill, var(--card-texture-ink));
+  -webkit-mask-image: var(--texture-pattern);
+  mask-image: var(--texture-pattern);
+  -webkit-mask-size: var(--texture-size);
+  mask-size: var(--texture-size);
+  -webkit-mask-repeat: var(--texture-repeat);
+  mask-repeat: var(--texture-repeat);
+  -webkit-mask-position: top right;
+  mask-position: top right;
+}
+
+.aw-card-texture::before {
+  opacity: var(--card-texture-opacity);
+}
+
+/* Reuse Spotlight coordinates; only the local brightness changes, never geometry. */
+.aw-card-texture::after {
+  opacity: 0;
+  -webkit-mask-image:
+    var(--texture-pattern),
+    radial-gradient(
+      190px circle at var(--spotlight-x, 100%) var(--spotlight-y, 0%),
+      #fff,
+      transparent
+    );
+  mask-image:
+    var(--texture-pattern),
+    radial-gradient(
+      190px circle at var(--spotlight-x, 100%) var(--spotlight-y, 0%),
+      #fff,
+      transparent
+    );
+  -webkit-mask-size:
+    var(--texture-size),
+    100% 100%;
+  mask-size:
+    var(--texture-size),
+    100% 100%;
+  -webkit-mask-repeat: var(--texture-repeat), no-repeat;
+  mask-repeat: var(--texture-repeat), no-repeat;
+  -webkit-mask-position:
+    top right,
+    0 0;
+  mask-position:
+    top right,
+    0 0;
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  transition: opacity var(--duration-interaction) ease-out;
+}
+
+.aw-card-texture[data-texture="dots"] {
+  --texture-pattern: radial-gradient(circle, #fff 0.8px, transparent 1px);
+  --texture-size: 12px 12px;
+  --texture-repeat: repeat;
+  --texture-fade: radial-gradient(
+    ellipse 340px 260px at 100% 100%,
+    #000,
+    transparent 100%
+  );
+  background: radial-gradient(
+    ellipse at 100% 100%,
+    var(--card-texture-wash),
+    transparent 70%
+  );
+}
+
+.aw-card-texture[data-texture="topographic"] {
+  --texture-pattern: url("../assets/card-textures/topographic.svg");
+  --texture-size: 360px 240px;
+}
+
+.aw-card-texture[data-texture="topology"] {
+  --texture-pattern: url("../assets/card-textures/topology.svg");
+  --texture-size: 360px 240px;
+}
+
+.aw-card-texture[data-texture="mesh"] {
+  --texture-fill:
+    radial-gradient(
+      ellipse at 100% 0,
+      var(--card-texture-ink),
+      transparent 65%
+    ),
+    radial-gradient(
+      ellipse at 65% 100%,
+      color-mix(in srgb, var(--card-texture-ink) 85%, var(--color-primary)),
+      transparent 65%
+    );
+}
+
+.aw-card-texture[data-texture="circuit"] {
+  --texture-pattern: url("../assets/card-textures/circuit.svg");
+  --texture-size: 360px 240px;
+}
+
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  .aw-spotlight[data-spotlight-active] > .aw-card-texture::after {
+    opacity: var(--card-texture-highlight);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aw-card-texture::after {
+    display: none;
+    transition: none;
+  }
+}

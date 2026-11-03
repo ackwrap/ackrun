@@ -8,6 +8,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/ackwrap/ackrun/internal/buildinfo"
 	"github.com/ackwrap/ackrun/internal/logging"
 	"github.com/ackwrap/ackrun/internal/model"
 	"github.com/ackwrap/ackrun/internal/service"
@@ -18,7 +19,7 @@ type hostInput struct {
 }
 
 func NewSSHServer(svc *service.SSHHostService) *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{Name: "ackwrap-ssh", Version: "1.0.0"}, &mcp.ServerOptions{
+	server := mcp.NewServer(&mcp.Implementation{Name: "ackwrap-ssh", Version: buildinfo.Version}, &mcp.ServerOptions{
 		Instructions: "Operate SSH hosts saved in Ackwrap. Use host_id from ssh_list_servers. Existing credentials and connection paths are reused. Unknown or changed host keys must be confirmed by the user in Ackwrap. File paths always refer to the remote SSH host, never to the MCP client's computer. For large file upload, supply source_url or call ssh_upload to obtain an HTTP PUT endpoint, then use a local HTTP/file tool to stream the file with the same MCP bearer token. For download, call ssh_download and save its HTTP GET response with a local HTTP/file tool. A ready response only prepares a transfer, not completes it. Never encode deployment packages as inline base64.",
 	})
 	addTool(server, "ssh_list_servers", "列出 Ackwrap SSH 主机，不返回密码或私钥。", func(_ context.Context, _ struct{}) (any, error) {

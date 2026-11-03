@@ -25,6 +25,7 @@ import { useAdaptiveActions } from "@/composables/useAdaptiveActions";
 import { useControlActivity } from "@/composables/useControlActivity";
 import ControlActivityCards from "./control/ControlActivityCards.vue";
 import ControlUsageSummary from "./control/ControlUsageSummary.vue";
+import { vSpotlight } from "@/directives/spotlight";
 
 const runtime = ref<RuntimeResponse | null>(null);
 const configStatus = ref<ConfigStatus | null>(null);
@@ -216,7 +217,8 @@ onBeforeUnmount(() => {
     </div>
 
     <section
-      class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-card)]"
+      v-spotlight
+      class="aw-textured rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-card)]"
     >
       <div
         ref="headerRow"

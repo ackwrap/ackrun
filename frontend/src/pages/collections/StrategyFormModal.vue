@@ -253,7 +253,7 @@ function submit() {
           <label
             v-for="group in selectableGroups"
             :key="group.id"
-            class="flex min-w-0 cursor-pointer items-center gap-2 rounded-[var(--radius-md)] border px-3 py-2.5 text-xs transition-colors"
+            class="aw-choice-row flex min-w-0 cursor-pointer items-center gap-2 rounded-[var(--radius-md)] border px-3 py-2.5 text-xs transition-colors"
             :class="
               groupIDs.includes(group.id)
                 ? 'border-[var(--button-primary-border)] bg-[var(--button-primary-bg)] text-[var(--button-primary-text)]'

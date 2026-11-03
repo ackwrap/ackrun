@@ -63,7 +63,7 @@ function togglePage() {
       <p class="text-sm text-[var(--text-secondary)]">
         默认按地域自动分组，新增节点、导入和订阅更新后自动归组；支持自定义节点组
       </p>
-      <div class="flex gap-2">
+      <div class="flex flex-wrap gap-2">
         <button
           v-if="selected.length"
           class="aw-action-button"
@@ -79,8 +79,20 @@ function togglePage() {
         </button>
       </div>
     </div>
-    <div class="overflow-x-auto border border-[var(--border-default)]">
-      <table class="aw-data-table min-w-[1120px]">
+    <label class="flex items-center gap-2 text-xs sm:hidden">
+      <input
+        type="checkbox"
+        :checked="
+          pagedGroups.length > 0 &&
+          pagedGroups.every((group) => selected.includes(group.id))
+        "
+        @change="togglePage"
+      />选择当前页
+    </label>
+    <div
+      class="aw-mobile-table-wrap overflow-x-auto border border-[var(--border-default)]"
+    >
+      <table class="aw-data-table aw-mobile-table min-w-[1120px]">
         <thead>
           <tr>
             <th>
@@ -113,42 +125,57 @@ function togglePage() {
         </thead>
         <tbody>
           <tr>
-            <td>
+            <td class="aw-mobile-selection">
               <input
                 type="checkbox"
                 disabled
                 aria-label="全球直连为固定内置组，不能批量删除"
               />
             </td>
-            <td>
+            <td class="aw-mobile-title">
               <Globe :size="16" class="mr-2 inline" />{{ directNodeGroup.name }}
               <small class="ml-2 text-[var(--text-tertiary)]">内置</small>
             </td>
-            <td>直连</td>
-            <td colspan="4" class="text-[var(--text-secondary)]">
+            <td data-label="类型">直连</td>
+            <td
+              data-label="节点筛选"
+              colspan="4"
+              class="text-[var(--text-secondary)]"
+            >
               固定 DIRECT 出站，不经过代理，不参与节点筛选或自动测速
             </td>
-            <td>—</td>
-            <td>始终启用</td>
-            <td class="text-[var(--text-tertiary)]">固定内置组</td>
+            <td data-label="匹配节点">—</td>
+            <td data-label="状态">始终启用</td>
+            <td class="aw-mobile-actions text-[var(--text-tertiary)]">
+              固定内置组
+            </td>
           </tr>
-          <tr v-for="group in pagedGroups" :key="group.id">
-            <td>
+          <tr
+            v-for="group in pagedGroups"
+            :key="group.id"
+            :data-selected="selected.includes(group.id)"
+          >
+            <td class="aw-mobile-selection">
               <input
                 type="checkbox"
                 :checked="selected.includes(group.id)"
+                :aria-label="`选择 ${group.name}`"
                 @change="toggleSelected(group.id)"
               />
             </td>
-            <td>
+            <td class="aw-mobile-title">
               <img
                 :src="getFlagImageURL(flags[String(group.id)] || defaultFlag)"
                 class="mr-2 inline h-4 w-4"
               />{{ group.name }}
             </td>
-            <td>{{ group.type === "urltest" ? "自动" : "手动" }}</td>
-            <td>{{ group.filter_protocols || "全部" }}</td>
-            <td>
+            <td data-label="类型">
+              {{ group.type === "urltest" ? "自动" : "手动" }}
+            </td>
+            <td data-label="协议限制">
+              {{ group.filter_protocols || "全部" }}
+            </td>
+            <td data-label="订阅限制">
               {{
                 subscriptionFilterLabel(
                   group.filter_subscriptions,
@@ -156,11 +183,13 @@ function togglePage() {
                 )
               }}
             </td>
-            <td>{{ group.filter_include }}</td>
-            <td>{{ group.filter_exclude || "-" }}</td>
-            <td>{{ group.matched_node_count || 0 }} 个</td>
-            <td>{{ group.enabled ? "启用" : "停用" }}</td>
-            <td>
+            <td data-label="包含关键词">{{ group.filter_include || "-" }}</td>
+            <td data-label="排除关键词">{{ group.filter_exclude || "-" }}</td>
+            <td data-label="匹配节点">
+              {{ group.matched_node_count || 0 }} 个
+            </td>
+            <td data-label="状态">{{ group.enabled ? "启用" : "停用" }}</td>
+            <td class="aw-mobile-actions">
               <div class="flex flex-wrap gap-2">
                 <button @click="emit('detail', group)">
                   <Eye :size="12" class="inline" />详情

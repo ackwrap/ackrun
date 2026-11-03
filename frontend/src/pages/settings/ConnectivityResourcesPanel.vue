@@ -156,8 +156,8 @@ onMounted(load);
         统一用于节点组、策略组自动 URLTest
         与后台健康检查；测速页面只使用此处已启用的地址。
       </p>
-      <div class="aw-data-table-wrap h-[170px] shrink-0">
-        <table class="aw-data-table h-full min-w-[620px]">
+      <div class="aw-data-table-wrap aw-mobile-table-wrap h-[170px] shrink-0">
+        <table class="aw-data-table aw-mobile-table h-full min-w-[620px]">
           <thead>
             <tr>
               <th>名称</th>
@@ -171,7 +171,7 @@ onMounted(load);
               <td colspan="4" class="text-center">加载中...</td>
             </tr>
             <tr v-for="target in targets" v-else :key="target.id">
-              <td>
+              <td class="aw-mobile-title">
                 {{ target.name
                 }}<span
                   v-if="target.builtin"
@@ -180,12 +180,13 @@ onMounted(load);
                 >
               </td>
               <td
-                class="max-w-72 truncate font-mono text-xs"
+                data-label="URL"
+                class="aw-mobile-wide max-w-72 truncate font-mono text-xs"
                 :title="target.url"
               >
                 {{ target.url }}
               </td>
-              <td>
+              <td data-label="状态">
                 <button
                   class="aw-action-button aw-action-neutral"
                   @click="toggle(target)"
@@ -193,7 +194,7 @@ onMounted(load);
                   {{ target.enabled ? "停用" : "启用" }}
                 </button>
               </td>
-              <td>
+              <td class="aw-mobile-actions">
                 <div class="flex gap-1">
                   <button
                     class="aw-action-button aw-action-neutral"

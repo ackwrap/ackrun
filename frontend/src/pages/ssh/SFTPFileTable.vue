@@ -41,8 +41,10 @@ function formatTime(value: number) {
 </script>
 
 <template>
-  <div class="min-h-0 flex-1 overflow-auto">
-    <table class="w-full table-fixed text-left text-xs">
+  <div class="min-h-0 min-w-0 max-w-full flex-1 overflow-auto">
+    <table
+      class="aw-file-table w-full min-w-[560px] table-fixed text-left text-xs"
+    >
       <thead
         class="sticky top-0 z-10 bg-[var(--bg-elevated)] text-[var(--text-tertiary)]"
       >
@@ -68,10 +70,8 @@ function formatTime(value: number) {
         <tr
           v-for="entry in entries"
           :key="entry.path"
-          class="cursor-default border-b border-[var(--border-light)] transition-colors hover:bg-[var(--bg-sidebar-hover)]"
-          :class="
-            selectedPaths.has(entry.path) && 'bg-[var(--color-primary-bg)]'
-          "
+          class="cursor-default border-b border-[var(--border-light)]"
+          :data-selected="selectedPaths.has(entry.path)"
           @click="$emit('select', entry, $event)"
           @dblclick="$emit('open', entry)"
           @contextmenu.prevent="$emit('context', entry, $event)"

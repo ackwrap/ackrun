@@ -11,6 +11,7 @@ import {
   Upload,
 } from "lucide-vue-next";
 import PageHeader from "@/components/layout/PageHeader.vue";
+import { vSpotlight } from "@/directives/spotlight";
 import NodeFlagName from "@/components/NodeFlagName.vue";
 import Toast from "@/components/ui/Toast.vue";
 import Modal from "@/components/ui/Modal.vue";
@@ -383,6 +384,7 @@ const pretty = (s: string) => {
       @dismiss="message = ''"
     />
     <section
+      v-spotlight
       class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
     >
       <div class="mb-4 flex flex-wrap justify-between gap-3">
@@ -404,8 +406,10 @@ const pretty = (s: string) => {
           </button>
         </div>
       </div>
-      <div class="overflow-x-auto border border-[var(--border-default)]">
-        <table class="aw-data-table min-w-[1100px]">
+      <div
+        class="aw-mobile-table-wrap overflow-x-auto border border-[var(--border-default)]"
+      >
+        <table class="aw-data-table aw-mobile-table min-w-[1100px]">
           <thead>
             <tr>
               <th
@@ -433,11 +437,16 @@ const pretty = (s: string) => {
               </td>
             </tr>
             <tr v-for="x in displayed" v-else :key="x.id">
-              <td>{{ x.url === manualURL ? "本地节点源" : x.name }}</td>
-              <td class="max-w-[260px] truncate">
+              <td class="aw-mobile-title">
+                {{ x.url === manualURL ? "本地节点源" : x.name }}
+              </td>
+              <td
+                data-label="订阅链接"
+                class="aw-mobile-wide max-w-[260px] truncate"
+              >
                 {{ x.url === manualURL ? "本地导入" : x.url }}
               </td>
-              <td>
+              <td data-label="节点数">
                 <button
                   :disabled="!x.node_count"
                   @click="router.push(`/nodes?subscription_id=${x.id}`)"
@@ -445,15 +454,19 @@ const pretty = (s: string) => {
                   {{ x.node_count }}
                 </button>
               </td>
-              <td>{{ x.url === manualURL ? "--" : traffic(x) }}</td>
-              <td>
+              <td data-label="流量使用">
+                {{ x.url === manualURL ? "--" : traffic(x) }}
+              </td>
+              <td data-label="到期时间">
                 {{ x.url === manualURL ? "--" : formatTime(x.expire_at) }}
               </td>
-              <td>
+              <td data-label="最后同步">
                 {{ x.url === manualURL ? "--" : formatTime(x.last_sync_at) }}
               </td>
-              <td>{{ x.url === manualURL ? "本地" : schedule(x) }}</td>
-              <td>
+              <td data-label="同步周期">
+                {{ x.url === manualURL ? "本地" : schedule(x) }}
+              </td>
+              <td data-label="状态">
                 <span :title="syncErrors[x.id]">{{
                   x.url === manualURL
                     ? "本地"
@@ -467,7 +480,7 @@ const pretty = (s: string) => {
                   {{ syncErrors[x.id] }}
                 </div>
               </td>
-              <td>
+              <td class="aw-mobile-actions">
                 <div class="flex gap-2">
                   <button
                     :disabled="
@@ -583,6 +596,7 @@ const pretty = (s: string) => {
       </template>
     </Modal>
     <section
+      v-spotlight
       class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
     >
       <div class="mb-4 flex items-center justify-between gap-3">
@@ -591,8 +605,8 @@ const pretty = (s: string) => {
           <Plus :size="15" />添加规则
         </button>
       </div>
-      <div class="overflow-x-auto">
-        <table class="aw-data-table min-w-[680px]">
+      <div class="aw-mobile-table-wrap overflow-x-auto">
+        <table class="aw-data-table aw-mobile-table min-w-[680px]">
           <thead>
             <tr>
               <th
@@ -608,12 +622,14 @@ const pretty = (s: string) => {
               <td colspan="5" class="py-10 text-center">暂无过滤规则</td>
             </tr>
             <tr v-for="x in filters" v-else :key="x.id">
-              <td>{{ x.name }}</td>
-              <td>
+              <td class="aw-mobile-title">{{ x.name }}</td>
+              <td data-label="目标字段">
                 {{ targets.find((t) => t[0] === x.target)?.[1] || x.target }}
               </td>
-              <td class="font-mono">{{ x.pattern }}</td>
-              <td>
+              <td data-label="正则" class="aw-mobile-wide font-mono">
+                {{ x.pattern }}
+              </td>
+              <td data-label="状态">
                 <button
                   @click="
                     api
@@ -624,7 +640,7 @@ const pretty = (s: string) => {
                   {{ x.enabled ? "启用" : "停用" }}
                 </button>
               </td>
-              <td>
+              <td class="aw-mobile-actions">
                 <button @click="openFilter(x)">编辑</button>
                 <button @click="deleteFilter(x)">删除</button>
               </td>

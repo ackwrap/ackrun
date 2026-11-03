@@ -175,8 +175,8 @@ onMounted(load);
       出口 IP
       与路由追踪页面从这里读取已启用接口；自定义接口由后端直连请求，不经过当前代理节点。
     </p>
-    <div class="aw-data-table-wrap min-h-[170px] flex-1">
-      <table class="aw-data-table h-full min-w-[700px]">
+    <div class="aw-data-table-wrap aw-mobile-table-wrap min-h-[170px] flex-1">
+      <table class="aw-data-table aw-mobile-table h-full min-w-[700px]">
         <thead>
           <tr>
             <th>名称</th>
@@ -191,9 +191,11 @@ onMounted(load);
             <td colspan="5" class="text-center">加载中...</td>
           </tr>
           <tr v-for="provider in providers" v-else :key="provider.id">
-            <td>{{ provider.name }}</td>
-            <td>{{ provider.builtin ? "内置" : provider.template }}</td>
-            <td>
+            <td class="aw-mobile-title">{{ provider.name }}</td>
+            <td data-label="类型">
+              {{ provider.builtin ? "内置" : provider.template }}
+            </td>
+            <td data-label="状态">
               <button
                 class="aw-action-button aw-action-neutral"
                 @click="toggle(provider)"
@@ -201,7 +203,7 @@ onMounted(load);
                 {{ provider.enabled ? "停用" : "启用" }}
               </button>
             </td>
-            <td>
+            <td data-label="默认">
               <button
                 class="aw-action-button aw-action-neutral"
                 :disabled="provider.is_default"
@@ -210,7 +212,7 @@ onMounted(load);
                 {{ provider.is_default ? "当前默认" : "设为默认" }}
               </button>
             </td>
-            <td>
+            <td class="aw-mobile-actions">
               <div class="flex gap-1">
                 <button
                   class="aw-action-button aw-action-neutral"

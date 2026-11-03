@@ -154,12 +154,12 @@ watch(
       <button
         v-for="group in filteredGroups"
         :key="group.name"
-        class="focus-ring flex w-full min-w-0 items-center gap-3 rounded-[var(--radius-lg)] bg-[var(--bg-inset)] px-3 py-2.5 text-left transition-colors hover:bg-[var(--button-secondary-hover)]"
+        class="aw-proxy-group focus-ring flex w-full min-w-0 items-center gap-3 rounded-[var(--radius-lg)] bg-[var(--bg-inset)] px-3 py-2.5 text-left transition-colors hover:bg-[var(--button-secondary-hover)]"
         :aria-label="`查看策略组 ${group.name}`"
         @click="openGroup(group.name)"
       >
         <span
-          class="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[var(--button-secondary-bg)] text-xs font-bold text-[var(--text-secondary)]"
+          class="aw-proxy-initial flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[var(--button-secondary-bg)] text-xs font-bold text-[var(--text-secondary)]"
           >{{ activityInitial(group.name) }}</span
         >
         <span class="min-w-0 flex-1"

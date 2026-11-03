@@ -102,7 +102,9 @@ function parseConditions(rule: DNSRule): Record<string, unknown> {
 function conditionValues(value: unknown): string[] {
   if (typeof value === "string") return value ? [value] : [];
   if (!Array.isArray(value)) return [];
-  return value.filter((item): item is string => typeof item === "string" && !!item);
+  return value.filter(
+    (item): item is string => typeof item === "string" && !!item,
+  );
 }
 
 const exceptions = computed<ExceptionItem[]>(() =>
@@ -110,7 +112,10 @@ const exceptions = computed<ExceptionItem[]>(() =>
     if (!isRealServerRule(rule)) return [];
     const conditions = parseConditions(rule);
     const keys = Object.keys(conditions);
-    if (keys.length !== 1 || (keys[0] !== "domain" && keys[0] !== "domain_suffix")) {
+    if (
+      keys.length !== 1 ||
+      (keys[0] !== "domain" && keys[0] !== "domain_suffix")
+    ) {
       return [];
     }
     const values = conditionValues(conditions[keys[0]]);
@@ -145,7 +150,9 @@ function preferredServer(): string {
     ["local", "dhcp", "hosts"].includes(server.server_type),
   );
   if (local) return local.tag;
-  if (enabledServers.value.some((server) => server.tag === settings.value.final)) {
+  if (
+    enabledServers.value.some((server) => server.tag === settings.value.final)
+  ) {
     return settings.value.final;
   }
   return enabledServers.value[0]?.tag || "";
@@ -154,7 +161,8 @@ function preferredServer(): string {
 async function request(url: string, init?: RequestInit) {
   const response = await authenticatedFetch(url, init);
   const data = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(data?.error?.message || response.statusText);
+  if (!response.ok)
+    throw new Error(data?.error?.message || response.statusText);
   return data;
 }
 
@@ -216,7 +224,10 @@ function openEdit(item: ExceptionItem) {
   view.value = "form";
 }
 
-function normalizeValue(raw: string, conditionType: "domain" | "domain_suffix") {
+function normalizeValue(
+  raw: string,
+  conditionType: "domain" | "domain_suffix",
+) {
   let value = raw.trim().toLowerCase().replace(/\.$/, "");
   const hasSuffixPrefix = value.startsWith("+.") || value.startsWith("*.");
   if (conditionType === "domain_suffix") {
@@ -225,13 +236,20 @@ function normalizeValue(raw: string, conditionType: "domain" | "domain_suffix") 
   } else if (hasSuffixPrefix || value.startsWith(".") || value.includes("*")) {
     throw new Error(`精确域名不支持通配符: ${raw.trim()}`);
   }
-  if (!value || value.includes("*") || !/^[a-z0-9_-]+(?:\.[a-z0-9_-]+)*$/.test(value)) {
+  if (
+    !value ||
+    value.includes("*") ||
+    !/^[a-z0-9_-]+(?:\.[a-z0-9_-]+)*$/.test(value)
+  ) {
     throw new Error(`域名格式无效: ${raw.trim()}`);
   }
   return value;
 }
 
-function normalizeValues(raw: string, conditionType: "domain" | "domain_suffix") {
+function normalizeValues(
+  raw: string,
+  conditionType: "domain" | "domain_suffix",
+) {
   const values = raw
     .split("\n")
     .map((rawLine) => rawLine.trim())
@@ -243,7 +261,9 @@ function normalizeValues(raw: string, conditionType: "domain" | "domain_suffix")
 }
 
 function nextPriority() {
-  return localRules.value.reduce((max, rule) => Math.max(max, rule.priority), -1) + 1;
+  return (
+    localRules.value.reduce((max, rule) => Math.max(max, rule.priority), -1) + 1
+  );
 }
 
 async function saveException() {
@@ -258,7 +278,11 @@ async function saveException() {
   try {
     values = normalizeValues(current.values, current.conditionType);
   } catch (error) {
-    emit("notify", error instanceof Error ? error.message : "域名格式无效", "error");
+    emit(
+      "notify",
+      error instanceof Error ? error.message : "域名格式无效",
+      "error",
+    );
     return;
   }
   const duplicates = new Set(
@@ -308,7 +332,9 @@ async function saveException() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const index = localRules.value.findIndex((rule) => rule.id === current.id);
+      const index = localRules.value.findIndex(
+        (rule) => rule.id === current.id,
+      );
       if (index >= 0) {
         localRules.value[index] = {
           ...localRules.value[index],
@@ -324,7 +350,11 @@ async function saveException() {
         body: JSON.stringify(payload),
       });
       localRules.value.push(created);
-      emit("notify", current.preset ? "常见真实 IP 例外预设已加入" : "真实 IP 例外已添加", "success");
+      emit(
+        "notify",
+        current.preset ? "常见真实 IP 例外预设已加入" : "真实 IP 例外已添加",
+        "success",
+      );
     }
     view.value = "list";
     form.value = null;
@@ -381,7 +411,9 @@ async function confirmDelete() {
   pendingRuleID.value = target.rule.id;
   try {
     await request(`/api/v1/dns/rules/${target.rule.id}`, { method: "DELETE" });
-    localRules.value = localRules.value.filter((rule) => rule.id !== target.rule.id);
+    localRules.value = localRules.value.filter(
+      (rule) => rule.id !== target.rule.id,
+    );
     deleteTarget.value = null;
     emit("changed");
     emit("notify", "真实 IP 例外已删除", "success");
@@ -442,7 +474,15 @@ function conditionLabel(type: ExceptionItem["conditionType"]) {
 
   <Modal
     :open="managerOpen"
-    :title="view === 'form' ? (form?.id ? '编辑真实 IP 例外' : form?.preset ? '加入常见例外预设' : '新增真实 IP 例外') : '真实 IP 例外'"
+    :title="
+      view === 'form'
+        ? form?.id
+          ? '编辑真实 IP 例外'
+          : form?.preset
+            ? '加入常见例外预设'
+            : '新增真实 IP 例外'
+        : '真实 IP 例外'
+    "
     size="xl"
     :closable="managerClosable"
     @close="closeManager"
@@ -450,14 +490,19 @@ function conditionLabel(type: ExceptionItem["conditionType"]) {
     <template v-if="view === 'list'">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <p class="max-w-2xl text-sm text-[var(--text-secondary)]">
-          这些域名使用所选 DNS Server 返回真实地址，并在系统 FakeIP 兜底规则之前匹配。
-          局域网域名应选择 local、dhcp、hosts 或实际可访问的 LAN DNS。
+          这些域名使用所选 DNS Server 返回真实地址，并在系统 FakeIP
+          兜底规则之前匹配。 局域网域名应选择 local、dhcp、hosts 或实际可访问的
+          LAN DNS。
         </p>
         <div class="flex flex-wrap gap-2">
           <Button :disabled="!enabledServers.length" @click="openPreset">
             加入常见例外预设
           </Button>
-          <Button variant="primary" :disabled="!enabledServers.length" @click="openNew">
+          <Button
+            variant="primary"
+            :disabled="!enabledServers.length"
+            @click="openNew"
+          >
             <template #icon><Plus :size="14" /></template>新增例外
           </Button>
         </div>
@@ -470,8 +515,8 @@ function conditionLabel(type: ExceptionItem["conditionType"]) {
         请先在 DNS 服务器区域启用一个非 FakeIP Server。
       </div>
 
-      <div class="aw-data-table-wrap mt-4">
-        <table class="aw-data-table min-w-[760px]">
+      <div class="aw-data-table-wrap aw-mobile-table-wrap mt-4">
+        <table class="aw-data-table aw-mobile-table min-w-[760px]">
           <thead>
             <tr>
               <th>类型</th>
@@ -483,34 +528,52 @@ function conditionLabel(type: ExceptionItem["conditionType"]) {
           </thead>
           <tbody>
             <tr v-if="!exceptions.length">
-              <td colspan="5" class="py-10 text-center text-[var(--text-tertiary)]">
+              <td
+                colspan="5"
+                class="py-10 text-center text-[var(--text-tertiary)]"
+              >
                 暂无真实 IP 例外
               </td>
             </tr>
             <tr v-for="item in exceptions" :key="item.rule.id">
-              <td>{{ conditionLabel(item.conditionType) }}</td>
-              <td class="max-w-[440px] truncate" :title="item.values.join('\n')">
+              <td data-label="类型">
+                {{ conditionLabel(item.conditionType) }}
+              </td>
+              <td
+                data-label="域名"
+                class="aw-mobile-wide max-w-[440px] truncate"
+                :title="item.values.join('\n')"
+              >
                 {{ item.values.join("、") }}
               </td>
-              <td>
+              <td data-label="DNS Server">
                 {{ item.rule.server }}
                 <span
-                  v-if="!realServers.some((server) => server.tag === item.rule.server && server.enabled)"
+                  v-if="
+                    !realServers.some(
+                      (server) =>
+                        server.tag === item.rule.server && server.enabled,
+                    )
+                  "
                   class="ml-1 text-xs text-[var(--color-warning)]"
                   >不可用</span
                 >
               </td>
-              <td>
+              <td data-label="状态">
                 <button
                   class="aw-action-button"
-                  :class="item.rule.enabled ? 'aw-action-success' : 'aw-action-neutral'"
+                  :class="
+                    item.rule.enabled
+                      ? 'aw-action-success'
+                      : 'aw-action-neutral'
+                  "
                   :disabled="pendingRuleID !== null"
                   @click="toggleException(item)"
                 >
                   {{ item.rule.enabled ? "启用" : "停用" }}
                 </button>
               </td>
-              <td>
+              <td class="aw-mobile-actions">
                 <div class="flex gap-2">
                   <button
                     class="aw-action-button aw-action-neutral"
@@ -535,7 +598,12 @@ function conditionLabel(type: ExceptionItem["conditionType"]) {
     </template>
 
     <template v-else-if="form">
-      <Button variant="ghost" size="sm" :disabled="saving" @click="view = 'list'">
+      <Button
+        variant="ghost"
+        size="sm"
+        :disabled="saving"
+        @click="view = 'list'"
+      >
         <template #icon><ArrowLeft :size="14" /></template>返回列表
       </Button>
       <div class="mt-4 grid gap-4 md:grid-cols-2">
@@ -560,13 +628,18 @@ function conditionLabel(type: ExceptionItem["conditionType"]) {
               :value="server.tag"
               :disabled="!server.enabled"
             >
-              {{ server.tag }} · {{ server.server_type }}{{ server.enabled ? "" : " · 已停用" }}
+              {{ server.tag }} · {{ server.server_type
+              }}{{ server.enabled ? "" : " · 已停用" }}
             </option>
           </select>
-          <span v-if="form.preset" class="mt-1 block text-xs text-[var(--color-warning)]">
-            此预设只让这些域名绕过 FakeIP，默认使用普通 DNS 获取真实结果；它不负责
-            LAN 主机名解析。TUN/DNS 劫持模式下不要选择回指 Ackwrap 的 local 或
-            127.0.0.1 DNS，否则可能形成查询回环。
+          <span
+            v-if="form.preset"
+            class="mt-1 block text-xs text-[var(--color-warning)]"
+          >
+            此预设只让这些域名绕过 FakeIP，默认使用普通 DNS
+            获取真实结果；它不负责 LAN 主机名解析。TUN/DNS
+            劫持模式下不要选择回指 Ackwrap 的 local 或 127.0.0.1
+            DNS，否则可能形成查询回环。
           </span>
         </label>
         <label class="text-sm text-[var(--text-secondary)] md:col-span-2">
@@ -578,8 +651,8 @@ function conditionLabel(type: ExceptionItem["conditionType"]) {
             placeholder="每行一个域名，例如 wpad.lan"
           />
           <span class="mt-1 block text-xs text-[var(--text-tertiary)]">
-            每行一个；域名后缀支持输入 *.lan、+.lan 或 .lan，保存时统一规范化为 lan。
-            不支持 localhost.* 形式的尾部通配符。
+            每行一个；域名后缀支持输入 *.lan、+.lan 或 .lan，保存时统一规范化为
+            lan。 不支持 localhost.* 形式的尾部通配符。
           </span>
         </label>
       </div>
@@ -594,7 +667,9 @@ function conditionLabel(type: ExceptionItem["conditionType"]) {
       </template>
       <template v-else>
         <Button :disabled="saving" @click="view = 'list'">取消</Button>
-        <Button variant="primary" :loading="saving" @click="saveException">保存</Button>
+        <Button variant="primary" :loading="saving" @click="saveException"
+          >保存</Button
+        >
       </template>
     </template>
   </Modal>

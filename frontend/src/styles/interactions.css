@@ -1,0 +1,240 @@
+/* Isolated, non-interactive layers preserve content contrast and dropdown overflow. */
+.aw-spotlight {
+  position: relative;
+  isolation: isolate;
+}
+
+.aw-spotlight:focus-within {
+  z-index: 2;
+}
+
+.aw-spotlight::before,
+.aw-spotlight::after {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  opacity: 0;
+  pointer-events: none;
+  content: "";
+  transition: opacity var(--duration-interaction) ease-out;
+}
+
+.aw-spotlight::before {
+  z-index: -1;
+  background: radial-gradient(
+    220px circle at var(--spotlight-x, 50%) var(--spotlight-y, 50%),
+    var(--spotlight-fill),
+    transparent 100%
+  );
+}
+
+.aw-spotlight::after {
+  z-index: 1;
+  padding: 1px;
+  background: radial-gradient(
+    220px circle at var(--spotlight-x, 50%) var(--spotlight-y, 50%),
+    var(--spotlight-border),
+    transparent 100%
+  );
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+}
+
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  .aw-spotlight[data-spotlight-active]::before {
+    opacity: 1;
+  }
+  .aw-spotlight[data-spotlight-active]::after {
+    opacity: var(--spotlight-edge, 0);
+  }
+
+  :root[data-theme] .card-interactive:hover {
+    transform: translateY(-1px);
+    border-color: var(--card-hover-border);
+    box-shadow: var(--shadow-card-hover);
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  :root[data-theme] .aw-probe-row:not(:disabled):hover {
+    background-color: var(--button-secondary-hover);
+  }
+}
+
+:root[data-theme]
+  :is(
+    .aw-button,
+    .aw-action-button,
+    .aw-control-action,
+    .btn-press,
+    .aw-nav-item,
+    .aw-probe-row,
+    .aw-proxy-group,
+    .aw-control-mode,
+    .card-interactive
+  ) {
+  transition:
+    background-color var(--duration-interaction) var(--easing-default),
+    border-color var(--duration-interaction) var(--easing-default),
+    color var(--duration-interaction) var(--easing-default),
+    box-shadow var(--duration-interaction) var(--easing-default),
+    transform var(--duration-interaction) var(--easing-default);
+}
+
+:root[data-theme] .btn-press:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+:root[data-theme] .aw-proxy-group:hover {
+  box-shadow: inset 0 0 0 1px var(--border-default);
+}
+
+/* Shared by every management table, diagnostics, connections and SFTP. Rows
+   never move, and cells keep their own status colors and drag placeholders. */
+:root[data-theme]
+  :is(.aw-data-table, .aw-activity-table, .aw-file-table)
+  > tbody
+  > tr {
+  transition: background-color var(--duration-interaction) ease-out;
+}
+
+:root[data-theme] .aw-activity-table > tbody > tr:nth-child(even) {
+  background-color: var(--bg-inset);
+}
+
+:root[data-theme]
+  :is(.aw-data-table, .aw-activity-table, .aw-file-table)
+  > tbody
+  > tr[data-selected="true"] {
+  background-color: var(--color-primary-bg);
+}
+
+:root[data-theme]
+  :is(.aw-data-table, .aw-activity-table, .aw-file-table)
+  > tbody
+  > tr:focus-within:not([data-selected="true"]):not(.rule-row-placeholder) {
+  background-color: color-mix(
+    in srgb,
+    var(--color-primary-bg) 55%,
+    var(--bg-inset)
+  );
+}
+
+@media (hover: hover) and (pointer: fine) {
+  :root[data-theme]
+    :is(.aw-data-table, .aw-activity-table, .aw-file-table)
+    > tbody
+    > tr:where(
+      :not(.rule-row-placeholder):not(:has(> td[colspan]:only-child))
+    ):hover {
+    background-color: var(--table-row-hover);
+  }
+
+  :root[data-theme]
+    :is(.aw-data-table, .aw-activity-table, .aw-file-table)
+    > tbody
+    > tr[data-selected="true"]:hover {
+    background-color: color-mix(
+      in srgb,
+      var(--color-primary-bg) 70%,
+      var(--table-row-hover)
+    );
+  }
+
+  .aw-log-row:hover {
+    background-color: var(--table-row-hover);
+  }
+}
+
+/* Include unstyled row actions, pagination, tabs and teleported dialog menus. */
+:root[data-theme] :where(button, [role="tab"], summary, .aw-choice-row) {
+  transition:
+    background-color var(--duration-interaction) var(--easing-default),
+    border-color var(--duration-interaction) var(--easing-default),
+    color var(--duration-interaction) var(--easing-default),
+    box-shadow var(--duration-interaction) var(--easing-default),
+    opacity var(--duration-interaction) var(--easing-default);
+}
+
+:root[data-theme] :where(button, [role="tab"], summary):focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.aw-choice-row:focus-within {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.aw-log-row {
+  transition: background-color var(--duration-interaction) ease-out;
+}
+
+.aw-animated-metric {
+  display: inline-block;
+  font-variant-numeric: tabular-nums;
+}
+
+.aw-metric-sparkline {
+  position: absolute;
+  right: 10px;
+  bottom: 3px;
+  left: 10px;
+  width: calc(100% - 20px);
+  height: 10px;
+  color: var(--color-primary);
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme]
+    :is(
+      .aw-button,
+      .aw-action-button,
+      .aw-control-action,
+      .btn-press,
+      .aw-nav-item,
+      .aw-probe-row,
+      .aw-proxy-group,
+      .aw-control-mode,
+      .card-interactive
+    ),
+  .aw-spotlight::before,
+  .aw-spotlight::after {
+    transition: none;
+  }
+
+  :root[data-theme] :where(button, [role="tab"], summary, .aw-choice-row),
+  :root[data-theme]
+    :is(.aw-data-table, .aw-activity-table, .aw-file-table)
+    > tbody
+    > tr,
+  :root[data-theme] :where(input, textarea, select),
+  .aw-log-row {
+    transition: none;
+  }
+
+  :root[data-theme] .card-interactive:hover,
+  :root[data-theme] .btn-press:active:not(:disabled) {
+    transform: none;
+  }
+
+  .aw-spotlight::before,
+  .aw-spotlight::after {
+    display: none;
+  }
+
+  [class*="animate-page-"],
+  [class*="animate-toast-"],
+  [class*="animate-modal-"],
+  .animate-status-pulse {
+    animation: none;
+  }
+}

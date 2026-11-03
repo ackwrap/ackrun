@@ -305,7 +305,7 @@ onMounted(load);
             <label
               v-for="item in facets.subscriptions"
               :key="item.value"
-              class="flex min-w-0 cursor-pointer items-center gap-2 rounded-[var(--radius-md)] border border-[var(--border-light)] bg-[var(--button-secondary-bg)] px-3 py-2 text-xs text-[var(--text-secondary)] transition-colors hover:border-[var(--button-primary-border)] hover:bg-[var(--button-secondary-hover)]"
+              class="aw-choice-row flex min-w-0 cursor-pointer items-center gap-2 rounded-[var(--radius-md)] border border-[var(--border-light)] bg-[var(--button-secondary-bg)] px-3 py-2 text-xs text-[var(--text-secondary)] transition-colors hover:border-[var(--button-primary-border)] hover:bg-[var(--button-secondary-hover)]"
             >
               <input
                 type="checkbox"
@@ -329,7 +329,7 @@ onMounted(load);
             <label
               v-for="item in facets.protocols"
               :key="item.value"
-              class="flex min-w-0 cursor-pointer items-center gap-2 rounded-[var(--radius-md)] border border-[var(--border-light)] bg-[var(--button-secondary-bg)] px-3 py-2 text-xs text-[var(--text-secondary)] transition-colors hover:border-[var(--button-primary-border)] hover:bg-[var(--button-secondary-hover)]"
+              class="aw-choice-row flex min-w-0 cursor-pointer items-center gap-2 rounded-[var(--radius-md)] border border-[var(--border-light)] bg-[var(--button-secondary-bg)] px-3 py-2 text-xs text-[var(--text-secondary)] transition-colors hover:border-[var(--button-primary-border)] hover:bg-[var(--button-secondary-hover)]"
             >
               <input
                 type="checkbox"

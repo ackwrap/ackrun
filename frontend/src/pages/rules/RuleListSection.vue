@@ -3,6 +3,7 @@ import {
   Edit3,
   Eye,
   GripVertical,
+  LockKeyhole,
   Plus,
   RefreshCw,
   Settings2,
@@ -11,6 +12,7 @@ import {
   Upload,
 } from "lucide-vue-next";
 import AdaptiveActionBar from "@/components/ui/AdaptiveActionBar.vue";
+import { vSpotlight } from "@/directives/spotlight";
 import FlagText from "@/components/ui/FlagText.vue";
 import type { RouteRule, RouteRuleSubscription } from "@/services/types";
 import { splitDeviceRuleValues } from "./deviceRulePreview";
@@ -110,6 +112,7 @@ function actionLabel(rule: RouteRule) {
 </script>
 <template>
   <section
+    v-spotlight
     class="rounded-[var(--radius-xl)] border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
   >
     <AdaptiveActionBar id="rule-list-actions" label="规则操作">
@@ -163,9 +166,20 @@ function actionLabel(rule: RouteRule) {
     >
       正在保存排序…
     </p>
-    <div class="aw-data-table-wrap mt-4" :aria-busy="sorting">
-      <table class="aw-data-table min-w-[760px]">
-        <thead>
+    <div class="rule-list-wrap aw-data-table-wrap mt-4" :aria-busy="sorting">
+      <table
+        class="rule-list-table aw-data-table sm:min-w-[1040px] sm:table-fixed"
+      >
+        <colgroup class="rule-list-columns">
+          <col class="w-24" />
+          <col class="w-44" />
+          <col class="w-36" />
+          <col class="w-72" />
+          <col class="w-32" />
+          <col class="w-20" />
+          <col class="w-72" />
+        </colgroup>
+        <thead class="rule-list-head">
           <tr>
             <th>排序</th>
             <th>名称</th>
@@ -176,17 +190,18 @@ function actionLabel(rule: RouteRule) {
             <th>操作</th>
           </tr>
         </thead>
-        <tbody :ref="setTableBody">
-          <tr v-if="!rules.length">
+        <tbody :ref="setTableBody" class="rule-list-body">
+          <tr v-if="!rules.length" class="rule-empty-row">
             <td colspan="7" class="py-8 text-center">暂无路由规则</td>
           </tr>
           <tr
             v-for="(r, i) in displayRules"
             :key="r.id"
             :data-rule-id="r.id"
+            class="rule-list-row"
             :class="{ 'rule-row-placeholder': draggingId === r.id }"
           >
-            <td>
+            <td class="rule-sort-cell">
               <div class="flex items-center gap-1.5">
                 <span class="w-6 text-[var(--text-tertiary)]"
                   >#{{ i + 1 }}</span
@@ -204,29 +219,46 @@ function actionLabel(rule: RouteRule) {
                 >
                   <GripVertical :size="15" />
                 </button>
+                <span
+                  v-else
+                  role="img"
+                  class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[var(--border-light)] text-[var(--text-tertiary)]"
+                  :aria-label="isAdBlock(r) ? '固定在首位' : '固定在末位'"
+                  :title="isAdBlock(r) ? '固定在首位' : '固定在末位'"
+                >
+                  <LockKeyhole :size="13" aria-hidden="true" />
+                </span>
               </div>
             </td>
-            <td>
-              <FlagText
-                class="font-medium text-[var(--text-primary)]"
-                :text="isFinalStrategy(r) ? '最终策略' : r.name"
-              /><small
-                v-if="r.is_system"
-                class="ml-2 rounded-full bg-[var(--button-primary-bg)] px-2 py-0.5 text-[10px] text-[var(--button-primary-text)]"
-                >系统默认</small
-              >
+            <td class="rule-name-cell">
+              <div class="flex min-w-0 flex-wrap items-center gap-1.5">
+                <FlagText
+                  class="min-w-0 font-medium text-[var(--text-primary)]"
+                  :text="isFinalStrategy(r) ? '最终策略' : r.name"
+                /><small
+                  v-if="r.is_system"
+                  class="inline-flex shrink-0 whitespace-nowrap rounded-full bg-[var(--button-primary-bg)] px-2 py-0.5 text-[10px] text-[var(--button-primary-text)]"
+                  >系统默认</small
+                >
+              </div>
             </td>
-            <td>
+            <td class="rule-type-cell">
               <span
-                class="rounded bg-[var(--button-secondary-bg)] px-2 py-1 text-xs"
+                class="inline-block max-w-full truncate whitespace-nowrap rounded bg-[var(--button-secondary-bg)] px-2 py-1 text-xs"
+                :title="typeLabel(r)"
                 >{{ typeLabel(r) }}</span
               >
             </td>
-            <td class="max-w-[320px] truncate" :title="valueLabel(r)">
-              {{ valueLabel(r) }}
+            <td class="rule-value-cell" :title="valueLabel(r)">
+              <span class="rule-cell-label">匹配</span>
+              <span class="block truncate">{{ valueLabel(r) }}</span>
             </td>
-            <td>{{ actionLabel(r) }}</td>
-            <td>
+            <td class="rule-action-cell">
+              <span class="rule-cell-label">动作</span>
+              <span>{{ actionLabel(r) }}</span>
+            </td>
+            <td class="rule-status-cell">
+              <span class="rule-cell-label">状态</span>
               <button
                 class="aw-action-button"
                 :class="r.enabled ? 'aw-action-success' : 'aw-action-neutral'"
@@ -237,8 +269,8 @@ function actionLabel(rule: RouteRule) {
                 {{ r.enabled ? "启用" : "停用" }}
               </button>
             </td>
-            <td>
-              <div class="flex gap-2">
+            <td class="rule-operations-cell">
+              <div class="flex flex-wrap gap-2 sm:flex-nowrap">
                 <button
                   v-if="!r.is_system || isFinalStrategy(r)"
                   class="aw-action-button aw-action-neutral"
@@ -286,6 +318,109 @@ function actionLabel(rule: RouteRule) {
 </template>
 
 <style scoped>
+@media (max-width: 639px) {
+  .rule-list-wrap {
+    overflow: visible;
+    background: transparent;
+  }
+  .rule-list-table,
+  .rule-list-body {
+    display: block;
+    width: 100%;
+  }
+  .rule-list-columns,
+  .rule-list-head {
+    display: none;
+  }
+  .rule-list-body {
+    display: grid;
+    gap: 0.75rem;
+  }
+  .rule-list-row {
+    display: grid;
+    grid-template-columns: 2rem minmax(0, 1fr) auto;
+    grid-template-areas:
+      "sort name type"
+      "sort value value"
+      "sort action status"
+      "operations operations operations";
+    gap: 0.55rem 0.75rem;
+    align-items: center;
+    padding: 0.75rem;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-lg);
+    background: var(--bg-inset);
+  }
+  .rule-list-row > td {
+    min-width: 0;
+    padding: 0 !important;
+    border-bottom: 0 !important;
+    background: transparent !important;
+  }
+  .rule-sort-cell {
+    grid-area: sort;
+    align-self: start;
+  }
+  .rule-sort-cell > div {
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+  .rule-sort-cell span {
+    width: auto;
+  }
+  .rule-name-cell {
+    grid-area: name;
+  }
+  .rule-type-cell {
+    grid-area: type;
+    max-width: 8rem;
+    text-align: right;
+  }
+  .rule-value-cell {
+    grid-area: value;
+  }
+  .rule-action-cell {
+    grid-area: action;
+  }
+  .rule-status-cell {
+    grid-area: status;
+    justify-self: end;
+  }
+  .rule-operations-cell {
+    grid-area: operations;
+    padding-top: 0.2rem !important;
+    border-top: 1px solid var(--border-light) !important;
+  }
+  .rule-value-cell,
+  .rule-action-cell,
+  .rule-status-cell {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 0.45rem;
+  }
+  .rule-cell-label {
+    flex: none;
+    font-size: 10px;
+    color: var(--text-tertiary);
+  }
+  .rule-empty-row {
+    display: block;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-lg);
+  }
+  .rule-empty-row > td {
+    display: block;
+  }
+}
+.rule-cell-label {
+  display: none;
+}
+@media (max-width: 639px) {
+  .rule-cell-label {
+    display: inline;
+  }
+}
 .rule-row-placeholder > td {
   background: var(--button-primary-bg) !important;
   color: transparent !important;

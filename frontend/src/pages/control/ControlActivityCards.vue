@@ -309,9 +309,6 @@ watch(
 .aw-activity-table td {
   padding: 6px 8px;
 }
-.aw-activity-table tbody tr:nth-child(even) {
-  background: var(--bg-inset);
-}
 .aw-activity-table th:first-child,
 .aw-activity-table td:first-child {
   border-radius: 10px 0 0 10px;
