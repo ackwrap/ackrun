@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from "vue";
+import { Check } from "lucide-vue-next";
 import Modal from "@/components/ui/Modal.vue";
 import NodeFlagName from "@/components/NodeFlagName.vue";
 import { api } from "@/services/api";
@@ -59,6 +60,11 @@ function toggle(uid: string) {
   );
 }
 
+function selectAndClose(uid: string) {
+  emit("update:selected", [uid]);
+  emit("close");
+}
+
 watch(
   () => props.open,
   (open) => {
@@ -89,14 +95,19 @@ watch(
             <th>订阅来源</th>
             <th>延迟</th>
             <th>状态</th>
+            <th v-if="single" class="text-right">操作</th>
           </tr>
         </thead>
         <tbody>
           <tr v-if="loading">
-            <td colspan="6" class="py-10 text-center">加载中...</td>
+            <td :colspan="single ? 7 : 6" class="py-10 text-center">
+              加载中...
+            </td>
           </tr>
           <tr v-else-if="!nodes.length">
-            <td colspan="6" class="py-10 text-center">没有匹配的节点</td>
+            <td :colspan="single ? 7 : 6" class="py-10 text-center">
+              没有匹配的节点
+            </td>
           </tr>
           <tr v-for="node in nodes" v-else :key="node.uid">
             <td>
@@ -111,6 +122,15 @@ watch(
             <td>{{ node.subscription_name }}</td>
             <td>{{ node.latency_ms || "-" }}</td>
             <td>{{ node.status }}</td>
+            <td v-if="single" class="text-right">
+              <button
+                type="button"
+                class="aw-action-button"
+                @click="selectAndClose(node.uid)"
+              >
+                <Check :size="13" />选择
+              </button>
+            </td>
           </tr>
         </tbody>
       </table>
