@@ -54,7 +54,10 @@ watch(
     items.value.push({ id, message, type });
     const dismissAfter = duration ?? (type === "error" ? 5000 : 3000);
     if (dismissAfter > 0) {
-      timers.set(id, window.setTimeout(() => remove(id), dismissAfter));
+      timers.set(
+        id,
+        window.setTimeout(() => remove(id), dismissAfter),
+      );
     }
   },
   { immediate: true },
@@ -71,7 +74,7 @@ onBeforeUnmount(() => {
     <TransitionGroup
       name="aw-toast-stack"
       tag="div"
-      class="pointer-events-none fixed right-0 bottom-[13vh] z-[var(--z-toast)] flex w-full max-w-xl flex-col gap-3 px-4 sm:right-2"
+      class="pointer-events-none fixed top-[calc(env(safe-area-inset-top)+5rem)] left-1/2 z-[var(--z-toast)] flex w-full max-w-xl -translate-x-1/2 flex-col gap-3 px-4"
     >
       <div
         v-for="item in items"
@@ -82,7 +85,7 @@ onBeforeUnmount(() => {
       >
         <span class="aw-toast-icon"
           ><component :is="icon(item.type)" :size="19" /></span
-        ><span
+        ><span class="min-w-0"
           ><span class="aw-toast-label">{{ label(item.type) }}</span
           ><span class="aw-toast-message">{{ item.message }}</span></span
         >
@@ -103,7 +106,7 @@ onBeforeUnmount(() => {
 .aw-toast-stack-enter-from,
 .aw-toast-stack-leave-to {
   opacity: 0;
-  transform: translateY(12px);
+  transform: translateY(-8px);
 }
 
 .aw-toast-stack-leave-active {

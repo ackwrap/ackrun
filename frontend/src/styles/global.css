@@ -443,7 +443,8 @@ button:disabled {
   }
 
   .aw-toast {
-    @apply relative mx-auto flex w-fit min-w-[320px] max-w-full items-center gap-3.5 overflow-hidden rounded-2xl border px-4 py-3.5 backdrop-blur-xl;
+    @apply relative mx-auto flex w-fit max-w-full items-center gap-3.5 overflow-hidden rounded-2xl border px-4 py-3.5 backdrop-blur-xl;
+    min-width: min(320px, 100%);
     animation: aw-toast-enter 180ms ease-out;
     background: var(--bg-elevated);
     box-shadow: var(--shadow-xl);
