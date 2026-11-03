@@ -592,9 +592,7 @@ onMounted(async () => {
                 ]"
                 :key="c"
                 :class="
-                  c === '操作'
-                    ? 'sticky right-0 z-20 bg-[var(--bg-surface)]'
-                    : ''
+                  c === '操作' ? 'sticky right-0 z-20 bg-[var(--bg-inset)]' : ''
                 "
               >
                 {{ c }}
