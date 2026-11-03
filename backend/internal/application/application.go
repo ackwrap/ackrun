@@ -154,6 +154,9 @@ func New(options Options) (*Application, error) {
 	appUpdateSvc := service.NewAppUpdateService(db, options.Paths, singboxSvc, realtimeSvc)
 	dashboardSvc := service.NewDashboardService(db, options.Paths)
 	nodeGroupSvc := service.NewNodeGroupService(db)
+	if _, err := nodeGroupSvc.AutoGroup(); err != nil {
+		logging.Error("node_group.auto_group", "启动时自动地域分组失败: %v", err)
+	}
 	subscriptionSvc.SetConfigReconciler(reconcileSvc)
 	simpleSetupSvc := service.NewSimpleSetupService(db, options.Paths, installerSvc, subscriptionSvc, routeRuleSvc, configGenSvc, singboxSvc, realtimeSvc)
 

@@ -326,6 +326,13 @@ function requestRemoveStrategy(strategy: StrategyItem) {
 }
 
 useRealtimeSocket((event: WSEvent) => {
+  if (
+    event.type === "node_group.updated" ||
+    (event.type === "subscription.sync" &&
+      (event.data as { status?: string } | undefined)?.status === "updated")
+  ) {
+    void load();
+  }
   if (event.type === "collection.test") {
     const result = event.data as CollectionTestResponse;
     tests.value[result.collection_id] = result;

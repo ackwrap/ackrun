@@ -65,11 +65,26 @@ func (svc *NodeGroupService) PreviewMatches(filterProtocols, filterSubscriptions
 
 // QuickSetup 一键快速配置（只创建有节点的地域）
 func (svc *NodeGroupService) QuickSetup(req model.NodeGroupQuickSetupRequest) error {
+	_, err := svc.setupNodeGroups(req, true)
+	return err
+}
+
+// AutoGroup reuses quick setup's regional templates without changing existing
+// group definitions or creating business strategies.
+func (svc *NodeGroupService) AutoGroup() (int, error) {
+	return svc.setupNodeGroups(model.NodeGroupQuickSetupRequest{}, false)
+}
+
+func (svc *NodeGroupService) setupNodeGroups(req model.NodeGroupQuickSetupRequest, manual bool) (int, error) {
 	allNodes, err := svc.store.PreviewNodeGroupMatches(req.FilterProtocols, req.FilterSubscriptions, ".*", "")
 	if err != nil {
-		return err
+		return 0, err
 	}
-	logging.Info("node_group.quick_setup", "智能快速配置开始，参与匹配的启用节点数: %d，订阅筛选: %s，协议筛选: %s", len(allNodes), req.FilterSubscriptions, req.FilterProtocols)
+	action := "node_group.auto_group"
+	if manual {
+		action = "node_group.quick_setup"
+	}
+	logging.Info(action, "地域分组开始，参与匹配的启用节点数: %d，订阅筛选: %s，协议筛选: %s", len(allNodes), req.FilterSubscriptions, req.FilterProtocols)
 
 	// 预设节点组模板（覆盖世界各地）
 	templates := []model.NodeGroupRequest{
@@ -123,7 +138,7 @@ func (svc *NodeGroupService) QuickSetup(req model.NodeGroupQuickSetupRequest) er
 	}
 	existingGroups, err := svc.store.ListNodeGroups()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	existingByName := make(map[string]model.NodeGroupWithStats, len(existingGroups))
 	for _, group := range existingGroups {
@@ -137,9 +152,9 @@ func (svc *NodeGroupService) QuickSetup(req model.NodeGroupQuickSetupRequest) er
 		tmpl.FilterProtocols = req.FilterProtocols
 		tmpl.FilterSubscriptions = req.FilterSubscriptions
 		if existing, ok := existingByName[tmpl.Name]; ok {
-			if quickSetupTemplateIdentityMatches(existing.NodeGroup, tmpl) && (existing.FilterProtocols != tmpl.FilterProtocols || existing.FilterSubscriptions != tmpl.FilterSubscriptions) {
+			if manual && quickSetupTemplateIdentityMatches(existing.NodeGroup, tmpl) && (existing.FilterProtocols != tmpl.FilterProtocols || existing.FilterSubscriptions != tmpl.FilterSubscriptions) {
 				if err := svc.store.UpdateNodeGroupFilters(existing.ID, tmpl.FilterProtocols, tmpl.FilterSubscriptions); err != nil {
-					return err
+					return createdCount, err
 				}
 				updatedCount++
 			}
@@ -150,7 +165,7 @@ func (svc *NodeGroupService) QuickSetup(req model.NodeGroupQuickSetupRequest) er
 		// 预览匹配节点数
 		matchedNodes, err := svc.store.PreviewNodeGroupMatches(tmpl.FilterProtocols, tmpl.FilterSubscriptions, tmpl.FilterInclude, tmpl.FilterExclude)
 		if err != nil {
-			continue
+			return createdCount, err
 		}
 
 		// 只创建有节点的地域组（特殊节点组除外，始终创建）
@@ -163,18 +178,21 @@ func (svc *NodeGroupService) QuickSetup(req model.NodeGroupQuickSetupRequest) er
 				skippedExistingCount++
 				continue
 			}
-			return err
+			return createdCount, err
 		}
 		createdCount++
 	}
 
-	strategyCreatedCount, strategySkippedCount, err := svc.createDefaultProxyCollections()
-	if err != nil {
-		return err
+	strategyCreatedCount, strategySkippedCount := 0, 0
+	if manual {
+		strategyCreatedCount, strategySkippedCount, err = svc.createDefaultProxyCollections()
+		if err != nil {
+			return createdCount, err
+		}
 	}
 
-	logging.Info("node_group.quick_setup", "智能快速配置完成，创建节点组数: %d，更新节点组数: %d，已存在跳过: %d，创建默认策略组数: %d，默认策略组已存在跳过: %d，参与匹配的启用节点数: %d，订阅筛选: %s，协议筛选: %s", createdCount, updatedCount, skippedExistingCount, strategyCreatedCount, strategySkippedCount, len(allNodes), req.FilterSubscriptions, req.FilterProtocols)
-	return nil
+	logging.Info(action, "地域分组完成，创建节点组数: %d，更新节点组数: %d，已存在跳过: %d，创建默认策略组数: %d，默认策略组已存在跳过: %d，参与匹配的启用节点数: %d，订阅筛选: %s，协议筛选: %s", createdCount, updatedCount, skippedExistingCount, strategyCreatedCount, strategySkippedCount, len(allNodes), req.FilterSubscriptions, req.FilterProtocols)
+	return createdCount, nil
 }
 
 func quickSetupTemplateIdentityMatches(existing model.NodeGroup, template model.NodeGroupRequest) bool {

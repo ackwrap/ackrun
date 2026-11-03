@@ -234,7 +234,9 @@ async function importNodes() {
   importing.value = true;
   try {
     const r = await api.importNodes({ content: content.value });
-    show(`手动导入完成：导入 ${r.imported} 个节点`);
+    show(
+      `手动导入完成：导入 ${r.imported} 个节点${r.warning ? `；${r.warning}` : ""}`,
+    );
     content.value = "";
     preview.value = [];
     importOpen.value = false;

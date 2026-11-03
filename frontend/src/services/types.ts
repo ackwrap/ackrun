@@ -592,6 +592,7 @@ export interface NodeImportRequest {
 }
 
 export interface NodeImportResponse {
+  warning?: string;
   imported: number;
   subscription_id: number;
 }

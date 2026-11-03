@@ -402,6 +402,14 @@ func (svc *SubscriptionService) runSyncWithReconcile(id int64, reconcile bool) {
 	} else {
 		logging.Info("subscription.sync", "订阅 %d 节点无变化，跳过配置更新", id)
 	}
+	createdGroups, groupErr := NewNodeGroupService(svc.store).AutoGroup()
+	if groupErr != nil {
+		logging.Error("node_group.auto_group", "订阅 %d 更新后自动地域分组失败: %v", id, groupErr)
+		warningMsg = appendSubscriptionWarning(warningMsg, "自动地域分组失败: "+groupErr.Error())
+	}
+	if createdGroups > 0 {
+		hasChanges = true
+	}
 	svc.nodeSyncMu.Unlock()
 
 	if !svc.updateSyncProgress(id, 95) {
