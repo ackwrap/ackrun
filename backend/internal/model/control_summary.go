@@ -9,7 +9,7 @@ type MonthlyTraffic struct {
 
 type SubscriptionExpiry struct {
 	Name     string `json:"name"`
-	ExpireAt int64  `json:"expire_at"`
+	ExpireAt int64  `json:"expire_at"` // Unix timestamp in milliseconds, matching subscriptions.
 }
 
 type ControlSummary struct {

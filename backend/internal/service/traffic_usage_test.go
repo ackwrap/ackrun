@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -124,10 +125,10 @@ func TestTrafficRecorderDiscardsSampleFromReplacedCore(t *testing.T) {
 func TestSubscriptionSummaryIgnoresManualAndFindsNextExpiry(t *testing.T) {
 	now := time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
 	items := []model.Subscription{
-		{Name: "local", URL: "manual://local", TrafficTotalBytes: 1000, ExpireAt: now.Add(time.Hour).Unix()},
-		{Name: "expired", TrafficTotalBytes: 100, ExpireAt: now.Add(-time.Hour).Unix()},
-		{Name: "later", TrafficTotalBytes: 200, ExpireAt: now.Add(48 * time.Hour).Unix()},
-		{Name: "next", TrafficTotalBytes: 300, ExpireAt: now.Add(24 * time.Hour).Unix()},
+		{Name: "local", URL: "manual://local", TrafficTotalBytes: 1000, ExpireAt: now.Add(time.Hour).UnixMilli()},
+		{Name: "expired", TrafficTotalBytes: 100, ExpireAt: now.Add(-time.Hour).UnixMilli()},
+		{Name: "later", TrafficTotalBytes: 200, ExpireAt: now.Add(48 * time.Hour).UnixMilli()},
+		{Name: "next", TrafficTotalBytes: 300, ExpireAt: now.Add(24 * time.Hour).UnixMilli()},
 		{Name: "unknown", TrafficTotalBytes: 0},
 	}
 	got := summarizeSubscriptions(items, now)
@@ -136,5 +137,25 @@ func TestSubscriptionSummaryIgnoresManualAndFindsNextExpiry(t *testing.T) {
 	}
 	if empty := summarizeSubscriptions(nil, now); empty.NextExpiry != nil || empty.SubscriptionCount != 0 {
 		t.Fatalf("empty summary = %+v", empty)
+	}
+}
+
+func TestSubscriptionSummaryUsesProviderExpiryMilliseconds(t *testing.T) {
+	now := time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
+	parseExpiry := func(at time.Time) int64 {
+		return parseSubscriptionUserInfo("expire=" + strconv.FormatInt(at.Unix(), 10)).ExpireAt
+	}
+	items := []model.Subscription{
+		{Name: "expired", ExpireAt: parseExpiry(now.Add(-time.Second))},
+		{Name: "due-now", ExpireAt: parseExpiry(now)},
+		{Name: "next", ExpireAt: parseExpiry(now.Add(time.Hour))},
+		{Name: "later", ExpireAt: parseExpiry(now.Add(24 * time.Hour))},
+	}
+	got := summarizeSubscriptions(items, now)
+	if got.ExpiredSubscriptionCount != 2 || got.NextExpiry == nil || got.NextExpiry.Name != "next" || got.NextExpiry.ExpireAt != now.Add(time.Hour).UnixMilli() {
+		t.Fatalf("provider expiry summary = %+v", got)
+	}
+	if expired := summarizeSubscriptions(items[:2], now); expired.NextExpiry != nil || expired.ExpiredSubscriptionCount != 2 {
+		t.Fatalf("expired subscriptions were returned as upcoming: %+v", expired)
 	}
 }

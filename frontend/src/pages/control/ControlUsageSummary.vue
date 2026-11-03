@@ -4,6 +4,7 @@ import { api } from "@/services/api";
 import type { ControlSummary } from "@/services/types";
 import { useRealtimeSocket } from "@/composables/useRealtimeSocket";
 import { formatBytes } from "@/utils/traffic";
+import { subscriptionExpiry } from "@/utils/subscriptionExpiry";
 
 const summary = ref<ControlSummary | null>(null);
 const error = ref("");
@@ -35,23 +36,19 @@ const totalUsed = computed(() =>
     : "--",
 );
 const expiry = computed(() => summary.value?.next_expiry);
+const expiryDetails = computed(() =>
+  expiry.value ? subscriptionExpiry(expiry.value.expire_at) : null,
+);
 const expiryDate = computed(() =>
-  expiry.value
-    ? new Date(expiry.value.expire_at * 1000).toLocaleDateString("zh-CN", {
+  expiryDetails.value
+    ? expiryDetails.value.date.toLocaleDateString("zh-CN", {
         year: "numeric",
         month: "2-digit",
         day: "2-digit",
       })
     : "暂无到期信息",
 );
-const remainingDays = computed(() =>
-  expiry.value
-    ? Math.max(
-        0,
-        Math.ceil((expiry.value.expire_at * 1000 - Date.now()) / 86_400_000),
-      )
-    : 0,
-);
+const remainingDays = computed(() => expiryDetails.value?.remainingDays ?? 0);
 const trackingTitle = computed(() => {
   const since = usage.value?.tracking_since;
   return since

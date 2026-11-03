@@ -59,7 +59,7 @@ func summarizeSubscriptions(subscriptions []model.Subscription, now time.Time) *
 		if item.ExpireAt <= 0 {
 			continue
 		}
-		if item.ExpireAt <= now.Unix() {
+		if item.ExpireAt <= now.UnixMilli() {
 			result.ExpiredSubscriptionCount++
 			continue
 		}
