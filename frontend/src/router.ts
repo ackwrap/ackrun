@@ -6,7 +6,6 @@ const pages = {
   "/control": () => import("@/pages/ControlPage.vue"),
   "/subscriptions": () => import("@/pages/SubscriptionsPage.vue"),
   "/nodes": () => import("@/pages/NodesPage.vue"),
-  "/collections": () => import("@/pages/CollectionsPage.vue"),
   "/rules": () => import("@/pages/RulesPage.vue"),
   "/dns": () => import("@/pages/DNSPage.vue"),
   "/config": () => import("@/pages/ConfigPage.vue"),
@@ -44,6 +43,13 @@ export const router = createRouter({
           path,
           redirect: () => ({ path: "/advanced/routing", query: { view } }),
         })),
+        {
+          path: "collections",
+          redirect: (to) =>
+            to.hash === "#collections"
+              ? "/rules"
+              : { path: "/nodes", hash: "#node-groups" },
+        },
         { path: "advanced", redirect: "/advanced/routing" },
       ],
     },

@@ -28,7 +28,7 @@ import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
 import Pagination from "@/components/ui/Pagination.vue";
 import { useAdaptiveActions } from "@/composables/useAdaptiveActions";
 import { useHashTab } from "@/composables/useHashTab";
-import CollectionsPage from "./CollectionsPage.vue";
+import NodeGroupsPanel from "./nodes/NodeGroupsPanel.vue";
 import NodeBatchShareModal from "@/pages/nodes/NodeBatchShareModal.vue";
 import NodeTracerouteModal from "@/pages/nodes/NodeTracerouteModal.vue";
 import NodeExitIPModal from "@/pages/nodes/NodeExitIPModal.vue";
@@ -704,7 +704,7 @@ onMounted(async () => {
       role="tabpanel"
       aria-labelledby="nodes-tab-node-groups"
     >
-      <CollectionsPage node-groups-only />
+      <NodeGroupsPanel />
     </div>
     <NodeBatchShareModal
       v-if="shareTargets.length"

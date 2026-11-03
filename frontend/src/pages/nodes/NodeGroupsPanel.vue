@@ -1,36 +1,20 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
-import { Layers, Zap } from "lucide-vue-next";
-import PageHeader from "@/components/layout/PageHeader.vue";
 import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
 import Modal from "@/components/ui/Modal.vue";
 import Toast from "@/components/ui/Toast.vue";
-import { useHashTab } from "@/composables/useHashTab";
 import { useRealtimeSocket } from "@/composables/useRealtimeSocket";
 import { api } from "@/services/api";
 import { authenticatedFetch } from "@/services/apiAuth";
+import type { WSEvent } from "@/services/types";
 import type {
-  CollectionTestResponse,
-  StrategyItem,
-  WSEvent,
-} from "@/services/types";
-import type {
-  DetailedProxyCollection,
   FacetItem,
   NodeGroup,
   NodeGroupRequest,
-  StrategyCollectionRequest,
-} from "./collections/collectionTypes";
-import NodeGroupDetailModal from "./collections/NodeGroupDetailModal.vue";
-import NodeGroupFormModal from "./collections/NodeGroupFormModal.vue";
-import NodeGroupSection from "./collections/NodeGroupSection.vue";
-import StrategyFormModal from "./collections/StrategyFormModal.vue";
-import StrategySection from "./collections/StrategySection.vue";
-import { collectionGroupNames } from "./collections/collectionSources";
-
-const props = withDefaults(defineProps<{ nodeGroupsOnly?: boolean }>(), {
-  nodeGroupsOnly: false,
-});
+} from "../collections/collectionTypes";
+import NodeGroupDetailModal from "../collections/NodeGroupDetailModal.vue";
+import NodeGroupFormModal from "../collections/NodeGroupFormModal.vue";
+import NodeGroupSection from "../collections/NodeGroupSection.vue";
 
 interface MatchedNode {
   uid: string;
@@ -42,13 +26,7 @@ interface MatchedNode {
   status: string;
 }
 
-type CollectionTab = "node-groups" | "collections";
-const { activeTab: active, selectTab } = useHashTab<CollectionTab>(
-  ["node-groups", "collections"],
-  "node-groups",
-);
 const groups = ref<NodeGroup[]>([]);
-const strategies = ref<StrategyItem[]>([]);
 const facets = ref<{
   protocols: FacetItem[];
   subscriptions: FacetItem[];
@@ -70,11 +48,6 @@ const quickOpen = ref(false);
 const quickRunning = ref(false);
 const quickProtocols = ref<string[]>([]);
 const quickSubscriptions = ref<string[]>([]);
-const editingStrategy = ref<StrategyItem | null>(null);
-const strategySaving = ref(false);
-const previewStrategy = ref<StrategyItem | null>(null);
-const connectivitySettings = ref({ test_url: "", interval_seconds: 300 });
-const tests = ref<Record<number, CollectionTestResponse>>({});
 const deleteAction = ref<null | (() => Promise<void>)>(null);
 const deleteMessage = ref("");
 
@@ -87,36 +60,6 @@ const pagedGroups = computed(() =>
     groupPage.value * groupPageSize.value,
   ),
 );
-const previewSummary = computed(() => {
-  const collection = previewStrategy.value?.collection as
-    DetailedProxyCollection | undefined;
-  if (!collection) return null;
-  const sourceMode = {
-    node_groups: "引用节点组",
-    node_groups_and_nodes: "引用节点组和组内节点",
-    manual: "手动选择节点",
-  }[collection.source_type];
-  return {
-    name: previewStrategy.value?.name || collection.name,
-    sourceMode,
-    groupNames: collectionGroupNames(collection),
-    selectedNodeCount: (collection.node_uids || []).filter(
-      (uid) => uid !== "direct",
-    ).length,
-    selectionMode:
-      collection.type === "urltest"
-        ? "自动选择（URLTest）"
-        : "手动切换（Selector）",
-    testURL:
-      collection.type === "urltest" ? connectivitySettings.value.test_url : "",
-    testInterval:
-      collection.type === "urltest"
-        ? `${connectivitySettings.value.interval_seconds} 秒`
-        : "",
-    tolerance:
-      collection.type === "urltest" ? `${collection.tolerance || 100} ms` : "",
-  };
-});
 
 function show(text: string, type: "success" | "error" | "info" = "success") {
   message.value = text;
@@ -142,18 +85,11 @@ async function json(url: string, init?: RequestInit) {
 
 async function load() {
   try {
-    const [groupItems, strategyItems, nodeFacets, connectivity] =
-      await Promise.all([
-        json("/api/v1/node-groups"),
-        props.nodeGroupsOnly ? [] : api.getRouteStrategies(),
-        api.getNodeFacets(),
-        props.nodeGroupsOnly
-          ? connectivitySettings.value
-          : api.getConnectivitySettings(),
-      ]);
+    const [groupItems, nodeFacets] = await Promise.all([
+      json("/api/v1/node-groups"),
+      api.getNodeFacets(),
+    ]);
     groups.value = Array.isArray(groupItems) ? groupItems : [];
-    strategies.value = Array.isArray(strategyItems) ? strategyItems : [];
-    connectivitySettings.value = connectivity;
     facets.value = {
       protocols: nodeFacets.types,
       subscriptions: nodeFacets.subscriptions,
@@ -287,44 +223,6 @@ async function quickSetup() {
   }
 }
 
-function configureStrategy(strategy: StrategyItem) {
-  if (strategy.kind === "proxy") editingStrategy.value = strategy;
-}
-
-async function saveStrategy(payload: StrategyCollectionRequest) {
-  if (!editingStrategy.value || strategySaving.value) return;
-  strategySaving.value = true;
-  try {
-    const collection = editingStrategy.value.collection;
-    if (collection) await api.updateProxyCollection(collection.id, payload);
-    else await api.createProxyCollection(payload);
-    show(collection ? "代理策略已更新" : "代理策略已配置");
-    editingStrategy.value = null;
-    await load();
-  } catch (error) {
-    show(
-      `保存失败: ${error instanceof Error ? error.message : "请求失败"}`,
-      "error",
-    );
-  } finally {
-    strategySaving.value = false;
-  }
-}
-
-async function removeStrategy(strategy: StrategyItem) {
-  if (!strategy.collection) return;
-  await api.deleteProxyCollection(strategy.collection.id);
-  show("代理策略配置已删除");
-  await load();
-}
-
-function requestRemoveStrategy(strategy: StrategyItem) {
-  if (!strategy.collection) return;
-  confirmDelete(`确定删除代理策略「${strategy.name}」的配置吗？`, () =>
-    removeStrategy(strategy),
-  );
-}
-
 useRealtimeSocket((event: WSEvent) => {
   if (
     event.type === "node_group.updated" ||
@@ -332,10 +230,6 @@ useRealtimeSocket((event: WSEvent) => {
       (event.data as { status?: string } | undefined)?.status === "updated")
   ) {
     void load();
-  }
-  if (event.type === "collection.test") {
-    const result = event.data as CollectionTestResponse;
-    tests.value[result.collection_id] = result;
   }
 });
 
@@ -347,39 +241,11 @@ onMounted(load);
 
 <template>
   <div class="space-y-4">
-    <PageHeader v-if="!nodeGroupsOnly" title="策略组管理" />
     <Toast :message="message" :type="messageType" @dismiss="message = ''" />
-    <div
-      v-if="!nodeGroupsOnly"
-      class="flex gap-2 border-b border-[var(--border-default)]"
-    >
-      <button
-        class="px-4 py-2 text-[var(--text-secondary)]"
-        :class="
-          active === 'node-groups'
-            ? 'border-b-2 border-[var(--color-primary)] text-[var(--text-primary)]'
-            : ''
-        "
-        @click="selectTab('node-groups')"
-      >
-        <Layers :size="16" class="inline" /> 节点组（地域划分）
-      </button>
-      <button
-        class="px-4 py-2 text-[var(--text-secondary)]"
-        :class="
-          active === 'collections'
-            ? 'border-b-2 border-[var(--color-primary)] text-[var(--text-primary)]'
-            : ''
-        "
-        @click="selectTab('collections')"
-      >
-        <Zap :size="16" class="inline" /> 策略组（业务用途）
-      </button>
-    </div>
 
     <div v-if="loading" class="py-20 text-center">加载中...</div>
     <NodeGroupSection
-      v-else-if="nodeGroupsOnly || active === 'node-groups'"
+      v-else
       :groups="groups"
       :paged-groups="pagedGroups"
       :selected="selected"
@@ -407,14 +273,6 @@ onMounted(load);
         )
       "
     />
-    <StrategySection
-      v-else
-      :strategies="strategies"
-      :tests="tests"
-      @configure="configureStrategy"
-      @preview="previewStrategy = $event"
-      @remove="requestRemoveStrategy"
-    />
 
     <NodeGroupDetailModal
       v-if="detailGroup"
@@ -432,17 +290,6 @@ onMounted(load);
       :subscriptions="facets.subscriptions"
       @close="editingGroup = null"
       @save="saveGroup"
-      @error="show($event, 'error')"
-    />
-    <StrategyFormModal
-      v-if="editingStrategy"
-      :key="editingStrategy.rule_id"
-      :strategy="editingStrategy"
-      :groups="groups"
-      :connectivity="connectivitySettings"
-      :saving="strategySaving"
-      @close="editingStrategy = null"
-      @save="saveStrategy"
       @error="show($event, 'error')"
     />
 
@@ -504,64 +351,6 @@ onMounted(load);
           {{ quickRunning ? "配置中..." : "开始配置" }}
         </button>
       </template>
-    </Modal>
-    <Modal
-      :open="!!previewStrategy"
-      title="策略配置摘要"
-      size="lg"
-      @close="previewStrategy = null"
-    >
-      <div v-if="previewSummary" class="grid gap-4 text-sm">
-        <div
-          class="rounded-[var(--radius-md)] border border-[var(--border-default)] bg-[var(--bg-secondary)] p-4"
-        >
-          <dl class="grid gap-x-6 gap-y-3 sm:grid-cols-2">
-            <div>
-              <dt class="text-xs text-[var(--text-tertiary)]">策略名称</dt>
-              <dd class="mt-1 font-medium text-[var(--text-primary)]">
-                {{ previewSummary.name }}
-              </dd>
-            </div>
-            <div>
-              <dt class="text-xs text-[var(--text-tertiary)]">节点来源</dt>
-              <dd class="mt-1">{{ previewSummary.sourceMode }}</dd>
-            </div>
-            <div class="sm:col-span-2">
-              <dt class="text-xs text-[var(--text-tertiary)]">已选节点组</dt>
-              <dd class="mt-1">
-                {{ previewSummary.groupNames.join("、") || "无" }}
-              </dd>
-            </div>
-            <div>
-              <dt class="text-xs text-[var(--text-tertiary)]">已选节点数</dt>
-              <dd class="mt-1">{{ previewSummary.selectedNodeCount }}</dd>
-            </div>
-            <div>
-              <dt class="text-xs text-[var(--text-tertiary)]">选择方式</dt>
-              <dd class="mt-1">{{ previewSummary.selectionMode }}</dd>
-            </div>
-            <template v-if="previewSummary.testURL">
-              <div class="sm:col-span-2">
-                <dt class="text-xs text-[var(--text-tertiary)]">测速地址</dt>
-                <dd class="mt-1 break-all">{{ previewSummary.testURL }}</dd>
-              </div>
-              <div>
-                <dt class="text-xs text-[var(--text-tertiary)]">测速间隔</dt>
-                <dd class="mt-1">{{ previewSummary.testInterval }}</dd>
-              </div>
-              <div>
-                <dt class="text-xs text-[var(--text-tertiary)]">切换容差</dt>
-                <dd class="mt-1">{{ previewSummary.tolerance }}</dd>
-              </div>
-            </template>
-          </dl>
-        </div>
-        <p
-          class="rounded-[var(--radius-md)] bg-[var(--color-primary-bg)] p-3 text-xs text-[var(--text-secondary)]"
-        >
-          此处仅展示配置摘要。节点组展开、节点名称去重及最终出站标签由服务端生成。
-        </p>
-      </div>
     </Modal>
     <ConfirmDialog
       :open="!!deleteAction"
