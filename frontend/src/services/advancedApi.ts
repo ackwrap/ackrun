@@ -1,9 +1,11 @@
 import { request } from "./api";
-import type { ActionResponse } from "./types";
+import type { ActionResponse, NodeShareResponse } from "./types";
 import type { NodeExposure, NodeExposureRequest } from "./advancedTypes";
 
 export const advancedApi = {
   getNodeExposures: () => request<NodeExposure[]>("/advanced/node-exposures"),
+  getNodeExposureShare: (id: number) =>
+    request<NodeShareResponse>(`/advanced/node-exposures/${id}/share`),
   createNodeExposure: (body: NodeExposureRequest) =>
     request<NodeExposure>("/advanced/node-exposures", {
       method: "POST",

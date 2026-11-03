@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
-import { KeyRound, Pencil, Plus, Radio, Trash2 } from "lucide-vue-next";
+import { Copy, KeyRound, Pencil, Plus, Radio, Trash2 } from "lucide-vue-next";
 import PageHeader from "@/components/layout/PageHeader.vue";
 import Button from "@/components/ui/Button.vue";
 import Card from "@/components/ui/Card.vue";
@@ -14,6 +14,7 @@ import type {
   NodeExposureRequest,
 } from "@/services/advancedTypes";
 import type { NodeItem } from "@/services/types";
+import { writeClipboardText } from "@/utils/clipboard";
 
 interface ExposureForm {
   name: string;
@@ -33,6 +34,7 @@ const saving = ref(false);
 const editing = ref<NodeExposure | null>(null);
 const formOpen = ref(false);
 const deleting = ref<NodeExposure | null>(null);
+const copyingID = ref<number | null>(null);
 const message = ref("");
 const messageType = ref<"success" | "error" | "info">("success");
 const form = reactive<ExposureForm>(emptyForm());
@@ -215,6 +217,23 @@ async function remove() {
   }
 }
 
+async function copyLink(item: NodeExposure) {
+  if (copyingID.value !== null) return;
+  copyingID.value = item.id;
+  try {
+    const { uri } = await advancedApi.getNodeExposureShare(item.id);
+    await writeClipboardText(uri);
+    show("代理链接已复制");
+  } catch (error) {
+    show(
+      `复制失败: ${error instanceof Error ? error.message : "请求失败"}`,
+      "error",
+    );
+  } finally {
+    copyingID.value = null;
+  }
+}
+
 onMounted(load);
 </script>
 
@@ -328,6 +347,16 @@ onMounted(load);
                 </td>
                 <td>
                   <div class="flex justify-end gap-2">
+                    <button
+                      class="aw-control-action"
+                      title="复制链接"
+                      :disabled="copyingID !== null"
+                      @click="copyLink(item)"
+                    >
+                      <Copy :size="13" />{{
+                        copyingID === item.id ? "复制中…" : "复制链接"
+                      }}
+                    </button>
                     <button
                       class="aw-control-action"
                       title="编辑"

@@ -236,6 +236,7 @@ func RegisterRoutes(
 
 func registerNodeExposureRoutes(group *gin.RouterGroup, nodeExposureH *handler.NodeExposureHandler) {
 	group.GET("/advanced/node-exposures", nodeExposureH.List)
+	group.GET("/advanced/node-exposures/:id/share", nodeExposureH.Share)
 	group.POST("/advanced/node-exposures", nodeExposureH.Create)
 	group.PUT("/advanced/node-exposures/:id", nodeExposureH.Update)
 	group.DELETE("/advanced/node-exposures/:id", nodeExposureH.Delete)

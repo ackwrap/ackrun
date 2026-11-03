@@ -27,10 +27,11 @@ func TestRegisterNodeExposureRoutesContract(t *testing.T) {
 		handler.NewNodeExposureHandler(service.NewNodeExposureService(db)),
 	)
 	want := map[string]bool{
-		"GET /api/v1/advanced/node-exposures":        false,
-		"POST /api/v1/advanced/node-exposures":       false,
-		"PUT /api/v1/advanced/node-exposures/:id":    false,
-		"DELETE /api/v1/advanced/node-exposures/:id": false,
+		"GET /api/v1/advanced/node-exposures":           false,
+		"GET /api/v1/advanced/node-exposures/:id/share": false,
+		"POST /api/v1/advanced/node-exposures":          false,
+		"PUT /api/v1/advanced/node-exposures/:id":       false,
+		"DELETE /api/v1/advanced/node-exposures/:id":    false,
 	}
 	for _, route := range router.Routes() {
 		key := route.Method + " " + route.Path
