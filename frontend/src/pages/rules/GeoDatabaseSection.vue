@@ -247,13 +247,11 @@ async function lookupTag(offset = 0) {
               :style="{ width: `${Math.max(2, x.sync_progress || 0)}%` }"
             />
           </div>
-          <details
+          <section
             v-if="x.type === 'geoip'"
             class="mt-4 border-t border-[var(--border-light)] pt-4"
           >
-            <summary class="cursor-pointer text-sm font-medium">
-              GeoIP 查询
-            </summary>
+            <h4 class="text-sm font-medium">GeoIP 查询</h4>
             <div
               class="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_160px_auto]"
             >
@@ -300,14 +298,12 @@ async function lookupTag(offset = 0) {
             >
               {{ error }}
             </p>
-          </details>
-          <details
+          </section>
+          <section
             v-else-if="x.type === 'geosite'"
             class="mt-4 border-t border-[var(--border-light)] pt-4"
           >
-            <summary class="cursor-pointer text-sm font-medium">
-              GeoSite 查询
-            </summary>
+            <h4 class="text-sm font-medium">GeoSite 查询</h4>
             <div class="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
               <input
                 v-model="tag"
@@ -340,7 +336,7 @@ async function lookupTag(offset = 0) {
             >
               {{ tagError }}
             </p>
-          </details>
+          </section>
         </article>
       </div>
     </details>
