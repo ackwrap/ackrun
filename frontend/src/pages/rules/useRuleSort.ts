@@ -26,11 +26,53 @@ export function useRuleSort(
   let first = 0;
   let last = 0;
   let startY = 0;
+  let pointerX = 0;
   let pointerY = 0;
+  let grabOffsetX = 0;
+  let grabOffsetY = 0;
   let centerOffset = 0;
   let frame = 0;
   let lastFrame = 0;
   let scrollContainers: HTMLElement[] = [];
+  let sourceRow: HTMLTableRowElement | null = null;
+  let ghost: HTMLDivElement | null = null;
+
+  function positionGhost() {
+    if (!ghost) return;
+    ghost.style.transform = `translate3d(${pointerX - grabOffsetX}px, ${pointerY - grabOffsetY}px, 0)`;
+  }
+
+  function createGhost() {
+    if (!sourceRow?.isConnected) return false;
+    const rect = sourceRow.getBoundingClientRect();
+    const clone = sourceRow.cloneNode(true) as HTMLTableRowElement;
+    clone.removeAttribute("data-rule-id");
+    clone
+      .querySelectorAll("[id]")
+      .forEach((element) => element.removeAttribute("id"));
+    const table = document.createElement("table");
+    table.className = "aw-data-table";
+    table.style.tableLayout = "fixed";
+    const columns = document.createElement("colgroup");
+    Array.from(sourceRow.cells).forEach((cell) => {
+      const column = document.createElement("col");
+      column.style.width = `${cell.getBoundingClientRect().width}px`;
+      columns.append(column);
+    });
+    const body = document.createElement("tbody");
+    body.append(clone);
+    table.append(columns, body);
+    ghost = document.createElement("div");
+    ghost.className = "rule-sort-ghost";
+    ghost.style.width = `${rect.width}px`;
+    ghost.setAttribute("aria-hidden", "true");
+    ghost.setAttribute("inert", "");
+    ghost.append(table);
+    positionGhost();
+    document.body.append(ghost);
+    document.body.classList.add("rule-sort-active");
+    return true;
+  }
 
   function moveRule(from: number, to: number, rules = getRules()) {
     const next = [...rules];
@@ -84,6 +126,10 @@ export function useRuleSort(
 
   function cancel() {
     cancelAnimationFrame(frame);
+    ghost?.remove();
+    ghost = null;
+    sourceRow = null;
+    document.body.classList.remove("rule-sort-active");
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", end);
     window.removeEventListener("pointercancel", cancel);
@@ -105,11 +151,17 @@ export function useRuleSort(
   function move(event: PointerEvent) {
     if (event.pointerId !== pointerId) return;
     event.preventDefault();
+    pointerX = event.clientX;
     pointerY = event.clientY;
     if (draggingId.value === null && Math.abs(pointerY - startY) >= 4) {
+      if (!createGhost()) {
+        cancel();
+        return;
+      }
       draggingId.value = origin[source].id;
       preview.value = [...origin];
     }
+    positionGhost();
     updatePreview();
   }
 
@@ -151,8 +203,12 @@ export function useRuleSort(
     while (last < origin.length - 1 && !isFixedRouteRule(origin[last + 1]))
       last++;
     pointerId = event.pointerId;
+    pointerX = event.clientX;
     startY = pointerY = event.clientY;
     const rect = row.getBoundingClientRect();
+    sourceRow = row;
+    grabOffsetX = pointerX - rect.left;
+    grabOffsetY = pointerY - rect.top;
     centerOffset = rect.top + rect.height / 2 - pointerY;
     for (
       let parent = tableBody.value?.parentElement;

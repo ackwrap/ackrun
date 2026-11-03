@@ -149,13 +149,6 @@ function actionLabel(rule: RouteRule) {
         <RefreshCw :size="13" />刷新
       </button>
     </AdaptiveActionBar>
-    <details class="mt-2 text-xs text-[var(--text-secondary)]">
-      <summary class="w-fit cursor-pointer">排序说明</summary>
-      <p class="mt-2 leading-5">
-        按住排序手柄上下拖动，松手后自动保存；也可聚焦手柄后用方向键调整。
-        广告拦截固定在首位，最终策略固定在末位；设备规则优先于普通业务规则。
-      </p>
-    </details>
     <p
       v-if="sorting"
       role="status"
@@ -184,7 +177,7 @@ function actionLabel(rule: RouteRule) {
             v-for="(r, i) in displayRules"
             :key="r.id"
             :data-rule-id="r.id"
-            :class="{ 'rule-row-dragging': draggingId === r.id }"
+            :class="{ 'rule-row-placeholder': draggingId === r.id }"
           >
             <td>
               <div class="flex items-center gap-1.5">
@@ -268,11 +261,33 @@ function actionLabel(rule: RouteRule) {
 </template>
 
 <style scoped>
-.rule-row-dragging > td {
+.rule-row-placeholder > td {
   background: var(--button-primary-bg) !important;
+  color: transparent !important;
+  box-shadow:
+    inset 0 1px 0 var(--color-primary),
+    inset 0 -1px 0 var(--color-primary);
 }
-.rule-row-dragging {
-  cursor: grabbing;
-  user-select: none;
+.rule-row-placeholder > td > * {
+  visibility: hidden;
+}
+:global(.rule-sort-ghost) {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 60;
+  pointer-events: none;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-card);
+  outline: 1px solid var(--color-primary);
+  opacity: 0.8;
+  will-change: transform;
+}
+:global(body.rule-sort-active),
+:global(body.rule-sort-active *) {
+  cursor: grabbing !important;
+  user-select: none !important;
 }
 </style>
