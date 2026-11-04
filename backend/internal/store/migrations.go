@@ -365,6 +365,15 @@ func (s *Store) migrate() error {
 					updated_at INTEGER NOT NULL,
 					FOREIGN KEY(host_id) REFERENCES ssh_hosts(id) ON DELETE CASCADE
 				)`,
+		`CREATE TABLE IF NOT EXISTS ssh_sftp_profiles (
+			host_id INTEGER PRIMARY KEY REFERENCES ssh_host_keys(host_id) ON DELETE CASCADE,
+			fingerprint TEXT NOT NULL,
+			username TEXT NOT NULL,
+			generation TEXT NOT NULL,
+			packet_size INTEGER NOT NULL CHECK (packet_size BETWEEN 1 AND 262144),
+			status TEXT NOT NULL CHECK (status IN ('probing', 'ready', 'fallback')),
+			probed_at INTEGER NOT NULL DEFAULT 0
+		)`,
 		`CREATE TABLE IF NOT EXISTS ssh_session_audits (
 					id INTEGER PRIMARY KEY AUTOINCREMENT,
 					session_id_hash TEXT NOT NULL DEFAULT '',

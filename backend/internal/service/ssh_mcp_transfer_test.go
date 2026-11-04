@@ -63,7 +63,7 @@ func TestSSHMCPTransferLargeRoundTrip(t *testing.T) {
 	if err != nil || !result.Success || result.Bytes != size {
 		t.Fatalf("large upload: result=%+v err=%v", result, err)
 	}
-	if source.maxRead > 64<<10 {
+	if source.maxRead > sshSFTPMaxPacket {
 		t.Fatalf("unbounded source read: %d", source.maxRead)
 	}
 	hash := sha1.New()
@@ -166,6 +166,10 @@ func (reader mcpFailingReader) Read([]byte) (int, error) {
 
 func TestSSHMCPTransferFailurePreservesDestination(t *testing.T) {
 	svc, hostID, root := newMCPTransferFixture(t)
+	profile, err := svc.store.GetSSHSFTPProfile(hostID)
+	if err != nil || profile == nil {
+		t.Fatalf("missing profile: %v", err)
+	}
 	for _, test := range []struct {
 		name, checksum, code string
 		size                 int64
@@ -218,6 +222,10 @@ func TestSSHMCPTransferFailurePreservesDestination(t *testing.T) {
 	data, _ := os.ReadFile(filepath.Join(root, "target"))
 	if string(data) != "original" {
 		t.Fatal("cancelled upload replaced original")
+	}
+	after, err := svc.store.GetSSHSFTPProfile(hostID)
+	if err != nil || after.Generation != profile.Generation {
+		t.Fatal("input error, checksum mismatch or cancellation triggered a probe")
 	}
 }
 

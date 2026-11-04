@@ -218,14 +218,24 @@ func (svc *SSHHostService) uploadMCPStream(ctx context.Context, request model.SS
 		return nil, err
 	}
 	result := &model.SSHMCPTransferResult{}
+	var profile *model.SSHSFTPProfile
+	reprobe := false
 	err = svc.withMCPHost(ctx, request.HostID, SSHMCPTransferTimeout, "upload", func(ctx context.Context, client *ssh.Client) error {
-		files, err := sftp.NewClient(client)
+		var packetSize, concurrency int
+		var err error
+		profile, packetSize, concurrency, err = svc.sftpUploadProfile(request.HostID)
 		if err != nil {
+			return err
+		}
+		files, err := sftp.NewClient(client, sftp.MaxPacketUnchecked(packetSize), sftp.MaxConcurrentRequestsPerFile(concurrency))
+		if err != nil {
+			reprobe = shouldReprobeSFTP(err)
 			return sshError("SSH_MCP_SFTP_FAILED", "无法启动 SFTP", err)
 		}
 		defer files.Close()
 		info, err := files.Lstat(remote)
 		if err != nil && !os.IsNotExist(err) {
+			reprobe = shouldReprobeSFTP(err)
 			return sshError("SSH_MCP_SFTP_FAILED", "无法检查远程文件", err)
 		}
 		if info != nil && (!request.Overwrite || !info.Mode().IsRegular()) {
@@ -252,6 +262,7 @@ func (svc *SSHHostService) uploadMCPStream(ctx context.Context, request model.SS
 		temporary := path.Join(path.Dir(remote), ".ackwrap-mcp-"+suffix)
 		file, err := files.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
 		if err != nil {
+			reprobe = shouldReprobeSFTP(err)
 			return sshError("SSH_MCP_SFTP_FAILED", "无法创建远程临时文件", err)
 		}
 		committed := false
@@ -268,14 +279,17 @@ func (svc *SSHHostService) uploadMCPStream(ctx context.Context, request model.SS
 			mode = info.Mode().Perm()
 		}
 		if err := file.Chmod(mode); err != nil {
+			reprobe = shouldReprobeSFTP(err)
 			return sshError("SSH_MCP_SFTP_FAILED", "无法设置远程文件权限", err)
 		}
 		hash := sha1.New()
 		source := &sshMCPUploadSource{Reader: io.TeeReader(content, hash)}
-		result.Bytes, err = file.ReadFromWithConcurrency(source, sshMCPUploadConcurrency)
+		result.Bytes, err = file.ReadFromWithConcurrency(source, concurrency)
+		writeErr := err
 		err = errors.Join(err, source.err)
 		closeErr := file.Close()
 		if err != nil || closeErr != nil {
+			reprobe = source.err == nil && ctx.Err() == nil && shouldReprobeSFTP(errors.Join(writeErr, closeErr))
 			return sshError("SSH_MCP_TRANSFER_FAILED", "流式上传中断，原文件未替换", errors.Join(err, closeErr))
 		}
 		if expectedSize >= 0 && result.Bytes != expectedSize {
@@ -294,12 +308,16 @@ func (svc *SSHHostService) uploadMCPStream(ctx context.Context, request model.SS
 			err = files.Link(temporary, remote)
 		}
 		if err != nil {
+			reprobe = shouldReprobeSFTP(err)
 			return sshError("SSH_MCP_SFTP_FAILED", "提交远程文件失败，目标可能已存在", err)
 		}
 		committed, result.Success = true, true
 		logging.Info("ssh_mcp.upload", "流式上传完成: host_id=%d bytes=%d", request.HostID, result.Bytes)
 		return nil
 	})
+	if reprobe && ctx.Err() == nil && profile != nil && profile.Status != "probing" {
+		svc.scheduleSFTPProbe(request.HostID, profile.Generation)
+	}
 	return result, err
 }
 
