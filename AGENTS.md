@@ -44,6 +44,7 @@ The application entry point is `backend/cmd/server/main.go`. See `backend/intern
 - Pushing, releasing, deploying, and changing remote state must stay within the user's authorization. The local commit convention alone does not authorize these actions.
 - `docs/` is a permanently ignored directory for local documentation. Never stage or commit it. Before committing, `git ls-files docs` must produce no output.
 - Do not commit dependency caches or generated artifacts. Only the embedding placeholder is tracked in `backend/internal/webui/dist/`; Vite-generated HTML, JavaScript, CSS, and images are rebuilt for each release.
+- Every release must include an English, user-facing description of its changes on the GitHub release page. Maintain `.github/release-notes/<version>.md` for the requested version and publish it with `--notes-file`; generated commit titles alone are not sufficient release notes.
 
 ## Validation
 

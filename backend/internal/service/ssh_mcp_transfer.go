@@ -76,7 +76,7 @@ func (svc *SSHHostService) UploadMCP(ctx context.Context, request model.SSHMCPUp
 }
 
 func validateMCPTransfer(request model.SSHMCPTransferRequest) (string, error) {
-	remote, err := normalizeSFTPPath(request.Path, false)
+	remote, err := normalizeMCPPath(request.HostID, request.Path, false)
 	if err != nil {
 		return "", err
 	}
@@ -94,7 +94,7 @@ func (svc *SSHHostService) PrepareMCPTransfer(request model.SSHMCPTransferReques
 	if err != nil {
 		return nil, err
 	}
-	host, err := svc.getHost(request.HostID)
+	host, err := getSSHMCPHost(svc.store, request.HostID)
 	if err != nil {
 		return nil, err
 	}
@@ -217,6 +217,9 @@ func (svc *SSHHostService) uploadMCPStream(ctx context.Context, request model.SS
 	if err != nil {
 		return nil, err
 	}
+	if request.HostID == SSHMCPLocalHostID {
+		return svc.uploadMCPLocal(ctx, request, remote, openSource)
+	}
 	result := &model.SSHMCPTransferResult{}
 	var profile *model.SSHSFTPProfile
 	reprobe := false
@@ -322,9 +325,12 @@ func (svc *SSHHostService) uploadMCPStream(ctx context.Context, request model.SS
 }
 
 func (svc *SSHHostService) DownloadMCPStream(ctx context.Context, request model.SSHMCPFileRequest, consume func(context.Context, io.Reader, os.FileInfo) error) error {
-	remote, err := normalizeSFTPPath(request.Path, false)
+	remote, err := normalizeMCPPath(request.HostID, request.Path, false)
 	if err != nil {
 		return err
+	}
+	if request.HostID == SSHMCPLocalHostID {
+		return svc.downloadMCPLocal(ctx, request, remote, consume)
 	}
 	return svc.withMCPHost(ctx, request.HostID, SSHMCPTransferTimeout, "download", func(ctx context.Context, client *ssh.Client) error {
 		files, err := sftp.NewClient(client)

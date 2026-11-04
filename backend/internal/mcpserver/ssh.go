@@ -20,10 +20,10 @@ type hostInput struct {
 
 func NewSSHServer(svc *service.SSHHostService, uploads *service.SSHMCPService) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "ackwrap-ssh", Version: buildinfo.Version}, &mcp.ServerOptions{
-		Instructions: "Operate SSH hosts saved in Ackwrap. Use host_id from ssh_list_servers. Existing credentials and connection paths are reused. Unknown or changed host keys must be confirmed by the user in Ackwrap. Paths in SSH tools refer to the remote SSH host. For a file on the MCP caller's machine, first call upload_file with the remote host_id and destination path, then run curl/Bash, PowerShell or Python ON THE CALLER'S MACHINE to PUT the local file's raw binary stream to the returned upload_url using ALL returned headers. Upload file checksums use SHA-1: the optional sha1 argument and returned sha1 contain 40 hexadecimal characters. This is a scoped single-attempt URL: use its temporary Authorization header, not the MCP token. Never use ssh_exec to read a file on the caller's machine: ssh_exec runs on the target SSH host. Do not put large file contents in MCP arguments, Base64, JSON or multipart. ready means no bytes have been uploaded; report completion only after the PUT response succeeds with success=true, bytes and sha1. Request a fresh URL after a failed attempt or expiry. ssh_upload without content/source_url is an alias of upload_file. For a publicly hosted source, ssh_upload with source_url streams it through Ackwrap instead. For download, call ssh_download and use a local HTTP/file tool to save its HTTP GET response with the MCP bearer token.",
+		Instructions: "Operate hosts returned by ssh_list_servers. When local access is enabled in the AckWrap MCP settings, the built-in host_id=-1 (connection_mode=local) is the machine RUNNING ACKWRAP, not the MCP caller. It executes commands and file operations directly as the AckWrap process account, without SSH credentials, host-key trust, SFTP or packet probing. Unix commands use /bin/sh; Windows commands use PowerShell. Local relative paths resolve from that service account's home; prefer absolute paths. This built-in target is configured only through MCP settings and cannot be added, updated or deleted using SSH host CRUD tools. Saved SSH hosts reuse existing credentials and connection paths. Unknown or changed SSH host keys must be confirmed by the user in Ackwrap. All paths refer to the selected target. For a file on the MCP caller's machine, first call upload_file with the target host_id and destination path, then run curl/Bash, PowerShell or Python ON THE CALLER'S MACHINE to PUT the local file's raw binary stream to the returned upload_url using ALL returned headers. Upload file checksums use SHA-1: the optional sha1 argument and returned sha1 contain 40 hexadecimal characters. This is a scoped single-attempt URL: use its temporary Authorization header, not the MCP token. Never use ssh_exec to read a file on the caller's machine: ssh_exec runs on the selected target. Do not put large file contents in MCP arguments, Base64, JSON or multipart. ready means no bytes have been uploaded; report completion only after the PUT response succeeds with success=true, bytes and sha1. Request a fresh URL after a failed attempt or expiry. ssh_upload without content/source_url is an alias of upload_file. For a publicly hosted source, ssh_upload with source_url streams it through Ackwrap instead. For download, call ssh_download and use a local HTTP/file tool to save its HTTP GET response with the MCP bearer token.",
 	})
-	addTool(server, "ssh_list_servers", "列出 Ackwrap SSH 主机，不返回密码或私钥；启用地址隐藏时只返回脱敏地址，使用 host_id 连接。", func(_ context.Context, _ struct{}) (any, error) {
-		return svc.ListHosts()
+	addTool(server, "ssh_list_servers", "列出可操作的主机，不返回密码或私钥；启用本机访问后包含内置 host_id=-1、connection_mode=local 的本机目标，指 AckWrap 服务所在设备。启用地址隐藏时远程主机只返回脱敏地址。", func(_ context.Context, _ struct{}) (any, error) {
+		return svc.ListMCPHosts()
 	})
 	addTool(server, "ssh_list_credentials", "列出可用于主机配置的凭据 ID 和元数据，不返回凭据内容。", func(_ context.Context, _ struct{}) (any, error) {
 		return svc.ListCredentials()
@@ -41,10 +41,10 @@ func NewSSHServer(svc *service.SSHHostService, uploads *service.SSHMCPService) *
 		err := svc.DeleteHost(input.HostID)
 		return map[string]any{"success": err == nil}, err
 	})
-	addTool(server, "ssh_test_connection", "测试已保存主机的 SSH 连通性，未知 Host Key 需要在 Ackwrap 页面确认。", func(ctx context.Context, input hostInput) (any, error) {
+	addTool(server, "ssh_test_connection", "测试目标是否可用；本机 host_id=-1 检查本机访问开关，远程主机测试 SSH 连通性，未知 Host Key 需要在 Ackwrap 页面确认。", func(ctx context.Context, input hostInput) (any, error) {
 		ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
-		return svc.TestHost(ctx, input.HostID)
+		return svc.TestMCPHost(ctx, input.HostID)
 	})
 	addTool(server, "ssh_exec", "在指定主机执行命令，返回 stdout、stderr 和退出码；非零退出码表示失败。", func(ctx context.Context, input model.SSHMCPExecRequest) (any, error) {
 		return svc.ExecuteMCP(ctx, input)
@@ -73,15 +73,15 @@ func NewSSHServer(svc *service.SSHHostService, uploads *service.SSHMCPService) *
 	})
 	for _, action := range []string{"read_file", "list_dir", "stat"} {
 		descriptions := map[string]string{
-			"read_file": "读取远程 UTF-8 文本，最大 1 MiB。",
-			"list_dir":  "列出远程目录，最多返回 1000 项，更多时标记 truncated。",
-			"stat":      "读取远程文件大小、权限和修改时间。",
+			"read_file": "读取所选目标上的 UTF-8 文本，最大 1 MiB。",
+			"list_dir":  "列出所选目标上的目录，最多返回 1000 项，更多时标记 truncated。",
+			"stat":      "读取所选目标上的文件大小、权限和修改时间。",
 		}
 		addTool(server, "ssh_"+action, descriptions[action], func(ctx context.Context, input model.SSHMCPFileRequest) (any, error) {
 			return svc.ReadMCPFile(ctx, input, action)
 		})
 	}
-	addTool(server, "ssh_write_file", "写入远程 UTF-8 文本，最大 1 MiB；覆盖已有文件需要 overwrite=true。", func(ctx context.Context, input model.SSHMCPWriteRequest) (any, error) {
+	addTool(server, "ssh_write_file", "在所选目标上写入 UTF-8 文本，最大 1 MiB；覆盖已有文件需要 overwrite=true。", func(ctx context.Context, input model.SSHMCPWriteRequest) (any, error) {
 		err := svc.WriteMCPFile(ctx, input, false)
 		return map[string]any{"success": err == nil}, err
 	})

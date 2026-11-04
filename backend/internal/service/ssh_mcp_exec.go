@@ -16,7 +16,22 @@ import (
 const sshMCPMaxContent = 1 << 20
 
 func (svc *SSHHostService) withMCPHost(ctx context.Context, hostID int64, timeout time.Duration, action string, run func(context.Context, *ssh.Client) error) (resultErr error) {
-	host, err := svc.getHost(hostID)
+	return svc.withMCPOperation(ctx, hostID, timeout, action, func(ctx context.Context, host *model.SSHHost) error {
+		connectCtx, connectCancel := context.WithTimeout(ctx, sshConnectTimeout)
+		client, _, _, _, err := svc.connect(connectCtx, host)
+		connectCancel()
+		if err != nil {
+			return err
+		}
+		defer client.Close()
+		stop := context.AfterFunc(ctx, func() { _ = client.Close() })
+		defer stop()
+		return run(ctx, client)
+	})
+}
+
+func (svc *SSHHostService) withMCPOperation(ctx context.Context, hostID int64, timeout time.Duration, action string, run func(context.Context, *model.SSHHost) error) (resultErr error) {
+	host, err := getSSHMCPHost(svc.store, hostID)
 	if err != nil {
 		return err
 	}
@@ -57,16 +72,10 @@ func (svc *SSHHostService) withMCPHost(ctx context.Context, hostID int64, timeou
 		}
 		svc.audit(host, "mcp_"+action, result, code, svc.now().Sub(started), "")
 	}()
-	connectCtx, connectCancel := context.WithTimeout(ctx, sshConnectTimeout)
-	client, _, _, _, err := svc.connect(connectCtx, host)
-	connectCancel()
-	if err != nil {
-		return err
+	if err := ctx.Err(); err != nil {
+		return sshError("SSH_MCP_CANCELLED", "MCP 操作已取消或超时", err)
 	}
-	defer client.Close()
-	stop := context.AfterFunc(ctx, func() { _ = client.Close() })
-	defer stop()
-	err = run(ctx, client)
+	err = run(ctx, host)
 	if ctx.Err() != nil {
 		return sshError("SSH_MCP_CANCELLED", "SSH MCP 操作已取消或超时", ctx.Err())
 	}
@@ -98,6 +107,9 @@ func (svc *SSHHostService) ExecuteMCP(ctx context.Context, request model.SSHMCPE
 	}
 	if request.Timeout < 1 || request.Timeout > 600 {
 		return nil, sshError("SSH_MCP_INVALID", "超时必须为 1 到 600 秒", nil)
+	}
+	if request.HostID == SSHMCPLocalHostID {
+		return svc.executeMCPLocal(ctx, request)
 	}
 	result := &model.SSHMCPExecResult{HostID: request.HostID, ExitCode: -1}
 	err := svc.withMCPHost(ctx, request.HostID, time.Duration(request.Timeout)*time.Second, "exec", func(ctx context.Context, client *ssh.Client) error {

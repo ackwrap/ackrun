@@ -308,10 +308,14 @@ func (s *Store) CountSSHHostsByNodeExposure(id int64) (int, error) {
 
 func (s *Store) CreateSSHSessionAudit(item *model.SSHSessionAudit) error {
 	item.CreatedAt = time.Now().UnixMilli()
+	var hostID any = item.HostID
+	if item.ConnectionMode == "local" {
+		hostID = nil // The built-in local MCP target is not a saved SSH host.
+	}
 	result, err := s.db.Exec(`INSERT INTO ssh_session_audits
 		(session_id_hash, host_id, host_name, event_type, connection_mode, node_exposure_id,
 		 result, error_code, duration_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		item.SessionIDHash, item.HostID, item.HostName, item.EventType, item.ConnectionMode,
+		item.SessionIDHash, hostID, item.HostName, item.EventType, item.ConnectionMode,
 		item.NodeExposureID, item.Result, item.ErrorCode, item.DurationMS, item.CreatedAt)
 	if err != nil {
 		return err

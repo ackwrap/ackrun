@@ -2,20 +2,24 @@ package model
 
 type SSHMCPSettings struct {
 	Enabled         bool   `json:"enabled"`
+	LocalEnabled    bool   `json:"local_enabled"`
+	LocalName       string `json:"local_name"`
 	TokenConfigured bool   `json:"token_configured"`
 	EndpointPath    string `json:"endpoint_path"`
 	Token           string `json:"token,omitempty"`
 }
 
 type SSHMCPSettingsRequest struct {
-	Enabled       bool   `json:"enabled"`
-	Token         string `json:"token"`
-	GenerateToken bool   `json:"generate_token"`
+	Enabled       bool    `json:"enabled"`
+	LocalEnabled  *bool   `json:"local_enabled,omitempty"`
+	LocalName     *string `json:"local_name,omitempty"`
+	Token         string  `json:"token"`
+	GenerateToken bool    `json:"generate_token"`
 }
 
 type SSHMCPExecRequest struct {
 	HostID  int64  `json:"host_id" jsonschema:"SSH host ID from ssh_list_servers"`
-	Command string `json:"command" jsonschema:"Shell command executed on the remote SSH host"`
+	Command string `json:"command" jsonschema:"Shell command executed on the selected host. Built-in host_id=-1 runs on the AckWrap server when local access is enabled, using sh on Unix or PowerShell on Windows and the AckWrap process account"`
 	Timeout int    `json:"timeout,omitempty" jsonschema:"Timeout in seconds; default 30, maximum 600"`
 }
 
@@ -29,19 +33,19 @@ type SSHMCPExecResult struct {
 
 type SSHMCPFileRequest struct {
 	HostID int64  `json:"host_id" jsonschema:"SSH host ID from ssh_list_servers"`
-	Path   string `json:"path" jsonschema:"Remote path on the SSH host"`
+	Path   string `json:"path" jsonschema:"Path on the selected host, including the AckWrap server for built-in local host_id=-1; never a path on the MCP caller's machine"`
 }
 
 type SSHMCPWriteRequest struct {
 	HostID    int64  `json:"host_id"`
-	Path      string `json:"path" jsonschema:"Remote path on the SSH host"`
+	Path      string `json:"path" jsonschema:"Path on the selected host; local host_id=-1 means the AckWrap server"`
 	Content   string `json:"content" jsonschema:"UTF-8 text for ssh_write_file or base64 bytes for ssh_upload; maximum 1 MiB decoded"`
 	Overwrite bool   `json:"overwrite,omitempty" jsonschema:"Allow replacing an existing regular file; default false"`
 }
 
 type SSHMCPTransferRequest struct {
 	HostID    int64  `json:"host_id"`
-	Path      string `json:"path" jsonschema:"Destination path on the remote SSH host for upload, or remote source for download; never a local client file path"`
+	Path      string `json:"path" jsonschema:"Destination path on the selected host for upload, or source for download. Built-in local host_id=-1 is the AckWrap server, not the MCP caller. Relative local paths resolve from the service account home directory"`
 	Overwrite bool   `json:"overwrite,omitempty" jsonschema:"Explicitly allow replacing an existing regular file"`
 	SHA1      string `json:"sha1,omitempty" jsonschema:"Optional expected SHA-1 hex digest (40 hex characters); checked before publishing an upload"`
 }

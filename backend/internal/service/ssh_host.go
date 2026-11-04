@@ -517,15 +517,18 @@ func (svc *SSHHostService) connect(ctx context.Context, host *model.SSHHost) (*s
 		return nil, nil, nil, 0, err
 	}
 	var observed ssh.PublicKey
+	hostKeyRejected := false
 	config := &ssh.ClientConfig{
 		User: host.Username, Auth: []ssh.AuthMethod{auth}, Timeout: sshConnectTimeout,
 		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
 			observed = key
 			if trusted == nil {
+				hostKeyRejected = true
 				return errors.New("host key is not trusted")
 			}
 			trustedKey, _, _, _, parseErr := ssh.ParseAuthorizedKey([]byte(trusted.PublicKey))
 			if parseErr != nil || !sshKeysEqual(trustedKey, key) {
+				hostKeyRejected = true
 				return errors.New("host key changed")
 			}
 			return nil
@@ -535,7 +538,7 @@ func (svc *SSHHostService) connect(ctx context.Context, host *model.SSHHost) (*s
 	clientConn, channels, requests, err := ssh.NewClientConn(conn, address, config)
 	handshakeDuration := svc.now().Sub(handshakeStarted)
 	if err != nil {
-		if observed != nil {
+		if observed != nil && hostKeyRejected {
 			challenge, challengeErr := svc.createHostKeyChallenge(host, address, observed, trusted)
 			if challengeErr != nil {
 				return nil, nil, nil, 0, challengeErr

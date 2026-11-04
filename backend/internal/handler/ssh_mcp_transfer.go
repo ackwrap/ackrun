@@ -14,12 +14,13 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/ackwrap/ackrun/internal/model"
+	"github.com/ackwrap/ackrun/internal/service"
 )
 
 func (h *SSHMCPHandler) TransferFile(c *gin.Context) {
 	h.withAuthorizedRequest(c, func() {
 		hostID, err := strconv.ParseInt(c.Param("hostID"), 10, 64)
-		if err != nil || hostID <= 0 {
+		if err != nil || (hostID <= 0 && hostID != service.SSHMCPLocalHostID) {
 			writeMCPError(c, http.StatusBadRequest, "SSH_MCP_INVALID", "SSH 主机 ID 无效")
 			return
 		}

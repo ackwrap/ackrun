@@ -202,6 +202,72 @@ func TestSSHEncryptedPrivateKeyCredential(t *testing.T) {
 	}
 }
 
+func TestSSHAuthenticationFailurePreservesTrustedHostKey(t *testing.T) {
+	for _, authType := range []string{"password", "private_key"} {
+		t.Run(authType, func(t *testing.T) {
+			server := newConfiguredTestSSHServer(t, testSSHServerOptions{
+				password: "correct-password", publicKey: newTestSSHSigner(t).PublicKey(),
+			})
+			defer server.Close()
+			root := t.TempDir()
+			db, err := store.Open(filepath.Join(root, "ackwrap.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			svc, err := NewSSHHostService(db, &paths.Paths{DataDir: root}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer svc.Close()
+			secret := "wrong-password"
+			if authType == "private_key" {
+				_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				block, err := ssh.MarshalPrivateKey(privateKey, "wrong test key")
+				if err != nil {
+					t.Fatal(err)
+				}
+				secret = string(pem.EncodeToMemory(block))
+			}
+			credential, err := svc.CreateCredential(model.SSHCredentialRequest{Name: "rejected", AuthType: authType, Secret: secret})
+			if err != nil {
+				t.Fatal(err)
+			}
+			host, err := svc.CreateHost(model.SSHHostRequest{Name: "unchanged key", Host: "127.0.0.1", Port: server.Port(), Username: "tester", CredentialID: credential.ID, Enabled: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			key := server.HostKey()
+			if err := db.UpsertSSHHostKey(&model.SSHHostKey{HostID: host.ID, KeyType: key.Type(), PublicKey: string(ssh.MarshalAuthorizedKey(key)), FingerprintSHA256: ssh.FingerprintSHA256(key)}); err != nil {
+				t.Fatal(err)
+			}
+			before, err := db.GetSSHHostKey(host.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = svc.TestHost(context.Background(), host.ID)
+			var serviceErr *SSHServiceError
+			if !errors.As(err, &serviceErr) || serviceErr.Code != "SSH_AUTH_FAILED" || serviceErr.Details != nil {
+				t.Fatalf("authentication failure was misclassified: %v", err)
+			}
+			if len(svc.challenges) != 0 {
+				t.Fatal("authentication failure created a host key rotation challenge")
+			}
+			after, err := db.GetSSHHostKey(host.ID)
+			if err != nil || *before != *after {
+				t.Fatal("authentication failure changed host key trust")
+			}
+			loaded, err := svc.GetHost(host.ID)
+			if err != nil || loaded.HostKeyStatus != "trusted" || loaded.LastErrorCode != "SSH_AUTH_FAILED" || loaded.LastStatus == "host_key_pending" {
+				t.Fatalf("incorrect host state after authentication failure: %+v err=%v", loaded, err)
+			}
+		})
+	}
+}
+
 func TestSSHHostKeyChangeRequiresExplicitRotation(t *testing.T) {
 	server := newTestSSHServer(t, "correct-password")
 	defer server.Close()
