@@ -33,6 +33,7 @@ type SSHHost struct {
 	Name             string   `json:"name"`
 	GroupName        string   `json:"group_name"`
 	Host             string   `json:"host"`
+	HostHidden       bool     `json:"host_hidden,omitempty"`
 	Port             int      `json:"port"`
 	Username         string   `json:"username"`
 	CredentialID     int64    `json:"credential_id"`
@@ -55,18 +56,23 @@ type SSHHost struct {
 }
 
 type SSHHostRequest struct {
-	Name           string   `json:"name"`
-	GroupName      string   `json:"group_name"`
-	Host           string   `json:"host"`
-	Port           int      `json:"port"`
-	Username       string   `json:"username"`
-	CredentialID   int64    `json:"credential_id"`
-	ConnectionMode string   `json:"connection_mode"`
-	NodeExposureID *int64   `json:"node_exposure_id"`
-	TerminalType   string   `json:"terminal_type"`
-	Enabled        bool     `json:"enabled"`
-	Tags           []string `json:"tags"`
-	Notes          string   `json:"notes"`
+	Name            string   `json:"name"`
+	GroupName       string   `json:"group_name"`
+	Host            string   `json:"host"`
+	KeepHostAddress bool     `json:"keep_host_address,omitempty" jsonschema:"When the saved address is hidden, set true and leave host empty to preserve it while updating other fields"`
+	Port            int      `json:"port"`
+	Username        string   `json:"username"`
+	CredentialID    int64    `json:"credential_id"`
+	ConnectionMode  string   `json:"connection_mode"`
+	NodeExposureID  *int64   `json:"node_exposure_id"`
+	TerminalType    string   `json:"terminal_type"`
+	Enabled         bool     `json:"enabled"`
+	Tags            []string `json:"tags"`
+	Notes           string   `json:"notes"`
+}
+
+type SSHPrivacySettings struct {
+	HideHostAddress bool `json:"hide_host_address"`
 }
 
 type SSHHostShareRequest struct {

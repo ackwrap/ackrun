@@ -22,7 +22,7 @@ func NewSSHServer(svc *service.SSHHostService) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "ackwrap-ssh", Version: buildinfo.Version}, &mcp.ServerOptions{
 		Instructions: "Operate SSH hosts saved in Ackwrap. Use host_id from ssh_list_servers. Existing credentials and connection paths are reused. Unknown or changed host keys must be confirmed by the user in Ackwrap. File paths always refer to the remote SSH host, never to the MCP client's computer. For large file upload, supply source_url or call ssh_upload to obtain an HTTP PUT endpoint, then use a local HTTP/file tool to stream the file with the same MCP bearer token. For download, call ssh_download and save its HTTP GET response with a local HTTP/file tool. A ready response only prepares a transfer, not completes it. Never encode deployment packages as inline base64.",
 	})
-	addTool(server, "ssh_list_servers", "列出 Ackwrap SSH 主机，不返回密码或私钥。", func(_ context.Context, _ struct{}) (any, error) {
+	addTool(server, "ssh_list_servers", "列出 Ackwrap SSH 主机，不返回密码或私钥；启用地址隐藏时只返回脱敏地址，使用 host_id 连接。", func(_ context.Context, _ struct{}) (any, error) {
 		return svc.ListHosts()
 	})
 	addTool(server, "ssh_list_credentials", "列出可用于主机配置的凭据 ID 和元数据，不返回凭据内容。", func(_ context.Context, _ struct{}) (any, error) {
@@ -31,7 +31,7 @@ func NewSSHServer(svc *service.SSHHostService) *mcp.Server {
 	addTool(server, "ssh_add_server", "添加主机，credential_id 引用已保存凭据；需要启用时设置 enabled=true。", func(_ context.Context, input model.SSHHostRequest) (any, error) {
 		return svc.CreateHost(input)
 	})
-	addTool(server, "ssh_update_server", "完整更新主机配置，先从 ssh_list_servers 获取现有字段；省略字段会恢复默认值。", func(_ context.Context, input struct {
+	addTool(server, "ssh_update_server", "完整更新主机配置，先从 ssh_list_servers 获取现有字段；地址已隐藏时设置 keep_host_address=true 并留空 host，保留原地址。其余省略字段会恢复默认值。", func(_ context.Context, input struct {
 		HostID int64                `json:"host_id"`
 		Config model.SSHHostRequest `json:"config"`
 	}) (any, error) {

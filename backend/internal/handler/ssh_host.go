@@ -26,6 +26,7 @@ func NewSSHHostHandler(service *service.SSHHostService) *SSHHostHandler {
 }
 
 func (h *SSHHostHandler) ListHosts(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
 	items, err := h.service.ListHosts()
 	if err != nil {
 		writeSSHError(c, err)
@@ -35,6 +36,7 @@ func (h *SSHHostHandler) ListHosts(c *gin.Context) {
 }
 
 func (h *SSHHostHandler) GetHost(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
 	id, ok := parseSSHID(c)
 	if !ok {
 		return
@@ -48,6 +50,7 @@ func (h *SSHHostHandler) GetHost(c *gin.Context) {
 }
 
 func (h *SSHHostHandler) CreateHost(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxSSHHostRequestBody)
 	var request model.SSHHostRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -63,6 +66,7 @@ func (h *SSHHostHandler) CreateHost(c *gin.Context) {
 }
 
 func (h *SSHHostHandler) UpdateHost(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
 	id, ok := parseSSHID(c)
 	if !ok {
 		return

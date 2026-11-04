@@ -16,7 +16,7 @@ import (
 const sshMCPMaxContent = 1 << 20
 
 func (svc *SSHHostService) withMCPHost(ctx context.Context, hostID int64, timeout time.Duration, action string, run func(context.Context, *ssh.Client) error) (resultErr error) {
-	host, err := svc.GetHost(hostID)
+	host, err := svc.getHost(hostID)
 	if err != nil {
 		return err
 	}

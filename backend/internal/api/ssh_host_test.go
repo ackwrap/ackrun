@@ -28,6 +28,8 @@ func TestRegisterSSHHostRoutesContract(t *testing.T) {
 	router := gin.New()
 	registerSSHHostRoutes(router.Group("/api/v1"), handler.NewSSHHostHandler(svc))
 	want := map[string]bool{
+		"GET /api/v1/advanced/ssh/settings":                    false,
+		"PUT /api/v1/advanced/ssh/settings":                    false,
 		"GET /api/v1/advanced/ssh/hosts":                       false,
 		"POST /api/v1/advanced/ssh/hosts":                      false,
 		"POST /api/v1/advanced/ssh/hosts/import":               false,

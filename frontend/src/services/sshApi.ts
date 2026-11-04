@@ -9,6 +9,7 @@ import type {
   SSHHostImportResponse,
   SSHHostKey,
   SSHHostRequest,
+  SSHPrivacySettings,
   SSHHostShareResponse,
   SSHDeviceDetails,
   SSHMonitorSnapshot,
@@ -29,7 +30,9 @@ async function parseSFTPError(
   let payload: any = null;
   try {
     payload = JSON.parse(
-      response instanceof Response ? await response.text() : response.responseText,
+      response instanceof Response
+        ? await response.text()
+        : response.responseText,
     );
   } catch {
     // Keep the fallback below for non-JSON proxy and transport errors.
@@ -44,6 +47,13 @@ async function parseSFTPError(
 }
 
 export const sshApi = {
+  getPrivacySettings: () =>
+    request<SSHPrivacySettings>("/advanced/ssh/settings"),
+  updatePrivacySettings: (body: SSHPrivacySettings) =>
+    request<SSHPrivacySettings>("/advanced/ssh/settings", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
   getHosts: () => request<SSHHost[]>("/advanced/ssh/hosts"),
   getHost: (id: number) => request<SSHHost>(`/advanced/ssh/hosts/${id}`),
   createHost: (body: SSHHostRequest) =>
@@ -126,20 +136,12 @@ export const sshApi = {
       `/advanced/ssh/sessions/${encodeURIComponent(sessionID)}`,
       { method: "DELETE" },
     ),
-  getSessionMonitor: (
-    sessionID: string,
-    token: string,
-    signal?: AbortSignal,
-  ) =>
+  getSessionMonitor: (sessionID: string, token: string, signal?: AbortSignal) =>
     request<SSHMonitorSnapshot>(
       `/advanced/ssh/sessions/${encodeURIComponent(sessionID)}/monitor`,
       { headers: { "X-SSH-Session-Token": token }, signal },
     ),
-  getSessionDetails: (
-    sessionID: string,
-    token: string,
-    signal?: AbortSignal,
-  ) =>
+  getSessionDetails: (sessionID: string, token: string, signal?: AbortSignal) =>
     request<SSHDeviceDetails>(
       `/advanced/ssh/sessions/${encodeURIComponent(sessionID)}/details`,
       { headers: { "X-SSH-Session-Token": token }, signal },
@@ -191,7 +193,10 @@ export const sshApi = {
     request<SSHActionResponse>(sftpEndpoint(sessionID, "/copy"), {
       method: "POST",
       headers: { "X-SSH-Session-Token": token },
-      body: JSON.stringify({ source_path: sourcePath, target_path: targetPath }),
+      body: JSON.stringify({
+        source_path: sourcePath,
+        target_path: targetPath,
+      }),
     }),
   readSFTPText: (sessionID: string, token: string, path: string) =>
     request<SSHSFTPTextFile>(

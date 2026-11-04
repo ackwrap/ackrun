@@ -75,7 +75,7 @@ func (svc *SSHHostService) PrepareMCPTransfer(request model.SSHMCPTransferReques
 	if err != nil {
 		return nil, err
 	}
-	host, err := svc.GetHost(request.HostID)
+	host, err := svc.getHost(request.HostID)
 	if err != nil {
 		return nil, err
 	}

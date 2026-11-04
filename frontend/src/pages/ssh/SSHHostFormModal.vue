@@ -73,7 +73,7 @@ function reset() {
   Object.assign(form, {
     name: host.name,
     group_name: host.group_name,
-    host: host.host,
+    host: host.host_hidden ? "" : host.host,
     port: host.port,
     username: host.username,
     credential_id: host.credential_id,
@@ -89,7 +89,7 @@ function reset() {
 function save() {
   if (
     !form.name.trim() ||
-    !form.host.trim() ||
+    (!props.editing?.host_hidden && !form.host.trim()) ||
     !form.username.trim() ||
     !form.credential_id
   ) {
@@ -104,6 +104,7 @@ function save() {
     name: form.name.trim(),
     group_name: form.group_name.trim(),
     host: form.host.trim(),
+    keep_host_address: props.editing?.host_hidden || undefined,
     port: Number(form.port),
     username: form.username.trim(),
     credential_id: Number(form.credential_id),
@@ -170,8 +171,14 @@ watch(
           v-model="form.host"
           class="aw-input mt-1 w-full font-mono"
           autocomplete="off"
-          placeholder="域名或 IP"
+          :disabled="!!editing?.host_hidden"
+          :placeholder="editing?.host_hidden ? editing.host : '域名或 IP'"
         />
+        <span
+          v-if="editing?.host_hidden"
+          class="mt-1 block text-xs text-[var(--text-tertiary)]"
+          >保留原地址；修改地址前请关闭 IP 隐藏。</span
+        >
       </label>
       <label>
         <span class="aw-modal-label text-xs">端口</span>

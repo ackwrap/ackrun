@@ -8,6 +8,8 @@ import {
   ref,
 } from "vue";
 import {
+  Eye,
+  EyeOff,
   Fingerprint,
   KeyRound,
   Laptop,
@@ -73,6 +75,8 @@ const credentials = ref<SSHCredential[]>([]);
 const exposures = ref<NodeExposure[]>([]);
 const loading = ref(true);
 const saving = ref(false);
+const hideHostAddress = ref(false);
+const privacySaving = ref(false);
 const testingID = ref(0);
 const openingShellID = ref(0);
 const message = ref("");
@@ -103,6 +107,7 @@ const selectedHosts = computed(() => {
 const maxSharedHosts = 100;
 let shellRequestGeneration = 0;
 let pageUnmounting = false;
+let loadGeneration = 0;
 
 const {
   detailsHost,
@@ -129,14 +134,19 @@ function show(text: string, type: "success" | "error" | "info" = "success") {
 }
 
 async function load() {
+  const generation = ++loadGeneration;
   loading.value = true;
   try {
-    const [hostItems, credentialItems, exposureItems] = await Promise.all([
-      sshApi.getHosts(),
-      sshApi.getCredentials(),
-      advancedApi.getNodeExposures(),
-    ]);
+    const [hostItems, credentialItems, exposureItems, privacy] =
+      await Promise.all([
+        sshApi.getHosts(),
+        sshApi.getCredentials(),
+        advancedApi.getNodeExposures(),
+        sshApi.getPrivacySettings(),
+      ]);
+    if (generation !== loadGeneration || pageUnmounting) return;
     hosts.value = hostItems;
+    hideHostAddress.value = privacy.hide_host_address;
     const availableHostIDs = new Set(hostItems.map((host) => host.id));
     selectedHostIDs.value = selectedHostIDs.value.filter((id) =>
       availableHostIDs.has(id),
@@ -144,9 +154,35 @@ async function load() {
     credentials.value = credentialItems;
     exposures.value = exposureItems;
   } catch (error) {
-    show(`加载 SSH 主机管理数据失败：${errorMessage(error)}`, "error");
+    if (generation === loadGeneration)
+      show(`加载 SSH 主机管理数据失败：${errorMessage(error)}`, "error");
   } finally {
-    loading.value = false;
+    if (generation === loadGeneration) loading.value = false;
+  }
+}
+
+async function toggleAddressPrivacy() {
+  if (privacySaving.value || loading.value) return;
+  privacySaving.value = true;
+  try {
+    const settings = await sshApi.updatePrivacySettings({
+      hide_host_address: !hideHostAddress.value,
+    });
+    hideHostAddress.value = settings.hide_host_address;
+    ++loadGeneration;
+    // Discard old presentation data before fetching the newly masked hosts.
+    hosts.value = [];
+    editingHost.value = null;
+    deletingHost.value = null;
+    sharingHosts.value = [];
+    trustedKey.value = null;
+    hostKeyPrompt.value = null;
+    closeDetails();
+    await load();
+  } catch (error) {
+    show(`保存 SSH 地址隐藏设置失败：${errorMessage(error)}`, "error");
+  } finally {
+    privacySaving.value = false;
   }
 }
 
@@ -464,8 +500,25 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="space-y-5">
-    <PageHeader title="SSH 主机">
+    <PageHeader title="SSH 主机" class="ssh-hosts-header">
       <template #actions>
+        <Button
+          class="shrink-0 max-sm:!w-8 max-sm:!px-0"
+          :disabled="loading || privacySaving"
+          :loading="privacySaving"
+          :aria-pressed="hideHostAddress"
+          :aria-label="hideHostAddress ? 'IP 已隐藏' : '隐藏 IP'"
+          title="同时隐藏 SSH 页面和 MCP 主机信息中的完整地址"
+          @click="toggleAddressPrivacy"
+        >
+          <template #icon>
+            <EyeOff v-if="hideHostAddress" :size="14" />
+            <Eye v-else :size="14" />
+          </template>
+          <span class="hidden sm:inline">{{
+            hideHostAddress ? "IP 已隐藏" : "隐藏 IP"
+          }}</span>
+        </Button>
         <Button
           v-if="tab === 'hosts'"
           @click="
@@ -776,3 +829,19 @@ onBeforeUnmount(() => {
     />
   </div>
 </template>
+
+<style scoped>
+@media (max-width: 639px) {
+  .ssh-hosts-header :deep(.flex.items-center.justify-between) {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .ssh-hosts-header :deep(.aw-page-title) {
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+  .ssh-hosts-header :deep(button) {
+    white-space: nowrap;
+  }
+}
+</style>

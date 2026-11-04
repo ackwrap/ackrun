@@ -130,7 +130,7 @@ watch(protocol, (value) => {
 
 function emptyForm(host: SSHHost): SSHSingboxDeployRequest {
   return {
-    server_address: host.host,
+    server_address: host.host_hidden ? "" : host.host,
     protocol: "vless-reality",
     listen_port: 443,
     reality_server_name: "www.microsoft.com",
@@ -188,7 +188,8 @@ async function install() {
     notice.value = `${response.message}，正在重新检测。`;
     emit("refresh");
   } catch (cause) {
-    if (props.host.id === requestHostID) deployError.value = errorMessage(cause);
+    if (props.host.id === requestHostID)
+      deployError.value = errorMessage(cause);
   } finally {
     installing.value = false;
     emit("busy", false);
@@ -222,7 +223,8 @@ async function deploy() {
     noticeError.value = false;
     notice.value = "部署完成。连接信息仅在本次结果中展示，请立即保存。";
   } catch (cause) {
-    if (props.host.id === requestHostID) deployError.value = errorMessage(cause);
+    if (props.host.id === requestHostID)
+      deployError.value = errorMessage(cause);
   } finally {
     deploying.value = false;
     emit("busy", false);
@@ -278,10 +280,26 @@ async function copy(value: string, label: string) {
         <div class="environment-primary">
           <CheckCircle2
             :size="22"
-            :class="detailsError ? 'text-[var(--color-error)]' : environmentReady ? 'text-[var(--color-success)]' : 'text-[var(--color-warning)]'"
+            :class="
+              detailsError
+                ? 'text-[var(--color-error)]'
+                : environmentReady
+                  ? 'text-[var(--color-success)]'
+                  : 'text-[var(--color-warning)]'
+            "
           />
           <div>
-            <strong>{{ detailsLoading ? '正在检测' : detailsError ? '检测失败' : installedVersion ? '已安装' : environmentReady ? '未安装，请先安装' : '等待检测' }}</strong>
+            <strong>{{
+              detailsLoading
+                ? "正在检测"
+                : detailsError
+                  ? "检测失败"
+                  : installedVersion
+                    ? "已安装"
+                    : environmentReady
+                      ? "未安装，请先安装"
+                      : "等待检测"
+            }}</strong>
             <small v-if="detailsLoading">正在读取远端软件状态</small>
             <small v-else-if="installedVersion">{{ installedVersion }}</small>
             <small v-else>官方 APT 源 · Debian / Ubuntu</small>
@@ -289,21 +307,50 @@ async function copy(value: string, label: string) {
         </div>
         <div class="environment-item">
           <span>服务状态</span>
-          <strong>{{ result ? 'systemd · active (running)' : detailsLoading ? '正在检测' : installedVersion ? '配置部署后启用' : '安装后保持停用' }}</strong>
+          <strong>{{
+            result
+              ? "systemd · active (running)"
+              : detailsLoading
+                ? "正在检测"
+                : installedVersion
+                  ? "配置部署后启用"
+                  : "安装后保持停用"
+          }}</strong>
         </div>
-        <div class="environment-item"><span>配置保护</span><strong>指纹校验 · 失败回滚</strong></div>
-        <div class="environment-item"><span>配置文件</span><strong class="font-mono">/etc/sing-box/config.json</strong></div>
+        <div class="environment-item">
+          <span>配置保护</span><strong>指纹校验 · 失败回滚</strong>
+        </div>
+        <div class="environment-item">
+          <span>配置文件</span
+          ><strong class="font-mono">/etc/sing-box/config.json</strong>
+        </div>
       </div>
       <div class="wizard-actions">
-        <p>{{ detailsError || (installationReady ? 'sing-box 已安装，可以继续配置协议。' : environmentReady ? '需要先安装官方 sing-box 核心。' : '等待远端环境检测完成。') }}</p>
+        <p>
+          {{
+            detailsError ||
+            (installationReady
+              ? "sing-box 已安装，可以继续配置协议。"
+              : environmentReady
+                ? "需要先安装官方 sing-box 核心。"
+                : "等待远端环境检测完成。")
+          }}
+        </p>
         <Button
           v-if="!installedVersion"
           variant="primary"
           :loading="installing"
           :disabled="!environmentReady || installing"
           @click="install"
-        >{{ installing ? '正在安装 sing-box...' : '安装 sing-box' }}</Button>
-        <Button v-else variant="primary" :disabled="!installationReady" @click="nextStep">下一步：配置协议</Button>
+          >{{ installing ? "正在安装 sing-box..." : "安装 sing-box" }}</Button
+        >
+        <Button
+          v-else
+          variant="primary"
+          :disabled="!installationReady"
+          @click="nextStep"
+          >下一步：配置协议</Button
+        >
       </div>
     </section>
 
@@ -315,33 +362,88 @@ async function copy(value: string, label: string) {
         </div>
       </header>
       <div class="protocol-fields">
-        <label>客户端连接地址<input v-model="form.server_address" class="aw-input mt-1 w-full font-mono" maxlength="253" placeholder="proxy.example.com" /></label>
-        <label>部署协议<select v-model="protocol" class="aw-input mt-1 w-full"><option v-for="item in deployProtocolOptions" :key="item.value" :value="item.value">{{ item.label }}</option></select></label>
-        <label>监听端口<input v-model.number="form.listen_port" class="aw-input mt-1 w-full font-mono" type="number" min="1" max="65535" /></label>
+        <label
+          >客户端连接地址<input
+            v-model="form.server_address"
+            class="aw-input mt-1 w-full font-mono"
+            maxlength="253"
+            placeholder="proxy.example.com"
+        /></label>
+        <label
+          >部署协议<select v-model="protocol" class="aw-input mt-1 w-full">
+            <option
+              v-for="item in deployProtocolOptions"
+              :key="item.value"
+              :value="item.value"
+            >
+              {{ item.label }}
+            </option>
+          </select></label
+        >
+        <label
+          >监听端口<input
+            v-model.number="form.listen_port"
+            class="aw-input mt-1 w-full font-mono"
+            type="number"
+            min="1"
+            max="65535"
+        /></label>
         <label>
           {{ protocolMeta.parameterLabel }}
-          <input v-if="protocolMeta.tlsMode === 'reality'" v-model="form.reality_server_name" class="aw-input mt-1 w-full font-mono" maxlength="253" />
-          <input v-else-if="protocolMeta.tlsMode === 'acme'" v-model="form.tls_server_name" class="aw-input mt-1 w-full font-mono" maxlength="253" placeholder="proxy.example.com" />
-          <input v-else class="aw-input mt-1 w-full font-mono" value="2022-blake3-aes-128-gcm" disabled />
+          <input
+            v-if="protocolMeta.tlsMode === 'reality'"
+            v-model="form.reality_server_name"
+            class="aw-input mt-1 w-full font-mono"
+            maxlength="253"
+          />
+          <input
+            v-else-if="protocolMeta.tlsMode === 'acme'"
+            v-model="form.tls_server_name"
+            class="aw-input mt-1 w-full font-mono"
+            maxlength="253"
+            placeholder="proxy.example.com"
+          />
+          <input
+            v-else
+            class="aw-input mt-1 w-full font-mono"
+            value="2022-blake3-aes-128-gcm"
+            disabled
+          />
         </label>
-        <label>{{ protocolMeta.credentialLabel }}<div class="generated-field mt-1">{{ protocolMeta.generatedLabel }}</div></label>
+        <label
+          >{{ protocolMeta.credentialLabel }}
+          <div class="generated-field mt-1">
+            {{ protocolMeta.generatedLabel }}
+          </div></label
+        >
       </div>
       <div class="protocol-reference">
-        <div class="reference-title"><BookOpen :size="16" /><span>配置参考</span></div>
+        <div class="reference-title">
+          <BookOpen :size="16" /><span>配置参考</span>
+        </div>
         <ul>
           <li>传输协议：{{ protocolMeta.network }}</li>
           <li>请放行监听端口 {{ form.listen_port }}</li>
-          <li v-for="item in protocolMeta.references" :key="item">{{ item }}</li>
+          <li v-for="item in protocolMeta.references" :key="item">
+            {{ item }}
+          </li>
         </ul>
         <label v-if="protocolMeta.tlsMode === 'acme'" class="acme-email-field">
           ACME 联系邮箱（可选）
-          <input v-model="form.acme_email" class="aw-input ml-2 min-w-0 flex-1 font-mono" type="email" placeholder="ops@example.com" />
+          <input
+            v-model="form.acme_email"
+            class="aw-input ml-2 min-w-0 flex-1 font-mono"
+            type="email"
+            placeholder="ops@example.com"
+          />
         </label>
       </div>
       <div class="wizard-actions">
         <p>{{ protocolStepHint }}</p>
         <Button @click="previousStep">上一步</Button>
-        <Button variant="primary" :disabled="!deploymentReady" @click="nextStep">下一步：校验并部署</Button>
+        <Button variant="primary" :disabled="!deploymentReady" @click="nextStep"
+          >下一步：校验并部署</Button
+        >
       </div>
     </section>
 
@@ -353,28 +455,89 @@ async function copy(value: string, label: string) {
         </div>
       </header>
       <div class="check-grid">
-        <div class="check-item" :class="{ 'check-passed': environmentReady }"><CheckCircle2 :size="20" /><div><strong>设备信息读取</strong><small>{{ environmentReady ? '通过' : '待检测' }}</small></div></div>
-        <div class="check-item" :class="{ 'check-passed': addressValid }"><CheckCircle2 :size="20" /><div><strong>连接地址格式</strong><small>{{ addressValid ? '通过' : '待完善' }}</small></div></div>
-        <div class="check-item" :class="{ 'check-passed': portValid }"><CheckCircle2 :size="20" /><div><strong>监听端口参数</strong><small>{{ portValid ? '通过' : '待完善' }}</small></div></div>
-        <div class="check-item" :class="{ 'check-passed': protocolValid }"><CheckCircle2 :size="20" /><div><strong>协议参数</strong><small>{{ protocolValid ? '通过' : '待完善' }}</small></div></div>
+        <div class="check-item" :class="{ 'check-passed': environmentReady }">
+          <CheckCircle2 :size="20" />
+          <div>
+            <strong>设备信息读取</strong
+            ><small>{{ environmentReady ? "通过" : "待检测" }}</small>
+          </div>
+        </div>
+        <div class="check-item" :class="{ 'check-passed': addressValid }">
+          <CheckCircle2 :size="20" />
+          <div>
+            <strong>连接地址格式</strong
+            ><small>{{ addressValid ? "通过" : "待完善" }}</small>
+          </div>
+        </div>
+        <div class="check-item" :class="{ 'check-passed': portValid }">
+          <CheckCircle2 :size="20" />
+          <div>
+            <strong>监听端口参数</strong
+            ><small>{{ portValid ? "通过" : "待完善" }}</small>
+          </div>
+        </div>
+        <div class="check-item" :class="{ 'check-passed': protocolValid }">
+          <CheckCircle2 :size="20" />
+          <div>
+            <strong>协议参数</strong
+            ><small>{{ protocolValid ? "通过" : "待完善" }}</small>
+          </div>
+        </div>
       </div>
       <div class="deploy-actions">
         <div class="min-w-0 flex-1 space-y-3">
           <label class="switch-row">
-            <input v-model="form.replace_existing_config" type="checkbox" :disabled="deploying" />
+            <input
+              v-model="form.replace_existing_config"
+              type="checkbox"
+              :disabled="deploying"
+            />
             <span class="switch-track"><span /></span>
-            <span><strong>允许备份并覆盖未知配置</strong><small>Ackwrap 管理的配置始终自动备份；未知或被修改的配置默认拒绝覆盖</small></span>
+            <span
+              ><strong>允许备份并覆盖未知配置</strong
+              ><small
+                >Ackwrap
+                管理的配置始终自动备份；未知或被修改的配置默认拒绝覆盖</small
+              ></span
+            >
           </label>
           <label v-if="installedVersion" class="confirm-row">
-            <input v-model="regenerateConfirmed" type="checkbox" :disabled="deploying" />
+            <input
+              v-model="regenerateConfirmed"
+              type="checkbox"
+              :disabled="deploying"
+            />
             <span>我了解重新部署会生成新凭据，并使上次连接信息失效</span>
           </label>
         </div>
         <div class="flex flex-wrap justify-end gap-2">
-          <Button :disabled="deploying || Boolean(result)" @click="previousStep">上一步</Button>
-          <Button class="deploy-button" variant="primary" size="lg" :disabled="deploying || !deploymentReady || (Boolean(installedVersion) && !regenerateConfirmed)" @click="deploy">
-            <template #icon><LoaderCircle v-if="deploying" :size="16" class="animate-spin" /><Rocket v-else :size="16" /></template>
-            {{ deploying ? '正在校验并启动...' : installedVersion ? '校验并重新部署' : '校验并部署到生产' }}
+          <Button :disabled="deploying || Boolean(result)" @click="previousStep"
+            >上一步</Button
+          >
+          <Button
+            class="deploy-button"
+            variant="primary"
+            size="lg"
+            :disabled="
+              deploying ||
+              !deploymentReady ||
+              (Boolean(installedVersion) && !regenerateConfirmed)
+            "
+            @click="deploy"
+          >
+            <template #icon
+              ><LoaderCircle
+                v-if="deploying"
+                :size="16"
+                class="animate-spin" /><Rocket v-else :size="16"
+            /></template>
+            {{
+              deploying
+                ? "正在校验并启动..."
+                : installedVersion
+                  ? "校验并重新部署"
+                  : "校验并部署到生产"
+            }}
           </Button>
         </div>
       </div>
@@ -385,38 +548,94 @@ async function copy(value: string, label: string) {
           <h4 class="text-sm font-semibold">节点与客户端配置</h4>
           <StatusBadge status="online" label="部署成功" size="sm" />
         </div>
-        <p class="text-xs leading-5 text-[var(--text-tertiary)]">连接秘密不会保存到 Ackwrap 数据库。关闭弹窗前请复制分享链接或完整客户端配置。</p>
-        <article v-for="node in result.nodes" :key="node.type" class="result-card">
+        <p class="text-xs leading-5 text-[var(--text-tertiary)]">
+          连接秘密不会保存到 Ackwrap
+          数据库。关闭弹窗前请复制分享链接或完整客户端配置。
+        </p>
+        <article
+          v-for="node in result.nodes"
+          :key="node.type"
+          class="result-card"
+        >
           <div class="min-w-0 flex-1">
-            <div class="flex flex-wrap items-center gap-2"><strong class="text-sm">{{ node.name }}</strong><span class="font-mono text-[10px] text-[var(--text-tertiary)]">{{ node.network }} · :{{ node.listen_port }}</span></div>
-            <p class="mt-1 text-[10px] text-[var(--text-secondary)]">连接信息已生成并通过 sing-box 校验</p>
+            <div class="flex flex-wrap items-center gap-2">
+              <strong class="text-sm">{{ node.name }}</strong
+              ><span class="font-mono text-[10px] text-[var(--text-tertiary)]"
+                >{{ node.network }} · :{{ node.listen_port }}</span
+              >
+            </div>
+            <p class="mt-1 text-[10px] text-[var(--text-secondary)]">
+              连接信息已生成并通过 sing-box 校验
+            </p>
           </div>
-          <Button size="sm" variant="ghost" @click="copy(node.share_uri, `${node.name} 分享链接`)"><template #icon><Clipboard :size="13" /></template>复制链接</Button>
-          <Button size="sm" variant="ghost" @click="copy(JSON.stringify(node.client_outbound, null, 2), `${node.name} 出站配置`)"><template #icon><ExternalLink :size="13" /></template>复制出站</Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            @click="copy(node.share_uri, `${node.name} 分享链接`)"
+            ><template #icon><Clipboard :size="13" /></template>复制链接</Button
+          >
+          <Button
+            size="sm"
+            variant="ghost"
+            @click="
+              copy(
+                JSON.stringify(node.client_outbound, null, 2),
+                `${node.name} 出站配置`,
+              )
+            "
+            ><template #icon><ExternalLink :size="13" /></template
+            >复制出站</Button
+          >
         </article>
         <details class="result-config">
           <summary>查看完整 sing-box 客户端配置</summary>
-          <div><pre>{{ clientConfigText }}</pre><Button class="mt-3" size="sm" @click="copy(clientConfigText, '完整客户端配置')"><template #icon><Clipboard :size="13" /></template>复制完整配置</Button></div>
+          <div>
+            <pre>{{ clientConfigText }}</pre>
+            <Button
+              class="mt-3"
+              size="sm"
+              @click="copy(clientConfigText, '完整客户端配置')"
+              ><template #icon><Clipboard :size="13" /></template
+              >复制完整配置</Button
+            >
+          </div>
         </details>
-        <p class="text-[10px] text-[var(--text-tertiary)]">远端配置：{{ result.config_path }}<template v-if="result.backup_path"> · 原配置备份：{{ result.backup_path }}</template></p>
+        <p class="text-[10px] text-[var(--text-tertiary)]">
+          远端配置：{{ result.config_path
+          }}<template v-if="result.backup_path">
+            · 原配置备份：{{ result.backup_path }}</template
+          >
+        </p>
       </div>
     </section>
 
-    <p class="mt-3 flex items-start gap-2 text-[11px] leading-5 text-[var(--text-tertiary)]">
+    <p
+      class="mt-3 flex items-start gap-2 text-[11px] leading-5 text-[var(--text-tertiary)]"
+    >
       <Info :size="14" class="mt-0.5 shrink-0" />
-      实际耗时取决于远端 APT 与证书签发速度；ACME 协议需将域名解析到该服务器并放行 TCP 80。系统不会自动修改 DNS 或防火墙。
+      实际耗时取决于远端 APT 与证书签发速度；ACME
+      协议需将域名解析到该服务器并放行 TCP 80。系统不会自动修改 DNS 或防火墙。
     </p>
 
-    <p v-if="deployError" role="alert" class="mt-4 rounded-[var(--radius-md)] bg-[var(--color-error-bg)] p-3 text-xs text-[var(--color-error)]">
+    <p
+      v-if="deployError"
+      role="alert"
+      class="mt-4 rounded-[var(--radius-md)] bg-[var(--color-error-bg)] p-3 text-xs text-[var(--color-error)]"
+    >
       {{ deployError }}
     </p>
     <p
       v-if="notice"
       aria-live="polite"
       class="mt-4 rounded-[var(--radius-md)] p-3 text-xs"
-      :class="noticeError ? 'bg-[var(--color-error-bg)] text-[var(--color-error)]' : 'bg-[var(--color-success-bg)] text-[var(--color-success)]'"
-    >{{ notice }}</p>
-
+      :class="
+        noticeError
+          ? 'bg-[var(--color-error-bg)] text-[var(--color-error)]'
+          : 'bg-[var(--color-success-bg)] text-[var(--color-success)]'
+      "
+    >
+      {{ notice }}
+    </p>
   </section>
 </template>
 
@@ -670,7 +889,9 @@ async function copy(value: string, label: string) {
   height: 0.9rem;
   border-radius: 999px;
   background: var(--text-secondary);
-  transition: transform 160ms ease, background 160ms ease;
+  transition:
+    transform 160ms ease,
+    background 160ms ease;
 }
 .switch-row > input:checked + .switch-track {
   background: var(--color-primary);
