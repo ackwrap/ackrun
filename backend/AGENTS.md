@@ -80,6 +80,9 @@ are defined by the source. Read only the implementation relevant to the task.
 - Preserve process and enabled-node direct bypass rules ahead of user rules,
   with process lookup enabled, to prevent TUN/global proxy loops. Match node
   domains as `domain`, IPv4 as `/32` and IPv6 as `/128`; never log the addresses.
+- Device source policies take precedence over node/process bypasses, including
+  DNS and ICMP. While device policies are active, do not add node IPs to global
+  TUN destination exclusions; ordinary sources use the pre-match bypass instead.
 - Diagnose `unknown outbound type` against the actual binary version/build tags,
   wrapper patch stack, upstream `constant/`, `option/`, `include/` registration
   and Ackwrap's generator/tests. Core support and standalone node support differ.
