@@ -5,6 +5,7 @@ import { writeClipboardText } from "@/utils/clipboard";
 import { vSpotlight } from "@/directives/spotlight";
 import CardTexture from "@/components/ui/CardTexture.vue";
 import FlagText from "@/components/ui/FlagText.vue";
+import AnimatedMetric from "@/components/ui/AnimatedMetric.vue";
 import {
   createIPDetailsLookup,
   normalizeIP,
@@ -119,14 +120,15 @@ const lookupIPDetails = createIPDetailsLookup(async (url) => {
   return JSON.parse(response.body);
 });
 async function enrichIP(item: IPProbe) {
+  const value = item.value;
   try {
-    const details = await lookupIPDetails(item.value);
-    if (cancelled || !ips.value.includes(item)) return;
-    item.details = details;
-    item.detailsState = details ? "ready" : "unavailable";
+    const details = await lookupIPDetails(value);
+    if (cancelled || item.value !== value) return;
+    if (details) item.details = details;
+    item.detailsState = item.details ? "ready" : "unavailable";
   } catch {
-    if (!cancelled && ips.value.includes(item))
-      item.detailsState = "unavailable";
+    if (!cancelled && item.value === value)
+      item.detailsState = item.details ? "ready" : "unavailable";
   }
 }
 function ipTitle(item: IPProbe) {
@@ -140,36 +142,30 @@ async function refreshIPs() {
   if (refreshingIPs.value || cancelled) return;
   clearTimeout(ipTimer);
   refreshingIPs.value = true;
-  const nextIPs = await Promise.all(
-    sources.map(async (source): Promise<IPProbe> => {
+  await Promise.all(
+    sources.map(async (source, index) => {
+      const item = ips.value[index]!;
       try {
         const response = await timedFetch(source.url);
         if (!response.ok) throw Error("request failed");
-        const value = String(source.parse(response.body)).trim();
-        if (!normalizeIP(value)) throw Error("invalid response");
-        return {
-          label: source.label,
-          value,
-          error: "",
-          details: null,
-          detailsState: "checking",
-        };
+        const value = normalizeIP(String(source.parse(response.body)));
+        if (!value) throw Error("invalid response");
+        if (cancelled) return;
+        if (item.value !== value) item.details = null;
+        item.value = value;
+        item.error = "";
+        if (!item.details) item.detailsState = "checking";
+        void enrichIP(item);
       } catch (error: any) {
-        return {
-          label: source.label,
-          value: "",
-          error: error?.name === "AbortError" ? "请求超时" : "获取失败",
-          details: null,
-          detailsState: "idle",
-        };
+        if (cancelled) return;
+        item.value = "";
+        item.error = error?.name === "AbortError" ? "请求超时" : "获取失败";
+        item.details = null;
+        item.detailsState = "idle";
       }
     }),
   );
   if (cancelled) return;
-  ips.value = nextIPs;
-  for (const item of ips.value) {
-    if (item.value) void enrichIP(item);
-  }
   refreshingIPs.value = false;
   ipTimer = window.setTimeout(refreshIPs, 60000);
 }
@@ -177,32 +173,26 @@ async function refreshAccess() {
   if (refreshingAccess.value || cancelled) return;
   clearTimeout(accessTimer);
   refreshingAccess.value = true;
-  access.value = targets.map(({ label, icon }) => ({
-    label,
-    icon,
-    latency: 0,
-    status: "checking",
-  }));
-  const nextAccess = await Promise.all(
-    targets.map(async ({ label, url, icon }) => {
+  await Promise.all(
+    targets.map(async ({ url }, index) => {
+      const item = access.value[index]!;
       const startedAt = performance.now();
       try {
         await timedFetch(url, { mode: "no-cors" });
-        return {
-          label,
-          icon,
-          latency: Math.max(1, Math.round(performance.now() - startedAt)),
-          status: "online" as const,
-        };
+        if (cancelled) return;
+        item.latency = Math.max(1, Math.round(performance.now() - startedAt));
+        item.status = "online";
       } catch {
-        return { label, icon, latency: 0, status: "offline" as const };
+        if (!cancelled) item.status = "offline";
       }
     }),
   );
   if (cancelled) return;
-  access.value = nextAccess;
   refreshingAccess.value = false;
   accessTimer = window.setTimeout(refreshAccess, 60000);
+}
+function formatLatency(value: number) {
+  return `${Math.round(value)} ms`;
 }
 async function copyIP(item: { label: string; value: string }) {
   if (!item.value) return;
@@ -326,6 +316,7 @@ onBeforeUnmount(() => {
           <span class="truncate">{{ item.label }}</span>
         </span>
         <span
+          class="min-w-[7ch] whitespace-nowrap text-right tabular-nums transition-colors duration-200"
           :class="
             item.status === 'online'
               ? 'text-[var(--color-success)]'
@@ -333,14 +324,16 @@ onBeforeUnmount(() => {
                 ? 'text-[var(--color-warning)]'
                 : 'text-[var(--text-tertiary)]'
           "
-          >{{
-            item.status === "online"
-              ? `${item.latency} ms`
-              : item.status === "offline"
-                ? "连接失败"
-                : "检查中…"
-          }}</span
         >
+          <AnimatedMetric
+            v-if="item.status === 'online'"
+            :value="item.latency"
+            :format="formatLatency"
+          />
+          <template v-else>{{
+            item.status === "offline" ? "连接失败" : "检查中…"
+          }}</template>
+        </span>
       </div>
     </div>
     <p class="mt-3 text-xs leading-5 text-[var(--text-tertiary)]">
