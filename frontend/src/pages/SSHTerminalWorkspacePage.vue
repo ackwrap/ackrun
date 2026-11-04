@@ -272,7 +272,6 @@ onBeforeUnmount(() => {
           <PanelLeft :size="12" />
         </div>
         <SSHTerminalPane
-          class="pb-4"
           :session="session"
           @status="updateTerminalStatus"
           @closed="terminalStatus = 'offline'"
