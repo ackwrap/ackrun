@@ -19,9 +19,12 @@ import (
 )
 
 func (svc *SSHHostService) ReadMCPFile(ctx context.Context, request model.SSHMCPFileRequest, action string) (any, error) {
-	remote, err := normalizeSFTPPath(request.Path, action == "list_dir" || action == "stat")
+	remote, err := normalizeMCPPath(request.HostID, request.Path, action == "list_dir" || action == "stat")
 	if err != nil {
 		return nil, err
+	}
+	if request.HostID == SSHMCPLocalHostID {
+		return svc.readMCPLocalFile(ctx, request, remote, action)
 	}
 	var result any
 	err = svc.withMCPHost(ctx, request.HostID, 60*time.Second, action, func(ctx context.Context, client *ssh.Client) error {
@@ -90,7 +93,7 @@ func mcpFileInfo(info os.FileInfo) map[string]any {
 }
 
 func (svc *SSHHostService) WriteMCPFile(ctx context.Context, request model.SSHMCPWriteRequest, binary bool) error {
-	remote, err := normalizeSFTPPath(request.Path, false)
+	remote, err := normalizeMCPPath(request.HostID, request.Path, false)
 	if err != nil {
 		return err
 	}
@@ -106,6 +109,12 @@ func (svc *SSHHostService) WriteMCPFile(ctx context.Context, request model.SSHMC
 	}
 	if len(content) > sshMCPMaxContent {
 		return sshError("SSH_MCP_FILE_LIMIT", "MCP 单次文件传输最大为 1 MiB", nil)
+	}
+	if request.HostID == SSHMCPLocalHostID {
+		_, err := svc.uploadMCPLocal(ctx, model.SSHMCPTransferRequest{HostID: request.HostID, Path: remote, Overwrite: request.Overwrite}, remote, func(context.Context) (io.ReadCloser, int64, error) {
+			return io.NopCloser(strings.NewReader(string(content))), int64(len(content)), nil
+		})
+		return err
 	}
 	return svc.withMCPHost(ctx, request.HostID, 60*time.Second, "write_file", func(_ context.Context, client *ssh.Client) error {
 		files, err := sftp.NewClient(client)

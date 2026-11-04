@@ -10,6 +10,7 @@ import { errorMessage } from "../advanced/advancedUi";
 
 const settings = ref<SSHMCPSettings | null>(null);
 const enabled = ref(false);
+const localEnabled = ref(false);
 const loading = ref(true);
 const saving = ref(false);
 const newToken = ref("");
@@ -57,6 +58,7 @@ async function load() {
   try {
     settings.value = await sshMcpApi.getSettings();
     enabled.value = settings.value.enabled;
+    localEnabled.value = settings.value.local_enabled;
     endpoint.value = new URL(
       settings.value.endpoint_path,
       window.location.origin,
@@ -82,6 +84,7 @@ async function save(generate = false) {
   try {
     const result = await sshMcpApi.updateSettings({
       enabled: enabled.value,
+      local_enabled: localEnabled.value,
       token: generate ? undefined : newToken.value || undefined,
       generate_token:
         generate ||
@@ -135,7 +138,8 @@ onMounted(load);
           <div>
             <h3 class="font-semibold">SSH MCP 服务</h3>
             <p class="mt-2 text-sm text-[var(--text-secondary)]">
-              让 LAN 内的 AI 客户端通过 HTTP 操作这里保存的 SSH 主机。
+              让 LAN 内的 AI 客户端通过 HTTP 操作 SSH 主机或运行 AckWrap
+              的本机。
             </p>
           </div>
           <span
@@ -154,6 +158,24 @@ onMounted(load);
             />
             启用 HTTP MCP
           </label>
+          <div>
+            <label
+              class="inline-flex cursor-pointer items-center gap-3 text-sm"
+            >
+              <input
+                v-model="localEnabled"
+                :disabled="saving"
+                type="checkbox"
+                class="h-4 w-4 accent-[var(--color-primary)]"
+              />
+              允许 MCP 操作本机
+            </label>
+            <p class="mt-2 text-xs text-[var(--text-secondary)]">
+              本机指运行 AckWrap 的设备。以 AckWrap
+              进程用户执行命令和读写文件，无需 SSH；启用后在 MCP
+              主机列表中显示“本机”。
+            </p>
+          </div>
           <div
             class="flex items-start gap-2 rounded-lg bg-[var(--bg-elevated)] p-3 text-xs leading-6 text-[var(--text-secondary)]"
           >
@@ -269,7 +291,7 @@ onMounted(load);
             </p>
           </div>
           <div>
-            <p class="font-medium">远程命令</p>
+            <p class="font-medium">命令执行</p>
             <p class="mt-1 text-xs leading-6 text-[var(--text-secondary)]">
               单台或批量执行，返回输出与退出码，支持超时设置。
             </p>
@@ -277,8 +299,9 @@ onMounted(load);
           <div>
             <p class="font-medium">文件操作</p>
             <p class="mt-1 text-xs leading-6 text-[var(--text-secondary)]">
-              大文件通过 HTTP 与 SFTP 流式上传下载，也可从公网 URL
-              直接上传；私网和本机地址会被拒绝。内联文本读写上限 1 MiB。
+              大文件通过 HTTP 流式上传下载，远程主机使用
+              SFTP，本机直接读写文件。 source_url
+              仅接受公网来源；内联文本读写上限 1 MiB。
             </p>
           </div>
         </div>

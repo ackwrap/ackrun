@@ -358,7 +358,7 @@ func writeSSHError(c *gin.Context, err error) {
 		status = http.StatusUnauthorized
 	case "SSH_MCP_UPLOAD_EXPIRED":
 		status = http.StatusGone
-	case "SSH_MCP_DISABLED":
+	case "SSH_MCP_DISABLED", "SSH_MCP_LOCAL_DISABLED":
 		status = http.StatusForbidden
 	case "SSH_SFTP_PERMISSION_DENIED":
 		status = http.StatusForbidden

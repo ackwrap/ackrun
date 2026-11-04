@@ -34,7 +34,7 @@ func (svc *SSHMCPService) Settings() (*model.SSHMCPSettings, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &model.SSHMCPSettings{Enabled: cfg.Enabled, TokenConfigured: cfg.TokenHash != "", EndpointPath: SSHMCPEndpoint}, nil
+	return &model.SSHMCPSettings{Enabled: cfg.Enabled, LocalEnabled: cfg.LocalEnabled, TokenConfigured: cfg.TokenHash != "", EndpointPath: SSHMCPEndpoint}, nil
 }
 
 func (svc *SSHMCPService) UpdateSettings(request model.SSHMCPSettingsRequest) (*model.SSHMCPSettings, error) {
@@ -66,14 +66,24 @@ func (svc *SSHMCPService) UpdateSettings(request model.SSHMCPSettingsRequest) (*
 		return nil, errors.New("启用 MCP 前请生成或设置 Token")
 	}
 	cfg.Enabled = request.Enabled
+	localDisabled := cfg.LocalEnabled && request.LocalEnabled != nil && !*request.LocalEnabled
+	if request.LocalEnabled != nil {
+		cfg.LocalEnabled = *request.LocalEnabled
+	}
 	if err := svc.store.SetSSHMCPConfig(cfg); err != nil {
 		return nil, err
 	}
 	if !cfg.Enabled || token != "" {
 		clear(svc.uploads)
+	} else if localDisabled {
+		for id, grant := range svc.uploads {
+			if grant.request.HostID == SSHMCPLocalHostID {
+				delete(svc.uploads, id)
+			}
+		}
 	}
-	logging.Info("ssh_mcp.settings", "更新 SSH MCP 配置: enabled=%t token_changed=%t", cfg.Enabled, token != "")
-	return &model.SSHMCPSettings{Enabled: cfg.Enabled, TokenConfigured: cfg.TokenHash != "", EndpointPath: SSHMCPEndpoint, Token: token}, nil
+	logging.Info("ssh_mcp.settings", "更新 SSH MCP 配置: enabled=%t local_enabled=%t token_changed=%t", cfg.Enabled, cfg.LocalEnabled, token != "")
+	return &model.SSHMCPSettings{Enabled: cfg.Enabled, LocalEnabled: cfg.LocalEnabled, TokenConfigured: cfg.TokenHash != "", EndpointPath: SSHMCPEndpoint, Token: token}, nil
 }
 
 func (svc *SSHMCPService) Authenticate(token string) (enabled, authenticated bool, err error) {

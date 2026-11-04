@@ -8,8 +8,9 @@ import (
 )
 
 type SSHMCPConfig struct {
-	Enabled   bool   `json:"enabled"`
-	TokenHash string `json:"token_hash"`
+	Enabled      bool   `json:"enabled"`
+	LocalEnabled bool   `json:"local_enabled"`
+	TokenHash    string `json:"token_hash"`
 }
 
 func (s *Store) GetSSHMCPConfig() (SSHMCPConfig, error) {
