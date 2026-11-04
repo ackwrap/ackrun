@@ -18,7 +18,7 @@ import (
 
 const (
 	sshSFTPDefaultPacket = 32 << 10
-	sshSFTPMaxPacket     = 256 << 10 // Bound memory on router-class devices.
+	sshSFTPMaxPacket     = 1 << 20 // Probe downward; keep uploads within the 2 MiB window.
 	sshSFTPWindowBytes   = 2 << 20
 	sshSFTPProbeTimeout  = 60 * time.Second
 )
@@ -73,7 +73,7 @@ func (svc *SSHHostService) scheduleSFTPProbe(hostID int64, previous string) {
 			}
 			svc.sessionMu.Unlock()
 		}()
-		logging.Info("ssh_sftp.probe", "开始 SFTP 分片探测: host_id=%d", hostID)
+		logging.Info("ssh_sftp.probe", "开始 SFTP 分片探测: host_id=%d start_packet_bytes=%d", hostID, sshSFTPMaxPacket)
 		size, probeErr := svc.probeSFTPPacket(ctx, hostID)
 		status := "ready"
 		if probeErr != nil {
@@ -238,24 +238,73 @@ func (svc *SSHHostService) probeSFTPPacket(ctx context.Context, hostID int64) (i
 			return file.Close()
 		})
 	}
-	good := min(sshSFTPDefaultPacket, limit)
-	if err := try(good); err != nil {
-		return 0, err
+	return probeSFTPWriteSize(ctx, limit, try)
+}
+
+func probeSFTPWriteSize(ctx context.Context, advertisedLimit int, try func(int) error) (int, error) {
+	good, bad := 0, sshSFTPMaxPacket+1
+	floor := min(sshSFTPDefaultPacket, advertisedLimit)
+	check := func(size int) (bool, error) {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		err := try(size)
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		if errors.Is(err, os.ErrPermission) || errors.Is(err, os.ErrNotExist) {
+			return false, err
+		}
+		var serviceErr *SSHServiceError
+		if errors.As(err, &serviceErr) && serviceErr.Code != "SSH_SFTP_PROBE_FAILED" {
+			return false, err
+		}
+		// An oversized WRITE can return generic SSH_FX_FAILURE rather than
+		// closing the channel. It still needs a smaller candidate; upload-error
+		// retry classification cannot distinguish that probe response.
+		return err == nil, nil
 	}
-	bad := limit + 1
-	for good < limit {
-		candidate := min(good*2, limit)
-		if err := try(candidate); err != nil {
-			bad = candidate
+	// Always verify 1 MiB first, then halve on independent connections until a
+	// candidate succeeds within the advertised limit. The advertised limit must
+	// not skip the initial 1 MiB WRITE or persist an unverified packet size.
+	for candidate := sshSFTPMaxPacket; ; candidate = max(floor, candidate/2) {
+		ok, err := check(candidate)
+		if err != nil {
+			return 0, err
+		}
+		if ok && candidate <= advertisedLimit {
+			good = candidate
 			break
 		}
-		good = candidate
+		if candidate == floor {
+			return 0, errors.New("SFTP rejected the compatible probe size")
+		}
+		if !ok {
+			bad = candidate
+		}
+	}
+	bad = min(bad, advertisedLimit+1)
+	// Confirm a useful advertised boundary directly (for example 255 KiB).
+	// Servers without this extension still use the measured success/rejection.
+	if advertisedLimit > good && advertisedLimit < bad {
+		ok, err := check(advertisedLimit)
+		if err != nil {
+			return 0, err
+		}
+		bad = advertisedLimit
+		if ok {
+			good, bad = advertisedLimit, advertisedLimit+1
+		}
 	}
 	// Refine between the last success and first rejection to 4 KiB. Do not
 	// claim an untested protocol maximum or a throughput benchmark.
 	for bad-good > 4<<10 {
 		candidate := (good + bad) / 2
-		if err := try(candidate); err != nil {
+		ok, err := check(candidate)
+		if err != nil {
+			return 0, err
+		}
+		if !ok {
 			bad = candidate
 		} else {
 			good = candidate

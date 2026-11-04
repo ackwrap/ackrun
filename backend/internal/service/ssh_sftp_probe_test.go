@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -47,6 +48,7 @@ func waitTestSFTPProbe(t *testing.T, svc *SSHHostService, hostID int64) *model.S
 // change its limit between uploads. All addresses and data are synthetic.
 type testSFTPLimits struct {
 	writeLimit atomic.Int64
+	firstWrite atomic.Int64
 	maxWrite   atomic.Int64
 	writes     atomic.Int64
 	advertise  bool
@@ -68,7 +70,7 @@ func (c *limitedTestSFTPChannel) Read(data []byte) (int, error) {
 		if err := binary.Read(c.Channel, binary.BigEndian, &size); err != nil {
 			return 0, err
 		}
-		if size < 1 || size > 1<<20 {
+		if size < 1 || size > sshSFTPMaxPacket+1024 {
 			return 0, io.ErrUnexpectedEOF
 		}
 		packet := make([]byte, size)
@@ -111,6 +113,7 @@ func (c *limitedTestSFTPChannel) Read(data []byte) (int, error) {
 				return 0, err
 			}
 			n := int64(len(write.Data))
+			c.limits.firstWrite.CompareAndSwap(0, n)
 			c.limits.writes.Add(1)
 			for previous := c.limits.maxWrite.Load(); n > previous; previous = c.limits.maxWrite.Load() {
 				if c.limits.maxWrite.CompareAndSwap(previous, n) {
@@ -173,12 +176,98 @@ func assertNoSFTPProbeFiles(t *testing.T, root string) {
 	}
 }
 
+func TestSSHSFTPProbeStartsAtOneMiBAndDescends(t *testing.T) {
+	for _, tc := range []struct {
+		name                    string
+		advertised, limit, want int
+		prefix                  []int
+	}{
+		{"one_mib", 1 << 20, 1 << 20, 1 << 20, []int{1 << 20}},
+		{"advertised_cap", 128 << 10, 1 << 20, 128 << 10, []int{1 << 20, 512 << 10, 256 << 10, 128 << 10}},
+		{"half_mib", 1 << 20, 512 << 10, 512 << 10, []int{1 << 20, 512 << 10}},
+		{"refined_boundary", 1 << 20, 384 << 10, 384 << 10, []int{1 << 20, 512 << 10, 256 << 10}},
+		{"advertised_boundary", 255 << 10, 255 << 10, 255 << 10, []int{1 << 20, 512 << 10, 256 << 10, 128 << 10, 255 << 10}},
+		{"unadvertised_boundary", 1 << 20, 96 << 10, 96 << 10, []int{1 << 20, 512 << 10, 256 << 10, 128 << 10, 64 << 10}},
+		{"below_default", 16 << 10, 16 << 10, 16 << 10, []int{1 << 20, 512 << 10, 256 << 10, 128 << 10, 64 << 10, 32 << 10, 16 << 10}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var attempts []int
+			got, err := probeSFTPWriteSize(context.Background(), tc.advertised, func(size int) error {
+				attempts = append(attempts, size)
+				if size > tc.limit {
+					return io.EOF
+				}
+				return nil
+			})
+			if err != nil || got != tc.want {
+				t.Fatalf("size=%d want=%d err=%v attempts=%v", got, tc.want, err, attempts)
+			}
+			if len(attempts) < len(tc.prefix) || !slices.Equal(attempts[:len(tc.prefix)], tc.prefix) {
+				t.Fatalf("did not descend from 1 MiB: %v", attempts)
+			}
+		})
+	}
+}
+
+func TestSSHSFTPProbeStopsOnCancellationOrUnrelatedFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	attempts := 0
+	if _, err := probeSFTPWriteSize(ctx, 1<<20, func(int) error {
+		attempts++
+		cancel()
+		return io.EOF
+	}); !errors.Is(err, context.Canceled) || attempts != 1 {
+		t.Fatalf("cancellation continued probing: attempts=%d err=%v", attempts, err)
+	}
+	attempts = 0
+	if _, err := probeSFTPWriteSize(context.Background(), 1<<20, func(int) error {
+		attempts++
+		return os.ErrPermission
+	}); !errors.Is(err, os.ErrPermission) || attempts != 1 {
+		t.Fatalf("permission failure continued probing: attempts=%d err=%v", attempts, err)
+	}
+	var sizes []int
+	if _, err := probeSFTPWriteSize(context.Background(), 1<<20, func(size int) error {
+		sizes = append(sizes, size)
+		return io.EOF
+	}); err == nil || !slices.Equal(sizes, []int{1 << 20, 512 << 10, 256 << 10, 128 << 10, 64 << 10, 32 << 10}) {
+		t.Fatalf("failed compatibility probe did not stop: sizes=%v err=%v", sizes, err)
+	}
+}
+
+func TestSSHSFTPProbeDescendsAfterGenericWriteRejection(t *testing.T) {
+	got, err := probeSFTPWriteSize(context.Background(), 1<<20, func(size int) error {
+		if size > 64<<10 {
+			return &sftp.StatusError{Code: 4}
+		}
+		return nil
+	})
+	if err != nil || got != 64<<10 {
+		t.Fatalf("generic write rejection stopped descending: size=%d err=%v", got, err)
+	}
+}
+
+func TestSSHSFTPProbeReusesOneMiBProfileWithBoundedWindow(t *testing.T) {
+	svc, hostID, _ := newMCPTransferFixture(t)
+	profile := waitTestSFTPProbe(t, svc, hostID)
+	if err := svc.store.FinishSSHSFTPProbe(hostID, profile.Generation, 1<<20, "ready"); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		got, size, concurrency, err := svc.sftpUploadProfile(hostID)
+		if err != nil || got == nil || got.Generation != profile.Generation || size != 1<<20 || concurrency != 2 {
+			t.Fatalf("large profile was not reused: size=%d concurrency=%d err=%v", size, concurrency, err)
+		}
+	}
+}
+
 func TestSSHSFTPProbeTrustPersistenceAndReuse(t *testing.T) {
 	limits := &testSFTPLimits{advertise: true, writeMax: 128 << 10, packetMax: 256 << 10}
 	limits.writeLimit.Store(128 << 10)
 	svc, hostID, root, server := newLimitedSFTPFixture(t, limits)
 	p := waitTestSFTPProbe(t, svc, hostID)
-	if p.Status != "ready" || p.PacketSize != 128<<10 || limits.maxWrite.Load() != 128<<10 {
+	if p.Status != "ready" || p.PacketSize != 128<<10 || limits.firstWrite.Load() != 1<<20 {
 		t.Fatalf("advertised profile: %+v max_write=%d", p, limits.maxWrite.Load())
 	}
 	assertNoSFTPProbeFiles(t, root)
@@ -286,7 +375,7 @@ func TestSSHSFTPProbeLimitsAndInvalidReplies(t *testing.T) {
 	}{
 		{"write", 256 << 10, 64 << 10, 64 << 10},
 		{"packet_overhead", 128 << 10, 128 << 10, (128 << 10) - 1024},
-		{"unspecified", 0, 0, sshSFTPMaxPacket},
+		{"unspecified", 0, 0, 256 << 10},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			limits := &testSFTPLimits{advertise: true, packetMax: tc.packet, writeMax: tc.write}
