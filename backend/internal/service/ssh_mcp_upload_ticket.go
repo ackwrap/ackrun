@@ -72,7 +72,7 @@ func (svc *SSHMCPService) PrepareUpload(request model.SSHMCPTransferRequest) (*m
 		Headers:   map[string]string{"Content-Type": "application/octet-stream", "Authorization": "Bearer " + secret},
 		ExpiresAt: expiresAt.UnixMilli(), ExpiresInSeconds: int(sshMCPUploadTicketTTL.Seconds()),
 		TimeoutSeconds: int(SSHMCPTransferTimeout.Seconds()), SingleUse: true,
-		Instructions: "尚未上传文件。下一步必须在保存本地文件的调用端机器上执行 curl、Bash、PowerShell 或 Python HTTP 上传：向 upload_url 发送 PUT，完整使用返回的 headers，请求体为本地文件的原始二进制流。curl 使用 --upload-file，PowerShell 使用 -InFile，Python 以 rb 打开文件并流式发送。不要 Base64、JSON、multipart/form-data，也不要通过 ssh_exec 读取调用端文件；ssh_exec 在远端主机执行。无需取得或发送长期 MCP Token，必须使用返回的临时 Authorization。地址绑定目标主机、远程路径、覆盖选项及校验值，不要添加或修改 X-SSH-* 请求头。15 分钟内开始上传，单次传输最长 1 小时，无文件总大小限制。地址仅供一次上传尝试；失败或重传须重新调用 upload_file，服务重启或 MCP Token 变更后旧地址失效。只在 HTTP 成功响应且 success=true 后报告上传完成，并核对 bytes 和 sha256；ready 不代表文件已上传。",
+		Instructions: "尚未上传文件。下一步必须在保存本地文件的调用端机器上执行 curl、Bash、PowerShell 或 Python HTTP 上传：向 upload_url 发送 PUT，完整使用返回的 headers，请求体为本地文件的原始二进制流。curl 使用 --upload-file，PowerShell 使用 -InFile，Python 以 rb 打开文件并流式发送。不要 Base64、JSON、multipart/form-data，也不要通过 ssh_exec 读取调用端文件；ssh_exec 在远端主机执行。无需取得或发送长期 MCP Token，必须使用返回的临时 Authorization。地址绑定目标主机、远程路径、覆盖选项及 SHA-1 校验值，不要添加或修改 X-SSH-* 请求头。15 分钟内开始上传，单次传输最长 1 小时，无文件总大小限制。地址仅供一次上传尝试；失败或重传须重新调用 upload_file，服务重启或 MCP Token 变更后旧地址失效。只在 HTTP 成功响应且 success=true 后报告上传完成，并核对 bytes 和 sha1（40 位十六进制）；ready 不代表文件已上传。",
 	}, nil
 }
 

@@ -43,7 +43,7 @@ type SSHMCPTransferRequest struct {
 	HostID    int64  `json:"host_id"`
 	Path      string `json:"path" jsonschema:"Destination path on the remote SSH host for upload, or remote source for download; never a local client file path"`
 	Overwrite bool   `json:"overwrite,omitempty" jsonschema:"Explicitly allow replacing an existing regular file"`
-	SHA256    string `json:"sha256,omitempty" jsonschema:"Optional expected SHA-256 hex digest; checked before publishing an upload"`
+	SHA1      string `json:"sha1,omitempty" jsonschema:"Optional expected SHA-1 hex digest (40 hex characters); checked before publishing an upload"`
 }
 
 type SSHMCPUploadTicket struct {
@@ -74,5 +74,5 @@ type SSHMCPDownloadRequest struct {
 type SSHMCPTransferResult struct {
 	Success bool   `json:"success"`
 	Bytes   int64  `json:"bytes"`
-	SHA256  string `json:"sha256"`
+	SHA1    string `json:"sha1"`
 }

@@ -3,7 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
+	"crypto/sha1"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -61,10 +61,10 @@ func validateMCPTransfer(request model.SSHMCPTransferRequest) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if request.SHA256 != "" {
-		decoded, err := hex.DecodeString(request.SHA256)
-		if err != nil || len(decoded) != sha256.Size {
-			return "", sshError("SSH_MCP_INVALID", "SHA-256 必须为 64 位十六进制字符串", nil)
+	if request.SHA1 != "" {
+		decoded, err := hex.DecodeString(request.SHA1)
+		if err != nil || len(decoded) != sha1.Size {
+			return "", sshError("SSH_MCP_INVALID", "SHA-1 必须为 40 位十六进制字符串", nil)
 		}
 	}
 	return remote, nil
@@ -88,8 +88,8 @@ func (svc *SSHHostService) PrepareMCPTransfer(request model.SSHMCPTransferReques
 		method = http.MethodPut
 		headers["Content-Type"] = "application/octet-stream"
 		headers["X-SSH-Overwrite"] = strconv.FormatBool(request.Overwrite)
-		if request.SHA256 != "" {
-			headers["X-SSH-SHA256"] = request.SHA256
+		if request.SHA1 != "" {
+			headers["X-SSH-SHA1"] = request.SHA1
 		}
 	}
 	return map[string]any{
@@ -251,7 +251,7 @@ func (svc *SSHHostService) uploadMCPStream(ctx context.Context, request model.SS
 		if err := file.Chmod(mode); err != nil {
 			return sshError("SSH_MCP_SFTP_FAILED", "无法设置远程文件权限", err)
 		}
-		hash := sha256.New()
+		hash := sha1.New()
 		result.Bytes, err = io.CopyBuffer(io.MultiWriter(file, hash), struct{ io.Reader }{content}, make([]byte, 64<<10))
 		closeErr := file.Close()
 		if err != nil || closeErr != nil {
@@ -260,9 +260,9 @@ func (svc *SSHHostService) uploadMCPStream(ctx context.Context, request model.SS
 		if expectedSize >= 0 && result.Bytes != expectedSize {
 			return sshError("SSH_MCP_TRANSFER_INCOMPLETE", "上传长度不符，原文件未替换", nil)
 		}
-		result.SHA256 = hex.EncodeToString(hash.Sum(nil))
-		if request.SHA256 != "" && !strings.EqualFold(request.SHA256, result.SHA256) {
-			return sshError("SSH_MCP_CHECKSUM_MISMATCH", "SHA-256 校验失败，原文件未替换", nil)
+		result.SHA1 = hex.EncodeToString(hash.Sum(nil))
+		if request.SHA1 != "" && !strings.EqualFold(request.SHA1, result.SHA1) {
+			return sshError("SSH_MCP_CHECKSUM_MISMATCH", "SHA-1 校验失败，原文件未替换", nil)
 		}
 		if err := ctx.Err(); err != nil {
 			return err

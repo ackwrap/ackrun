@@ -23,9 +23,13 @@ func (h *SSHMCPHandler) TransferFile(c *gin.Context) {
 			writeMCPError(c, http.StatusBadRequest, "SSH_MCP_INVALID", "SSH 主机 ID 无效")
 			return
 		}
-		request := model.SSHMCPTransferRequest{HostID: hostID, Path: c.GetHeader("X-SSH-Path"), SHA256: c.GetHeader("X-SSH-SHA256")}
+		request := model.SSHMCPTransferRequest{HostID: hostID, Path: c.GetHeader("X-SSH-Path"), SHA1: c.GetHeader("X-SSH-SHA1")}
 		controller := http.NewResponseController(c.Writer)
 		if c.Request.Method == http.MethodPut {
+			if c.GetHeader("X-SSH-SHA256") != "" {
+				writeMCPError(c, http.StatusBadRequest, "SSH_MCP_INVALID", "文件校验已改用 SHA-1，请使用 X-SSH-SHA1")
+				return
+			}
 			if value := c.GetHeader("X-SSH-Overwrite"); value != "" {
 				request.Overwrite, err = strconv.ParseBool(value)
 				if err != nil {

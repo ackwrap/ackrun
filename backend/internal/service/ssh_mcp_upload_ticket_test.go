@@ -26,7 +26,7 @@ func newMCPUploadTicketFixture(t *testing.T) (*SSHMCPService, model.SSHMCPTransf
 	if _, err := svc.UpdateSettings(model.SSHMCPSettingsRequest{Enabled: true, GenerateToken: true}); err != nil {
 		t.Fatal(err)
 	}
-	return svc, model.SSHMCPTransferRequest{HostID: host.ID, Path: "/tmp/package.bin", Overwrite: true, SHA256: strings.Repeat("a", 64)}
+	return svc, model.SSHMCPTransferRequest{HostID: host.ID, Path: "/tmp/package.bin", Overwrite: true, SHA1: strings.Repeat("a", 40)}
 }
 
 func ticketCredentials(ticket *model.SSHMCPUploadTicket) (string, string) {
@@ -105,7 +105,7 @@ func TestSSHMCPUploadTicketExpiryAndRevocation(t *testing.T) {
 
 func TestSSHMCPUploadTicketBoundedAndValidated(t *testing.T) {
 	svc, request := newMCPUploadTicketFixture(t)
-	for _, bad := range []model.SSHMCPTransferRequest{{HostID: request.HostID, Path: ""}, {HostID: request.HostID, Path: "/tmp/file", SHA256: "invalid"}, {HostID: -1, Path: "/tmp/file"}} {
+	for _, bad := range []model.SSHMCPTransferRequest{{HostID: request.HostID, Path: ""}, {HostID: request.HostID, Path: "/tmp/file", SHA1: "invalid"}, {HostID: request.HostID, Path: "/tmp/file", SHA1: strings.Repeat("a", 64)}, {HostID: -1, Path: "/tmp/file"}} {
 		if _, err := svc.PrepareUpload(bad); err == nil {
 			t.Fatal("invalid upload request accepted")
 		}

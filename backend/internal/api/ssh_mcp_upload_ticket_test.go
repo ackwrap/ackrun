@@ -3,7 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
+	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -35,9 +35,18 @@ func TestSSHMCPUniqueUploadURL(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer session.Close()
+	for _, tool := range []string{"upload_file", "ssh_upload"} {
+		result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: map[string]any{"host_id": hostID, "path": "package.bin", "sha256": strings.Repeat("a", 64)}})
+		if err != nil && !strings.Contains(err.Error(), "unexpected additional properties") {
+			t.Fatalf("%s rejected sha256 for an unexpected reason: %v", tool, err)
+		}
+		if err == nil && !result.IsError {
+			t.Fatalf("%s silently accepted the removed sha256 parameter", tool)
+		}
+	}
 	prepare := func(tool, checksum string) model.SSHMCPUploadTicket {
 		t.Helper()
-		result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: map[string]any{"host_id": hostID, "path": "package.bin", "overwrite": true, "sha256": checksum}})
+		result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: map[string]any{"host_id": hostID, "path": "package.bin", "overwrite": true, "sha1": checksum}})
 		if err != nil || result.IsError {
 			t.Fatalf("prepare %s: %v", tool, err)
 		}
@@ -68,7 +77,7 @@ func TestSSHMCPUniqueUploadURL(t *testing.T) {
 		// Ticket parameters are fixed; client headers cannot redirect the write.
 		request.Header.Set("X-SSH-Path", "must-not-exist.bin")
 		request.Header.Set("X-SSH-Overwrite", "false")
-		request.Header.Set("X-SSH-SHA256", "ignored")
+		request.Header.Set("X-SSH-SHA1", "ignored")
 		response, err := http.DefaultClient.Do(request)
 		if err != nil {
 			t.Fatal(err)
@@ -76,7 +85,7 @@ func TestSSHMCPUniqueUploadURL(t *testing.T) {
 		return response
 	}
 	content := bytes.Repeat([]byte{0, 255, 3, 128}, 2<<20)
-	hash := sha256.Sum256(content)
+	hash := sha1.Sum(content)
 	checksum := hex.EncodeToString(hash[:])
 	ticket := prepare("upload_file", checksum)
 	for _, test := range []struct {
@@ -138,10 +147,20 @@ func TestSSHMCPUniqueUploadURL(t *testing.T) {
 		}
 		response := put(ticket, reader)
 		var result model.SSHMCPTransferResult
-		err = json.NewDecoder(response.Body).Decode(&result)
+		var payload map[string]json.RawMessage
+		body, err := io.ReadAll(response.Body)
+		if err == nil {
+			err = json.Unmarshal(body, &result)
+		}
+		if err == nil {
+			err = json.Unmarshal(body, &payload)
+		}
 		_ = response.Body.Close()
 		_ = file.Close()
-		if err != nil || response.StatusCode != http.StatusOK || !result.Success || result.Bytes != int64(len(content)) || result.SHA256 != checksum || response.Header.Get("Cache-Control") != "no-store" {
+		if _, oldDigest := payload["sha256"]; oldDigest || len(payload["sha1"]) == 0 {
+			t.Fatal("upload response must expose sha1 instead of sha256")
+		}
+		if err != nil || response.StatusCode != http.StatusOK || !result.Success || result.Bytes != int64(len(content)) || result.SHA1 != checksum || response.Header.Get("Cache-Control") != "no-store" {
 			t.Fatalf("binary upload chunked=%v: status=%d err=%v", chunked, response.StatusCode, err)
 		}
 		response = put(ticket, strings.NewReader("replay"))
@@ -157,7 +176,7 @@ func TestSSHMCPUniqueUploadURL(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(remoteRoot, "must-not-exist.bin")); !os.IsNotExist(err) {
 		t.Fatal("client overrode the ticket destination")
 	}
-	badChecksum := prepare("upload_file", strings.Repeat("0", 64))
+	badChecksum := prepare("upload_file", strings.Repeat("0", 40))
 	response := put(badChecksum, strings.NewReader("damaged"))
 	_ = response.Body.Close()
 	if response.StatusCode != http.StatusUnprocessableEntity {
