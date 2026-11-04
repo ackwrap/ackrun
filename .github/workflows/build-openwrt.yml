@@ -49,6 +49,11 @@ jobs:
             exit 1
           fi
           git check-ref-format "refs/tags/v${VERSION}"
+          notes=".github/release-notes/${VERSION}.md"
+          if [[ ! -s "$notes" ]] || ! grep -q '[^[:space:]]' "$notes"; then
+            echo "English release notes are required: $notes" >&2
+            exit 1
+          fi
 
       - name: Setup Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -115,6 +120,11 @@ jobs:
         run: |
           set -euo pipefail
           tag="v${VERSION}"
+          notes=".github/release-notes/${VERSION}.md"
+          if [[ ! -s "$notes" ]] || ! grep -q '[^[:space:]]' "$notes"; then
+            echo "English release notes are required: $notes" >&2
+            exit 1
+          fi
           assets=(
             "dist/ackwrap-openwrt-amd64"
             "dist/ackwrap_${VERSION}-1_x86_64.ipk"
@@ -151,7 +161,7 @@ jobs:
           if ! gh release create "$tag" "${assets[@]}" \
             --verify-tag \
             --title "$tag" \
-            --generate-notes; then
+            --notes-file "$notes"; then
             if gh release view "$tag" >/dev/null 2>&1; then
               echo "Release $tag was published concurrently; assets were not overwritten"
               exit 0

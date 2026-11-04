@@ -34,6 +34,9 @@ def read_version() -> str:
 
 def main() -> int:
     version = read_version()
+    notes = PROJECT_ROOT / ".github" / "release-notes" / f"{version}.md"
+    if not notes.is_file() or not notes.read_text(encoding="utf-8").strip():
+        raise SystemExit(f"English release notes are required: {notes}")
     gh = shutil.which("gh")
     if gh is None:
         raise SystemExit("GitHub CLI (gh) was not found in PATH")
