@@ -352,6 +352,14 @@ func writeSSHError(c *gin.Context, err error) {
 		status = http.StatusGatewayTimeout
 	case "SSH_SESSION_LIMIT", "SSH_MONITOR_BUSY", "SSH_SINGBOX_DEPLOY_BUSY":
 		status = http.StatusTooManyRequests
+	case "SSH_MCP_BUSY":
+		status = http.StatusTooManyRequests
+	case "SSH_MCP_UPLOAD_INVALID":
+		status = http.StatusUnauthorized
+	case "SSH_MCP_UPLOAD_EXPIRED":
+		status = http.StatusGone
+	case "SSH_MCP_DISABLED":
+		status = http.StatusForbidden
 	case "SSH_SFTP_PERMISSION_DENIED":
 		status = http.StatusForbidden
 	case "SSH_HOST_DISABLED", "SSH_NODE_EXPOSURE_DISABLED", "SSH_NODE_EXPOSURE_UNAVAILABLE",

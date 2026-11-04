@@ -123,7 +123,7 @@ func TestSSHMCPHTTPFileStreaming(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer session.Close()
-	for _, name := range []string{"ssh_upload", "ssh_download"} {
+	for _, name := range []string{"upload_file", "ssh_upload", "ssh_download"} {
 		result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: map[string]any{"host_id": hostID, "path": "package.bin"}})
 		if err != nil || result.IsError {
 			t.Fatalf("prepare %s: %v", name, err)
@@ -135,10 +135,13 @@ func TestSSHMCPHTTPFileStreaming(t *testing.T) {
 				Path   string `json:"endpoint_path"`
 			} `json:"data"`
 		}
-		if err := json.Unmarshal([]byte(result.Content[0].(*mcp.TextContent).Text), &payload); err != nil || payload.Data.Status != "ready" || payload.Data.Path != service.SSHMCPEndpoint+"/files/"+strconv.FormatInt(hostID, 10) {
+		if err := json.Unmarshal([]byte(result.Content[0].(*mcp.TextContent).Text), &payload); err != nil || payload.Data.Status != "ready" {
 			t.Fatalf("invalid transfer descriptor: %v", err)
 		}
-		if (name == "ssh_upload" && payload.Data.Method != "PUT") || (name == "ssh_download" && payload.Data.Method != "GET") {
+		if name == "ssh_download" && payload.Data.Path != service.SSHMCPEndpoint+"/files/"+strconv.FormatInt(hostID, 10) || name != "ssh_download" && !strings.HasPrefix(payload.Data.Path, service.SSHMCPEndpoint+"/uploads/") {
+			t.Fatal("invalid transfer endpoint")
+		}
+		if (name != "ssh_download" && payload.Data.Method != "PUT") || (name == "ssh_download" && payload.Data.Method != "GET") {
 			t.Fatal("invalid transfer method")
 		}
 	}

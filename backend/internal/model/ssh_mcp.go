@@ -41,9 +41,22 @@ type SSHMCPWriteRequest struct {
 
 type SSHMCPTransferRequest struct {
 	HostID    int64  `json:"host_id"`
-	Path      string `json:"path" jsonschema:"Remote destination for upload or source for download"`
+	Path      string `json:"path" jsonschema:"Destination path on the remote SSH host for upload, or remote source for download; never a local client file path"`
 	Overwrite bool   `json:"overwrite,omitempty" jsonschema:"Explicitly allow replacing an existing regular file"`
 	SHA256    string `json:"sha256,omitempty" jsonschema:"Optional expected SHA-256 hex digest; checked before publishing an upload"`
+}
+
+type SSHMCPUploadTicket struct {
+	Status           string            `json:"status"`
+	UploadURL        string            `json:"upload_url"`
+	EndpointPath     string            `json:"endpoint_path"`
+	Method           string            `json:"method"`
+	Headers          map[string]string `json:"headers"`
+	ExpiresAt        int64             `json:"expires_at"`
+	ExpiresInSeconds int               `json:"expires_in_seconds"`
+	TimeoutSeconds   int               `json:"timeout_seconds"`
+	SingleUse        bool              `json:"single_use"`
+	Instructions     string            `json:"instructions"`
 }
 
 type SSHMCPUploadRequest struct {

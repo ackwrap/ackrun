@@ -24,7 +24,7 @@ type SSHMCPHandler struct {
 }
 
 func NewSSHMCPHandler(settings *service.SSHMCPService, hosts *service.SSHHostService) *SSHMCPHandler {
-	server := mcpserver.NewSSHServer(hosts)
+	server := mcpserver.NewSSHServer(hosts, settings)
 	transport := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
 	return &SSHMCPHandler{service: settings, hosts: hosts, transport: transport, requests: make(chan struct{}, 16)}
 }
@@ -61,34 +61,22 @@ func (h *SSHMCPHandler) UpdateSettings(c *gin.Context) {
 
 func (h *SSHMCPHandler) ServeHTTP(c *gin.Context) {
 	h.withAuthorizedRequest(c, func() {
+		scheme := "http"
+		if c.Request.TLS != nil {
+			scheme = "https"
+		}
+		ctx := mcpserver.WithRequestBaseURL(c.Request.Context(), scheme+"://"+c.Request.Host)
+		c.Request = c.Request.WithContext(ctx)
 		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 2<<20)
 		h.transport.ServeHTTP(c.Writer, c.Request)
 	})
 }
 
 func (h *SSHMCPHandler) withAuthorizedRequest(c *gin.Context, run func()) {
-	c.Header("Cache-Control", "no-store")
-	c.Header("X-Content-Type-Options", "nosniff")
-	peer, _, err := net.SplitHostPort(c.Request.RemoteAddr)
-	if err != nil || !mcpLANAddress(peer) || !mcpHostAllowed(c.Request.Host) || !mcpOriginAllowed(c.Request) {
-		writeMCPError(c, http.StatusForbidden, "SSH_MCP_LAN_ONLY", "MCP 仅允许通过本机或 LAN IP 访问")
+	if !allowSSHMCPRequest(c) {
 		return
 	}
-	for _, header := range []string{"Forwarded", "X-Forwarded-For", "X-Real-IP"} {
-		if len(c.Request.Header.Values(header)) != 0 {
-			writeMCPError(c, http.StatusForbidden, "SSH_MCP_PROXY_DENIED", "请从 LAN 直接连接 MCP 地址")
-			return
-		}
-	}
-	if c.Request.URL.RawQuery != "" {
-		writeMCPError(c, http.StatusBadRequest, "SSH_MCP_INVALID", "MCP 地址不接受查询参数，Token 请使用 Authorization 请求头")
-		return
-	}
-	var token string
-	authorization := strings.Fields(c.GetHeader("Authorization"))
-	if len(c.Request.Header.Values("Authorization")) == 1 && len(authorization) == 2 && strings.EqualFold(authorization[0], "Bearer") {
-		token = authorization[1]
-	}
+	token := sshMCPBearer(c)
 	enabled, authenticated, err := h.service.Authenticate(token)
 	if err != nil {
 		writeMCPError(c, http.StatusServiceUnavailable, "SSH_MCP_UNAVAILABLE", "MCP 配置暂不可用")
@@ -103,6 +91,39 @@ func (h *SSHMCPHandler) withAuthorizedRequest(c *gin.Context, run func()) {
 		writeMCPError(c, http.StatusUnauthorized, "SSH_MCP_UNAUTHORIZED", "需要有效的 MCP Token")
 		return
 	}
+	h.withRequestSlot(c, run)
+}
+
+func allowSSHMCPRequest(c *gin.Context) bool {
+	c.Header("Cache-Control", "no-store")
+	c.Header("X-Content-Type-Options", "nosniff")
+	peer, _, err := net.SplitHostPort(c.Request.RemoteAddr)
+	if err != nil || !mcpLANAddress(peer) || !mcpHostAllowed(c.Request.Host) || !mcpOriginAllowed(c.Request) {
+		writeMCPError(c, http.StatusForbidden, "SSH_MCP_LAN_ONLY", "MCP 仅允许通过本机或 LAN IP 访问")
+		return false
+	}
+	for _, header := range []string{"Forwarded", "X-Forwarded-For", "X-Real-IP"} {
+		if len(c.Request.Header.Values(header)) != 0 {
+			writeMCPError(c, http.StatusForbidden, "SSH_MCP_PROXY_DENIED", "请从 LAN 直接连接 MCP 地址")
+			return false
+		}
+	}
+	if c.Request.URL.RawQuery != "" {
+		writeMCPError(c, http.StatusBadRequest, "SSH_MCP_INVALID", "MCP 地址不接受查询参数，Token 请使用 Authorization 请求头")
+		return false
+	}
+	return true
+}
+
+func sshMCPBearer(c *gin.Context) string {
+	authorization := strings.Fields(c.GetHeader("Authorization"))
+	if len(c.Request.Header.Values("Authorization")) == 1 && len(authorization) == 2 && strings.EqualFold(authorization[0], "Bearer") {
+		return authorization[1]
+	}
+	return ""
+}
+
+func (h *SSHMCPHandler) withRequestSlot(c *gin.Context, run func()) {
 	select {
 	case h.requests <- struct{}{}:
 		defer func() { <-h.requests }()

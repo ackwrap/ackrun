@@ -18,9 +18,9 @@ type hostInput struct {
 	HostID int64 `json:"host_id" jsonschema:"SSH host ID from ssh_list_servers"`
 }
 
-func NewSSHServer(svc *service.SSHHostService) *mcp.Server {
+func NewSSHServer(svc *service.SSHHostService, uploads *service.SSHMCPService) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "ackwrap-ssh", Version: buildinfo.Version}, &mcp.ServerOptions{
-		Instructions: "Operate SSH hosts saved in Ackwrap. Use host_id from ssh_list_servers. Existing credentials and connection paths are reused. Unknown or changed host keys must be confirmed by the user in Ackwrap. File paths always refer to the remote SSH host, never to the MCP client's computer. For large file upload, supply source_url or call ssh_upload to obtain an HTTP PUT endpoint, then use a local HTTP/file tool to stream the file with the same MCP bearer token. For download, call ssh_download and save its HTTP GET response with a local HTTP/file tool. A ready response only prepares a transfer, not completes it. Never encode deployment packages as inline base64.",
+		Instructions: "Operate SSH hosts saved in Ackwrap. Use host_id from ssh_list_servers. Existing credentials and connection paths are reused. Unknown or changed host keys must be confirmed by the user in Ackwrap. Paths in SSH tools refer to the remote SSH host. For a file on the MCP caller's machine, first call upload_file with the remote host_id and destination path, then run curl/Bash, PowerShell or Python ON THE CALLER'S MACHINE to PUT the local file's raw binary stream to the returned upload_url using ALL returned headers. This is a scoped single-attempt URL: use its temporary Authorization header, not the MCP token. Never use ssh_exec to read a file on the caller's machine: ssh_exec runs on the target SSH host. Do not put large file contents in MCP arguments, Base64, JSON or multipart. ready means no bytes have been uploaded; report completion only after the PUT response succeeds with success=true, bytes and sha256. Request a fresh URL after a failed attempt or expiry. ssh_upload without content/source_url is an alias of upload_file. For a publicly hosted source, ssh_upload with source_url streams it through Ackwrap instead. For download, call ssh_download and use a local HTTP/file tool to save its HTTP GET response with the MCP bearer token.",
 	})
 	addTool(server, "ssh_list_servers", "列出 Ackwrap SSH 主机，不返回密码或私钥；启用地址隐藏时只返回脱敏地址，使用 host_id 连接。", func(_ context.Context, _ struct{}) (any, error) {
 		return svc.ListHosts()
@@ -85,7 +85,13 @@ func NewSSHServer(svc *service.SSHHostService) *mcp.Server {
 		err := svc.WriteMCPFile(ctx, input, false)
 		return map[string]any{"success": err == nil}, err
 	})
-	addTool(server, "ssh_upload", "流式上传大文件，无总大小限制。提供解析到公网 IP 的 HTTP(S) source_url 可直接下载并传到 SSH 主机；私网、本机、链路本地、运营商级 NAT、未指定及组播地址会被拒绝。省略则返回 HTTP PUT 地址，由客户端以原始字节上传本地文件，需使用同一个 MCP Bearer Token。ready 仅表示上传准备就绪。覆盖需 overwrite=true，可传 sha256 校验。content 仅兼容小文件 Base64。", func(ctx context.Context, input model.SSHMCPUploadRequest) (any, error) {
+	addTool(server, "upload_file", sshUploadFileDescription, func(ctx context.Context, input model.SSHMCPTransferRequest) (any, error) {
+		return prepareSSHUpload(ctx, uploads, input)
+	})
+	addTool(server, "ssh_upload", sshUploadFileDescription+" 不传 content/source_url 时与 upload_file 相同。已有公网文件可传 source_url，由 Ackwrap 拉取后流式写入 SSH 主机，私网来源会被拒绝。content 仅为兼容旧客户端的小文件 Base64，解码后最多 1 MiB，大文件禁止使用。", func(ctx context.Context, input model.SSHMCPUploadRequest) (any, error) {
+		if input.Content == nil && input.SourceURL == "" {
+			return prepareSSHUpload(ctx, uploads, input.SSHMCPTransferRequest)
+		}
 		return svc.UploadMCP(ctx, input)
 	})
 	addTool(server, "ssh_download", "返回大文件流式 HTTP GET 地址，无总大小限制；客户端需使用同一个 MCP Bearer Token 将响应保存到本地。ready 不表示已下载。仅小文件可用 inline=true 返回 Base64（最大 1 MiB）。", func(ctx context.Context, input model.SSHMCPDownloadRequest) (any, error) {

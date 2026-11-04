@@ -33,18 +33,7 @@ func (h *SSHMCPHandler) TransferFile(c *gin.Context) {
 					return
 				}
 			}
-			if c.GetHeader("Content-Encoding") != "" && c.GetHeader("Content-Encoding") != "identity" {
-				writeMCPError(c, http.StatusUnsupportedMediaType, "SSH_MCP_INVALID", "请发送未经压缩编码的原始文件字节")
-				return
-			}
-			defer controller.SetReadDeadline(time.Time{})
-			body := &sshMCPUploadBody{ReadCloser: c.Request.Body, controller: controller}
-			result, err := h.hosts.UploadMCPStream(c.Request.Context(), request, body, c.Request.ContentLength)
-			if err != nil {
-				writeSSHError(c, err)
-				return
-			}
-			c.JSON(http.StatusOK, result)
+			h.receiveUpload(c, request)
 			return
 		}
 		err = h.hosts.DownloadMCPStream(c.Request.Context(), model.SSHMCPFileRequest{HostID: hostID, Path: request.Path}, func(ctx context.Context, content io.Reader, info os.FileInfo) error {
@@ -73,6 +62,41 @@ func (h *SSHMCPHandler) TransferFile(c *gin.Context) {
 			writeSSHError(c, err)
 		}
 	})
+}
+
+func (h *SSHMCPHandler) UploadFile(c *gin.Context) {
+	if !allowSSHMCPRequest(c) {
+		return
+	}
+	mediaType, _, err := mime.ParseMediaType(c.GetHeader("Content-Type"))
+	if err != nil || mediaType != "application/octet-stream" {
+		writeMCPError(c, http.StatusUnsupportedMediaType, "SSH_MCP_INVALID", "请使用返回的 Content-Type，以原始二进制流上传文件")
+		return
+	}
+	h.withRequestSlot(c, func() {
+		request, err := h.service.ClaimUpload(c.Param("uploadID"), sshMCPBearer(c))
+		if err != nil {
+			writeSSHError(c, err)
+			return
+		}
+		h.receiveUpload(c, *request)
+	})
+}
+
+func (h *SSHMCPHandler) receiveUpload(c *gin.Context, request model.SSHMCPTransferRequest) {
+	if c.GetHeader("Content-Encoding") != "" && c.GetHeader("Content-Encoding") != "identity" {
+		writeMCPError(c, http.StatusUnsupportedMediaType, "SSH_MCP_INVALID", "请发送未经压缩编码的原始文件字节")
+		return
+	}
+	controller := http.NewResponseController(c.Writer)
+	defer controller.SetReadDeadline(time.Time{})
+	body := &sshMCPUploadBody{ReadCloser: c.Request.Body, controller: controller}
+	result, err := h.hosts.UploadMCPStream(c.Request.Context(), request, body, c.Request.ContentLength)
+	if err != nil {
+		writeSSHError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
 }
 
 type sshMCPUploadBody struct {

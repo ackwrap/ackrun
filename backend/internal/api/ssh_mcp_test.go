@@ -140,7 +140,7 @@ func TestSSHMCPStreamableHTTPToolsAndRevocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]bool{}
-	for _, name := range []string{"ssh_list_servers", "ssh_list_credentials", "ssh_add_server", "ssh_update_server", "ssh_delete_server", "ssh_test_connection", "ssh_exec", "ssh_exec_multi", "ssh_read_file", "ssh_write_file", "ssh_upload", "ssh_download", "ssh_list_dir", "ssh_stat"} {
+	for _, name := range []string{"ssh_list_servers", "ssh_list_credentials", "ssh_add_server", "ssh_update_server", "ssh_delete_server", "ssh_test_connection", "ssh_exec", "ssh_exec_multi", "ssh_read_file", "ssh_write_file", "upload_file", "ssh_upload", "ssh_download", "ssh_list_dir", "ssh_stat"} {
 		want[name] = true
 	}
 	for _, tool := range listed.Tools {
