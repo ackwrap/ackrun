@@ -17,6 +17,7 @@ const loading = ref(true);
 const saving = ref(false);
 const savingGeoSource = ref(false);
 const available = ref(false);
+const switchesUnconfirmed = ref(false);
 const protection = ref<
   Pick<
     GeneralSettings,
@@ -53,10 +54,19 @@ function updateProtection(settings: GeneralSettings) {
   };
 }
 
+function updateSwitches(settings: GeneralSettings) {
+  updateProtection(settings);
+  autoStartCore.value = settings.auto_start_core !== false;
+  dnsmasqTakeoverEnabled.value = settings.dnsmasq_takeover_enabled !== false;
+  dnsmasqTakeoverSupported.value = settings.dnsmasq_takeover_supported === true;
+  realIPPingBypassEnabled.value = settings.real_ip_ping_bypass_enabled === true;
+  switchesUnconfirmed.value = false;
+}
+
 async function refreshProtection() {
   if (saving.value || loading.value || !available.value) return;
   try {
-    updateProtection(await api.getGeneralSettings());
+    updateSwitches(await api.getGeneralSettings());
   } catch {
     protection.value.device_protection_status = "error";
     protection.value.device_protection_error =
@@ -103,13 +113,7 @@ async function load() {
   available.value = false;
   try {
     const settings = await api.getGeneralSettings();
-    updateProtection(settings);
-    autoStartCore.value = settings.auto_start_core !== false;
-    dnsmasqTakeoverEnabled.value = settings.dnsmasq_takeover_enabled !== false;
-    dnsmasqTakeoverSupported.value =
-      settings.dnsmasq_takeover_supported === true;
-    realIPPingBypassEnabled.value =
-      settings.real_ip_ping_bypass_enabled === true;
+    updateSwitches(settings);
     geoSource.value = settings.geo_source || "sagernet";
     savedGeoSource.value = geoSource.value;
     available.value = true;
@@ -124,7 +128,13 @@ async function load() {
 }
 
 async function saveSetting(kind: "autoStart" | "dnsmasq" | "ping") {
-  if (loading.value || saving.value || !available.value) return;
+  if (
+    loading.value ||
+    saving.value ||
+    !available.value ||
+    switchesUnconfirmed.value
+  )
+    return;
   saving.value = true;
   const setting = {
     autoStart: {
@@ -148,8 +158,14 @@ async function saveSetting(kind: "autoStart" | "dnsmasq" | "ping") {
     await api.setGeneralSettings({ [setting.key]: next });
     emit("notify", `已${next ? "开启" : "关闭"}${setting.label}`, "success");
   } catch (cause: any) {
-    setting.value.value = !next;
+    switchesUnconfirmed.value = true;
     emit("notify", `其他开关保存失败: ${cause.message}`, "error");
+    try {
+      updateSwitches(await api.getGeneralSettings());
+    } catch {
+      // The write may have succeeded before the response was lost. Keep the
+      // state unconfirmed until the existing poll can read it back.
+    }
   } finally {
     saving.value = false;
   }
@@ -193,6 +209,13 @@ onBeforeUnmount(() => clearInterval(protectionPoll));
       <SlidersHorizontal :size="18" class="text-[var(--color-primary)]" />
       <h2 class="font-semibold">其他开关</h2>
     </div>
+    <p
+      v-if="switchesUnconfirmed"
+      role="status"
+      class="mb-3 text-xs text-[var(--text-secondary)]"
+    >
+      开关状态未确认，正在重新读取…
+    </p>
 
     <label
       class="flex cursor-pointer items-center justify-between gap-4 rounded-[var(--radius-lg)] border border-[var(--border-light)] bg-[var(--bg-base)] px-4 py-3"
@@ -208,7 +231,7 @@ onBeforeUnmount(() => clearInterval(protectionPoll));
         v-model="autoStartCore"
         type="checkbox"
         class="h-4 w-4 shrink-0"
-        :disabled="loading || saving || !available"
+        :disabled="loading || saving || !available || switchesUnconfirmed"
         @change="saveSetting('autoStart')"
       />
     </label>
@@ -230,7 +253,13 @@ onBeforeUnmount(() => clearInterval(protectionPoll));
         v-model="dnsmasqTakeoverEnabled"
         type="checkbox"
         class="h-4 w-4 shrink-0"
-        :disabled="loading || saving || !available || !dnsmasqTakeoverSupported"
+        :disabled="
+          loading ||
+          saving ||
+          !available ||
+          !dnsmasqTakeoverSupported ||
+          switchesUnconfirmed
+        "
         @change="saveSetting('dnsmasq')"
       />
     </label>
@@ -249,7 +278,7 @@ onBeforeUnmount(() => clearInterval(protectionPoll));
         v-model="realIPPingBypassEnabled"
         type="checkbox"
         class="h-4 w-4 shrink-0"
-        :disabled="loading || saving || !available"
+        :disabled="loading || saving || !available || switchesUnconfirmed"
         @change="saveSetting('ping')"
       />
     </label>
