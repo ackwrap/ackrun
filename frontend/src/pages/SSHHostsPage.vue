@@ -522,10 +522,6 @@ onBeforeUnmount(() => {
         @click="tab = item.id"
       >
         <component :is="item.icon" :size="15" />{{ item.label }}
-        <span
-          v-if="tab === item.id"
-          class="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-[var(--color-primary)]"
-        />
       </button>
     </div>
 

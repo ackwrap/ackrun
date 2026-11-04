@@ -176,6 +176,46 @@
   transition: background-color var(--duration-interaction) ease-out;
 }
 
+.aw-sort-placeholder {
+  background: var(--color-primary-bg) !important;
+  outline: 1px solid var(--color-primary);
+  outline-offset: -1px;
+}
+
+.aw-sort-placeholder > td {
+  color: transparent !important;
+}
+
+.aw-sort-placeholder > td > *,
+.aw-sort-placeholder > td::before {
+  visibility: hidden;
+}
+
+.aw-sort-ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 60;
+  pointer-events: none;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-card);
+  outline: 1px solid var(--color-primary);
+  opacity: 0.8;
+  will-change: transform;
+}
+
+.aw-sort-ghost > table > tbody > tr {
+  background: var(--bg-elevated) !important;
+}
+
+body.aw-sort-active,
+body.aw-sort-active * {
+  cursor: grabbing !important;
+  user-select: none !important;
+}
+
 .aw-animated-metric {
   display: inline-block;
   font-variant-numeric: tabular-nums;
