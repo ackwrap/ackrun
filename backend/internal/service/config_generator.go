@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -50,6 +51,7 @@ type ConfigGeneratorService struct {
 	singbox               configGeneratorCore
 	readCoreVersion       func() string
 	dnsmasqSupported      func() bool
+	nodeBypassLookup      func(context.Context, string) ([]net.IP, error)
 	runtimeAPISecret      string
 	configMu              sync.Mutex
 	coreRestartGeneration atomic.Uint64
@@ -335,9 +337,14 @@ func (s *ConfigGeneratorService) generateLockedTo(req *model.ConfigGenerateReque
 	if err := s.validateDevicePolicies(); err != nil {
 		return nil, err
 	}
+	// Resolve once per generation so routing and TUN use the same address snapshot.
+	nodeBypass, err := s.resolveNodeServerBypass(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("生成节点服务器排除地址失败: %w", err)
+	}
 
 	// 1. 生成 inbounds
-	inbounds, err := s.generateInbounds(req.InboundListen, req.InboundPort, req.TUNIPv4Address, req.TUNIPv6Address)
+	inbounds, err := s.generateInbounds(req.InboundListen, req.InboundPort, req.TUNIPv4Address, req.TUNIPv6Address, nodeBypass)
 	if err != nil {
 		return nil, fmt.Errorf("生成 inbounds 失败: %w", err)
 	}
@@ -352,7 +359,7 @@ func (s *ConfigGeneratorService) generateLockedTo(req *model.ConfigGenerateReque
 		return nil, fmt.Errorf("生成 outbounds 失败: %w", err)
 	}
 	// 3. 生成 route
-	route, err := s.generateRoute(req.DefaultOutbound)
+	route, err := s.generateRoute(req.DefaultOutbound, nodeBypass)
 	if err != nil {
 		return nil, fmt.Errorf("生成 route 失败: %w", err)
 	}
@@ -2209,7 +2216,7 @@ func nodeUIDsToOutboundTags(uids []string, nodeTags map[string]string) []string 
 
 // generateRoute 生成路由配置
 // 根据代理模式（全局/规则/直连）决定路由策略
-func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[string]interface{}, error) {
+func (s *ConfigGeneratorService) generateRoute(defaultOutbound string, nodeTargets ...*nodeServerBypass) (map[string]interface{}, error) {
 	route := map[string]interface{}{
 		"rules":               []map[string]interface{}{},
 		"rule_set":            []map[string]interface{}{},
@@ -2276,26 +2283,6 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 			map[string]interface{}{"inbound": deviceDNSInboundTag, "action": "reject"},
 		)
 	}
-	bypassRules, err := s.defaultBypassRules(runtime.GOOS == "linux" && inboundMode != "mixed")
-	if err != nil {
-		return nil, err
-	}
-	if len(deviceMACs) > 0 {
-		for i, rule := range bypassRules {
-			conditions := map[string]interface{}{}
-			wrapped := map[string]interface{}{"type": "logical", "mode": "and"}
-			for key, value := range rule {
-				if key == "action" || key == "outbound" {
-					wrapped[key] = value
-				} else {
-					conditions[key] = value
-				}
-			}
-			wrapped["rules"] = []map[string]interface{}{{"inbound": deviceMACInboundTag, "invert": true}, conditions}
-			bypassRules[i] = wrapped
-		}
-	}
-	routeRules = append(routeRules, bypassRules...)
 	route["find_process"] = true
 	if len(devices) > 0 {
 		fakeIPs, err := s.deviceFakeIPCIDRs()
@@ -2335,6 +2322,13 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 	if len(deviceMACs) > 0 {
 		routeRules = append(routeRules, map[string]interface{}{"inbound": deviceMACInboundTag, "action": "reject"})
 	}
+	// Device policies (including ICMP) terminate before node/process exemptions.
+	// All bypass rules must still precede sniff for Linux TCP pre-matching.
+	bypassRules, err := s.defaultBypassRules(runtime.GOOS == "linux" && inboundMode != "mixed", nodeTargets...)
+	if err != nil {
+		return nil, err
+	}
+	routeRules = append(routeRules, bypassRules...)
 	preSniffRuleCount := len(routeRules)
 
 	// sing-box 1.13 已移除 inbound sniff 字段，嗅探和 DNS 劫持必须使用 rule action。
@@ -2508,7 +2502,7 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string) (map[stri
 	return route, nil
 }
 
-func (s *ConfigGeneratorService) defaultBypassRules(autoRedirect bool) ([]map[string]interface{}, error) {
+func (s *ConfigGeneratorService) defaultBypassRules(autoRedirect bool, nodeTargets ...*nodeServerBypass) ([]map[string]interface{}, error) {
 	currentExecutable, _ := os.Executable()
 	coreBinaryPath := ""
 	if s.paths != nil {
@@ -2563,16 +2557,24 @@ func (s *ConfigGeneratorService) defaultBypassRules(autoRedirect bool) ([]map[st
 		})
 	}
 
-	nodes, err := s.store.ListEnabledNodes()
+	targets, err := s.nodeServerBypassTargets(nodeTargets...)
 	if err != nil {
 		return nil, fmt.Errorf("加载节点服务器直连白名单失败: %w", err)
 	}
-	domains, ipCIDRs := nodeServerBypassTargets(nodes)
+	domains, ipCIDRs := targets.domains, targets.ipCIDRs
 	ipCIDRs, err = s.deviceBypassTargets(ipCIDRs)
 	if err != nil {
 		return nil, err
 	}
 	if len(domains) > 0 {
+		if len(s.defaultDomainResolver()) > 0 {
+			// A client may still have a cached FakeIP from before this whitelist.
+			// Resolve it before bypass; a FakeIP cannot be sent to the physical network.
+			rules = append(rules, map[string]interface{}{
+				"inbound": []string{"tun-in"}, "domain": domains, "network": []string{"icmp"},
+				"action": "resolve",
+			})
+		}
 		rules = append(rules, map[string]interface{}{
 			"domain":   domains,
 			"action":   "bypass",
@@ -2877,7 +2879,14 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase(routeFinal ...string) (
 
 	// 4. 显式规则用于国内、局域网等真实 IP 例外。TUN 客户端未命中的
 	// A/AAAA 查询随后使用 FakeIP；其他查询进入统一 DNS final。
+	nodeTargets, err := s.nodeServerBypassTargets()
+	if err != nil {
+		return nil, fmt.Errorf("加载节点服务器 DNS 白名单失败: %w", err)
+	}
+	// Protected devices retain their DNS policy even for node server domains.
+	// Other clients use real bootstrap DNS before ordinary rules and FakeIP.
 	rules := append([]map[string]interface{}{}, deviceDNSRules...)
+	rules = append(rules, nodeServerDNSRules(nodeTargets.domains, hostDomains, hostsServerTag, bootstrapTag)...)
 	if hostsServerTag != "" {
 		rules = append(rules, map[string]interface{}{
 			"domain":     hostDomains,
@@ -2932,6 +2941,11 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase(routeFinal ...string) (
 		"disable_cache":   globalSettings.DisableCache,
 		"disable_expire":  globalSettings.DisableExpire,
 		"reverse_mapping": globalSettings.ReverseMapping,
+	}
+	if len(nodeTargets.domains) > 0 {
+		// DNS answers can rotate after generation. Reverse mappings let pre-match
+		// bypass those real IPs by domain instead of forwarding ping into TUN.
+		dns["reverse_mapping"] = true
 	}
 	// Device whitelist matching also needs domains for connections without HTTP/TLS sniff data.
 	for _, rule := range deviceDNSRules {
@@ -3486,7 +3500,7 @@ func writeActiveConfigMarker(p *paths.Paths, targetPath string) error {
 }
 
 // generateInbounds 生成入站配置
-func (s *ConfigGeneratorService) generateInbounds(listen string, port int, tunIPv4Address, tunIPv6Address string) ([]interface{}, error) {
+func (s *ConfigGeneratorService) generateInbounds(listen string, port int, tunIPv4Address, tunIPv6Address string, nodeTargets ...*nodeServerBypass) ([]interface{}, error) {
 	if listen == "" {
 		listen = "0.0.0.0"
 	}
@@ -3503,12 +3517,20 @@ func (s *ConfigGeneratorService) generateInbounds(listen string, port int, tunIP
 	}
 	_, excludedInterfaces, excludedCIDRs, _, _ := trafficBypassValues(bypassSettings)
 	if mode != "mixed" {
-		nodes, err := s.store.ListEnabledNodes()
+		targets, err := s.nodeServerBypassTargets(nodeTargets...)
 		if err != nil {
 			return nil, fmt.Errorf("加载节点服务器路由排除地址失败: %w", err)
 		}
-		_, nodeIPCIDRs := nodeServerBypassTargets(nodes)
-		excludedCIDRs = appendUniqueStrings(excludedCIDRs, nodeIPCIDRs...)
+		devices, err := s.deviceRules()
+		if err != nil {
+			return nil, err
+		}
+		// Destination-only TUN exclusions would also exempt protected sources.
+		// With device rules, ordinary clients instead use the pre-match bypass,
+		// which returns their real-IP ICMP to the kernel before TUN interception.
+		if len(devices) == 0 {
+			excludedCIDRs = appendUniqueStrings(excludedCIDRs, targets.ipCIDRs...)
+		}
 	}
 	var mixedInbound map[string]interface{}
 	if mode != "tun" {
