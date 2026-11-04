@@ -204,11 +204,11 @@ onBeforeUnmount(() => {
 
 <template>
   <section
-    class="relative h-full min-h-0 overflow-hidden bg-[var(--ssh-terminal-bg)]"
+    class="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-[var(--ssh-terminal-bg)] p-3"
   >
     <div
       ref="container"
-      class="h-full w-full overflow-hidden p-3"
+      class="min-h-0 min-w-0 flex-1 overflow-hidden"
       aria-label="SSH 交互终端"
     />
     <div
