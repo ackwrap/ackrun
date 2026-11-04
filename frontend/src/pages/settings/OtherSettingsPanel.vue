@@ -10,6 +10,7 @@ const emit = defineEmits<{
 const autoStartCore = ref(true);
 const dnsmasqTakeoverEnabled = ref(true);
 const dnsmasqTakeoverSupported = ref(false);
+const realIPPingBypassEnabled = ref(false);
 const geoSource = ref<GeoSource>("sagernet");
 const savedGeoSource = ref<GeoSource>("sagernet");
 const loading = ref(true);
@@ -107,6 +108,8 @@ async function load() {
     dnsmasqTakeoverEnabled.value = settings.dnsmasq_takeover_enabled !== false;
     dnsmasqTakeoverSupported.value =
       settings.dnsmasq_takeover_supported === true;
+    realIPPingBypassEnabled.value =
+      settings.real_ip_ping_bypass_enabled === true;
     geoSource.value = settings.geo_source || "sagernet";
     savedGeoSource.value = geoSource.value;
     available.value = true;
@@ -120,31 +123,32 @@ async function load() {
   }
 }
 
-async function saveSetting(kind: "autoStart" | "dnsmasq") {
+async function saveSetting(kind: "autoStart" | "dnsmasq" | "ping") {
   if (loading.value || saving.value || !available.value) return;
   saving.value = true;
-  const next =
-    kind === "autoStart" ? autoStartCore.value : dnsmasqTakeoverEnabled.value;
+  const setting = {
+    autoStart: {
+      value: autoStartCore,
+      key: "auto_start_core",
+      label: "核心自动启动",
+    },
+    dnsmasq: {
+      value: dnsmasqTakeoverEnabled,
+      key: "dnsmasq_takeover_enabled",
+      label: "dnsmasq 接管",
+    },
+    ping: {
+      value: realIPPingBypassEnabled,
+      key: "real_ip_ping_bypass_enabled",
+      label: "真实 IP Ping 直连",
+    },
+  }[kind];
+  const next = setting.value.value;
   try {
-    await api.setGeneralSettings(
-      kind === "autoStart"
-        ? { auto_start_core: autoStartCore.value }
-        : { dnsmasq_takeover_enabled: dnsmasqTakeoverEnabled.value },
-    );
-    emit(
-      "notify",
-      kind === "autoStart"
-        ? next
-          ? "已开启 Ackwrap 启动后自动启动核心"
-          : "已关闭 Ackwrap 启动后自动启动核心"
-        : next
-          ? "已开启 OpenWrt dnsmasq DNS 接管"
-          : "已关闭 OpenWrt dnsmasq DNS 接管",
-      "success",
-    );
+    await api.setGeneralSettings({ [setting.key]: next });
+    emit("notify", `已${next ? "开启" : "关闭"}${setting.label}`, "success");
   } catch (cause: any) {
-    if (kind === "autoStart") autoStartCore.value = !next;
-    else dnsmasqTakeoverEnabled.value = !next;
+    setting.value.value = !next;
     emit("notify", `其他开关保存失败: ${cause.message}`, "error");
   } finally {
     saving.value = false;
@@ -195,12 +199,9 @@ onBeforeUnmount(() => clearInterval(protectionPoll));
       :class="(loading || saving || !available) && 'cursor-wait opacity-70'"
     >
       <span class="min-w-0">
-        <span class="block text-sm font-medium"
-          >启动 Ackwrap 时自动启动核心</span
-        >
+        <span class="block text-sm font-medium">启动时运行核心</span>
         <span class="mt-1 block text-xs leading-5 text-[var(--text-secondary)]">
-          仅在核心已安装且存在有效配置时生效；修改后从下次 Ackwrap
-          启动开始执行。
+          下次启动 AckWrap 时生效，需已安装核心并有有效配置。
         </span>
       </span>
       <input
@@ -219,11 +220,10 @@ onBeforeUnmount(() => clearInterval(protectionPoll));
       "
     >
       <span class="min-w-0">
-        <span class="block text-sm font-medium">接管 OpenWrt dnsmasq 上游</span>
+        <span class="block text-sm font-medium">接管 dnsmasq</span>
         <span class="mt-1 block text-xs leading-5 text-[var(--text-secondary)]">
-          TUN 模式下将 dnsmasq 转发到本机 sing-box DNS
-          端口；停止核心时恢复普通设备 DNS，受防泄漏保护的设备继续阻断。
-          切换前请先停止核心。
+          TUN 模式接管 OpenWrt
+          DNS；停止核心后恢复，受保护设备除外。切换前请停止核心。
         </span>
       </span>
       <input
@@ -232,6 +232,25 @@ onBeforeUnmount(() => clearInterval(protectionPoll));
         class="h-4 w-4 shrink-0"
         :disabled="loading || saving || !available || !dnsmasqTakeoverSupported"
         @change="saveSetting('dnsmasq')"
+      />
+    </label>
+    <label
+      class="mt-3 flex cursor-pointer items-center justify-between gap-4 rounded-[var(--radius-lg)] border border-[var(--border-light)] bg-[var(--bg-base)] px-4 py-3"
+      :class="(loading || saving || !available) && 'cursor-wait opacity-70'"
+    >
+      <span class="min-w-0">
+        <span class="block text-sm font-medium">真实 IP Ping 直连</span>
+        <span class="mt-1 block text-xs leading-5 text-[var(--text-secondary)]">
+          真实 IPv4/IPv6 Ping 绕过 TUN，设备规则优先，FakeIP
+          除外。切换前请停止核心。
+        </span>
+      </span>
+      <input
+        v-model="realIPPingBypassEnabled"
+        type="checkbox"
+        class="h-4 w-4 shrink-0"
+        :disabled="loading || saving || !available"
+        @change="saveSetting('ping')"
       />
     </label>
     <div
@@ -259,7 +278,7 @@ onBeforeUnmount(() => clearInterval(protectionPoll));
         id="geo-source-description"
         class="mt-2 text-xs leading-5 text-[var(--text-secondary)]"
       >
-        Loyalsoldier 缺失分类时自动回退 SagerNet；切换失败保留原来源。
+        缺失分类自动回退 SagerNet，切换失败保留原来源。
       </p>
       <p
         v-if="savingGeoSource"
@@ -278,11 +297,8 @@ onBeforeUnmount(() => clearInterval(protectionPoll));
           <span
             class="mt-1 block text-xs leading-5 text-[var(--text-secondary)]"
           >
-            保护已绑定设备的流量和
-            DNS；核心停止或异常时阻断外网，局域网仍可访问。
-            ICMP（ping）也受设备规则约束，避免绕过策略。仅 IP
-            规则的排除接口保持直连；MAC
-            规则须常驻保护，且不支持接口或来源排除。修改前请停止核心。
+            核心停止时阻断已绑定设备外网，保留局域网。IP 规则排除接口可直连；MAC
+            规则须常驻保护，不支持排除。修改前请停止核心。
           </span>
         </span>
         <input

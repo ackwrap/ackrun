@@ -47,6 +47,7 @@ type GeneralSettings struct {
 	AutoStartCore             bool   `json:"auto_start_core"`
 	DNSMasqTakeoverEnabled    bool   `json:"dnsmasq_takeover_enabled"`
 	DNSMasqTakeoverSupported  bool   `json:"dnsmasq_takeover_supported"`
+	RealIPPingBypassEnabled   bool   `json:"real_ip_ping_bypass_enabled"`
 }
 
 type GeneralSettingsRequest struct {
@@ -54,6 +55,7 @@ type GeneralSettingsRequest struct {
 	GeoSource               *string `json:"geo_source"`
 	AutoStartCore           *bool   `json:"auto_start_core"`
 	DNSMasqTakeoverEnabled  *bool   `json:"dnsmasq_takeover_enabled"`
+	RealIPPingBypassEnabled *bool   `json:"real_ip_ping_bypass_enabled"`
 }
 
 // NTPSettings NTP 时间同步设置

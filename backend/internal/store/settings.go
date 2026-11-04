@@ -314,7 +314,7 @@ func (s *Store) SetNTPSettings(req *model.NTPSettings) error {
 
 func (s *Store) GetGeneralSettings() (*model.GeneralSettings, error) {
 	settings := &model.GeneralSettings{AutoStartCore: true, DNSMasqTakeoverEnabled: true, GeoSource: model.GeoSourceSagerNet}
-	rows, err := s.db.Query(`SELECT key, value FROM app_settings WHERE key IN ('general.auto_start_core', 'general.dnsmasq_takeover_enabled', 'general.geo_source', 'general.device_protection_enabled')`)
+	rows, err := s.db.Query(`SELECT key, value FROM app_settings WHERE key IN ('general.auto_start_core', 'general.dnsmasq_takeover_enabled', 'general.geo_source', 'general.device_protection_enabled', 'general.real_ip_ping_bypass_enabled')`)
 	if err != nil {
 		return nil, err
 	}
@@ -331,6 +331,8 @@ func (s *Store) GetGeneralSettings() (*model.GeneralSettings, error) {
 			settings.AutoStartCore = value != "false"
 		case "general.dnsmasq_takeover_enabled":
 			settings.DNSMasqTakeoverEnabled = value != "false"
+		case "general.real_ip_ping_bypass_enabled":
+			settings.RealIPPingBypassEnabled = value == "true"
 		case "general.geo_source":
 			settings.GeoSource, err = model.NormalizeGeoSource(value)
 			if err != nil {
@@ -431,6 +433,7 @@ func (s *Store) setGeneralSettingsWithGeoAssets(settings *model.GeneralSettings,
 		{key: "general.auto_start_core", value: strconv.FormatBool(settings.AutoStartCore)},
 		{key: "general.device_protection_enabled", value: strconv.FormatBool(settings.DeviceProtectionEnabled)},
 		{key: "general.dnsmasq_takeover_enabled", value: strconv.FormatBool(settings.DNSMasqTakeoverEnabled)},
+		{key: "general.real_ip_ping_bypass_enabled", value: strconv.FormatBool(settings.RealIPPingBypassEnabled)},
 		{key: "general.geo_source", value: source},
 	}
 	for _, item := range values {

@@ -70,15 +70,26 @@ func TestGeneralSettingsDefaultEnabledAndPersist(t *testing.T) {
 	if !settings.AutoStartCore || !settings.DNSMasqTakeoverEnabled {
 		t.Fatalf("general settings should default to enabled: %+v", settings)
 	}
-	if err := s.SetGeneralSettings(&model.GeneralSettings{AutoStartCore: false, DNSMasqTakeoverEnabled: false}); err != nil {
+	if settings.RealIPPingBypassEnabled {
+		t.Fatal("Ping bypass must remain opt-in for existing installations")
+	}
+	if err := s.SetGeneralSettings(&model.GeneralSettings{AutoStartCore: false, DNSMasqTakeoverEnabled: false, RealIPPingBypassEnabled: true}); err != nil {
 		t.Fatal(err)
 	}
 	settings, err = s.GetGeneralSettings()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.AutoStartCore || settings.DNSMasqTakeoverEnabled {
+	if settings.AutoStartCore || settings.DNSMasqTakeoverEnabled || !settings.RealIPPingBypassEnabled {
 		t.Fatalf("disabled general settings were not persisted: %+v", settings)
+	}
+	settings.RealIPPingBypassEnabled = false
+	if err := s.SetGeneralSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+	settings, err = s.GetGeneralSettings()
+	if err != nil || settings.RealIPPingBypassEnabled {
+		t.Fatalf("Ping bypass could not be disabled: settings=%+v err=%v", settings, err)
 	}
 }
 

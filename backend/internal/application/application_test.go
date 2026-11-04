@@ -151,6 +151,27 @@ func TestGeneralSettingsAPIControlsCoreAutoStart(t *testing.T) {
 	}
 }
 
+func TestGeneralSettingsAPIPingBypassRoundTrip(t *testing.T) {
+	app := testApplication(t)
+	defer app.Close()
+	for _, enabled := range []string{"true", "false"} {
+		putRecorder := httptest.NewRecorder()
+		app.Handler().ServeHTTP(putRecorder, httptest.NewRequest(http.MethodPut, "/api/v1/settings/general", strings.NewReader(`{"real_ip_ping_bypass_enabled":`+enabled+`}`)))
+		if putRecorder.Code != http.StatusOK {
+			t.Fatalf("Ping bypass update failed: %d %s", putRecorder.Code, putRecorder.Body.String())
+		}
+		getRecorder := httptest.NewRecorder()
+		app.Handler().ServeHTTP(getRecorder, httptest.NewRequest(http.MethodGet, "/api/v1/settings/general", nil))
+		if getRecorder.Code != http.StatusOK || !strings.Contains(getRecorder.Body.String(), `"real_ip_ping_bypass_enabled":`+enabled) {
+			t.Fatalf("Ping bypass state not returned: %d %s", getRecorder.Code, getRecorder.Body.String())
+		}
+		settings, err := app.store.GetGeneralSettings()
+		if err != nil || !settings.AutoStartCore || !settings.DNSMasqTakeoverEnabled {
+			t.Fatalf("Ping update changed unrelated settings: %+v, err=%v", settings, err)
+		}
+	}
+}
+
 func TestAccessTokenRedactingWriter(t *testing.T) {
 	var output bytes.Buffer
 	writer := accessTokenRedactingWriter{Writer: &output}

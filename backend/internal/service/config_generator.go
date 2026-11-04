@@ -2231,6 +2231,10 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string, nodeTarge
 		return nil, fmt.Errorf("读取 DNS 全局设置失败: %w", err)
 	}
 	dnsEnabled := dnsSettings != nil && dnsSettings.Enabled
+	generalSettings, err := s.store.GetGeneralSettings()
+	if err != nil {
+		return nil, fmt.Errorf("读取通用设置失败: %w", err)
+	}
 	devices, err := s.deviceRules()
 	if err != nil {
 		return nil, err
@@ -2258,10 +2262,6 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string, nodeTarge
 	// 标准 TCP/UDP DNS 必须在进程和节点直连白名单之前劫持，避免 DNS
 	// 目标与白名单地址重合时被 bypass 终止匹配。
 	if dnsEnabled {
-		generalSettings, settingsErr := s.store.GetGeneralSettings()
-		if settingsErr != nil {
-			return nil, fmt.Errorf("读取通用设置失败: %w", settingsErr)
-		}
 		if generalSettings.DNSMasqTakeoverEnabled && s.supportsDNSMasqTakeover() && (inboundMode == "tun" || inboundMode == "tun_mixed") {
 			routeRules = append([]map[string]interface{}{{
 				"inbound": dnsInboundTag,
@@ -2324,6 +2324,15 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string, nodeTarge
 	}
 	// Device policies (including ICMP) terminate before node/process exemptions.
 	// All bypass rules must still precede sniff for Linux TCP pre-matching.
+	if generalSettings.RealIPPingBypassEnabled && (inboundMode == "tun" || inboundMode == "tun_mixed") {
+		pingRule, err := s.realIPPingBypassRule()
+		if err != nil {
+			return nil, err
+		}
+		if pingRule != nil {
+			routeRules = append(routeRules, pingRule)
+		}
+	}
 	bypassRules, err := s.defaultBypassRules(runtime.GOOS == "linux" && inboundMode != "mixed", nodeTargets...)
 	if err != nil {
 		return nil, err

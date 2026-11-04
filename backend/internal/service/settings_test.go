@@ -477,9 +477,11 @@ func TestSetGeneralSettingsSerializesPartialUpdates(t *testing.T) {
 
 	svc := NewSettingsService(db)
 	disabled := false
+	enabled := true
 	requests := []*model.GeneralSettingsRequest{
 		{AutoStartCore: &disabled},
 		{DNSMasqTakeoverEnabled: &disabled},
+		{RealIPPingBypassEnabled: &enabled},
 	}
 	errorsCh := make(chan error, len(requests))
 	var wait sync.WaitGroup
@@ -501,7 +503,7 @@ func TestSetGeneralSettingsSerializesPartialUpdates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.AutoStartCore || settings.DNSMasqTakeoverEnabled {
+	if settings.AutoStartCore || settings.DNSMasqTakeoverEnabled || !settings.RealIPPingBypassEnabled {
 		t.Fatalf("partial updates overwrote each other: %+v", settings)
 	}
 }

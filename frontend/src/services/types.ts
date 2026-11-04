@@ -249,6 +249,7 @@ export interface GeneralSettings {
   auto_start_core: boolean;
   dnsmasq_takeover_enabled: boolean;
   dnsmasq_takeover_supported: boolean;
+  real_ip_ping_bypass_enabled: boolean;
   geo_source: GeoSource;
 }
 
@@ -257,6 +258,7 @@ export type GeneralSettingsUpdate = Partial<
     GeneralSettings,
     | "auto_start_core"
     | "dnsmasq_takeover_enabled"
+    | "real_ip_ping_bypass_enabled"
     | "geo_source"
     | "device_protection_enabled"
   >

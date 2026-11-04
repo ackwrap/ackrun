@@ -235,7 +235,7 @@ func (svc *SettingsService) SetGeneralSettings(req *model.GeneralSettingsRequest
 		return err
 	}
 	if req.DeviceProtectionEnabled != nil {
-		if req.GeoSource != nil || req.AutoStartCore != nil || req.DNSMasqTakeoverEnabled != nil {
+		if req.GeoSource != nil || req.AutoStartCore != nil || req.DNSMasqTakeoverEnabled != nil || req.RealIPPingBypassEnabled != nil {
 			return errors.New("流量防泄漏开关请单独保存")
 		}
 		return svc.setDeviceProtection(*req.DeviceProtectionEnabled, previous)
@@ -247,6 +247,9 @@ func (svc *SettingsService) SetGeneralSettings(req *model.GeneralSettingsRequest
 	if req.DNSMasqTakeoverEnabled != nil {
 		next.DNSMasqTakeoverEnabled = *req.DNSMasqTakeoverEnabled
 	}
+	if req.RealIPPingBypassEnabled != nil {
+		next.RealIPPingBypassEnabled = *req.RealIPPingBypassEnabled
+	}
 	if req.GeoSource != nil {
 		next.GeoSource, err = model.NormalizeGeoSource(*req.GeoSource)
 		if err != nil {
@@ -257,6 +260,10 @@ func (svc *SettingsService) SetGeneralSettings(req *model.GeneralSettingsRequest
 	takeoverChanged := previous.DNSMasqTakeoverEnabled != next.DNSMasqTakeoverEnabled
 	if takeoverChanged && svc.singbox != nil && svc.singbox.IsRunning() {
 		return errors.New("核心运行时不能切换 dnsmasq 接管，请先停止核心")
+	}
+	pingBypassChanged := previous.RealIPPingBypassEnabled != next.RealIPPingBypassEnabled
+	if pingBypassChanged && svc.singbox != nil && svc.singbox.IsRunning() {
+		return errors.New("核心运行时不能切换 Ping 直连，请先停止核心")
 	}
 	var previousAssets, preparedAssets []model.GeoAsset
 	if geoSourceChanged {
@@ -282,8 +289,8 @@ func (svc *SettingsService) SetGeneralSettings(req *model.GeneralSettingsRequest
 	if err := svc.store.SetGeneralSettingsWithGeoAssets(&next, preparedAssets); err != nil {
 		return err
 	}
-	logging.Info("settings.update", "通用设置已更新，核心自动启动: %t，dnsmasq 接管: %t，Geo 来源: %s", next.AutoStartCore, next.DNSMasqTakeoverEnabled, next.GeoSource)
-	if !takeoverChanged || svc.configGenerator == nil || svc.singbox == nil || !svc.singbox.IsInstalledAndConfigured() {
+	logging.Info("settings.update", "通用设置已更新，核心自动启动: %t，dnsmasq 接管: %t，真实 IP Ping 直连: %t，Geo 来源: %s", next.AutoStartCore, next.DNSMasqTakeoverEnabled, next.RealIPPingBypassEnabled, next.GeoSource)
+	if (!takeoverChanged && !pingBypassChanged) || svc.configGenerator == nil || svc.singbox == nil || !svc.singbox.IsInstalledAndConfigured() {
 		return nil
 	}
 	result, err := svc.configGenerator.ReconcileCurrent()
@@ -300,9 +307,9 @@ func (svc *SettingsService) SetGeneralSettings(req *model.GeneralSettingsRequest
 		rollbackErr = svc.store.SetGeneralSettings(previous)
 	}
 	if rollbackErr != nil {
-		return fmt.Errorf("应用 dnsmasq 接管设置失败: %v；回滚设置也失败: %w", err, rollbackErr)
+		return fmt.Errorf("应用网络设置失败: %v；回滚设置也失败: %w", err, rollbackErr)
 	}
-	return fmt.Errorf("应用 dnsmasq 接管设置失败，已回滚: %w", err)
+	return fmt.Errorf("应用网络设置失败，已回滚: %w", err)
 }
 
 func (svc *SettingsService) GetMixedInboundSettings() (*model.MixedInboundSettings, error) {
