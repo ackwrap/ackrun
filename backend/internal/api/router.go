@@ -242,6 +242,8 @@ func registerNodeExposureRoutes(group *gin.RouterGroup, nodeExposureH *handler.N
 }
 
 func registerSSHHostRoutes(group *gin.RouterGroup, sshHostH *handler.SSHHostHandler) {
+	group.GET("/advanced/ssh/settings", sshHostH.GetPrivacySettings)
+	group.PUT("/advanced/ssh/settings", sshHostH.UpdatePrivacySettings)
 	group.GET("/advanced/ssh/hosts", sshHostH.ListHosts)
 	group.POST("/advanced/ssh/hosts", sshHostH.CreateHost)
 	group.POST("/advanced/ssh/hosts/import", sshHostH.ImportHost)

@@ -141,8 +141,12 @@ func (svc *SSHHostService) ShareHost(hostID int64, password string) (*model.SSHH
 	if err != nil {
 		return nil, err
 	}
+	visible, err := svc.presentHost(host)
+	if err != nil {
+		return nil, err
+	}
 	logging.Info("ssh_host.share", "生成 SSH 主机加密分享码: host_id=%d", hostID)
-	return &model.SSHHostShareResponse{Code: code, HostName: host.Name, HostCount: 1}, nil
+	return &model.SSHHostShareResponse{Code: code, HostName: visible.Name, HostCount: 1}, nil
 }
 
 func (svc *SSHHostService) ShareHosts(hostIDs []int64, password string) (*model.SSHHostShareResponse, error) {
@@ -320,6 +324,10 @@ func (svc *SSHHostService) ImportHost(request model.SSHHostImportRequest) (*mode
 			return nil, normalizeSSHStoreError(err)
 		}
 		created = append(created, *item)
+	}
+	created, err = svc.presentHosts(created)
+	if err != nil {
+		return nil, err
 	}
 	logging.Info("ssh_host.import", "导入 SSH 主机加密分享码: host_count=%d credential_count=%d converted_to_direct=%d", len(created), len(builtCredentials), convertedCount)
 	return &model.SSHHostImportResponse{

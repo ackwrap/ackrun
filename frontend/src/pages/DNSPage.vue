@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { Plus, Trash2 } from "lucide-vue-next";
+import { GripVertical, LockKeyhole, Plus, Trash2 } from "lucide-vue-next";
 import PageHeader from "@/components/layout/PageHeader.vue";
 import { vSpotlight } from "@/directives/spotlight";
 import Toast from "@/components/ui/Toast.vue";
 import OrderButtons from "@/components/ui/OrderButtons.vue";
 import { authenticatedFetch } from "@/services/apiAuth";
+import { useTableRowSort } from "@/composables/useTableRowSort";
 import DNSRuleFormModal from "./dns/DNSRuleFormModal.vue";
 import DNSServerFormModal from "./dns/DNSServerFormModal.vue";
 import DNSFakeIPCard from "./dns/DNSFakeIPCard.vue";
@@ -65,7 +66,25 @@ const defaults = {
   serverForm = ref<Partial<Server> | null>(null),
   ruleForm = ref<any | null>(null),
   ruleSaving = ref(false),
+  serverOrderPending = ref(false),
   ruleOrderPending = ref(false);
+const {
+  tableBody: serverTableBody,
+  displayItems: displayServers,
+  draggingId: draggingServerID,
+  start: startServerSort,
+  keydown: serverSortKeydown,
+} = useTableRowSort(
+  () => servers.value,
+  () => serverOrderPending.value,
+  reorderServers,
+  isLegacyFakeIPServer,
+);
+
+function setServerTableBody(element: unknown) {
+  serverTableBody.value =
+    element instanceof HTMLTableSectionElement ? element : null;
+}
 let loadRevision = 0;
 const types = [
     "udp",
@@ -296,26 +315,35 @@ function swapped<T>(items: T[], index: number, direction: -1 | 1) {
   [next[index], next[target]] = [next[target], next[index]];
   return next;
 }
-async function moveServer(index: number, direction: -1 | 1) {
-  const target = index + direction;
+async function reorderServers(ids: number[]) {
+  if (serverOrderPending.value) return;
+  const previous = servers.value;
+  const byID = new Map(previous.map((server) => [server.id, server]));
   if (
-    target < 0 ||
-    target >= servers.value.length ||
-    isLegacyFakeIPServer(servers.value[index]) ||
-    isLegacyFakeIPServer(servers.value[target])
+    ids.length !== previous.length ||
+    new Set(ids).size !== ids.length ||
+    ids.some((id) => !byID.has(id)) ||
+    previous.some(
+      (server, index) =>
+        isLegacyFakeIPServer(server) && ids[index] !== server.id,
+    ) ||
+    ids.every((id, index) => id === previous[index].id)
   )
     return;
-  const next = swapped(servers.value, index, direction);
-  if (!next) return;
-  servers.value = next;
+  serverOrderPending.value = true;
+  servers.value = ids.map((id) => byID.get(id)!);
+  ++loadRevision;
   try {
     await request("/api/v1/dns/servers/reorder", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(next.map((item) => item.id)),
+      body: JSON.stringify(ids),
     });
   } catch (e: any) {
+    servers.value = previous;
     show(`DNS Server 排序失败: ${e.message}`, "error");
+  } finally {
+    serverOrderPending.value = false;
     await load();
   }
 }
@@ -503,7 +531,10 @@ onMounted(load);
             </button>
           </div>
         </header>
-        <div class="aw-data-table-wrap aw-mobile-table-wrap mt-4">
+        <div
+          class="aw-data-table-wrap aw-mobile-table-wrap mt-4"
+          :aria-busy="serverOrderPending"
+        >
           <table class="aw-data-table aw-mobile-table min-w-[760px]">
             <thead>
               <tr>
@@ -516,26 +547,39 @@ onMounted(load);
                 <th>操作</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody :ref="setServerTableBody">
               <tr v-if="!servers.length && !global.fakeip_enabled">
                 <td colspan="7" class="py-10 text-center">暂无 DNS 服务器</td>
               </tr>
-              <tr v-for="(s, i) in servers" :key="s.id">
+              <tr
+                v-for="s in displayServers"
+                :key="s.id"
+                :data-sort-id="s.id"
+                :class="{ 'aw-sort-placeholder': draggingServerID === s.id }"
+              >
                 <td data-label="排序">
-                  <OrderButtons
-                    :up-disabled="
-                      i === 0 ||
-                      isLegacyFakeIPServer(s) ||
-                      isLegacyFakeIPServer(servers[i - 1])
-                    "
-                    :down-disabled="
-                      i === servers.length - 1 ||
-                      isLegacyFakeIPServer(s) ||
-                      isLegacyFakeIPServer(servers[i + 1])
-                    "
-                    @up="moveServer(i, -1)"
-                    @down="moveServer(i, 1)"
-                  />
+                  <button
+                    v-if="!isLegacyFakeIPServer(s)"
+                    type="button"
+                    class="aw-action-button aw-action-neutral !h-7 !w-7 touch-none select-none !px-0 cursor-grab active:cursor-grabbing"
+                    :disabled="serverOrderPending"
+                    title="上下拖动排序，也可使用方向键"
+                    :aria-label="`调整 ${s.tag} 的顺序`"
+                    @pointerdown="startServerSort($event, s)"
+                    @keydown="serverSortKeydown($event, s)"
+                    @dragstart.prevent
+                  >
+                    <GripVertical :size="15" />
+                  </button>
+                  <span
+                    v-else
+                    role="img"
+                    class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[var(--border-light)] text-[var(--text-tertiary)]"
+                    aria-label="旧版 FakeIP 不参与排序"
+                    title="旧版 FakeIP 不参与排序"
+                  >
+                    <LockKeyhole :size="13" aria-hidden="true" />
+                  </span>
                 </td>
                 <td
                   data-label="Tag"
@@ -594,15 +638,23 @@ onMounted(load);
               <tr v-if="global.fakeip_enabled">
                 <td data-label="排序">
                   <span
-                    class="rounded-full bg-[var(--button-primary-bg)] px-2 py-0.5 text-[10px] text-[var(--button-primary-text)]"
-                    >系统</span
+                    role="img"
+                    class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[var(--border-light)] text-[var(--text-tertiary)]"
+                    aria-label="系统 FakeIP 固定在末位"
+                    title="系统 FakeIP 固定在末位"
                   >
+                    <LockKeyhole :size="13" aria-hidden="true" />
+                  </span>
                 </td>
                 <td
                   data-label="Tag"
                   class="font-medium text-[var(--text-primary)]"
                 >
                   fakeip
+                  <small
+                    class="ml-2 rounded-full bg-[var(--button-primary-bg)] px-2 py-0.5 text-[10px] text-[var(--button-primary-text)]"
+                    >系统</small
+                  >
                 </td>
                 <td data-label="类型">fakeip</td>
                 <td

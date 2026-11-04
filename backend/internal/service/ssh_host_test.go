@@ -83,6 +83,10 @@ func TestSSHCredentialEncryptionAndHostKeyTrust(t *testing.T) {
 	}, false); err != nil {
 		t.Fatal(err)
 	}
+	trustedHost, err := svc.GetHost(host.ID)
+	if err != nil || trustedHost.HostKeyStatus != "trusted" || trustedHost.LastStatus != "unknown" || trustedHost.LastErrorCode != "" || trustedHost.LastErrorMessage != "" {
+		t.Fatalf("trust left a stale pending check: %+v err=%v", trustedHost, err)
+	}
 	result, err := svc.TestHost(context.Background(), host.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -390,6 +394,7 @@ type testSSHServer struct {
 	hostKey       ssh.PublicKey
 	echoShell     bool
 	sftpRoot      string
+	sftpHandler   func(ssh.Channel)
 	windowChanges atomic.Int64
 	connections   atomic.Int64
 	done          chan struct{}
@@ -409,11 +414,12 @@ func newSFTPTestSSHServer(t *testing.T, password, root string) *testSSHServer {
 }
 
 type testSSHServerOptions struct {
-	exec      func(ssh.Channel, string)
-	password  string
-	publicKey ssh.PublicKey
-	echoShell bool
-	sftpRoot  string
+	exec        func(ssh.Channel, string)
+	password    string
+	publicKey   ssh.PublicKey
+	echoShell   bool
+	sftpRoot    string
+	sftpHandler func(ssh.Channel)
 }
 
 func newConfiguredTestSSHServer(t *testing.T, options testSSHServerOptions) *testSSHServer {
@@ -445,6 +451,7 @@ func newConfiguredTestSSHServer(t *testing.T, options testSSHServerOptions) *tes
 		exec:     options.exec,
 		listener: listener, config: config, hostKey: signer.PublicKey(),
 		echoShell: options.echoShell, sftpRoot: options.sftpRoot, done: make(chan struct{}),
+		sftpHandler: options.sftpHandler,
 	}
 	go server.serve()
 	return server
@@ -533,9 +540,13 @@ func (server *testSSHServer) serveConnection(conn net.Conn) {
 				supported := request.Type == "pty-req" || request.Type == "shell" || request.Type == "window-change"
 				if request.Type == "subsystem" {
 					var payload struct{ Name string }
-					supported = ssh.Unmarshal(request.Payload, &payload) == nil && payload.Name == "sftp" && server.sftpRoot != ""
+					supported = ssh.Unmarshal(request.Payload, &payload) == nil && payload.Name == "sftp" && (server.sftpRoot != "" || server.sftpHandler != nil)
 					_ = request.Reply(supported, nil)
 					if supported {
+						if server.sftpHandler != nil {
+							server.sftpHandler(accepted)
+							return
+						}
 						sftpServer, err := sftp.NewServer(accepted, sftp.WithServerWorkingDirectory(server.sftpRoot))
 						if err == nil {
 							_ = sftpServer.Serve()
@@ -586,4 +597,5 @@ func trustTestSSHHostKey(t *testing.T, svc *SSHHostService, hostID int64) {
 	}, false); err != nil {
 		t.Fatal(err)
 	}
+	waitTestSFTPProbe(t, svc, hostID)
 }

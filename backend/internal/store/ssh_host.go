@@ -256,14 +256,32 @@ func (s *Store) UpsertSSHHostKey(item *model.SSHHostKey) error {
 		item.FirstSeenAt = now
 	}
 	item.LastSeenAt, item.UpdatedAt = now, now
-	_, err := s.db.Exec(`INSERT INTO ssh_host_keys
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	_, err = tx.Exec(`INSERT INTO ssh_host_keys
 		(host_id, key_type, public_key, fingerprint_sha256, first_seen_at, last_seen_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(host_id) DO UPDATE SET key_type = excluded.key_type, public_key = excluded.public_key,
 		fingerprint_sha256 = excluded.fingerprint_sha256, last_seen_at = excluded.last_seen_at,
 		updated_at = excluded.updated_at`, item.HostID, item.KeyType, item.PublicKey,
 		item.FingerprintSHA256, item.FirstSeenAt, item.LastSeenAt, item.UpdatedAt)
-	return err
+	if err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`DELETE FROM ssh_sftp_profiles WHERE host_id = ?`, item.HostID); err != nil {
+		return err
+	}
+	// The pending check describes the key that was just accepted. Clear that
+	// obsolete failure without claiming authentication or connectivity succeeded.
+	if _, err = tx.Exec(`UPDATE ssh_hosts SET last_status = 'unknown', last_latency_ms = 0,
+		last_error_code = '', last_error_message = '', updated_at = ?
+		WHERE id = ? AND last_status = 'host_key_pending'`, now, item.HostID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) TouchSSHHostKey(hostID int64) error {

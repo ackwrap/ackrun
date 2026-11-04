@@ -26,6 +26,7 @@ func NewSSHHostHandler(service *service.SSHHostService) *SSHHostHandler {
 }
 
 func (h *SSHHostHandler) ListHosts(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
 	items, err := h.service.ListHosts()
 	if err != nil {
 		writeSSHError(c, err)
@@ -35,6 +36,7 @@ func (h *SSHHostHandler) ListHosts(c *gin.Context) {
 }
 
 func (h *SSHHostHandler) GetHost(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
 	id, ok := parseSSHID(c)
 	if !ok {
 		return
@@ -48,6 +50,7 @@ func (h *SSHHostHandler) GetHost(c *gin.Context) {
 }
 
 func (h *SSHHostHandler) CreateHost(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxSSHHostRequestBody)
 	var request model.SSHHostRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -63,6 +66,7 @@ func (h *SSHHostHandler) CreateHost(c *gin.Context) {
 }
 
 func (h *SSHHostHandler) UpdateHost(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
 	id, ok := parseSSHID(c)
 	if !ok {
 		return
@@ -348,6 +352,14 @@ func writeSSHError(c *gin.Context, err error) {
 		status = http.StatusGatewayTimeout
 	case "SSH_SESSION_LIMIT", "SSH_MONITOR_BUSY", "SSH_SINGBOX_DEPLOY_BUSY":
 		status = http.StatusTooManyRequests
+	case "SSH_MCP_BUSY":
+		status = http.StatusTooManyRequests
+	case "SSH_MCP_UPLOAD_INVALID":
+		status = http.StatusUnauthorized
+	case "SSH_MCP_UPLOAD_EXPIRED":
+		status = http.StatusGone
+	case "SSH_MCP_DISABLED":
+		status = http.StatusForbidden
 	case "SSH_SFTP_PERMISSION_DENIED":
 		status = http.StatusForbidden
 	case "SSH_HOST_DISABLED", "SSH_NODE_EXPOSURE_DISABLED", "SSH_NODE_EXPOSURE_UNAVAILABLE",

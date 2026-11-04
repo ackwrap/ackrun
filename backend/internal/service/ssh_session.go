@@ -232,6 +232,9 @@ func (svc *SSHHostService) Close() {
 		ids = append(ids, id)
 	}
 	svc.closed = true
+	for _, job := range svc.sftpProbes {
+		job.cancel()
+	}
 	for _, cancel := range svc.mcpCancels {
 		cancel()
 	}
@@ -248,6 +251,7 @@ func (svc *SSHHostService) Close() {
 	for _, id := range ids {
 		svc.closeSession(id, "cancelled", "SSH_SERVICE_STOPPED")
 	}
+	svc.sftpProbeWG.Wait()
 }
 
 func (svc *SSHHostService) attachSession(conn *websocket.Conn, payload sshSessionAttachCommand) {

@@ -3,7 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
+	"crypto/sha1"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -63,13 +63,13 @@ func TestSSHMCPTransferLargeRoundTrip(t *testing.T) {
 	if err != nil || !result.Success || result.Bytes != size {
 		t.Fatalf("large upload: result=%+v err=%v", result, err)
 	}
-	if source.maxRead > 64<<10 {
+	if source.maxRead > sshSFTPMaxPacket {
 		t.Fatalf("unbounded source read: %d", source.maxRead)
 	}
-	hash := sha256.New()
+	hash := sha1.New()
 	_, _ = io.Copy(hash, &mcpPatternReader{remaining: size})
 	wantHash := hex.EncodeToString(hash.Sum(nil))
-	if result.SHA256 != wantHash {
+	if result.SHA1 != wantHash {
 		t.Fatal("upload checksum mismatch")
 	}
 	hash.Reset()
@@ -88,26 +88,103 @@ func TestSSHMCPTransferLargeRoundTrip(t *testing.T) {
 	}
 }
 
-type mcpFailingReader struct{}
+func TestSSHMCPTransferSHA1(t *testing.T) {
+	svc, hostID, _ := newMCPTransferFixture(t)
+	const expected = "a9993e364706816aba3e25717850c26c9cd0d89d"
+	request := model.SSHMCPTransferRequest{HostID: hostID, Path: "sha1.bin", SHA1: strings.ToUpper(expected)}
+	result, err := svc.UploadMCPStream(context.Background(), request, io.NopCloser(strings.NewReader("abc")), 3)
+	if err != nil || !result.Success || result.Bytes != 3 || result.SHA1 != expected {
+		t.Fatalf("SHA-1 known vector: result=%+v err=%v", result, err)
+	}
+}
 
-func (mcpFailingReader) Read([]byte) (int, error) { return 0, errors.New("injected read error") }
+func TestSSHMCPTransferConcurrentFiles(t *testing.T) {
+	svc, hostID, root := newMCPTransferFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	names := []string{"one.bin", "two.bin"}
+	payloads := [][]byte{bytes.Repeat([]byte{0, 255, 3}, 128<<10), bytes.Repeat([]byte{128, 4, 1}, 128<<10)}
+	type outcome struct {
+		index  int
+		result *model.SSHMCPTransferResult
+		err    error
+	}
+	finished := make(chan outcome, len(names))
+	writers := make([]*io.PipeWriter, len(names))
+	for index, name := range names {
+		reader, writer := io.Pipe()
+		writers[index] = writer
+		defer writer.Close()
+		go func() {
+			result, err := svc.UploadMCPStream(ctx, model.SSHMCPTransferRequest{HostID: hostID, Path: name}, reader, -1)
+			finished <- outcome{index: index, result: result, err: err}
+		}()
+		// Keep both uploads open after they have acquired their SSH sessions.
+		if _, err := writer.Write(payloads[index][:64<<10]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err := svc.UploadMCPStream(ctx, model.SSHMCPTransferRequest{HostID: hostID, Path: "over-limit.bin"}, io.NopCloser(strings.NewReader("unused")), 6)
+	if sshServiceCode(err) != "SSH_SESSION_LIMIT" {
+		t.Fatalf("third simultaneous upload: %v", err)
+	}
+	for index, writer := range writers {
+		if _, err := writer.Write(payloads[index][64<<10:]); err != nil {
+			t.Fatal(err)
+		}
+		_ = writer.Close()
+	}
+	for range names {
+		select {
+		case completed := <-finished:
+			expected := payloads[completed.index]
+			hash := sha1.Sum(expected)
+			if completed.err != nil || !completed.result.Success || completed.result.Bytes != int64(len(expected)) || completed.result.SHA1 != hex.EncodeToString(hash[:]) {
+				t.Fatalf("concurrent upload %d: result=%+v err=%v", completed.index, completed.result, completed.err)
+			}
+			actual, err := os.ReadFile(filepath.Join(root, names[completed.index]))
+			if err != nil || !bytes.Equal(actual, expected) {
+				t.Fatalf("concurrent upload %d contents: %v", completed.index, err)
+			}
+		case <-ctx.Done():
+			t.Fatal("concurrent uploads did not complete")
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, "over-limit.bin")); !os.IsNotExist(err) {
+		t.Fatal("over-limit upload created a file")
+	}
+}
+
+type mcpFailingReader struct{ err error }
+
+func (reader mcpFailingReader) Read([]byte) (int, error) {
+	if reader.err != nil {
+		return 0, reader.err
+	}
+	return 0, errors.New("injected read error")
+}
 
 func TestSSHMCPTransferFailurePreservesDestination(t *testing.T) {
 	svc, hostID, root := newMCPTransferFixture(t)
+	profile, err := svc.store.GetSSHSFTPProfile(hostID)
+	if err != nil || profile == nil {
+		t.Fatalf("missing profile: %v", err)
+	}
 	for _, test := range []struct {
 		name, checksum, code string
 		size                 int64
 		reader               io.Reader
 	}{
 		{"length", "", "SSH_MCP_TRANSFER_INCOMPLETE", 100, strings.NewReader("partial")},
-		{"checksum", strings.Repeat("0", 64), "SSH_MCP_CHECKSUM_MISMATCH", 7, strings.NewReader("partial")},
+		{"checksum", strings.Repeat("0", 40), "SSH_MCP_CHECKSUM_MISMATCH", 7, strings.NewReader("partial")},
 		{"read error", "", "SSH_MCP_TRANSFER_FAILED", -1, io.MultiReader(strings.NewReader("partial"), mcpFailingReader{})},
+		{"unexpected EOF", "", "SSH_MCP_TRANSFER_FAILED", -1, io.MultiReader(strings.NewReader("partial"), mcpFailingReader{err: io.ErrUnexpectedEOF})},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(root, "target"), []byte("original"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			result, err := svc.UploadMCPStream(context.Background(), model.SSHMCPTransferRequest{HostID: hostID, Path: "target", Overwrite: true, SHA256: test.checksum}, io.NopCloser(test.reader), test.size)
+			result, err := svc.UploadMCPStream(context.Background(), model.SSHMCPTransferRequest{HostID: hostID, Path: "target", Overwrite: true, SHA1: test.checksum}, io.NopCloser(test.reader), test.size)
 			if sshServiceCode(err) != test.code || result.Success {
 				t.Fatalf("failure result=%+v err=%v", result, err)
 			}
@@ -146,12 +223,16 @@ func TestSSHMCPTransferFailurePreservesDestination(t *testing.T) {
 	if string(data) != "original" {
 		t.Fatal("cancelled upload replaced original")
 	}
+	after, err := svc.store.GetSSHSFTPProfile(hostID)
+	if err != nil || after.Generation != profile.Generation {
+		t.Fatal("input error, checksum mismatch or cancellation triggered a probe")
+	}
 }
 
 func TestSSHMCPTransferSourceURLAndPublish(t *testing.T) {
 	svc, hostID, root := newMCPTransferFixture(t)
 	content := bytes.Repeat([]byte{0, 0xff, 0x80, 3}, 1<<20)
-	hash := sha256.Sum256(content)
+	hash := sha1.Sum(content)
 	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "" {
 			t.Error("authorization leaked to source")
@@ -167,7 +248,7 @@ func TestSSHMCPTransferSourceURLAndPublish(t *testing.T) {
 		_, _ = w.Write(content)
 	}))
 	defer source.Close()
-	request := model.SSHMCPUploadRequest{SSHMCPTransferRequest: model.SSHMCPTransferRequest{HostID: hostID, Path: "url.bin", SHA256: hex.EncodeToString(hash[:])}, SourceURL: source.URL + "/redirect"}
+	request := model.SSHMCPUploadRequest{SSHMCPTransferRequest: model.SSHMCPTransferRequest{HostID: hostID, Path: "url.bin", SHA1: hex.EncodeToString(hash[:])}, SourceURL: source.URL + "/redirect"}
 	result, err := svc.uploadMCPFromURL(context.Background(), request.SSHMCPTransferRequest, request.SourceURL, source.Client())
 	if err != nil || !result.Success {
 		t.Fatalf("URL upload: %v", err)

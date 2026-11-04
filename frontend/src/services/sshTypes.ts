@@ -23,6 +23,7 @@ export interface SSHHost {
   name: string;
   group_name: string;
   host: string;
+  host_hidden?: boolean;
   port: number;
   username: string;
   credential_id: number;
@@ -48,6 +49,7 @@ export interface SSHHostRequest {
   name: string;
   group_name: string;
   host: string;
+  keep_host_address?: boolean;
   port: number;
   username: string;
   credential_id: number;
@@ -57,6 +59,10 @@ export interface SSHHostRequest {
   enabled: boolean;
   tags: string[];
   notes: string;
+}
+
+export interface SSHPrivacySettings {
+  hide_host_address: boolean;
 }
 
 export interface SSHHostShareResponse {

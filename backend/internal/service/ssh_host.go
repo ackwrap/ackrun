@@ -64,6 +64,8 @@ type SSHHostService struct {
 	realtime        *RealtimeService
 	closed          bool
 	mcpCancels      map[context.Context]context.CancelFunc
+	sftpProbes      map[int64]*sshSFTPProbeJob // guarded by sessionMu, including WaitGroup.Add
+	sftpProbeWG     sync.WaitGroup
 
 	sftpTextLockMu sync.Mutex
 	sftpTextLocks  map[string]*sshSFTPTextLock
@@ -184,15 +186,30 @@ func (svc *SSHHostService) buildCredential(request model.SSHCredentialRequest, e
 
 func (svc *SSHHostService) ListHosts() ([]model.SSHHost, error) {
 	logging.Info("ssh_host.list", "读取 SSH 主机")
-	return svc.store.ListSSHHosts()
+	items, err := svc.store.ListSSHHosts()
+	if err != nil {
+		return nil, err
+	}
+	return svc.presentHosts(items)
 }
 
 func (svc *SSHHostService) GetHost(id int64) (*model.SSHHost, error) {
+	item, err := svc.getHost(id)
+	if err != nil {
+		return nil, err
+	}
+	return svc.presentHost(item)
+}
+
+func (svc *SSHHostService) getHost(id int64) (*model.SSHHost, error) {
 	item, err := svc.store.GetSSHHost(id)
 	return item, normalizeSSHStoreError(err)
 }
 
 func (svc *SSHHostService) CreateHost(request model.SSHHostRequest) (*model.SSHHost, error) {
+	if request.KeepHostAddress {
+		return nil, sshError("SSH_HOST_INVALID", "新增主机必须填写主机地址", nil)
+	}
 	item, err := svc.normalizeHost(request)
 	if err != nil {
 		return nil, err
@@ -201,13 +218,16 @@ func (svc *SSHHostService) CreateHost(request model.SSHHostRequest) (*model.SSHH
 		return nil, normalizeSSHStoreError(err)
 	}
 	logging.Info("ssh_host.create", "创建 SSH 主机: %d", item.ID)
-	return svc.store.GetSSHHost(item.ID)
+	return svc.GetHost(item.ID)
 }
 
 func (svc *SSHHostService) UpdateHost(id int64, request model.SSHHostRequest) (*model.SSHHost, error) {
 	existing, err := svc.store.GetSSHHost(id)
 	if err != nil {
 		return nil, normalizeSSHStoreError(err)
+	}
+	if err := svc.restoreHiddenHostFields(&request, existing); err != nil {
+		return nil, err
 	}
 	item, err := svc.normalizeHost(request)
 	if err != nil {
@@ -218,15 +238,23 @@ func (svc *SSHHostService) UpdateHost(id int64, request model.SSHHostRequest) (*
 		return nil, normalizeSSHStoreError(err)
 	}
 	if !strings.EqualFold(existing.Host, item.Host) || existing.Port != item.Port {
+		svc.cancelSFTPProbe(id)
 		if err := svc.store.DeleteSSHHostKey(id); err != nil {
 			return nil, err
 		}
+	} else if existing.Username != item.Username {
+		svc.cancelSFTPProbe(id)
+		if err := svc.store.DeleteSSHSFTPProfile(id); err != nil {
+			return nil, err
+		}
+		svc.scheduleSFTPProbe(id, "")
 	}
 	logging.Info("ssh_host.update", "更新 SSH 主机: %d", id)
-	return svc.store.GetSSHHost(id)
+	return svc.GetHost(id)
 }
 
 func (svc *SSHHostService) DeleteHost(id int64) error {
+	svc.cancelSFTPProbe(id)
 	if err := svc.store.DeleteSSHHost(id); err != nil {
 		return normalizeSSHStoreError(err)
 	}
@@ -267,7 +295,7 @@ func normalizeSSHHostFields(request model.SSHHostRequest) (*model.SSHHost, error
 	if utf8.RuneCountInString(request.GroupName) > 128 || utf8.RuneCountInString(request.Notes) > 4096 {
 		return nil, sshError("SSH_HOST_INVALID", "分组不能超过 128 个字符，备注不能超过 4096 个字符", nil)
 	}
-	if request.Host == "" || strings.ContainsAny(request.Host, "\x00\r\n\t /\\") || utf8.RuneCountInString(request.Host) > 253 {
+	if request.Host == "" || strings.ContainsAny(request.Host, "\x00\r\n\t /\\*") || utf8.RuneCountInString(request.Host) > 253 {
 		return nil, sshError("SSH_HOST_INVALID", "SSH 主机地址无效", nil)
 	}
 	if request.Port < 1 || request.Port > 65535 {
@@ -323,6 +351,7 @@ func (svc *SSHHostService) DeleteHostKey(hostID int64) error {
 	if _, err := svc.store.GetSSHHost(hostID); err != nil {
 		return normalizeSSHStoreError(err)
 	}
+	svc.cancelSFTPProbe(hostID)
 	if err := svc.store.DeleteSSHHostKey(hostID); err != nil {
 		return err
 	}
@@ -371,11 +400,15 @@ func (svc *SSHHostService) TrustHostKey(hostID int64, request model.SSHHostKeyTr
 	if err := svc.store.UpsertSSHHostKey(item); err != nil {
 		return nil, err
 	}
+	// Cancel after the atomic trust/profile update so a concurrent upload cannot
+	// leave an older probe registered across a key rotation.
+	svc.cancelSFTPProbe(hostID)
 	action := "ssh_host_key.trust"
 	if rotate {
 		action = "ssh_host_key.rotate"
 	}
 	logging.Info(action, "更新 SSH Host Key 信任: %d", hostID)
+	svc.scheduleSFTPProbe(hostID, "")
 	return svc.store.GetSSHHostKey(hostID)
 }
 

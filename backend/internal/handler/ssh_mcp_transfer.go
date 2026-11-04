@@ -23,9 +23,13 @@ func (h *SSHMCPHandler) TransferFile(c *gin.Context) {
 			writeMCPError(c, http.StatusBadRequest, "SSH_MCP_INVALID", "SSH 主机 ID 无效")
 			return
 		}
-		request := model.SSHMCPTransferRequest{HostID: hostID, Path: c.GetHeader("X-SSH-Path"), SHA256: c.GetHeader("X-SSH-SHA256")}
+		request := model.SSHMCPTransferRequest{HostID: hostID, Path: c.GetHeader("X-SSH-Path"), SHA1: c.GetHeader("X-SSH-SHA1")}
 		controller := http.NewResponseController(c.Writer)
 		if c.Request.Method == http.MethodPut {
+			if c.GetHeader("X-SSH-SHA256") != "" {
+				writeMCPError(c, http.StatusBadRequest, "SSH_MCP_INVALID", "文件校验已改用 SHA-1，请使用 X-SSH-SHA1")
+				return
+			}
 			if value := c.GetHeader("X-SSH-Overwrite"); value != "" {
 				request.Overwrite, err = strconv.ParseBool(value)
 				if err != nil {
@@ -33,18 +37,7 @@ func (h *SSHMCPHandler) TransferFile(c *gin.Context) {
 					return
 				}
 			}
-			if c.GetHeader("Content-Encoding") != "" && c.GetHeader("Content-Encoding") != "identity" {
-				writeMCPError(c, http.StatusUnsupportedMediaType, "SSH_MCP_INVALID", "请发送未经压缩编码的原始文件字节")
-				return
-			}
-			defer controller.SetReadDeadline(time.Time{})
-			body := &sshMCPUploadBody{ReadCloser: c.Request.Body, controller: controller}
-			result, err := h.hosts.UploadMCPStream(c.Request.Context(), request, body, c.Request.ContentLength)
-			if err != nil {
-				writeSSHError(c, err)
-				return
-			}
-			c.JSON(http.StatusOK, result)
+			h.receiveUpload(c, request)
 			return
 		}
 		err = h.hosts.DownloadMCPStream(c.Request.Context(), model.SSHMCPFileRequest{HostID: hostID, Path: request.Path}, func(ctx context.Context, content io.Reader, info os.FileInfo) error {
@@ -73,6 +66,41 @@ func (h *SSHMCPHandler) TransferFile(c *gin.Context) {
 			writeSSHError(c, err)
 		}
 	})
+}
+
+func (h *SSHMCPHandler) UploadFile(c *gin.Context) {
+	if !allowSSHMCPRequest(c) {
+		return
+	}
+	mediaType, _, err := mime.ParseMediaType(c.GetHeader("Content-Type"))
+	if err != nil || mediaType != "application/octet-stream" {
+		writeMCPError(c, http.StatusUnsupportedMediaType, "SSH_MCP_INVALID", "请使用返回的 Content-Type，以原始二进制流上传文件")
+		return
+	}
+	h.withRequestSlot(c, func() {
+		request, err := h.service.ClaimUpload(c.Param("uploadID"), sshMCPBearer(c))
+		if err != nil {
+			writeSSHError(c, err)
+			return
+		}
+		h.receiveUpload(c, *request)
+	})
+}
+
+func (h *SSHMCPHandler) receiveUpload(c *gin.Context, request model.SSHMCPTransferRequest) {
+	if c.GetHeader("Content-Encoding") != "" && c.GetHeader("Content-Encoding") != "identity" {
+		writeMCPError(c, http.StatusUnsupportedMediaType, "SSH_MCP_INVALID", "请发送未经压缩编码的原始文件字节")
+		return
+	}
+	controller := http.NewResponseController(c.Writer)
+	defer controller.SetReadDeadline(time.Time{})
+	body := &sshMCPUploadBody{ReadCloser: c.Request.Body, controller: controller}
+	result, err := h.hosts.UploadMCPStream(c.Request.Context(), request, body, c.Request.ContentLength)
+	if err != nil {
+		writeSSHError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
 }
 
 type sshMCPUploadBody struct {

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ackwrap/ackrun/internal/logging"
 	"github.com/ackwrap/ackrun/internal/model"
@@ -18,11 +19,15 @@ import (
 const SSHMCPEndpoint = "/mcp/ssh"
 
 type SSHMCPService struct {
-	store *store.Store
-	mu    sync.Mutex
+	store   *store.Store
+	mu      sync.Mutex
+	uploads map[string]sshMCPUploadGrant
+	now     func() time.Time
 }
 
-func NewSSHMCPService(db *store.Store) *SSHMCPService { return &SSHMCPService{store: db} }
+func NewSSHMCPService(db *store.Store) *SSHMCPService {
+	return &SSHMCPService{store: db, now: time.Now}
+}
 
 func (svc *SSHMCPService) Settings() (*model.SSHMCPSettings, error) {
 	cfg, err := svc.store.GetSSHMCPConfig()
@@ -63,6 +68,9 @@ func (svc *SSHMCPService) UpdateSettings(request model.SSHMCPSettingsRequest) (*
 	cfg.Enabled = request.Enabled
 	if err := svc.store.SetSSHMCPConfig(cfg); err != nil {
 		return nil, err
+	}
+	if !cfg.Enabled || token != "" {
+		clear(svc.uploads)
 	}
 	logging.Info("ssh_mcp.settings", "更新 SSH MCP 配置: enabled=%t token_changed=%t", cfg.Enabled, token != "")
 	return &model.SSHMCPSettings{Enabled: cfg.Enabled, TokenConfigured: cfg.TokenHash != "", EndpointPath: SSHMCPEndpoint, Token: token}, nil

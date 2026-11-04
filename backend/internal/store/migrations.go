@@ -2,9 +2,20 @@ package store
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/ackwrap/ackrun/internal/logging"
 )
+
+const sshSFTPProfilesSchema = `CREATE TABLE IF NOT EXISTS ssh_sftp_profiles (
+	host_id INTEGER PRIMARY KEY REFERENCES ssh_host_keys(host_id) ON DELETE CASCADE,
+	fingerprint TEXT NOT NULL,
+	username TEXT NOT NULL,
+	generation TEXT NOT NULL,
+	packet_size INTEGER NOT NULL CHECK (packet_size BETWEEN 1 AND 1048576),
+	status TEXT NOT NULL CHECK (status IN ('probing', 'ready', 'fallback')),
+	probed_at INTEGER NOT NULL DEFAULT 0
+)`
 
 func (s *Store) migrate() error {
 	migrations := []string{
@@ -365,6 +376,7 @@ func (s *Store) migrate() error {
 					updated_at INTEGER NOT NULL,
 					FOREIGN KEY(host_id) REFERENCES ssh_hosts(id) ON DELETE CASCADE
 				)`,
+		sshSFTPProfilesSchema,
 		`CREATE TABLE IF NOT EXISTS ssh_session_audits (
 					id INTEGER PRIMARY KEY AUTOINCREMENT,
 					session_id_hash TEXT NOT NULL DEFAULT '',
@@ -399,6 +411,9 @@ func (s *Store) migrate() error {
 		}
 	}
 
+	if err := s.migrateSSHSFTPProfilePacketLimit(); err != nil {
+		return err
+	}
 	if err := s.dedupeNodeGroupsByName(); err != nil {
 		return err
 	}
@@ -419,6 +434,39 @@ func (s *Store) migrate() error {
 	}
 
 	logging.Info("store", "migrations applied")
+	return nil
+}
+
+func (s *Store) migrateSSHSFTPProfilePacketLimit() error {
+	var schema string
+	if err := s.db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ssh_sftp_profiles'`).Scan(&schema); err != nil {
+		return err
+	}
+	if !strings.Contains(schema, "packet_size BETWEEN 1 AND 262144") {
+		return nil
+	}
+	// SQLite cannot ALTER a CHECK constraint. Rebuild only this child table in
+	// one transaction, preserving trusted-host bindings and completed profiles.
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, statement := range []string{
+		`ALTER TABLE ssh_sftp_profiles RENAME TO ssh_sftp_profiles_legacy`,
+		sshSFTPProfilesSchema,
+		`INSERT INTO ssh_sftp_profiles (host_id, fingerprint, username, generation, packet_size, status, probed_at)
+		 SELECT host_id, fingerprint, username, generation, packet_size, status, probed_at FROM ssh_sftp_profiles_legacy`,
+		`DROP TABLE ssh_sftp_profiles_legacy`,
+	} {
+		if _, err := tx.Exec(statement); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	logging.Info("store", "expanded SFTP profile packet limit to 1 MiB")
 	return nil
 }
 

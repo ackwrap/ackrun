@@ -5,7 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/sha256"
+	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -123,7 +123,7 @@ func TestSSHMCPHTTPFileStreaming(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer session.Close()
-	for _, name := range []string{"ssh_upload", "ssh_download"} {
+	for _, name := range []string{"upload_file", "ssh_upload", "ssh_download"} {
 		result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: map[string]any{"host_id": hostID, "path": "package.bin"}})
 		if err != nil || result.IsError {
 			t.Fatalf("prepare %s: %v", name, err)
@@ -135,16 +135,34 @@ func TestSSHMCPHTTPFileStreaming(t *testing.T) {
 				Path   string `json:"endpoint_path"`
 			} `json:"data"`
 		}
-		if err := json.Unmarshal([]byte(result.Content[0].(*mcp.TextContent).Text), &payload); err != nil || payload.Data.Status != "ready" || payload.Data.Path != service.SSHMCPEndpoint+"/files/"+strconv.FormatInt(hostID, 10) {
+		if err := json.Unmarshal([]byte(result.Content[0].(*mcp.TextContent).Text), &payload); err != nil || payload.Data.Status != "ready" {
 			t.Fatalf("invalid transfer descriptor: %v", err)
 		}
-		if (name == "ssh_upload" && payload.Data.Method != "PUT") || (name == "ssh_download" && payload.Data.Method != "GET") {
+		if name == "ssh_download" && payload.Data.Path != service.SSHMCPEndpoint+"/files/"+strconv.FormatInt(hostID, 10) || name != "ssh_download" && !strings.HasPrefix(payload.Data.Path, service.SSHMCPEndpoint+"/uploads/") {
+			t.Fatal("invalid transfer endpoint")
+		}
+		if (name != "ssh_download" && payload.Data.Method != "PUT") || (name == "ssh_download" && payload.Data.Method != "GET") {
 			t.Fatal("invalid transfer method")
 		}
 	}
 	content := bytes.Repeat([]byte{0, 255, 2, 3}, 2<<20)
-	hash := sha256.Sum256(content)
+	hash := sha1.Sum(content)
 	endpoint := server.URL + service.SSHMCPEndpoint + "/files/" + strconv.FormatInt(hostID, 10)
+	legacy, _ := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, strings.NewReader("ignored"))
+	legacy.Header.Set("Authorization", "Bearer "+token)
+	legacy.Header.Set("X-SSH-Path", "package.bin")
+	legacy.Header.Set("X-SSH-SHA256", strings.Repeat("a", 64))
+	legacyResponse, err := http.DefaultClient.Do(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyResponse.Body.Close()
+	if legacyResponse.StatusCode != http.StatusBadRequest {
+		t.Fatal("removed SHA-256 header was silently ignored")
+	}
+	if _, err := os.Stat(filepath.Join(root, "package.bin")); !os.IsNotExist(err) {
+		t.Fatal("rejected upload created a destination file")
+	}
 	for _, chunked := range []bool{false, true} {
 		var body io.Reader = bytes.NewReader(content)
 		if chunked {
@@ -154,7 +172,7 @@ func TestSSHMCPHTTPFileStreaming(t *testing.T) {
 		request.Header.Set("Authorization", "Bearer "+token)
 		request.Header.Set("X-SSH-Path", "package.bin")
 		request.Header.Set("X-SSH-Overwrite", "true")
-		request.Header.Set("X-SSH-SHA256", hex.EncodeToString(hash[:]))
+		request.Header.Set("X-SSH-SHA1", hex.EncodeToString(hash[:]))
 		response, err := http.DefaultClient.Do(request)
 		if err != nil {
 			t.Fatal(err)
@@ -162,7 +180,7 @@ func TestSSHMCPHTTPFileStreaming(t *testing.T) {
 		var result model.SSHMCPTransferResult
 		err = json.NewDecoder(response.Body).Decode(&result)
 		response.Body.Close()
-		if response.StatusCode != http.StatusOK || err != nil || !result.Success || result.Bytes != int64(len(content)) || result.SHA256 != hex.EncodeToString(hash[:]) {
+		if response.StatusCode != http.StatusOK || err != nil || !result.Success || result.Bytes != int64(len(content)) || result.SHA1 != hex.EncodeToString(hash[:]) {
 			t.Fatalf("8 MiB HTTP upload chunked=%v status=%d result=%+v err=%v", chunked, response.StatusCode, result, err)
 		}
 	}
@@ -173,7 +191,7 @@ func TestSSHMCPHTTPFileStreaming(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	downloaded := sha256.New()
+	downloaded := sha1.New()
 	n, err := io.Copy(downloaded, response.Body)
 	response.Body.Close()
 	if err != nil || response.StatusCode != http.StatusOK || response.ContentLength != int64(len(content)) || n != int64(len(content)) || !bytes.Equal(downloaded.Sum(nil), hash[:]) {
@@ -184,7 +202,7 @@ func TestSSHMCPHTTPFileStreaming(t *testing.T) {
 	request.Header.Set("Authorization", "Bearer "+token)
 	request.Header.Set("X-SSH-Path", "package.bin")
 	request.Header.Set("X-SSH-Overwrite", "true")
-	request.Header.Set("X-SSH-SHA256", hex.EncodeToString(hash[:]))
+	request.Header.Set("X-SSH-SHA1", hex.EncodeToString(hash[:]))
 	response, err = http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)

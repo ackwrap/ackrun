@@ -3,7 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
+	"crypto/sha1"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -26,7 +26,26 @@ import (
 	"github.com/ackwrap/ackrun/internal/model"
 )
 
-const SSHMCPTransferTimeout = time.Hour
+const (
+	SSHMCPTransferTimeout   = time.Hour
+	sshMCPUploadConcurrency = 16
+)
+
+// ReadFromWithConcurrency treats io.ErrUnexpectedEOF as the normal final short
+// chunk. Preserve errors from the source itself so truncated HTTP streams cannot
+// be published when their length is unknown.
+type sshMCPUploadSource struct {
+	io.Reader
+	err error
+}
+
+func (source *sshMCPUploadSource) Read(data []byte) (int, error) {
+	n, err := source.Reader.Read(data)
+	if err != nil && err != io.EOF {
+		source.err = err
+	}
+	return n, err
+}
 
 var (
 	errMCPSourceAddressDenied = errors.New("MCP source address is not public")
@@ -61,10 +80,10 @@ func validateMCPTransfer(request model.SSHMCPTransferRequest) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if request.SHA256 != "" {
-		decoded, err := hex.DecodeString(request.SHA256)
-		if err != nil || len(decoded) != sha256.Size {
-			return "", sshError("SSH_MCP_INVALID", "SHA-256 必须为 64 位十六进制字符串", nil)
+	if request.SHA1 != "" {
+		decoded, err := hex.DecodeString(request.SHA1)
+		if err != nil || len(decoded) != sha1.Size {
+			return "", sshError("SSH_MCP_INVALID", "SHA-1 必须为 40 位十六进制字符串", nil)
 		}
 	}
 	return remote, nil
@@ -75,7 +94,7 @@ func (svc *SSHHostService) PrepareMCPTransfer(request model.SSHMCPTransferReques
 	if err != nil {
 		return nil, err
 	}
-	host, err := svc.GetHost(request.HostID)
+	host, err := svc.getHost(request.HostID)
 	if err != nil {
 		return nil, err
 	}
@@ -88,8 +107,8 @@ func (svc *SSHHostService) PrepareMCPTransfer(request model.SSHMCPTransferReques
 		method = http.MethodPut
 		headers["Content-Type"] = "application/octet-stream"
 		headers["X-SSH-Overwrite"] = strconv.FormatBool(request.Overwrite)
-		if request.SHA256 != "" {
-			headers["X-SSH-SHA256"] = request.SHA256
+		if request.SHA1 != "" {
+			headers["X-SSH-SHA1"] = request.SHA1
 		}
 	}
 	return map[string]any{
@@ -199,14 +218,24 @@ func (svc *SSHHostService) uploadMCPStream(ctx context.Context, request model.SS
 		return nil, err
 	}
 	result := &model.SSHMCPTransferResult{}
+	var profile *model.SSHSFTPProfile
+	reprobe := false
 	err = svc.withMCPHost(ctx, request.HostID, SSHMCPTransferTimeout, "upload", func(ctx context.Context, client *ssh.Client) error {
-		files, err := sftp.NewClient(client)
+		var packetSize, concurrency int
+		var err error
+		profile, packetSize, concurrency, err = svc.sftpUploadProfile(request.HostID)
 		if err != nil {
+			return err
+		}
+		files, err := sftp.NewClient(client, sftp.MaxPacketUnchecked(packetSize), sftp.MaxConcurrentRequestsPerFile(concurrency))
+		if err != nil {
+			reprobe = shouldReprobeSFTP(err)
 			return sshError("SSH_MCP_SFTP_FAILED", "无法启动 SFTP", err)
 		}
 		defer files.Close()
 		info, err := files.Lstat(remote)
 		if err != nil && !os.IsNotExist(err) {
+			reprobe = shouldReprobeSFTP(err)
 			return sshError("SSH_MCP_SFTP_FAILED", "无法检查远程文件", err)
 		}
 		if info != nil && (!request.Overwrite || !info.Mode().IsRegular()) {
@@ -233,6 +262,7 @@ func (svc *SSHHostService) uploadMCPStream(ctx context.Context, request model.SS
 		temporary := path.Join(path.Dir(remote), ".ackwrap-mcp-"+suffix)
 		file, err := files.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
 		if err != nil {
+			reprobe = shouldReprobeSFTP(err)
 			return sshError("SSH_MCP_SFTP_FAILED", "无法创建远程临时文件", err)
 		}
 		committed := false
@@ -249,20 +279,25 @@ func (svc *SSHHostService) uploadMCPStream(ctx context.Context, request model.SS
 			mode = info.Mode().Perm()
 		}
 		if err := file.Chmod(mode); err != nil {
+			reprobe = shouldReprobeSFTP(err)
 			return sshError("SSH_MCP_SFTP_FAILED", "无法设置远程文件权限", err)
 		}
-		hash := sha256.New()
-		result.Bytes, err = io.CopyBuffer(io.MultiWriter(file, hash), struct{ io.Reader }{content}, make([]byte, 64<<10))
+		hash := sha1.New()
+		source := &sshMCPUploadSource{Reader: io.TeeReader(content, hash)}
+		result.Bytes, err = file.ReadFromWithConcurrency(source, concurrency)
+		writeErr := err
+		err = errors.Join(err, source.err)
 		closeErr := file.Close()
 		if err != nil || closeErr != nil {
+			reprobe = source.err == nil && ctx.Err() == nil && shouldReprobeSFTP(errors.Join(writeErr, closeErr))
 			return sshError("SSH_MCP_TRANSFER_FAILED", "流式上传中断，原文件未替换", errors.Join(err, closeErr))
 		}
 		if expectedSize >= 0 && result.Bytes != expectedSize {
 			return sshError("SSH_MCP_TRANSFER_INCOMPLETE", "上传长度不符，原文件未替换", nil)
 		}
-		result.SHA256 = hex.EncodeToString(hash.Sum(nil))
-		if request.SHA256 != "" && !strings.EqualFold(request.SHA256, result.SHA256) {
-			return sshError("SSH_MCP_CHECKSUM_MISMATCH", "SHA-256 校验失败，原文件未替换", nil)
+		result.SHA1 = hex.EncodeToString(hash.Sum(nil))
+		if request.SHA1 != "" && !strings.EqualFold(request.SHA1, result.SHA1) {
+			return sshError("SSH_MCP_CHECKSUM_MISMATCH", "SHA-1 校验失败，原文件未替换", nil)
 		}
 		if err := ctx.Err(); err != nil {
 			return err
@@ -273,12 +308,16 @@ func (svc *SSHHostService) uploadMCPStream(ctx context.Context, request model.SS
 			err = files.Link(temporary, remote)
 		}
 		if err != nil {
+			reprobe = shouldReprobeSFTP(err)
 			return sshError("SSH_MCP_SFTP_FAILED", "提交远程文件失败，目标可能已存在", err)
 		}
 		committed, result.Success = true, true
 		logging.Info("ssh_mcp.upload", "流式上传完成: host_id=%d bytes=%d", request.HostID, result.Bytes)
 		return nil
 	})
+	if reprobe && ctx.Err() == nil && profile != nil && profile.Status != "probing" {
+		svc.scheduleSFTPProbe(request.HostID, profile.Generation)
+	}
 	return result, err
 }
 

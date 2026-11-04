@@ -197,9 +197,9 @@ function actionLabel(rule: RouteRule) {
           <tr
             v-for="(r, i) in displayRules"
             :key="r.id"
-            :data-rule-id="r.id"
+            :data-sort-id="r.id"
             class="rule-list-row"
-            :class="{ 'rule-row-placeholder': draggingId === r.id }"
+            :class="{ 'aw-sort-placeholder': draggingId === r.id }"
           >
             <td class="rule-sort-cell">
               <div class="flex items-center gap-1.5">
@@ -420,34 +420,5 @@ function actionLabel(rule: RouteRule) {
   .rule-cell-label {
     display: inline;
   }
-}
-.rule-row-placeholder > td {
-  background: var(--button-primary-bg) !important;
-  color: transparent !important;
-  box-shadow:
-    inset 0 1px 0 var(--color-primary),
-    inset 0 -1px 0 var(--color-primary);
-}
-.rule-row-placeholder > td > * {
-  visibility: hidden;
-}
-:global(.rule-sort-ghost) {
-  position: fixed;
-  top: 0;
-  left: 0;
-  z-index: 60;
-  pointer-events: none;
-  overflow: hidden;
-  border-radius: var(--radius-lg);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-card);
-  outline: 1px solid var(--color-primary);
-  opacity: 0.8;
-  will-change: transform;
-}
-:global(body.rule-sort-active),
-:global(body.rule-sort-active *) {
-  cursor: grabbing !important;
-  user-select: none !important;
 }
 </style>
