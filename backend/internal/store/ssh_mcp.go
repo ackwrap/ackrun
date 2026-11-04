@@ -10,11 +10,12 @@ import (
 type SSHMCPConfig struct {
 	Enabled      bool   `json:"enabled"`
 	LocalEnabled bool   `json:"local_enabled"`
+	LocalName    string `json:"local_name"`
 	TokenHash    string `json:"token_hash"`
 }
 
 func (s *Store) GetSSHMCPConfig() (SSHMCPConfig, error) {
-	var cfg SSHMCPConfig
+	cfg := SSHMCPConfig{LocalName: "本机"}
 	var raw string
 	err := s.db.QueryRow(`SELECT value FROM app_settings WHERE key = 'ssh.mcp'`).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -24,6 +25,9 @@ func (s *Store) GetSSHMCPConfig() (SSHMCPConfig, error) {
 		return cfg, err
 	}
 	err = json.Unmarshal([]byte(raw), &cfg)
+	if cfg.LocalName == "" {
+		cfg.LocalName = "本机"
+	}
 	return cfg, err
 }
 

@@ -3,16 +3,18 @@ package model
 type SSHMCPSettings struct {
 	Enabled         bool   `json:"enabled"`
 	LocalEnabled    bool   `json:"local_enabled"`
+	LocalName       string `json:"local_name"`
 	TokenConfigured bool   `json:"token_configured"`
 	EndpointPath    string `json:"endpoint_path"`
 	Token           string `json:"token,omitempty"`
 }
 
 type SSHMCPSettingsRequest struct {
-	Enabled       bool   `json:"enabled"`
-	LocalEnabled  *bool  `json:"local_enabled,omitempty"`
-	Token         string `json:"token"`
-	GenerateToken bool   `json:"generate_token"`
+	Enabled       bool    `json:"enabled"`
+	LocalEnabled  *bool   `json:"local_enabled,omitempty"`
+	LocalName     *string `json:"local_name,omitempty"`
+	Token         string  `json:"token"`
+	GenerateToken bool    `json:"generate_token"`
 }
 
 type SSHMCPExecRequest struct {

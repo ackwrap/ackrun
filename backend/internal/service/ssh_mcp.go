@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ackwrap/ackrun/internal/logging"
 	"github.com/ackwrap/ackrun/internal/model"
@@ -34,7 +35,7 @@ func (svc *SSHMCPService) Settings() (*model.SSHMCPSettings, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &model.SSHMCPSettings{Enabled: cfg.Enabled, LocalEnabled: cfg.LocalEnabled, TokenConfigured: cfg.TokenHash != "", EndpointPath: SSHMCPEndpoint}, nil
+	return &model.SSHMCPSettings{Enabled: cfg.Enabled, LocalEnabled: cfg.LocalEnabled, LocalName: cfg.LocalName, TokenConfigured: cfg.TokenHash != "", EndpointPath: SSHMCPEndpoint}, nil
 }
 
 func (svc *SSHMCPService) UpdateSettings(request model.SSHMCPSettingsRequest) (*model.SSHMCPSettings, error) {
@@ -43,6 +44,16 @@ func (svc *SSHMCPService) UpdateSettings(request model.SSHMCPSettingsRequest) (*
 	cfg, err := svc.store.GetSSHMCPConfig()
 	if err != nil {
 		return nil, err
+	}
+	if request.LocalName != nil {
+		name := strings.TrimSpace(*request.LocalName)
+		if utf8.RuneCountInString(name) > 128 || strings.ContainsAny(name, "\x00\r\n") {
+			return nil, errors.New("本机名称不能超过 128 个字符或包含换行、NUL")
+		}
+		if name == "" {
+			name = "本机"
+		}
+		cfg.LocalName = name
 	}
 	if request.GenerateToken && request.Token != "" {
 		return nil, errors.New("自动生成和自定义 Token 不能同时选择")
@@ -83,7 +94,7 @@ func (svc *SSHMCPService) UpdateSettings(request model.SSHMCPSettingsRequest) (*
 		}
 	}
 	logging.Info("ssh_mcp.settings", "更新 SSH MCP 配置: enabled=%t local_enabled=%t token_changed=%t", cfg.Enabled, cfg.LocalEnabled, token != "")
-	return &model.SSHMCPSettings{Enabled: cfg.Enabled, LocalEnabled: cfg.LocalEnabled, TokenConfigured: cfg.TokenHash != "", EndpointPath: SSHMCPEndpoint, Token: token}, nil
+	return &model.SSHMCPSettings{Enabled: cfg.Enabled, LocalEnabled: cfg.LocalEnabled, LocalName: cfg.LocalName, TokenConfigured: cfg.TokenHash != "", EndpointPath: SSHMCPEndpoint, Token: token}, nil
 }
 
 func (svc *SSHMCPService) Authenticate(token string) (enabled, authenticated bool, err error) {

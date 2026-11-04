@@ -79,6 +79,41 @@ func TestSSHMCPBuiltinLocalTargetLifecycle(t *testing.T) {
 	}
 }
 
+func TestSSHMCPBuiltinLocalRename(t *testing.T) {
+	svc, db := newSSHHostShareTestService(t)
+	settings := enableTestMCPLocal(t, svc)
+	if cfg, err := settings.Settings(); err != nil || cfg.LocalName != "本机" {
+		t.Fatalf("missing default local name: %v", err)
+	}
+	name := "  家里软路由 🏠  "
+	updated, err := settings.UpdateSettings(model.SSHMCPSettingsRequest{Enabled: true, LocalName: &name})
+	if err != nil || updated.LocalName != strings.TrimSpace(name) {
+		t.Fatalf("local rename failed: %v", err)
+	}
+	if _, err := settings.UpdateSettings(model.SSHMCPSettingsRequest{Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, err := NewSSHMCPService(db).Settings(); err != nil || cfg.LocalName != strings.TrimSpace(name) || !cfg.LocalEnabled {
+		t.Fatal("local rename was not persisted or omitted fields reset it")
+	}
+	hosts, err := svc.ListMCPHosts()
+	if err != nil || len(hosts) != 1 || hosts[0].Name != strings.TrimSpace(name) || hosts[0].ID != SSHMCPLocalHostID || hosts[0].ConnectionMode != "local" {
+		t.Fatalf("MCP local target did not reflect renamed display name: %+v %v", hosts, err)
+	}
+	for _, invalid := range []string{strings.Repeat("长", 129), "one\ntwo", "one\rTwo", "one\x00two"} {
+		if _, err := settings.UpdateSettings(model.SSHMCPSettingsRequest{Enabled: false, LocalName: &invalid}); err == nil {
+			t.Fatal("invalid local name accepted")
+		}
+		if cfg, err := settings.Settings(); err != nil || cfg.LocalName != strings.TrimSpace(name) || !cfg.Enabled {
+			t.Fatal("invalid rename changed saved settings")
+		}
+	}
+	name = " "
+	if cfg, err := settings.UpdateSettings(model.SSHMCPSettingsRequest{Enabled: true, LocalName: &name}); err != nil || cfg.LocalName != "本机" {
+		t.Fatalf("empty local name did not restore default: %v", err)
+	}
+}
+
 func TestSSHMCPBuiltinLocalExecution(t *testing.T) {
 	svc, _ := newSSHHostShareTestService(t)
 	enableTestMCPLocal(t, svc)

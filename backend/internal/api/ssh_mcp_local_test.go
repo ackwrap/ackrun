@@ -28,7 +28,11 @@ func TestSSHMCPBuiltinLocalHTTPTransfer(t *testing.T) {
 	defer cancel()
 	setLocal := func(enabled bool) {
 		t.Helper()
-		body, _ := json.Marshal(map[string]bool{"enabled": true, "local_enabled": enabled})
+		payload := map[string]any{"enabled": true, "local_enabled": enabled}
+		if enabled {
+			payload["local_name"] = "家里软路由"
+		}
+		body, _ := json.Marshal(payload)
 		request, _ := http.NewRequestWithContext(ctx, http.MethodPut, server.URL+"/api/v1/advanced/ssh/mcp/settings", bytes.NewReader(body))
 		request.Header.Set("Authorization", "Bearer test-admin-token")
 		request.Header.Set("Content-Type", "application/json")
@@ -38,7 +42,7 @@ func TestSSHMCPBuiltinLocalHTTPTransfer(t *testing.T) {
 		}
 		defer response.Body.Close()
 		var settings model.SSHMCPSettings
-		if err := json.NewDecoder(response.Body).Decode(&settings); err != nil || response.StatusCode != http.StatusOK || settings.LocalEnabled != enabled {
+		if err := json.NewDecoder(response.Body).Decode(&settings); err != nil || response.StatusCode != http.StatusOK || settings.LocalEnabled != enabled || settings.LocalName != "家里软路由" {
 			t.Fatalf("local settings HTTP update: %d %v", response.StatusCode, err)
 		}
 	}
@@ -69,7 +73,7 @@ func TestSSHMCPBuiltinLocalHTTPTransfer(t *testing.T) {
 	}
 	var hosts []model.SSHHost
 	call("ssh_list_servers", map[string]any{}, &hosts)
-	if len(hosts) != 1 || hosts[0].ID != service.SSHMCPLocalHostID || hosts[0].ConnectionMode != "local" {
+	if len(hosts) != 1 || hosts[0].ID != service.SSHMCPLocalHostID || hosts[0].ConnectionMode != "local" || hosts[0].Name != "家里软路由" {
 		t.Fatal("MCP did not discover built-in local target")
 	}
 	var execution model.SSHMCPExecResult

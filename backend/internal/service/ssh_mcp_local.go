@@ -31,7 +31,7 @@ func getSSHMCPHost(db *store.Store, hostID int64) (*model.SSHHost, error) {
 	if !cfg.Enabled || !cfg.LocalEnabled {
 		return nil, sshError("SSH_MCP_LOCAL_DISABLED", "本机 MCP 访问未启用，请在 MCP 配置中启用", nil)
 	}
-	host := &model.SSHHost{ID: SSHMCPLocalHostID, Name: "本机", ConnectionMode: "local", Enabled: true,
+	host := &model.SSHHost{ID: SSHMCPLocalHostID, Name: cfg.LocalName, ConnectionMode: "local", Enabled: true,
 		HostKeyStatus: "not_required", Tags: []string{}, Notes: "AckWrap 服务所在设备；以 AckWrap 进程用户执行，无需 SSH"}
 	if current, err := user.Current(); err == nil {
 		host.Username = current.Username

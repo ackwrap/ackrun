@@ -11,6 +11,7 @@ import { errorMessage } from "../advanced/advancedUi";
 const settings = ref<SSHMCPSettings | null>(null);
 const enabled = ref(false);
 const localEnabled = ref(false);
+const localName = ref("本机");
 const loading = ref(true);
 const saving = ref(false);
 const newToken = ref("");
@@ -59,6 +60,7 @@ async function load() {
     settings.value = await sshMcpApi.getSettings();
     enabled.value = settings.value.enabled;
     localEnabled.value = settings.value.local_enabled;
+    localName.value = settings.value.local_name || "本机";
     endpoint.value = new URL(
       settings.value.endpoint_path,
       window.location.origin,
@@ -85,6 +87,7 @@ async function save(generate = false) {
     const result = await sshMcpApi.updateSettings({
       enabled: enabled.value,
       local_enabled: localEnabled.value,
+      local_name: localName.value,
       token: generate ? undefined : newToken.value || undefined,
       generate_token:
         generate ||
@@ -95,6 +98,7 @@ async function save(generate = false) {
       visible.value = false;
     }
     settings.value = { ...result, token: undefined };
+    localName.value = result.local_name;
     newToken.value = "";
     show(
       result.token
@@ -172,9 +176,18 @@ onMounted(load);
             </label>
             <p class="mt-2 text-xs text-[var(--text-secondary)]">
               本机指运行 AckWrap 的设备。以 AckWrap
-              进程用户执行命令和读写文件，无需 SSH；启用后在 MCP
-              主机列表中显示“本机”。
+              进程用户执行命令和读写文件，无需 SSH。
             </p>
+            <label v-if="localEnabled" class="mt-3 block max-w-md">
+              <span class="aw-modal-label text-xs">本机显示名称</span>
+              <input
+                v-model="localName"
+                :disabled="saving"
+                maxlength="128"
+                placeholder="本机"
+                class="aw-input mt-1 w-full"
+              />
+            </label>
           </div>
           <div
             class="flex items-start gap-2 rounded-lg bg-[var(--bg-elevated)] p-3 text-xs leading-6 text-[var(--text-secondary)]"
