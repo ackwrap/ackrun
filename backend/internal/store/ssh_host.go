@@ -274,6 +274,13 @@ func (s *Store) UpsertSSHHostKey(item *model.SSHHostKey) error {
 	if _, err = tx.Exec(`DELETE FROM ssh_sftp_profiles WHERE host_id = ?`, item.HostID); err != nil {
 		return err
 	}
+	// The pending check describes the key that was just accepted. Clear that
+	// obsolete failure without claiming authentication or connectivity succeeded.
+	if _, err = tx.Exec(`UPDATE ssh_hosts SET last_status = 'unknown', last_latency_ms = 0,
+		last_error_code = '', last_error_message = '', updated_at = ?
+		WHERE id = ? AND last_status = 'host_key_pending'`, now, item.HostID); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 

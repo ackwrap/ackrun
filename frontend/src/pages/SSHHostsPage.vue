@@ -273,6 +273,20 @@ async function trustHostKey() {
     };
     if (prompt.rotate) await sshApi.rotateHostKey(prompt.host.id, payload);
     else await sshApi.trustHostKey(prompt.host.id, payload);
+    if (pageUnmounting) return;
+    // Apply the confirmed trust before reloading unrelated management data.
+    // Invalidate older loads so they cannot restore the pending-key snapshot.
+    ++loadGeneration;
+    const host = hosts.value.find((item) => item.id === prompt.host.id);
+    if (host) {
+      host.host_key_status = "trusted";
+      if (host.last_status === "host_key_pending") {
+        host.last_status = "unknown";
+        host.last_latency_ms = 0;
+        host.last_error_code = "";
+        host.last_error_message = "";
+      }
+    }
     show(prompt.rotate ? "Host Key 已显式轮换" : "Host Key 已信任");
     hostKeyPrompt.value = null;
     await load();

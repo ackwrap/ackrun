@@ -73,6 +73,60 @@ func TestSSHCredentialCiphertextStoredAsBlob(t *testing.T) {
 	}
 }
 
+func TestSSHHostTrustClearsOnlyPendingKeyChecks(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "trust.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	credential := &model.SSHCredential{
+		Name: "trust", AuthType: "password", SecretContext: "trust",
+		SecretCiphertext: []byte{1}, SecretNonce: []byte{2}, KeyVersion: 1,
+	}
+	if err := db.CreateSSHCredential(credential); err != nil {
+		t.Fatal(err)
+	}
+	host := &model.SSHHost{
+		Name: "trust", Host: "localhost", Port: 22, Username: "tester",
+		CredentialID: credential.ID, ConnectionMode: "direct", TerminalType: "xterm",
+		Enabled: true, Tags: []string{},
+	}
+	if err := db.CreateSSHHost(host); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ status, code, want string }{
+		{"host_key_pending", "SSH_HOST_KEY_UNKNOWN", "unknown"},
+		{"host_key_pending", "SSH_HOST_KEY_CHANGED", "unknown"},
+		{"unavailable", "SSH_AUTH_FAILED", "unavailable"},
+		{"unavailable", "SSH_CONNECT_FAILED", "unavailable"},
+		{"available", "", "available"},
+	} {
+		t.Run(tc.status+tc.code, func(t *testing.T) {
+			if err := db.UpdateSSHHostTestResult(host.ID, tc.status, 42, tc.code, tc.code); err != nil {
+				t.Fatal(err)
+			}
+			key := &model.SSHHostKey{HostID: host.ID, KeyType: "synthetic", PublicKey: "synthetic", FingerprintSHA256: tc.status + tc.code}
+			if err := db.UpsertSSHHostKey(key); err != nil {
+				t.Fatal(err)
+			}
+			got, err := db.GetSSHHost(host.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.HostKeyStatus != "trusted" || got.LastStatus != tc.want {
+				t.Fatalf("unexpected trust status: %+v", got)
+			}
+			if tc.status == "host_key_pending" {
+				if got.LastErrorCode != "" || got.LastErrorMessage != "" || got.LastLatencyMS != 0 {
+					t.Fatal("stale pending error remained after trust")
+				}
+			} else if got.LastErrorCode != tc.code || got.LastErrorMessage != tc.code || got.LastLatencyMS != 42 {
+				t.Fatal("trust overwrote an unrelated connection check")
+			}
+		})
+	}
+}
+
 func TestCreateSSHHostsWithCredentialsRollsBackBatch(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {

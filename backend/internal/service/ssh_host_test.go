@@ -83,6 +83,10 @@ func TestSSHCredentialEncryptionAndHostKeyTrust(t *testing.T) {
 	}, false); err != nil {
 		t.Fatal(err)
 	}
+	trustedHost, err := svc.GetHost(host.ID)
+	if err != nil || trustedHost.HostKeyStatus != "trusted" || trustedHost.LastStatus != "unknown" || trustedHost.LastErrorCode != "" || trustedHost.LastErrorMessage != "" {
+		t.Fatalf("trust left a stale pending check: %+v err=%v", trustedHost, err)
+	}
 	result, err := svc.TestHost(context.Background(), host.ID)
 	if err != nil {
 		t.Fatal(err)
