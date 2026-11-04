@@ -62,7 +62,7 @@
 
 :root[data-theme] .aw-card,
 :root[data-theme] main section[class*="bg-[var(--bg-surface)]"] {
-  border: 1px solid var(--border-default);
+  border: 1px solid var(--card-border);
   border-radius: var(--radius-card);
   box-shadow: var(--shadow-card);
   backdrop-filter: none;

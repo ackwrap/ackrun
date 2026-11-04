@@ -53,6 +53,7 @@
   --radius-card: 16px;
   --shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.025), 0 8px 24px rgba(0, 0, 0, 0.18);
   --shadow-card-hover: inset 0 1px 0 rgba(255, 255, 255, 0.035), 0 10px 26px rgba(0, 0, 0, 0.22);
+  --card-border: var(--border-default);
   --card-hover-border: rgba(230, 224, 215, 0.20);
   --card-surface-tint: rgba(245, 245, 246, 0.018);
   --card-texture-ink: #D5D3D0;
@@ -104,7 +105,7 @@
   --color-error: #DC2626;
   --color-error-bg: rgba(220, 38, 38, 0.12);
   --latency-low: oklch(0.551 0.08 167);
-  --bg-base: #F5F6FA;
+  --bg-base: #EEF1F6;
   --bg-surface: #FFFFFF;
   --bg-elevated: #FFFFFF;
   --bg-input: #F1F3F7;
@@ -132,8 +133,9 @@
   --radius-md: 12px;
   --radius-lg: 18px;
   --radius-xl: 28px;
-  --shadow-card: 0 1px 2px rgba(25, 42, 70, 0.025), 0 3px 10px rgba(25, 42, 70, 0.025);
-  --shadow-card-hover: 0 2px 4px rgba(25, 42, 70, 0.035), 0 6px 16px rgba(25, 42, 70, 0.045);
+  --shadow-card: 0 1px 2px rgba(25, 42, 70, 0.04), 0 6px 18px -6px rgba(25, 42, 70, 0.12);
+  --shadow-card-hover: 0 2px 4px rgba(25, 42, 70, 0.05), 0 10px 24px -8px rgba(25, 42, 70, 0.18);
+  --card-border: #D7DFEB;
   --card-hover-border: #C4D7F4;
   --card-surface-tint: rgba(220, 235, 255, 0.14);
   --card-texture-ink: #638AB8;
@@ -149,5 +151,5 @@
   --proxy-node-bg: var(--bg-inset);
   --proxy-node-hover: #E8EDF5;
   --app-bg-image: none;
-  --header-bg: rgba(245, 246, 250, 0.94);
+  --header-bg: rgba(238, 241, 246, 0.94);
 }
