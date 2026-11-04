@@ -98,9 +98,71 @@ func TestSSHMCPTransferSHA1(t *testing.T) {
 	}
 }
 
-type mcpFailingReader struct{}
+func TestSSHMCPTransferConcurrentFiles(t *testing.T) {
+	svc, hostID, root := newMCPTransferFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	names := []string{"one.bin", "two.bin"}
+	payloads := [][]byte{bytes.Repeat([]byte{0, 255, 3}, 128<<10), bytes.Repeat([]byte{128, 4, 1}, 128<<10)}
+	type outcome struct {
+		index  int
+		result *model.SSHMCPTransferResult
+		err    error
+	}
+	finished := make(chan outcome, len(names))
+	writers := make([]*io.PipeWriter, len(names))
+	for index, name := range names {
+		reader, writer := io.Pipe()
+		writers[index] = writer
+		defer writer.Close()
+		go func() {
+			result, err := svc.UploadMCPStream(ctx, model.SSHMCPTransferRequest{HostID: hostID, Path: name}, reader, -1)
+			finished <- outcome{index: index, result: result, err: err}
+		}()
+		// Keep both uploads open after they have acquired their SSH sessions.
+		if _, err := writer.Write(payloads[index][:64<<10]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err := svc.UploadMCPStream(ctx, model.SSHMCPTransferRequest{HostID: hostID, Path: "over-limit.bin"}, io.NopCloser(strings.NewReader("unused")), 6)
+	if sshServiceCode(err) != "SSH_SESSION_LIMIT" {
+		t.Fatalf("third simultaneous upload: %v", err)
+	}
+	for index, writer := range writers {
+		if _, err := writer.Write(payloads[index][64<<10:]); err != nil {
+			t.Fatal(err)
+		}
+		_ = writer.Close()
+	}
+	for range names {
+		select {
+		case completed := <-finished:
+			expected := payloads[completed.index]
+			hash := sha1.Sum(expected)
+			if completed.err != nil || !completed.result.Success || completed.result.Bytes != int64(len(expected)) || completed.result.SHA1 != hex.EncodeToString(hash[:]) {
+				t.Fatalf("concurrent upload %d: result=%+v err=%v", completed.index, completed.result, completed.err)
+			}
+			actual, err := os.ReadFile(filepath.Join(root, names[completed.index]))
+			if err != nil || !bytes.Equal(actual, expected) {
+				t.Fatalf("concurrent upload %d contents: %v", completed.index, err)
+			}
+		case <-ctx.Done():
+			t.Fatal("concurrent uploads did not complete")
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, "over-limit.bin")); !os.IsNotExist(err) {
+		t.Fatal("over-limit upload created a file")
+	}
+}
 
-func (mcpFailingReader) Read([]byte) (int, error) { return 0, errors.New("injected read error") }
+type mcpFailingReader struct{ err error }
+
+func (reader mcpFailingReader) Read([]byte) (int, error) {
+	if reader.err != nil {
+		return 0, reader.err
+	}
+	return 0, errors.New("injected read error")
+}
 
 func TestSSHMCPTransferFailurePreservesDestination(t *testing.T) {
 	svc, hostID, root := newMCPTransferFixture(t)
@@ -112,6 +174,7 @@ func TestSSHMCPTransferFailurePreservesDestination(t *testing.T) {
 		{"length", "", "SSH_MCP_TRANSFER_INCOMPLETE", 100, strings.NewReader("partial")},
 		{"checksum", strings.Repeat("0", 40), "SSH_MCP_CHECKSUM_MISMATCH", 7, strings.NewReader("partial")},
 		{"read error", "", "SSH_MCP_TRANSFER_FAILED", -1, io.MultiReader(strings.NewReader("partial"), mcpFailingReader{})},
+		{"unexpected EOF", "", "SSH_MCP_TRANSFER_FAILED", -1, io.MultiReader(strings.NewReader("partial"), mcpFailingReader{err: io.ErrUnexpectedEOF})},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(root, "target"), []byte("original"), 0o600); err != nil {

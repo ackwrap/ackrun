@@ -26,7 +26,26 @@ import (
 	"github.com/ackwrap/ackrun/internal/model"
 )
 
-const SSHMCPTransferTimeout = time.Hour
+const (
+	SSHMCPTransferTimeout   = time.Hour
+	sshMCPUploadConcurrency = 16
+)
+
+// ReadFromWithConcurrency treats io.ErrUnexpectedEOF as the normal final short
+// chunk. Preserve errors from the source itself so truncated HTTP streams cannot
+// be published when their length is unknown.
+type sshMCPUploadSource struct {
+	io.Reader
+	err error
+}
+
+func (source *sshMCPUploadSource) Read(data []byte) (int, error) {
+	n, err := source.Reader.Read(data)
+	if err != nil && err != io.EOF {
+		source.err = err
+	}
+	return n, err
+}
 
 var (
 	errMCPSourceAddressDenied = errors.New("MCP source address is not public")
@@ -252,7 +271,9 @@ func (svc *SSHHostService) uploadMCPStream(ctx context.Context, request model.SS
 			return sshError("SSH_MCP_SFTP_FAILED", "无法设置远程文件权限", err)
 		}
 		hash := sha1.New()
-		result.Bytes, err = io.CopyBuffer(io.MultiWriter(file, hash), struct{ io.Reader }{content}, make([]byte, 64<<10))
+		source := &sshMCPUploadSource{Reader: io.TeeReader(content, hash)}
+		result.Bytes, err = file.ReadFromWithConcurrency(source, sshMCPUploadConcurrency)
+		err = errors.Join(err, source.err)
 		closeErr := file.Close()
 		if err != nil || closeErr != nil {
 			return sshError("SSH_MCP_TRANSFER_FAILED", "流式上传中断，原文件未替换", errors.Join(err, closeErr))
