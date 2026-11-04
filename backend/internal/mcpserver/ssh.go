@@ -46,13 +46,13 @@ func NewSSHServer(svc *service.SSHHostService, uploads *service.SSHMCPService) *
 		defer cancel()
 		return svc.TestMCPHost(ctx, input.HostID)
 	})
-	addTool(server, "ssh_exec", "在指定主机执行命令，返回 stdout、stderr 和退出码；非零退出码表示失败。", func(ctx context.Context, input model.SSHMCPExecRequest) (any, error) {
+	addTool(server, "ssh_exec", "在指定主机执行命令，返回 stdout、stderr 和退出码；非零退出码表示失败。timeout 是连接、代理、SSH 握手、创建会话及命令执行共用的总时限，默认 30 秒，最大 600 秒；调用方取消或更早的截止时间仍优先。", func(ctx context.Context, input model.SSHMCPExecRequest) (any, error) {
 		return svc.ExecuteMCP(ctx, input)
 	})
-	addTool(server, "ssh_exec_multi", "逐个在最多 10 台主机执行相同命令，单台失败不影响其余主机。", func(ctx context.Context, input struct {
+	addTool(server, "ssh_exec_multi", "逐个在最多 10 台主机执行相同命令，单台失败不影响其余主机。timeout 为每台主机连接至命令结束的总时限，默认 30 秒，最大 600 秒；整次调用仍受调用方截止时间约束。", func(ctx context.Context, input struct {
 		HostIDs []int64 `json:"host_ids"`
 		Command string  `json:"command"`
-		Timeout int     `json:"timeout,omitempty"`
+		Timeout int     `json:"timeout,omitempty" jsonschema:"Per-host total timeout in seconds, shared by connection, SSH handshake, session creation and command execution; default 30, maximum 600. The caller's earlier deadline still takes precedence across the entire multi-host call"`
 	}) (any, error) {
 		if len(input.HostIDs) == 0 || len(input.HostIDs) > 10 {
 			return nil, errors.New("必须选择 1 到 10 台 SSH 主机")

@@ -235,7 +235,7 @@ func TestSSHMCPExecRemoteResults(t *testing.T) {
 					t.Fatalf("output limit failed: %v", err)
 				}
 			case "wait":
-				if sshServiceCode(err) != "SSH_MCP_CANCELLED" || time.Since(started) > 5*time.Second {
+				if sshServiceCode(err) != "SSH_MCP_CANCELLED" || err.Error() != "SSH 命令执行超时" || time.Since(started) > 5*time.Second {
 					t.Fatalf("timeout did not close SSH: %v", err)
 				}
 			}

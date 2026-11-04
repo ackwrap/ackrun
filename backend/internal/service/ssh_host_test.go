@@ -454,17 +454,19 @@ func TestSSHSessionTerminationPreventsAttachCommit(t *testing.T) {
 }
 
 type testSSHServer struct {
-	exec          func(ssh.Channel, string)
-	listener      net.Listener
-	config        *ssh.ServerConfig
-	hostKey       ssh.PublicKey
-	echoShell     bool
-	sftpRoot      string
-	sftpHandler   func(ssh.Channel)
-	windowChanges atomic.Int64
-	connections   atomic.Int64
-	done          chan struct{}
-	once          sync.Once
+	exec           func(ssh.Channel, string)
+	listener       net.Listener
+	config         *ssh.ServerConfig
+	hostKey        ssh.PublicKey
+	echoShell      bool
+	sftpRoot       string
+	sftpHandler    func(ssh.Channel)
+	handshakeDelay time.Duration
+	sessionDelay   time.Duration
+	windowChanges  atomic.Int64
+	connections    atomic.Int64
+	done           chan struct{}
+	once           sync.Once
 }
 
 func newTestSSHServer(t *testing.T, password string) *testSSHServer {
@@ -480,12 +482,14 @@ func newSFTPTestSSHServer(t *testing.T, password, root string) *testSSHServer {
 }
 
 type testSSHServerOptions struct {
-	exec        func(ssh.Channel, string)
-	password    string
-	publicKey   ssh.PublicKey
-	echoShell   bool
-	sftpRoot    string
-	sftpHandler func(ssh.Channel)
+	exec           func(ssh.Channel, string)
+	password       string
+	publicKey      ssh.PublicKey
+	echoShell      bool
+	sftpRoot       string
+	sftpHandler    func(ssh.Channel)
+	handshakeDelay time.Duration
+	sessionDelay   time.Duration
 }
 
 func newConfiguredTestSSHServer(t *testing.T, options testSSHServerOptions) *testSSHServer {
@@ -517,7 +521,8 @@ func newConfiguredTestSSHServer(t *testing.T, options testSSHServerOptions) *tes
 		exec:     options.exec,
 		listener: listener, config: config, hostKey: signer.PublicKey(),
 		echoShell: options.echoShell, sftpRoot: options.sftpRoot, done: make(chan struct{}),
-		sftpHandler: options.sftpHandler,
+		sftpHandler:    options.sftpHandler,
+		handshakeDelay: options.handshakeDelay, sessionDelay: options.sessionDelay,
 	}
 	go server.serve()
 	return server
@@ -573,6 +578,14 @@ func (server *testSSHServer) serve() {
 }
 
 func (server *testSSHServer) serveConnection(conn net.Conn) {
+	if server.handshakeDelay > 0 {
+		select {
+		case <-time.After(server.handshakeDelay):
+		case <-server.done:
+			_ = conn.Close()
+			return
+		}
+	}
 	serverConn, channels, requests, err := ssh.NewServerConn(conn, server.config)
 	if err != nil {
 		_ = conn.Close()
@@ -584,6 +597,13 @@ func (server *testSSHServer) serveConnection(conn net.Conn) {
 		if channel.ChannelType() != "session" {
 			_ = channel.Reject(ssh.UnknownChannelType, "unsupported")
 			continue
+		}
+		if server.sessionDelay > 0 {
+			select {
+			case <-time.After(server.sessionDelay):
+			case <-server.done:
+				return
+			}
 		}
 		accepted, requests, err := channel.Accept()
 		if err != nil {

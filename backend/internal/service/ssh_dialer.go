@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -19,7 +18,7 @@ import (
 
 func (svc *SSHHostService) dial(ctx context.Context, host *model.SSHHost, targetAddress string) (net.Conn, error) {
 	if host.ConnectionMode == "direct" {
-		conn, err := (&net.Dialer{Timeout: sshConnectTimeout}).DialContext(ctx, "tcp", targetAddress)
+		conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", targetAddress)
 		if err != nil {
 			return nil, classifySSHDialError(ctx, err)
 		}
@@ -61,7 +60,7 @@ func dialSSHThroughSOCKS(ctx context.Context, proxyAddress, targetAddress, usern
 	if username != "" || password != "" {
 		auth = &proxy.Auth{User: username, Password: password}
 	}
-	dialer, err := proxy.SOCKS5("tcp", proxyAddress, auth, &net.Dialer{Timeout: sshConnectTimeout})
+	dialer, err := proxy.SOCKS5("tcp", proxyAddress, auth, &net.Dialer{})
 	if err != nil {
 		return nil, sshError("SSH_PROXY_CONNECT_FAILED", "无法初始化 SOCKS5 节点入口", err)
 	}
@@ -77,7 +76,7 @@ func dialSSHThroughSOCKS(ctx context.Context, proxyAddress, targetAddress, usern
 }
 
 func dialSSHThroughHTTP(ctx context.Context, proxyAddress, targetAddress, username, password string) (net.Conn, error) {
-	conn, err := (&net.Dialer{Timeout: sshConnectTimeout}).DialContext(ctx, "tcp", proxyAddress)
+	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", proxyAddress)
 	if err != nil {
 		return nil, classifySSHProxyError(ctx, err)
 	}
@@ -89,9 +88,9 @@ func dialSSHThroughHTTP(ctx context.Context, proxyAddress, targetAddress, userna
 	}()
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(deadline)
-	} else {
-		_ = conn.SetDeadline(time.Now().Add(sshConnectTimeout))
 	}
+	stopCancellation := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopCancellation()
 	request := &http.Request{
 		Method: http.MethodConnect,
 		URL:    &url.URL{Opaque: targetAddress},
@@ -170,19 +169,15 @@ func localExposureAddress(listen string) (string, error) {
 }
 
 func classifySSHDialError(ctx context.Context, err error) error {
-	if ctx.Err() != nil {
-		return classifySSHConnectError(ctx, err)
-	}
-	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
-		return sshError("SSH_CONNECT_TIMEOUT", "SSH 连接超时", err)
+	if contextErr := classifySSHContextError(ctx, err, "tcp_connect"); contextErr != nil {
+		return contextErr
 	}
 	return sshError("SSH_CONNECT_FAILED", "无法连接 SSH 主机", err)
 }
 
 func classifySSHProxyError(ctx context.Context, err error) error {
-	if ctx.Err() != nil {
-		return classifySSHConnectError(ctx, err)
+	if contextErr := classifySSHContextError(ctx, err, "proxy_connect"); contextErr != nil {
+		return contextErr
 	}
 	lower := strings.ToLower(err.Error())
 	if strings.Contains(lower, "authentication") || strings.Contains(lower, "auth") {

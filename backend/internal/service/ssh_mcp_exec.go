@@ -77,7 +77,21 @@ func (svc *SSHHostService) withMCPOperation(ctx context.Context, hostID int64, t
 	}
 	err = run(ctx, host)
 	if ctx.Err() != nil {
-		return sshError("SSH_MCP_CANCELLED", "SSH MCP 操作已取消或超时", ctx.Err())
+		// Keep the failing connection phase instead of replacing it with a
+		// generic operation timeout when both share the same deadline.
+		var serviceErr *SSHServiceError
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) && errors.As(err, &serviceErr) &&
+			(serviceErr.Code == "SSH_CONNECT_TIMEOUT" || serviceErr.Code == "SSH_SESSION_OPEN_TIMEOUT") {
+			return err
+		}
+		message := "SSH MCP 操作已取消"
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			message = "SSH MCP 操作超时"
+			if action == "exec" {
+				message = "SSH 命令执行超时"
+			}
+		}
+		return sshError("SSH_MCP_CANCELLED", message, ctx.Err())
 	}
 	return err
 }
@@ -112,8 +126,16 @@ func (svc *SSHHostService) ExecuteMCP(ctx context.Context, request model.SSHMCPE
 		return svc.executeMCPLocal(ctx, request)
 	}
 	result := &model.SSHMCPExecResult{HostID: request.HostID, ExitCode: -1}
-	err := svc.withMCPHost(ctx, request.HostID, time.Duration(request.Timeout)*time.Second, "exec", func(ctx context.Context, client *ssh.Client) error {
-		session, err := newSSHSessionWithTimeout(ctx, client)
+	timeout := time.Duration(request.Timeout) * time.Second
+	err := svc.withMCPOperation(ctx, request.HostID, timeout, "exec", func(ctx context.Context, host *model.SSHHost) error {
+		client, _, _, _, err := svc.connectWithTimeout(ctx, host, timeout)
+		if err != nil {
+			return err
+		}
+		defer client.Close()
+		stop := context.AfterFunc(ctx, func() { _ = client.Close() })
+		defer stop()
+		session, err := newSSHSession(ctx, client)
 		if err != nil {
 			return err
 		}

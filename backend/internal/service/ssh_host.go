@@ -468,6 +468,11 @@ type sshSessionOpenResult struct {
 func newSSHSessionWithTimeout(ctx context.Context, client *ssh.Client) (*ssh.Session, error) {
 	operationCtx, cancel := context.WithTimeout(ctx, sshConnectTimeout)
 	defer cancel()
+	return newSSHSession(operationCtx, client)
+}
+
+// newSSHSession uses the caller's deadline, including time already spent connecting.
+func newSSHSession(ctx context.Context, client *ssh.Client) (*ssh.Session, error) {
 	completed := make(chan sshSessionOpenResult, 1)
 	go func() {
 		session, err := client.NewSession()
@@ -475,17 +480,28 @@ func newSSHSessionWithTimeout(ctx context.Context, client *ssh.Client) (*ssh.Ses
 	}()
 	select {
 	case result := <-completed:
-		return result.session, result.err
-	case <-operationCtx.Done():
-		_ = client.Close()
-		if errors.Is(operationCtx.Err(), context.DeadlineExceeded) {
-			return nil, sshError("SSH_SESSION_OPEN_TIMEOUT", "SSH 认证成功但创建会话超时", operationCtx.Err())
+		if ctx.Err() == nil {
+			return result.session, result.err
 		}
-		return nil, sshError("SSH_CONNECT_CANCELLED", "SSH 连接已取消", operationCtx.Err())
+		if result.session != nil {
+			_ = result.session.Close()
+		}
+	case <-ctx.Done():
 	}
+	_ = client.Close()
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return nil, sshError("SSH_SESSION_OPEN_TIMEOUT", "SSH 认证成功但创建会话超时", ctx.Err())
+	}
+	return nil, sshError("SSH_CONNECT_CANCELLED", "SSH 连接已取消", ctx.Err())
 }
 
 func (svc *SSHHostService) connect(ctx context.Context, host *model.SSHHost) (*ssh.Client, ssh.ConnMetadata, ssh.PublicKey, time.Duration, error) {
+	return svc.connectWithTimeout(ctx, host, sshConnectTimeout)
+}
+
+func (svc *SSHHostService) connectWithTimeout(ctx context.Context, host *model.SSHHost, timeout time.Duration) (*ssh.Client, ssh.ConnMetadata, ssh.PublicKey, time.Duration, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	credential, err := svc.store.GetSSHCredential(host.CredentialID)
 	if err != nil {
 		return nil, nil, nil, 0, sshError("SSH_CREDENTIAL_NOT_FOUND", "SSH 凭据不存在", err)
@@ -509,8 +525,6 @@ func (svc *SSHHostService) connect(ctx context.Context, host *model.SSHHost) (*s
 	defer stopCancellation()
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(deadline)
-	} else {
-		_ = conn.SetDeadline(svc.now().Add(sshConnectTimeout))
 	}
 	trusted, err := svc.store.GetSSHHostKey(host.ID)
 	if err != nil {
@@ -519,7 +533,7 @@ func (svc *SSHHostService) connect(ctx context.Context, host *model.SSHHost) (*s
 	var observed ssh.PublicKey
 	hostKeyRejected := false
 	config := &ssh.ClientConfig{
-		User: host.Username, Auth: []ssh.AuthMethod{auth}, Timeout: sshConnectTimeout,
+		User: host.Username, Auth: []ssh.AuthMethod{auth},
 		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
 			observed = key
 			if trusted == nil {
@@ -696,19 +710,30 @@ func normalizeSSHStoreError(err error) error {
 }
 
 func classifySSHConnectError(ctx context.Context, err error) error {
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return sshError("SSH_CONNECT_TIMEOUT", "SSH 连接超时", err)
-	}
-	if errors.Is(ctx.Err(), context.Canceled) {
-		return sshError("SSH_CONNECT_CANCELLED", "SSH 连接已取消", err)
-	}
-	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
-		return sshError("SSH_CONNECT_TIMEOUT", "SSH 连接超时", err)
+	if contextErr := classifySSHContextError(ctx, err, "handshake"); contextErr != nil {
+		return contextErr
 	}
 	message := strings.ToLower(err.Error())
 	if strings.Contains(message, "unable to authenticate") || strings.Contains(message, "no supported methods remain") {
 		return sshError("SSH_AUTH_FAILED", "SSH 用户认证失败", err)
 	}
 	return sshError("SSH_HANDSHAKE_FAILED", "SSH 握手失败", err)
+}
+
+func classifySSHContextError(ctx context.Context, err error, stage string) error {
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return sshError("SSH_CONNECT_CANCELLED", "SSH 连接已取消", err)
+	}
+	var netErr net.Error
+	if !errors.Is(ctx.Err(), context.DeadlineExceeded) && !(errors.As(err, &netErr) && netErr.Timeout()) {
+		return nil
+	}
+	message := "SSH 握手或认证超时"
+	switch stage {
+	case "tcp_connect":
+		message = "SSH TCP 连接超时"
+	case "proxy_connect":
+		message = "SSH 节点入口连接超时"
+	}
+	return &SSHServiceError{Code: "SSH_CONNECT_TIMEOUT", Message: message, Details: map[string]string{"stage": stage}, Cause: err}
 }

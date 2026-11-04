@@ -20,7 +20,7 @@ type SSHMCPSettingsRequest struct {
 type SSHMCPExecRequest struct {
 	HostID  int64  `json:"host_id" jsonschema:"SSH host ID from ssh_list_servers"`
 	Command string `json:"command" jsonschema:"Shell command executed on the selected host. Built-in host_id=-1 runs on the AckWrap server when local access is enabled, using sh on Unix or PowerShell on Windows and the AckWrap process account"`
-	Timeout int    `json:"timeout,omitempty" jsonschema:"Timeout in seconds; default 30, maximum 600"`
+	Timeout int    `json:"timeout,omitempty" jsonschema:"Total timeout in seconds for connecting (direct or proxy), SSH handshake, opening a session and executing the command; default 30, maximum 600. All stages share this limit; increasing it also extends connection waiting. Caller cancellation or an earlier caller deadline still takes precedence"`
 }
 
 type SSHMCPExecResult struct {
