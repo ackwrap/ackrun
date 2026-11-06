@@ -939,6 +939,37 @@ func TestGenerateNodeOutboundNormalizesLegacyProtocolFields(t *testing.T) {
 	}
 }
 
+func TestGenerateNodeOutboundNormalizesHysteriaPassword(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		typ     string
+		fields  string
+		wantKey string
+		want    string
+	}{
+		{name: "existing auth string", typ: "hysteria", fields: `"auth_str":"auth-string","password":"redundant-password"`, wantKey: "auth_str", want: "auth-string"},
+		{name: "existing binary auth", typ: "hysteria", fields: `"auth":"YXV0aA==","password":"redundant-password"`, wantKey: "auth", want: "YXV0aA=="},
+		{name: "password alias", typ: "hysteria", fields: `"password":"test-password"`, wantKey: "auth_str", want: "test-password"},
+		{name: "hysteria2 password unchanged", typ: "hysteria2", fields: `"password":"test-password"`, wantKey: "password", want: "test-password"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rawJSON := fmt.Sprintf(`{"type":%q,"server":"hy.example.com","server_port":443,%s}`, test.typ, test.fields)
+			outbound, err := (&ConfigGeneratorService{}).generateNodeOutbound(&model.Node{Type: test.typ, RawJSON: rawJSON}, "test-hysteria", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if outbound[test.wantKey] != test.want {
+				t.Fatalf("authentication field %s was not preserved", test.wantKey)
+			}
+			if test.typ == "hysteria" {
+				if _, exists := outbound["password"]; exists {
+					t.Fatal("Hysteria v1 must not emit the unsupported password field")
+				}
+			}
+		})
+	}
+}
+
 func TestGenerateNodeOutboundRejectsLossyShadowsocksPluginMigration(t *testing.T) {
 	svc := &ConfigGeneratorService{}
 	_, err := svc.generateNodeOutbound(&model.Node{

@@ -1616,6 +1616,14 @@ func normalizeLegacyOutboundFields(nodeData map[string]interface{}, outboundType
 	}
 	switch outboundType {
 	case "hysteria":
+		// Older Clash imports may contain both password and auth_str. Only the
+		// native auth fields are valid for Hysteria v1; preserve their precedence.
+		if firstStringValue(nodeData, "auth_str", "auth") == "" {
+			if password := firstStringValue(nodeData, "password"); password != "" {
+				nodeData["auth_str"] = password
+			}
+		}
+		delete(nodeData, "password")
 		moveConfigField(nodeData, "obfs-param", "obfs")
 		moveConfigField(nodeData, "obfs_param", "obfs")
 		moveConfigField(nodeData, "receive-window", "recv_window")

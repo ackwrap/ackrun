@@ -578,10 +578,15 @@ func normalizeClashProxy(proxy map[string]any, typ string) (map[string]any, stri
 		result["network"] = "tcp"
 	}
 
+	if strings.TrimSpace(getString(proxy, "dialer-proxy")) != "" {
+		unsupportedReason = "Clash dialer-proxy requires a chained node model and cannot be imported as a standalone node"
+	}
+
 	return result, unsupportedReason
 }
 
 func hasShadowsocksTLSInput(proxy map[string]any) bool {
+	tlsDisabled := false
 	if tlsValue, exists := proxy["tls"]; exists {
 		switch value := tlsValue.(type) {
 		case nil:
@@ -589,8 +594,11 @@ func hasShadowsocksTLSInput(proxy map[string]any) bool {
 			if value {
 				return true
 			}
+			tlsDisabled = true
 		case string:
-			if strings.TrimSpace(value) != "" && !strings.EqualFold(strings.TrimSpace(value), "false") && strings.TrimSpace(value) != "0" {
+			value = strings.TrimSpace(value)
+			tlsDisabled = strings.EqualFold(value, "false") || value == "0"
+			if value != "" && !tlsDisabled {
 				return true
 			}
 		default:
@@ -604,6 +612,11 @@ func hasShadowsocksTLSInput(proxy map[string]any) bool {
 		if value, exists := proxy[key]; exists && value != nil {
 			return true
 		}
+	}
+	// Subscription converters may emit verification flags even with TLS disabled.
+	// Keep rejecting actual TLS hints above, but do not enable TLS for these flags.
+	if tlsDisabled {
+		return false
 	}
 	for _, key := range []string{"skip-cert-verify", "skip_cert_verify", "insecure"} {
 		if boolOrString(proxy[key]) {
