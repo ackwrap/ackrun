@@ -1891,11 +1891,9 @@ func validateGeoAssetRequest(req *model.GeoAssetRequest) error {
 }
 
 func fetchRouteRuleSubscriptionContent(rawURL string, useProxy bool) ([]byte, error) {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport := directHTTPTransport()
 	if useProxy {
 		transport.Proxy = http.ProxyFromEnvironment
-	} else {
-		transport.Proxy = nil
 	}
 	client := &http.Client{Timeout: 60 * time.Second, Transport: transport}
 	return fetchRouteRuleSubscriptionContentWithClient(client, rawURL)

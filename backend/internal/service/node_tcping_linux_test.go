@@ -15,9 +15,9 @@ func TestResolveTCPingServerRejectsLoopbackOnlyDNS(t *testing.T) {
 	if err := os.WriteFile(resolverFile, []byte("nameserver 127.0.0.1\nnameserver ::1\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	originalFiles := tcpingResolverFiles
-	tcpingResolverFiles = []string{resolverFile}
-	t.Cleanup(func() { tcpingResolverFiles = originalFiles })
+	originalFiles := controlPlaneResolverFiles
+	controlPlaneResolverFiles = []string{resolverFile}
+	t.Cleanup(func() { controlPlaneResolverFiles = originalFiles })
 
 	_, err := resolveTCPingServer(context.Background(), "example.com")
 	if err == nil || !strings.Contains(err.Error(), "非回环系统 DNS") {

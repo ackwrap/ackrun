@@ -105,6 +105,8 @@ func isGitHubFileURL(rawURL string) bool {
 func directHTTPTransport() *http.Transport {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
+	dialer := controlPlaneDialer(30 * time.Second)
+	transport.DialContext = dialer.DialContext
 	return transport
 }
 

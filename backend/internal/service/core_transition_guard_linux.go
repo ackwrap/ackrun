@@ -200,8 +200,8 @@ func transitionGuardRules(replace bool, excluded []string, fakeIPs ...string) st
 	}
 	// No established-flow exemption in forward: cached DNS, existing TCP and
 	// UDP sessions must not fall back to direct WAN access. The output mark is
-	// assigned to sing-box sockets by auto_redirect, allowing startup DNS and
-	// node handshakes while all unrelated original-direction output is blocked.
+	// assigned to sing-box sockets by auto_redirect and Ackwrap's controlled
+	// download/DNS sockets, allowing startup without unlocking unrelated output.
 	fmt.Fprintf(&rules, `table inet %s {
 	comment "%s"
 	chain forward {
