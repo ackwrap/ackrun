@@ -12,6 +12,7 @@ import (
 
 type clashSubscription struct {
 	Proxies []map[string]any `yaml:"proxies"`
+	Groups  []map[string]any `yaml:"proxy-groups"`
 }
 
 func parseClashYAML(body []byte) []model.ParsedNode {
@@ -21,10 +22,14 @@ func parseClashYAML(body []byte) []model.ParsedNode {
 	}
 
 	nodes := make([]model.ParsedNode, 0, len(sub.Proxies))
+	var directNames []string
 	for _, proxy := range sub.Proxies {
 		name := getString(proxy, "name")
 		typ := strings.ToLower(getString(proxy, "type"))
 		normalizedType := normalizeProtocolType(typ)
+		if normalizedType == "direct" && isPlainChainDirect(proxy) {
+			directNames = append(directNames, name)
+		}
 		server := getString(proxy, "server")
 		port := getInt(proxy, "port")
 		if normalizedType == "ssh" && port == 0 {
@@ -46,7 +51,7 @@ func parseClashYAML(body []byte) []model.ParsedNode {
 			UnsupportedReason: unsupportedReason,
 		})
 	}
-	return nodes
+	return resolveSubscriptionChains(nodes, sub.Groups, directNames, true)
 }
 
 func normalizeProtocolType(typ string) string {
@@ -579,7 +584,7 @@ func normalizeClashProxy(proxy map[string]any, typ string) (map[string]any, stri
 	}
 
 	if strings.TrimSpace(getString(proxy, "dialer-proxy")) != "" {
-		unsupportedReason = "Clash dialer-proxy requires a chained node model and cannot be imported as a standalone node"
+		result["detour"] = getString(proxy, "dialer-proxy")
 	}
 
 	return result, unsupportedReason

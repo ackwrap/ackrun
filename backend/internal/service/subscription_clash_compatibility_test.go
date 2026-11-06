@@ -32,7 +32,7 @@ const clashCompatibilitySubscription = `proxies:
     type: http
     server: http.example.com
     port: 8080
-  - name: Unsupported-HTTP-Chain
+  - name: Valid-HTTP-Chain
     type: http
     server: chained.example.com
     port: 8080
@@ -52,13 +52,13 @@ func TestFetchAndParseClashCompatibility(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.NodeCount != 3 || len(result.Nodes) != 3 {
-		t.Fatalf("expected three standalone nodes, got %d", result.NodeCount)
+	if result.NodeCount != 4 || len(result.Nodes) != 4 {
+		t.Fatalf("expected four supported nodes, got %d", result.NodeCount)
 	}
-	if result.UnsupportedCount["http"] != 1 || len(result.ExcludedNodes) != 1 || !strings.Contains(result.ExcludedNodes[0].Reason, "dialer-proxy") {
-		t.Fatalf("expected an observable chain dependency rejection, got %+v", result.ExcludedNodes)
+	if len(result.UnsupportedCount) != 0 || len(result.ExcludedNodes) != 0 {
+		t.Fatalf("valid proxy chains must not be filtered, got %+v", result.ExcludedNodes)
 	}
-	for index, wantType := range []string{"hysteria", "shadowsocks", "http"} {
+	for index, wantType := range []string{"hysteria", "shadowsocks", "http", "http"} {
 		node := result.Nodes[index]
 		if node.Type != wantType {
 			t.Fatalf("node %d type = %q, want %q", index, node.Type, wantType)
@@ -93,10 +93,10 @@ func TestManualImportAndPreviewClashCompatibility(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if preview.Count != 3 || len(preview.Items) != 3 || response.Imported != 3 || len(nodes) != 3 {
+	if preview.Count != 4 || len(preview.Items) != 4 || response.Imported != 4 || len(nodes) != 4 {
 		t.Fatalf("preview/import counts differ: preview=%d imported=%d stored=%d", preview.Count, response.Imported, len(nodes))
 	}
-	for index, wantName := range []string{"Valid-Hysteria", "Valid-SS", "Valid-HTTP"} {
+	for index, wantName := range []string{"Valid-Hysteria", "Valid-SS", "Valid-HTTP", "Valid-HTTP-Chain"} {
 		if preview.Items[index].Name != wantName || nodes[index].Name != wantName || preview.Items[index].UID != nodes[index].UID {
 			t.Fatalf("preview and import differ for node %d", index)
 		}

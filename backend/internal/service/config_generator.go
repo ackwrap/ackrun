@@ -776,6 +776,10 @@ func (s *ConfigGeneratorService) generateOutbounds(requireUsableProxy ...bool) (
 		outbounds = append(outbounds, nodeOutbound)
 		generatedNodeTags[node.UID] = nodeTags[node.UID]
 	}
+	outbounds, err = applySubscriptionNodeChains(nodes, generatedNodeTags, outbounds, endpoints)
+	if err != nil {
+		return nil, nil, err
+	}
 	// 6. 生成节点组 outbound
 	for _, group := range nodeGroups {
 		uids := groupNodeUIDs[group.ID]
@@ -1266,6 +1270,7 @@ func (s *ConfigGeneratorService) generateNodeOutbound(node *model.Node, tag stri
 	if err := json.Unmarshal([]byte(node.RawJSON), &nodeData); err != nil {
 		return nil, fmt.Errorf("解析节点 JSON 失败: %w", err)
 	}
+	delete(nodeData, model.NodeChainMetadataKey)
 
 	// 使用可读且稳定的 tag，便于在生成配置和 Clash API 中识别节点。
 	nodeData["tag"] = tag
@@ -1290,6 +1295,7 @@ func (s *ConfigGeneratorService) generateWireGuardEndpoint(node *model.Node, tag
 	if err := json.Unmarshal([]byte(node.RawJSON), &nodeData); err != nil {
 		return nil, fmt.Errorf("解析 WireGuard 节点 JSON 失败: %w", err)
 	}
+	delete(nodeData, model.NodeChainMetadataKey)
 	if _, exists := nodeData["on_demand"]; exists {
 		version := s.coreVersion()
 		if version != "" && !singboxSupportsDevelopmentOptions(version) {

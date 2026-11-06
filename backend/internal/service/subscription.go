@@ -489,6 +489,11 @@ func (svc *SubscriptionService) applyNodeFilters(result *subscriptionSyncResult)
 	if len(kept) == 0 {
 		return fmt.Errorf("all parsed nodes were filtered by rules")
 	}
+	kept, excluded := filterUnavailableNodeChains(kept)
+	result.ExcludedNodes = append(result.ExcludedNodes, excluded...)
+	if len(kept) == 0 {
+		return fmt.Errorf("all parsed nodes have filtered chain dependencies")
+	}
 	result.Nodes = kept
 	result.NodeCount = len(kept)
 	return nil

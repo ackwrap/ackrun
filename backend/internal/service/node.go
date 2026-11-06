@@ -195,6 +195,13 @@ func (svc *NodeService) applyNodeFilters(nodes []model.ParsedNode) ([]model.Pars
 	if len(kept) == 0 {
 		return nil, fmt.Errorf("all imported nodes were filtered by rules")
 	}
+	kept, excluded := filterUnavailableNodeChains(kept)
+	for _, node := range excluded {
+		logging.Info("node.import", "filtered chained %s node: %s", node.Type, node.Reason)
+	}
+	if len(kept) == 0 {
+		return nil, fmt.Errorf("all imported nodes have filtered chain dependencies")
+	}
 	return kept, nil
 }
 
@@ -259,7 +266,7 @@ func (svc *NodeService) TCPing(uids []string) ([]model.NodeTCPingResult, error) 
 	nodeTags := buildNodeOutboundTags(nodes)
 	for _, node := range nodes {
 		var result model.NodeTCPingResult
-		if usesUDPTransport(node.Type) {
+		if usesUDPTransport(node.Type) || nodeHasChain(node.RawJSON) {
 			result = svc.urlTestNode(node, nodeTags[node.UID])
 		} else {
 			result = svc.tcpingNode(node)

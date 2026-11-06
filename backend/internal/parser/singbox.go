@@ -20,8 +20,16 @@ func parseSingboxJSON(body []byte) []model.ParsedNode {
 	}
 
 	nodes := make([]model.ParsedNode, 0, len(sub.Outbounds)+len(sub.Endpoints))
+	var groups []map[string]any
+	var directNames []string
 	for _, outbound := range sub.Outbounds {
 		typ := normalizeProtocolType(strings.ToLower(getString(outbound, "type")))
+		if typ == "selector" || typ == "urltest" || isSingboxLogicalOutbound(typ) && typ != "direct" {
+			groups = append(groups, outbound)
+		}
+		if typ == "direct" && isPlainChainDirect(outbound) {
+			directNames = append(directNames, getString(outbound, "tag"))
+		}
 		server := getString(outbound, "server")
 		port := getInt(outbound, "server_port")
 		if typ == "ssh" && port == 0 {
@@ -35,6 +43,7 @@ func parseSingboxJSON(body []byte) []model.ParsedNode {
 		for key, value := range outbound {
 			normalized[key] = value
 		}
+		delete(normalized, model.NodeChainMetadataKey)
 		normalized["name"] = name
 		normalized["type"] = typ
 		normalized["server"] = server
@@ -74,7 +83,7 @@ func parseSingboxJSON(body []byte) []model.ParsedNode {
 			nodes = append(nodes, node)
 		}
 	}
-	return nodes
+	return resolveSubscriptionChains(nodes, groups, directNames, false)
 }
 
 func parseSingboxEndpoint(endpoint map[string]any) (model.ParsedNode, bool) {
@@ -129,6 +138,7 @@ func parseSingboxEndpoint(endpoint map[string]any) (model.ParsedNode, bool) {
 	for key, value := range endpoint {
 		normalized[key] = value
 	}
+	delete(normalized, model.NodeChainMetadataKey)
 	normalized["type"] = "wireguard"
 	rawJSON, _ = json.Marshal(normalized)
 	return model.ParsedNode{

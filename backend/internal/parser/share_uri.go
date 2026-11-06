@@ -23,12 +23,16 @@ var shareableProxySchemes = map[string]bool{
 }
 
 func EncodeProxyURI(node model.Node) (string, error) {
+	var options map[string]any
+	optionsErr := json.Unmarshal([]byte(node.RawJSON), &options)
+	if _, chained := options[model.NodeChainMetadataKey]; chained {
+		return "", fmt.Errorf("链式节点不能导出为独立分享链接，否则会丢失前置代理")
+	}
 	if raw := reusableProxyURI(node.Raw); raw != "" {
 		return raw, nil
 	}
 
-	var options map[string]any
-	if err := json.Unmarshal([]byte(node.RawJSON), &options); err != nil {
+	if optionsErr != nil {
 		return "", fmt.Errorf("节点配置不是有效 JSON")
 	}
 	switch strings.ToLower(strings.TrimSpace(node.Type)) {

@@ -6,16 +6,16 @@ import (
 	"testing"
 )
 
-func TestClashDialerProxyRequiresChainedNodeModel(t *testing.T) {
+func TestClashDialerProxyPreservesDependency(t *testing.T) {
 	for _, protocol := range []string{"http", "socks", "shadowsocks", "vless"} {
 		t.Run(protocol, func(t *testing.T) {
-			_, reason := normalizeClashProxy(map[string]any{
+			config, reason := normalizeClashProxy(map[string]any{
 				"type": protocol, "server": "proxy.example.com", "port": 443,
 				"password": "test-password", "cipher": "aes-256-gcm",
 				"dialer-proxy": "Upstream-Group",
 			}, protocol)
-			if !strings.Contains(reason, "dialer-proxy") {
-				t.Fatalf("expected a chain dependency rejection, got %q", reason)
+			if reason != "" || config["detour"] != "Upstream-Group" {
+				t.Fatalf("chain dependency was not preserved: reason=%q", reason)
 			}
 		})
 	}
