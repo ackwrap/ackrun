@@ -19,6 +19,72 @@ import (
 
 const testLoyalsoldierCNRuleSetURL = "https://raw.githubusercontent.com/Loyalsoldier/geoip/release/srs/cn.srs"
 
+func TestLoyalsoldierNativeDownloadDoesNotHoldDatabaseLock(t *testing.T) {
+	svc, db := geoSourceTestService(t)
+	selectTestGeoSource(t, svc, db)
+	started, unblock := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(unblock) }) }
+	payload := testBinaryRuleSet(t, 2)
+	mirror := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/"+testLoyalsoldierCNRuleSetURL {
+			close(started)
+			<-unblock
+		}
+		_, _ = w.Write(payload)
+	}))
+	defer mirror.Close()
+	defer release()
+	if err := db.SetUpdateSettings(&model.UpdateSettings{Acceleration: "custom", CustomMirrorURL: mirror.URL}); err != nil {
+		t.Fatal(err)
+	}
+	cnDone := make(chan error, 1)
+	go func() {
+		_, _, err := svc.GeneratedGeoRuleSetContentForSource(context.Background(), "geoip-cn", model.GeoSourceLoyalsoldier, "", "binary")
+		cnDone <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("download did not start")
+	}
+	otherDone := make(chan error, 1)
+	go func() {
+		_, _, err := svc.GeneratedGeoRuleSetContentForSource(context.Background(), "geoip-telegram", model.GeoSourceLoyalsoldier, "", "binary")
+		otherDone <- err
+	}()
+	select {
+	case err := <-otherDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("native download blocked a different category")
+	}
+	publicationDone := make(chan error, 1)
+	go func() {
+		_, err := svc.cacheGeoDatabase(&model.GeoAsset{Source: model.GeoSourceLoyalsoldier, Type: "geoip"}, geoTestIPDAT())
+		publicationDone <- err
+	}()
+	select {
+	case err := <-publicationDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("native download blocked database publication")
+	}
+	release()
+	select {
+	case err := <-cnDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("native download did not finish")
+	}
+}
+
 func TestLoyalsoldierNativeGeoIPPreservesBytesAndIsolatesCache(t *testing.T) {
 	svc, db := geoSourceTestService(t)
 	sagerNetPayload, nativePayload := testBinaryRuleSet(t, 1), testBinaryRuleSet(t, 2)

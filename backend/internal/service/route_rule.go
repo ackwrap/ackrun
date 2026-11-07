@@ -83,7 +83,8 @@ type RouteRuleService struct {
 	geoEntries           map[int64]cron.EntryID
 	mu                   sync.Mutex
 	cacheMu              sync.Mutex
-	cacheLocks           map[string]*sync.Mutex
+	cacheLocks           map[string]*sync.RWMutex
+	geoValidations       geoRuleSetValidationCache
 	ruleSetValidator     func(context.Context, string) error
 	ruleSetCompiler      func(context.Context, []byte, string) error
 	deviceProtectionCore *SingboxService
@@ -98,7 +99,7 @@ func NewRouteRuleService(s *store.Store, p *paths.Paths, rt *RealtimeService) *R
 		cron:        newSchedulerCron(),
 		ruleEntries: make(map[int64]cron.EntryID),
 		geoEntries:  make(map[int64]cron.EntryID),
-		cacheLocks:  make(map[string]*sync.Mutex),
+		cacheLocks:  make(map[string]*sync.RWMutex),
 	}
 }
 
@@ -933,11 +934,10 @@ func (svc *RouteRuleService) GeoDomains(tag string, limit int, offset int) (*mod
 		fallback = selected.source == model.GeoSourceSagerNet
 	}
 
-	reader, codes, err := geoquery.OpenGeosite(geositePath)
+	codes, err := cachedGeoAssetCodes("geosite", geositePath)
 	if err != nil {
 		return nil, err
 	}
-	defer reader.Close()
 
 	codeExists := false
 	for _, code := range codes {
@@ -955,7 +955,7 @@ func (svc *RouteRuleService) GeoDomains(tag string, limit int, offset int) (*mod
 	}
 	resp.Suggestions = []string{}
 
-	items, err := reader.Read(tag)
+	items, err := cachedGeositeItems(geositePath, tag)
 	if err != nil {
 		resp.Message = "未找到精确 geosite tag"
 		return resp, nil
@@ -1034,11 +1034,10 @@ func (svc *RouteRuleService) loadGeoTags(assetType string) ([]string, bool, erro
 	if !ready {
 		return []string{}, false, nil
 	}
-	reader, codes, err := geoquery.OpenGeosite(geositePath)
+	codes, err := cachedGeoAssetCodes("geosite", geositePath)
 	if err != nil {
 		return nil, false, err
 	}
-	defer reader.Close()
 	sort.Strings(codes)
 	return codes, true, nil
 }
@@ -1511,12 +1510,9 @@ func (svc *RouteRuleService) cachedGeneratedGeoRuleSetContentContext(ctx context
 	}
 	hasValidCache := cacheErr == nil
 	if hasValidCache {
-		if err := validateGeneratedGeoRuleSet(cachedData); err != nil {
+		if err := svc.validateCachedGeoRuleSet(ctx, cachedData, cachePath); err != nil {
 			hasValidCache = false
 			logging.Error("route_rule_geo.cache", "忽略无效的 Geo 规则集缓存 %s: %v", tag, err)
-		} else if err := svc.validateGeneratedGeoRuleSetFile(ctx, cachePath); err != nil {
-			hasValidCache = false
-			logging.Error("route_rule_geo.cache", "忽略核心无法解析的 Geo 规则集缓存 %s: %v", tag, err)
 		}
 	}
 	useCachedOnRefreshError := func(action string, refreshErr error) ([]byte, string, error) {
@@ -1564,7 +1560,7 @@ func (svc *RouteRuleService) cachedGeneratedGeoRuleSetContentContext(ctx context
 	if err := tmpFile.Close(); err != nil {
 		return useCachedOnRefreshError("关闭 Geo 规则集缓存失败", err)
 	}
-	if err := svc.validateGeneratedGeoRuleSetFile(ctx, tmpPath); err != nil {
+	if err := svc.validateCachedGeoRuleSet(ctx, data, tmpPath); err != nil {
 		return useCachedOnRefreshError("sing-box 无法解析 Geo 规则集 "+tag, err)
 	}
 	if err := atomicReplaceFile(tmpPath, cachePath); err != nil {
@@ -1596,15 +1592,26 @@ func (svc *RouteRuleService) validateGeneratedGeoRuleSetFile(ctx context.Context
 }
 
 func (svc *RouteRuleService) lockGeneratedGeoRuleSet(tag string) func() {
-	svc.cacheMu.Lock()
-	lock := svc.cacheLocks[tag]
-	if lock == nil {
-		lock = &sync.Mutex{}
-		svc.cacheLocks[tag] = lock
-	}
-	svc.cacheMu.Unlock()
+	lock := svc.generatedGeoRuleSetLock(tag)
 	lock.Lock()
 	return lock.Unlock
+}
+
+func (svc *RouteRuleService) readLockGeneratedGeoRuleSet(tag string) func() {
+	lock := svc.generatedGeoRuleSetLock(tag)
+	lock.RLock()
+	return lock.RUnlock
+}
+
+func (svc *RouteRuleService) generatedGeoRuleSetLock(tag string) *sync.RWMutex {
+	svc.cacheMu.Lock()
+	defer svc.cacheMu.Unlock()
+	lock := svc.cacheLocks[tag]
+	if lock == nil {
+		lock = &sync.RWMutex{}
+		svc.cacheLocks[tag] = lock
+	}
+	return lock
 }
 
 func (svc *RouteRuleService) fetchGeneratedGeoRuleSetContent(ctx context.Context, upstreamURL string) ([]byte, error) {

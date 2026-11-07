@@ -13,14 +13,17 @@ import (
 	"github.com/ackwrap/ackrun/internal/logging"
 )
 
-// The caller holds the source/type database lock, also used by snapshot cleanup.
+// The caller holds a shared database lock to protect the snapshot from cleanup.
 func (svc *RouteRuleService) compiledGeoRuleSetContent(ctx context.Context, tag, kind, code, databasePath, cacheDir string) ([]byte, string, error) {
 	cachePath := filepath.Join(cacheDir, tag+".srs")
+	unlock := svc.lockGeneratedGeoRuleSet(cachePath)
+	defer unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
+	}
 	if data, err := os.ReadFile(cachePath); err == nil {
-		if err := validateGeneratedGeoRuleSet(data); err == nil {
-			if err := svc.validateGeneratedGeoRuleSetFile(ctx, cachePath); err == nil {
-				return data, "application/octet-stream", nil
-			}
+		if err := svc.validateCachedGeoRuleSet(ctx, data, cachePath); err == nil {
+			return data, "application/octet-stream", nil
 		}
 	} else if !os.IsNotExist(err) {
 		return nil, "", fmt.Errorf("read compiled Geo rule set: %w", err)
@@ -48,7 +51,7 @@ func (svc *RouteRuleService) compiledGeoRuleSetContent(ctx context.Context, tag,
 	if err != nil {
 		return nil, "", err
 	}
-	if err := validateGeneratedGeoRuleSet(binary); err != nil {
+	if err := svc.validateCachedGeoRuleSet(ctx, binary, tmpPath); err != nil {
 		return nil, "", fmt.Errorf("compiled Geo rule set is invalid: %w", err)
 	}
 	if err := atomicReplaceFile(tmpPath, cachePath); err != nil {

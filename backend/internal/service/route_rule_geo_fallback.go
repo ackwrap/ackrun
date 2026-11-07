@@ -42,7 +42,7 @@ func (svc *RouteRuleService) geoCategoryCatalog(assets []model.GeoAsset) (*geoCa
 }
 
 func (catalog *geoCategoryCatalog) addDatabase(asset model.GeoAsset) error {
-	codes, err := geoAssetCodes(asset.Type, asset.LocalPath)
+	codes, err := cachedGeoAssetCodes(asset.Type, asset.LocalPath)
 	if err != nil {
 		return fmt.Errorf("读取 %s %s 分类失败: %w", asset.Source, asset.Type, err)
 	}

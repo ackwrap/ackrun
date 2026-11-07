@@ -30,7 +30,7 @@ func (svc *RouteRuleService) sagerNetFallbackDatabase(kind string, useProxy bool
 	lock := value.(*sync.Mutex)
 	lock.Lock()
 	defer lock.Unlock()
-	_, cacheErr := geoAssetCodes(kind, current)
+	_, cacheErr := cachedGeoAssetCodes(kind, current)
 	if cacheErr != nil {
 		// Bootstrap from an existing SagerNet snapshot, including the database
 		// downloaded before switching sources. The accepted copy is outside
@@ -101,11 +101,11 @@ func (svc *RouteRuleService) validateGeoFallbackRefresh(kind, previous, next str
 	if err != nil {
 		return err
 	}
-	oldCodes, err := geoAssetCodes(kind, previous)
+	oldCodes, err := cachedGeoAssetCodes(kind, previous)
 	if err != nil {
 		return err
 	}
-	newCodes, err := geoAssetCodes(kind, next)
+	newCodes, err := cachedGeoAssetCodes(kind, next)
 	if err != nil {
 		return err
 	}

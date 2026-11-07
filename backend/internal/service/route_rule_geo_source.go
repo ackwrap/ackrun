@@ -231,7 +231,8 @@ func (svc *RouteRuleService) cacheGeoDatabase(asset *model.GeoAsset, body []byte
 	if err := file.Close(); err != nil {
 		return "", err
 	}
-	if codes, err := geoAssetCodes(asset.Type, name); err != nil {
+	codes, err := geoAssetCodes(asset.Type, name)
+	if err != nil {
 		return "", fmt.Errorf("invalid %s database: %w", asset.Type, err)
 	} else if len(codes) == 0 {
 		return "", fmt.Errorf("%s database has no categories", asset.Type)
@@ -240,6 +241,7 @@ func (svc *RouteRuleService) cacheGeoDatabase(asset *model.GeoAsset, body []byte
 	if err := atomicReplaceFile(name, path); err != nil {
 		return "", err
 	}
+	rememberGeoAssetCodes(asset.Type, path, codes)
 	// The caller has not yet published this path to the store. Keep it as well
 	// as the currently selected asset if cleanup cannot infer which is active.
 	if err := svc.pruneGeoDatabaseCache(source, asset.Type, path); err != nil {
@@ -397,7 +399,7 @@ func (svc *RouteRuleService) latestUsableGeoSnapshot(source, kind string) (geoDa
 		return geoDatabaseSnapshot{}, err
 	}
 	for _, snapshot := range snapshots {
-		if codes, err := geoAssetCodes(kind, snapshot.path); err == nil && len(codes) > 0 {
+		if codes, err := cachedGeoAssetCodes(kind, snapshot.path); err == nil && len(codes) > 0 {
 			return snapshot, nil
 		} else {
 			logging.Error("geo.cache", "忽略无法读取的 Geo 历史快照: %s/%s/%s: %v", source, kind, snapshot.version, err)
@@ -496,8 +498,12 @@ func (svc *RouteRuleService) GeneratedGeoRuleSetContentForSource(ctx context.Con
 		return nil, "", fmt.Errorf("invalid geo database version")
 	}
 	kind, code, _ := strings.Cut(tag, "-")
-	unlock := svc.lockGeneratedGeoRuleSet(geoDatabaseCacheLockKey(source, kind))
-	defer unlock()
+	unlock := svc.readLockGeneratedGeoRuleSet(geoDatabaseCacheLockKey(source, kind))
+	defer func() {
+		if unlock != nil {
+			unlock()
+		}
+	}()
 	if err := ctx.Err(); err != nil {
 		return nil, "", err
 	}
@@ -546,6 +552,8 @@ func (svc *RouteRuleService) GeneratedGeoRuleSetContentForSource(ctx context.Con
 	if selected.source == model.GeoSourceSagerNet {
 		logging.Info("geo.fallback", "提供 SagerNet 回退规则集: %s", tag)
 		if format == "binary" {
+			unlock()
+			unlock = nil
 			return svc.GeneratedGeoRuleSetContentContext(ctx, tag)
 		}
 		if kind == "geoip" && code == "private" {
@@ -556,6 +564,8 @@ func (svc *RouteRuleService) GeneratedGeoRuleSetContentForSource(ctx context.Con
 		return data, "application/json; charset=utf-8", err
 	}
 	if format == "binary" && kind == "geoip" {
+		unlock()
+		unlock = nil
 		return svc.loyalsoldierGeoIPRuleSetContent(ctx, tag)
 	}
 	cacheDir := filepath.Join(svc.paths.RulesDir, "geo", source, version)
@@ -565,6 +575,8 @@ func (svc *RouteRuleService) GeneratedGeoRuleSetContentForSource(ctx context.Con
 	// Previously generated configurations requested JSON without a format
 	// parameter. Keep those URLs usable until the new binary config is applied.
 	cachePath := filepath.Join(cacheDir, tag+".json")
+	unlockCache := svc.lockGeneratedGeoRuleSet(cachePath)
+	defer unlockCache()
 	if data, err := os.ReadFile(cachePath); err == nil && json.Valid(data) {
 		return data, "application/json; charset=utf-8", nil
 	}
@@ -602,12 +614,7 @@ func geoDatabaseRuleSetSource(kind, code, path string) ([]byte, error) {
 			rule["ip_cidr"] = values
 		}
 	} else {
-		reader, _, err := geoquery.OpenGeosite(path)
-		if err != nil {
-			return nil, err
-		}
-		defer reader.Close()
-		items, err := reader.Read(code)
+		items, err := cachedGeositeItems(path, code)
 		if err != nil {
 			return nil, err
 		}
