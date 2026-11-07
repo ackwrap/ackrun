@@ -31,12 +31,24 @@ func TestDNSModeSwitchWithAvailableCore(t *testing.T) {
 	if core == "" || runtime.GOOS == "windows" {
 		t.Skip("set ACKWRAP_SINGBOX_114_BIN on Unix for graceful mode-switch validation")
 	}
+	for _, inboundMode := range []string{"mixed", "tun", "tun_mixed"} {
+		t.Run(inboundMode, func(t *testing.T) {
+			testDNSModeSwitchWithCore(t, core, inboundMode)
+		})
+	}
+}
+
+func testDNSModeSwitchWithCore(t *testing.T, core, inboundMode string) {
+	t.Helper()
 	dir := t.TempDir()
 	db, err := store.Open(filepath.Join(dir, "ackwrap.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
+	if err := db.SetInboundMode(inboundMode); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.SetProxyMode("rule"); err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +144,7 @@ func TestDNSModeSwitchWithAvailableCore(t *testing.T) {
 				{"type": "mixed", "tag": "test-mixed", "listen": "127.0.0.1", "listen_port": mixedPort},
 				{"type": "direct", "tag": "test-dns-in", "listen": "127.0.0.1", "listen_port": dnsPort},
 			},
-			"experimental": map[string]interface{}{"cache_file": g.cacheFileConfig(&model.ExperimentalSettingsResponse{}, true)},
+			"experimental": map[string]interface{}{"cache_file": g.cacheFileConfig(&model.ExperimentalSettingsResponse{}, retainFakeIPMappings(settings))},
 		}
 		data, err := json.Marshal(config)
 		if err != nil {

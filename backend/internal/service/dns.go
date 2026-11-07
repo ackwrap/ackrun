@@ -484,8 +484,9 @@ func dnsModeName(fakeIP bool) string {
 	return "redir-host"
 }
 
-func retainFakeIPMappings(settings *model.DNSGlobalSettings, inboundMode string) bool {
+func retainFakeIPMappings(settings *model.DNSGlobalSettings) bool {
 	// A dormant transport restores persisted mappings for clients still holding
-	// old FakeIP answers. Only fake-ip mode adds the DNS allocation rule.
-	return settings != nil && settings.Enabled && (settings.FakeIPEnabled || inboundMode != "mixed")
+	// old FakeIP answers, including through Mixed proxies. Only fake-ip mode
+	// adds the DNS allocation rule; retaining mappings is independent of inbound.
+	return settings != nil && settings.Enabled
 }

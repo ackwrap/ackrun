@@ -451,7 +451,7 @@ func (s *ConfigGeneratorService) generateLockedTo(req *model.ConfigGenerateReque
 	experimental["clash_api"] = clashAPI
 	logging.Info("config_generator.experimental", "Clash API 已强制启用: %s:%s, 模式: %s", controllerHost, port, proxyMode)
 
-	if cacheFile := s.cacheFileConfig(expSettings, retainFakeIPMappings(dnsGlobalSettings, s.store.GetInboundMode())); cacheFile != nil {
+	if cacheFile := s.cacheFileConfig(expSettings, retainFakeIPMappings(dnsGlobalSettings)); cacheFile != nil {
 		experimental["cache_file"] = cacheFile
 	}
 
@@ -2358,7 +2358,7 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string, nodeTarge
 	routeRules = append(routeRules, map[string]interface{}{
 		"action": "sniff",
 	})
-	if (inboundMode == "tun" || inboundMode == "tun_mixed") && retainFakeIPMappings(dnsSettings, inboundMode) {
+	if (inboundMode == "tun" || inboundMode == "tun_mixed") && retainFakeIPMappings(dnsSettings) {
 		// FakeIP turns the original ICMP destination into a domain during pre-match.
 		// Resolve it before any route action so direct/bridge outbounds receive a real address.
 		routeRules = append(routeRules, map[string]interface{}{
@@ -2757,7 +2757,7 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase(routeFinal ...string) (
 		}
 	}
 	servers := []map[string]interface{}{}
-	keepFakeIPMappings := retainFakeIPMappings(globalSettings, s.store.GetInboundMode())
+	keepFakeIPMappings := retainFakeIPMappings(globalSettings)
 	serverTags := enabledDNSServerTags(dnsServers, keepFakeIPMappings)
 	fakeIPServerTags := map[string]bool{"fakeip": true}
 	for _, server := range dnsServers {

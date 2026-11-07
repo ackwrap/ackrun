@@ -484,8 +484,8 @@ function conditionLabel(type: ExceptionItem["conditionType"]) {
         或无法嗅探的流量可能影响识别；内核绕过规则仍先于普通嗅探匹配。
       </p>
       <p>
-        TUN 下保留旧 FakeIP 映射和地址池保护用于缓存过渡，但不再向新查询分配
-        FakeIP。 若旧映射已丢失，请刷新客户端 DNS
+        所有入站均保留旧 FakeIP 映射用于缓存过渡，TUN 下继续保护地址池，
+        但不再向新查询分配 FakeIP。 若旧映射已丢失，请刷新客户端 DNS
         缓存；切换时不要同时更换地址池。
       </p>
     </div>

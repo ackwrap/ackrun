@@ -2094,9 +2094,6 @@ func TestCacheFileConfigPersistsFakeIPMappings(t *testing.T) {
 		t.Fatalf("FakeIP cache generation changed persisted settings: %+v", settings)
 	}
 
-	if err := db.SetInboundMode("mixed"); err != nil {
-		t.Fatal(err)
-	}
 	dnsSettings, err := db.GetDNSGlobalSettings()
 	if err != nil {
 		t.Fatal(err)
@@ -2105,15 +2102,22 @@ func TestCacheFileConfigPersistsFakeIPMappings(t *testing.T) {
 	if err := db.SetDNSGlobalSettings(dnsSettings); err != nil {
 		t.Fatal(err)
 	}
-	if cacheFile, exists := generate("mixed")["experimental"].(map[string]interface{})["cache_file"]; exists || cacheFile != nil {
-		t.Fatalf("mixed mode cache file = %+v, want none", cacheFile)
+	for _, inboundMode := range []string{"mixed", "tun", "tun_mixed"} {
+		if err := db.SetInboundMode(inboundMode); err != nil {
+			t.Fatal(err)
+		}
+		cacheFile, _ := generate("redir-host-" + inboundMode)["experimental"].(map[string]interface{})["cache_file"].(map[string]interface{})
+		if cacheFile["enabled"] != true || cacheFile["store_fakeip"] != true || cacheFile["path"] != filepath.Join(dataDir, "cache.db") {
+			t.Fatalf("%s redir-host lost persisted FakeIP transition mappings: %+v", inboundMode, cacheFile)
+		}
 	}
-	if err := db.SetInboundMode("tun"); err != nil {
+	dnsSettings.Enabled = false
+	dnsSettings.FakeIPEnabled = true
+	if err := db.SetDNSGlobalSettings(dnsSettings); err != nil {
 		t.Fatal(err)
 	}
-	cacheFile = generate("redir-host")["experimental"].(map[string]interface{})["cache_file"].(map[string]interface{})
-	if cacheFile["store_fakeip"] != true || cacheFile["path"] != filepath.Join(dataDir, "cache.db") {
-		t.Fatalf("redir-host lost persisted FakeIP transition mappings: %+v", cacheFile)
+	if cacheFile, exists := generate("dns-disabled")["experimental"].(map[string]interface{})["cache_file"]; exists || cacheFile != nil {
+		t.Fatalf("disabled DNS forced cache file: %+v", cacheFile)
 	}
 }
 
@@ -2231,8 +2235,8 @@ func TestGenerateDNSModePreservesExplicitRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	dns = mustGenerateDNS(t, service)
-	if generatedDNSHasServerType(dns, "fakeip") || generatedDNSHasRuleServer(dns, "fakeip") {
-		t.Fatalf("Mixed redir-host DNS contains fakeip server or rule: %+v", dns)
+	if !generatedDNSHasServerType(dns, "fakeip") || generatedDNSHasRuleServer(dns, "fakeip") {
+		t.Fatalf("Mixed redir-host must retain old mappings without allocating FakeIP: %+v", dns)
 	}
 	settings.FakeIPEnabled = true
 	if err := db.SetDNSGlobalSettings(settings); err != nil {
@@ -2453,8 +2457,8 @@ func TestGenerateDNSLeakProtectionModeMatrix(t *testing.T) {
 					if hasFakeIP != wantFakeIP {
 						t.Fatalf("FakeIP rule present = %t, want %t; rules = %+v", hasFakeIP, wantFakeIP, rules)
 					}
-					if hasServer := generatedDNSHasServerType(dns, "fakeip"); hasServer != (fakeIP || inboundMode != "mixed") {
-						t.Fatalf("FakeIP server present = %t, want %t; DNS = %+v", hasServer, wantFakeIP, dns)
+					if !generatedDNSHasServerType(dns, "fakeip") {
+						t.Fatalf("DNS mode switch must retain the FakeIP transport: %+v", dns)
 					}
 					if wantFakeIP && (len(rules) == 0 || rules[len(rules)-1]["server"] != "fakeip") {
 						t.Fatalf("FakeIP fallback is not the final DNS rule: %+v", rules)
