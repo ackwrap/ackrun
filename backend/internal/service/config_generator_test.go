@@ -2097,12 +2097,27 @@ func TestCacheFileConfigPersistsFakeIPMappings(t *testing.T) {
 	if err := db.SetInboundMode("mixed"); err != nil {
 		t.Fatal(err)
 	}
+	dnsSettings, err := db.GetDNSGlobalSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dnsSettings.FakeIPEnabled = false
+	if err := db.SetDNSGlobalSettings(dnsSettings); err != nil {
+		t.Fatal(err)
+	}
 	if cacheFile, exists := generate("mixed")["experimental"].(map[string]interface{})["cache_file"]; exists || cacheFile != nil {
 		t.Fatalf("mixed mode cache file = %+v, want none", cacheFile)
 	}
+	if err := db.SetInboundMode("tun"); err != nil {
+		t.Fatal(err)
+	}
+	cacheFile = generate("redir-host")["experimental"].(map[string]interface{})["cache_file"].(map[string]interface{})
+	if cacheFile["store_fakeip"] != true || cacheFile["path"] != filepath.Join(dataDir, "cache.db") {
+		t.Fatalf("redir-host lost persisted FakeIP transition mappings: %+v", cacheFile)
+	}
 }
 
-func TestGenerateDNSFakeIPFollowsTUNMode(t *testing.T) {
+func TestGenerateDNSModePreservesExplicitRules(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -2151,7 +2166,7 @@ func TestGenerateDNSFakeIPFollowsTUNMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	settings.Final = "custom_fakeip"
-	settings.FakeIPEnabled = false
+	settings.FakeIPEnabled = true
 	if err := db.SetDNSGlobalSettings(settings); err != nil {
 		t.Fatal(err)
 	}
@@ -2201,16 +2216,31 @@ func TestGenerateDNSFakeIPFollowsTUNMode(t *testing.T) {
 		t.Fatalf("FakeIP rule is not the final fallback after reorder: %+v", rules)
 	}
 
+	settings.FakeIPEnabled = false
+	if err := db.SetDNSGlobalSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+	dns = mustGenerateDNS(t, service)
+	if generatedDNSHasRuleServer(dns, "fakeip") || !generatedDNSHasServerType(dns, "fakeip") || dns["reverse_mapping"] != true {
+		t.Fatalf("redir-host must stop allocation but retain old mappings: %+v", dns)
+	}
+	if got := generatedDNSDomainSuffixOrder(dns["rules"].([]map[string]interface{})); !reflect.DeepEqual(got, []string{"third.cn", "first.cn", "second.cn"}) {
+		t.Fatalf("redir-host changed explicit DNS rules: %v", got)
+	}
 	if err := db.SetInboundMode("mixed"); err != nil {
 		t.Fatal(err)
+	}
+	dns = mustGenerateDNS(t, service)
+	if generatedDNSHasServerType(dns, "fakeip") || generatedDNSHasRuleServer(dns, "fakeip") {
+		t.Fatalf("Mixed redir-host DNS contains fakeip server or rule: %+v", dns)
 	}
 	settings.FakeIPEnabled = true
 	if err := db.SetDNSGlobalSettings(settings); err != nil {
 		t.Fatal(err)
 	}
 	dns = mustGenerateDNS(t, service)
-	if generatedDNSHasServerType(dns, "fakeip") || generatedDNSHasRuleServer(dns, "fakeip") {
-		t.Fatalf("Mixed mode DNS contains fakeip server or rule: %+v", dns)
+	if !generatedDNSHasServerType(dns, "fakeip") || !generatedDNSHasRuleServer(dns, "fakeip") {
+		t.Fatalf("Mixed mode must honor explicit FakeIP selection: %+v", dns)
 	}
 	if resolver := service.defaultDomainResolver(); resolver["server"] != "dns_direct" {
 		t.Fatalf("Mixed mode default domain resolver = %+v, want dns_direct", resolver)
@@ -2350,120 +2380,123 @@ func TestGenerateDNSSimplifiesProxyPoliciesToFakeIPAndOneFinal(t *testing.T) {
 }
 
 func TestGenerateDNSLeakProtectionModeMatrix(t *testing.T) {
-	for _, proxyMode := range []string{"direct", "global", "rule"} {
-		for _, inboundMode := range []string{"mixed", "tun", "tun_mixed"} {
-			t.Run(proxyMode+"/"+inboundMode, func(t *testing.T) {
-				db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
-				if err != nil {
-					t.Fatal(err)
-				}
-				defer db.Close()
-				for _, server := range []*model.DNSServerRequest{
-					{Tag: "dns_direct", Enabled: true, ServerType: "udp", Address: "1.1.1.1"},
-					{Tag: "dns_proxy", Enabled: true, ServerType: "https", Address: "https://proxy-dns.example.com/dns-query"},
-				} {
-					if _, err := db.CreateDNSServer(server); err != nil {
-						t.Fatal(err)
-					}
-				}
-				if _, err := db.CreateDNSRule(&model.DNSRuleRequest{
-					Enabled: true, Conditions: map[string]interface{}{"domain_suffix": []string{"cn.example"}}, Server: "dns_direct",
-				}); err != nil {
-					t.Fatal(err)
-				}
-				if _, err := db.CreateRouteRule(&model.RouteRuleRequest{
-					Name: "Proxy", Enabled: true, RuleType: "domain_suffix", Values: []string{"proxy.example"}, Outbound: "proxy",
-				}); err != nil {
-					t.Fatal(err)
-				}
-				if err := db.SetProxyMode(proxyMode); err != nil {
-					t.Fatal(err)
-				}
-				if err := db.SetInboundMode(inboundMode); err != nil {
-					t.Fatal(err)
-				}
-				settings, err := db.GetDNSGlobalSettings()
-				if err != nil {
-					t.Fatal(err)
-				}
-				settings.ProxyFinal = "dns_proxy"
-				if err := db.SetDNSGlobalSettings(settings); err != nil {
-					t.Fatal(err)
-				}
-
-				routeFinal := "direct"
-				if proxyMode == "global" {
-					routeFinal = "proxy"
-				}
-				generator := NewConfigGeneratorService(db, nil)
-				dns, err := generator.generateDNSFromDatabase(routeFinal)
-				if err != nil {
-					t.Fatal(err)
-				}
-				rules, _ := dns["rules"].([]map[string]interface{})
-				if len(rules) == 0 || rules[0]["server"] != "dns_direct" {
-					t.Fatalf("domestic real-IP rule = %+v", rules)
-				}
-				hasFakeIP := false
-				for _, rule := range rules {
-					if rule["server"] != "fakeip" {
-						continue
-					}
-					hasFakeIP = true
-					if _, exists := rule["inbound"]; exists {
-						t.Fatalf("FakeIP fallback unexpectedly limits inbound: %+v", rule)
-					}
-					if !stringListContains(rule["query_type"], "A") || !stringListContains(rule["query_type"], "AAAA") {
-						t.Fatalf("FakeIP fallback does not cover A/AAAA: %+v", rule)
-					}
-				}
-				wantFakeIP := inboundMode == "tun" || inboundMode == "tun_mixed"
-				if hasFakeIP != wantFakeIP {
-					t.Fatalf("FakeIP rule present = %t, want %t; rules = %+v", hasFakeIP, wantFakeIP, rules)
-				}
-				if hasServer := generatedDNSHasServerType(dns, "fakeip"); hasServer != wantFakeIP {
-					t.Fatalf("FakeIP server present = %t, want %t; DNS = %+v", hasServer, wantFakeIP, dns)
-				}
-				if wantFakeIP && (len(rules) == 0 || rules[len(rules)-1]["server"] != "fakeip") {
-					t.Fatalf("FakeIP fallback is not the final DNS rule: %+v", rules)
-				}
-				if proxyMode != "rule" {
-					route, err := generator.generateRoute(routeFinal)
+	for _, fakeIP := range []bool{false, true} {
+		for _, proxyMode := range []string{"direct", "global", "rule"} {
+			for _, inboundMode := range []string{"mixed", "tun", "tun_mixed"} {
+				t.Run(dnsModeName(fakeIP)+"/"+proxyMode+"/"+inboundMode, func(t *testing.T) {
+					db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 					if err != nil {
 						t.Fatal(err)
 					}
-					routeRules, _ := route["rules"].([]map[string]interface{})
-					sniffIndex, resolveIndex, resolveCount := -1, -1, 0
-					for index, rule := range routeRules {
-						if rule["action"] == "sniff" {
-							sniffIndex = index
-						}
-						if rule["action"] == "resolve" && stringListContains(rule["network"], "icmp") && stringListContains(rule["inbound"], "tun-in") {
-							resolveIndex = index
-							resolveCount++
+					defer db.Close()
+					for _, server := range []*model.DNSServerRequest{
+						{Tag: "dns_direct", Enabled: true, ServerType: "udp", Address: "1.1.1.1"},
+						{Tag: "dns_proxy", Enabled: true, ServerType: "https", Address: "https://proxy-dns.example.com/dns-query"},
+					} {
+						if _, err := db.CreateDNSServer(server); err != nil {
+							t.Fatal(err)
 						}
 					}
-					if wantFakeIP && (resolveCount != 1 || resolveIndex != sniffIndex+1) {
-						t.Fatalf("FakeIP ICMP resolve count=%d index=%d, sniff=%d; rules=%+v", resolveCount, resolveIndex, sniffIndex, routeRules)
+					if _, err := db.CreateDNSRule(&model.DNSRuleRequest{
+						Enabled: true, Conditions: map[string]interface{}{"domain_suffix": []string{"cn.example"}}, Server: "dns_direct",
+					}); err != nil {
+						t.Fatal(err)
 					}
-					if !wantFakeIP && resolveCount != 0 {
-						t.Fatalf("unexpected FakeIP ICMP resolve rule: %+v", routeRules)
+					if _, err := db.CreateRouteRule(&model.RouteRuleRequest{
+						Name: "Proxy", Enabled: true, RuleType: "domain_suffix", Values: []string{"proxy.example"}, Outbound: "proxy",
+					}); err != nil {
+						t.Fatal(err)
 					}
-				}
+					if err := db.SetProxyMode(proxyMode); err != nil {
+						t.Fatal(err)
+					}
+					if err := db.SetInboundMode(inboundMode); err != nil {
+						t.Fatal(err)
+					}
+					settings, err := db.GetDNSGlobalSettings()
+					if err != nil {
+						t.Fatal(err)
+					}
+					settings.ProxyFinal = "dns_proxy"
+					settings.FakeIPEnabled = fakeIP
+					if err := db.SetDNSGlobalSettings(settings); err != nil {
+						t.Fatal(err)
+					}
 
-				finalServer, _ := dns["final"].(string)
-				if proxyMode == "direct" {
-					if finalServer != "dns_proxy" {
-						t.Fatalf("direct mode DNS final = %q, want configured server", finalServer)
+					routeFinal := "direct"
+					if proxyMode == "global" {
+						routeFinal = "proxy"
 					}
-					assertGeneratedDNSServerDetour(t, dns, finalServer, "")
-					return
-				}
-				if finalServer == "" || finalServer == "dns_proxy" {
-					t.Fatalf("%s mode DNS final is not protected: %q", proxyMode, finalServer)
-				}
-				assertGeneratedDNSServerDetour(t, dns, finalServer, "proxy")
-			})
+					generator := NewConfigGeneratorService(db, nil)
+					dns, err := generator.generateDNSFromDatabase(routeFinal)
+					if err != nil {
+						t.Fatal(err)
+					}
+					rules, _ := dns["rules"].([]map[string]interface{})
+					if len(rules) == 0 || rules[0]["server"] != "dns_direct" {
+						t.Fatalf("domestic real-IP rule = %+v", rules)
+					}
+					hasFakeIP := false
+					for _, rule := range rules {
+						if rule["server"] != "fakeip" {
+							continue
+						}
+						hasFakeIP = true
+						if _, exists := rule["inbound"]; exists {
+							t.Fatalf("FakeIP fallback unexpectedly limits inbound: %+v", rule)
+						}
+						if !stringListContains(rule["query_type"], "A") || !stringListContains(rule["query_type"], "AAAA") {
+							t.Fatalf("FakeIP fallback does not cover A/AAAA: %+v", rule)
+						}
+					}
+					wantFakeIP := fakeIP
+					if hasFakeIP != wantFakeIP {
+						t.Fatalf("FakeIP rule present = %t, want %t; rules = %+v", hasFakeIP, wantFakeIP, rules)
+					}
+					if hasServer := generatedDNSHasServerType(dns, "fakeip"); hasServer != (fakeIP || inboundMode != "mixed") {
+						t.Fatalf("FakeIP server present = %t, want %t; DNS = %+v", hasServer, wantFakeIP, dns)
+					}
+					if wantFakeIP && (len(rules) == 0 || rules[len(rules)-1]["server"] != "fakeip") {
+						t.Fatalf("FakeIP fallback is not the final DNS rule: %+v", rules)
+					}
+					if proxyMode != "rule" {
+						route, err := generator.generateRoute(routeFinal)
+						if err != nil {
+							t.Fatal(err)
+						}
+						routeRules, _ := route["rules"].([]map[string]interface{})
+						sniffIndex, resolveIndex, resolveCount := -1, -1, 0
+						for index, rule := range routeRules {
+							if rule["action"] == "sniff" {
+								sniffIndex = index
+							}
+							if rule["action"] == "resolve" && stringListContains(rule["network"], "icmp") && stringListContains(rule["inbound"], "tun-in") {
+								resolveIndex = index
+								resolveCount++
+							}
+						}
+						if inboundMode != "mixed" && (resolveCount != 1 || resolveIndex != sniffIndex+1) {
+							t.Fatalf("FakeIP ICMP resolve count=%d index=%d, sniff=%d; rules=%+v", resolveCount, resolveIndex, sniffIndex, routeRules)
+						}
+						if inboundMode == "mixed" && resolveCount != 0 {
+							t.Fatalf("unexpected FakeIP ICMP resolve rule: %+v", routeRules)
+						}
+					}
+
+					finalServer, _ := dns["final"].(string)
+					if proxyMode == "direct" {
+						if finalServer != "dns_proxy" {
+							t.Fatalf("direct mode DNS final = %q, want configured server", finalServer)
+						}
+						assertGeneratedDNSServerDetour(t, dns, finalServer, "")
+						return
+					}
+					if finalServer == "" || finalServer == "dns_proxy" {
+						t.Fatalf("%s mode DNS final is not protected: %q", proxyMode, finalServer)
+					}
+					assertGeneratedDNSServerDetour(t, dns, finalServer, "proxy")
+				})
+			}
 		}
 	}
 }

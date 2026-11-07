@@ -745,6 +745,11 @@ func (s *Store) SetDNSGlobalSettingsForCore(req *model.DNSGlobalSettings, indepe
 }
 
 func (s *Store) setDNSGlobalSettings(req *model.DNSGlobalSettings, independentCacheSupported bool) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 	now := time.Now().Unix()
 	settings := map[string]string{
 		"dns.enabled":                   fmt.Sprintf("%t", req.Enabled),
@@ -782,18 +787,18 @@ func (s *Store) setDNSGlobalSettings(req *model.DNSGlobalSettings, independentCa
 
 	for key, value := range settings {
 		if value == "" {
-			_, err := s.db.Exec(`DELETE FROM app_settings WHERE key = ?`, key)
+			_, err := tx.Exec(`DELETE FROM app_settings WHERE key = ?`, key)
 			if err != nil {
 				return err
 			}
 			continue
 		}
-		_, err := s.db.Exec(`INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`, key, value, now)
+		_, err := tx.Exec(`INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`, key, value, now)
 		if err != nil {
 			return err
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (s *Store) MigrateDNSIndependentCache(supported bool) (bool, error) {

@@ -68,7 +68,7 @@ Geo 数据库用于 GeoIP 和 GeoSite 匹配。页面默认提供 GeoIP 和 GeoS
 
 ## DNS 管理
 
-DNS 管理页面分为全局设置、FakeIP、DNS 服务器和 DNS 规则。
+DNS 管理页面分为全局设置、DNS 模式、DNS 服务器、Hosts 静态映射和 DNS 规则。
 
 ### 添加 DNS Server
 
@@ -105,18 +105,26 @@ DNS 规则从上到下匹配，适合为国内域名、局域网域名或特定�
 4. 按需启用“禁用缓存”和 Rewrite TTL。
 5. 保存后检查规则顺序。
 
-### FakeIP
+### DNS 模式：FakeIP / redir-host
 
-FakeIP 由运行模式自动管理：
+DNS 模式与 TUN、TUN + Mixed、Mixed 入站独立，可以在“DNS 模式”卡片中自由选择：
 
-- TUN 和 TUN + Mixed：自动启用。
-- Mixed：自动停用。
+- **FakeIP**：未命中设备 DNS、Hosts 或显式 DNS 规则的 A/AAAA 查询返回虚拟地址，便于核心明确关联域名。
+- **真实 IP（redir-host）**：查询返回真实地址，自动开启 `reverse_mapping`，并结合连接嗅探匹配 GeoSite 等域名规则。它不是 sing-box 的同名配置字段，而是 Ackwrap 对这组行为的模式名称。
 
-FakeIP 不是普通 DNS Server，不能像普通 Server 一样手动添加。只有确实需要避开现有局域网、Docker 或 VPN 网段时，才在配置生成参数中调整 TUN 地址或 FakeIP 网段。
+两种模式均保留显式 DNS 规则、设备固定出口和代理 DNS Final。真实 IP 不代表直连，也不会自动把代理 DNS 改成运营商 DNS。切换入站不会重置已选择的 DNS 模式；升级时会保留旧版实际生效的模式。
+
+选择后点击“保存 DNS 模式”，再到配置生成页面生成、校验并应用配置。仅保存不会立即改变运行中的核心。
+
+注意：
+
+- redir-host 下，如果客户端绕过核心自行解析、缓存映射丢失、多个域名共享 IP 或连接无法嗅探，域名规则可能漏匹配。内核绕过规则仍先于普通嗅探，命中的真实 IP 不会进入后面的域名规则；应结合自己的 CN/GeoIP 绕过和兜底策略验证。
+- TUN 下切换到 redir-host 后，不再向新查询分配 FakeIP，但会保留持久化映射、兼容传输和地址池保护，让客户端缓存的旧 FakeIP 继续由核心处理。旧映射已经丢失时，需要刷新客户端 DNS 缓存；切换时不要同时更换地址池，也不要清理 FakeIP 映射。
+- FakeIP 不是普通 DNS Server，不能手动添加。FakeIP 地址池在“DNS 模式”卡片中设置，TUN 接口地址则在配置生成参数中设置；两者用途不同。
 
 ## 常见关系
 
 - 规则模式使用路由规则判断流量走向。
 - DNS 规则只负责域名解析，不直接决定业务流量是否走代理。
-- TUN 模式下 FakeIP 会自动参与未命中的 A/AAAA 查询。
+- 只有选择 FakeIP DNS 模式时，未命中的 A/AAAA 查询才使用 FakeIP。
 - 修改规则或 DNS 后，建议打开配置生成页面确认校验结果。

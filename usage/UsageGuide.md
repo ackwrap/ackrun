@@ -23,7 +23,7 @@ Ackwrap 是用于管理 sing-box 的 Web 平台，可以集中管理订阅、节
 - 导入单个节点或整段节点内容。
 - 创建节点组和代理策略组。
 - 管理手动路由规则、规则订阅和 Geo 数据库。
-- 管理 DNS Server、DNS 规则和 TUN 模式下的 FakeIP。
+- 管理 DNS Server、DNS 规则，并独立选择 FakeIP 或真实 IP（redir-host）模式。
 - 自动生成、校验、备份和应用 sing-box 配置。
 - 启动、停止、重启核心，查看实时日志和运行状态。
 

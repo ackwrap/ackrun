@@ -32,6 +32,7 @@ const global = defineModel<GlobalSettings>({ required: true });
 const props = defineProps<{
   servers: ServerOption[];
   strategies: string[];
+  busy: boolean;
 }>();
 defineEmits<{ save: [] }>();
 
@@ -112,6 +113,7 @@ const proxyFinalUnavailable = computed(
       <label>Client Subnet<input v-model="global.client_subnet" /></label>
       <button
         class="aw-action-button aw-action-success self-end justify-self-end px-4"
+        :disabled="busy"
         @click="$emit('save')"
       >
         <Save :size="13" />保存全局设置
@@ -141,10 +143,20 @@ const proxyFinalUnavailable = computed(
         independent_cache</label
       >
       <label
-        ><input v-model="global.reverse_mapping" type="checkbox" />
+        ><input
+          v-model="global.reverse_mapping"
+          type="checkbox"
+          :disabled="!global.fakeip_enabled"
+        />
         reverse_mapping</label
       >
     </div>
+    <p
+      v-if="!global.fakeip_enabled"
+      class="mt-2 text-xs text-[var(--text-tertiary)]"
+    >
+      redir-host 模式自动开启 reverse_mapping，为真实 IP 连接提供域名分流信息。
+    </p>
     <p
       v-if="!global.independent_cache_supported"
       class="mt-2 text-xs text-[var(--text-tertiary)]"

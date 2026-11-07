@@ -9,7 +9,7 @@ import { authenticatedFetch } from "@/services/apiAuth";
 import { useTableRowSort } from "@/composables/useTableRowSort";
 import DNSRuleFormModal from "./dns/DNSRuleFormModal.vue";
 import DNSServerFormModal from "./dns/DNSServerFormModal.vue";
-import DNSFakeIPCard from "./dns/DNSFakeIPCard.vue";
+import DNSModeCard from "./dns/DNSModeCard.vue";
 import DNSGlobalSettingsCard from "./dns/DNSGlobalSettingsCard.vue";
 import DNSHostsCard from "./dns/DNSHostsCard.vue";
 interface Server {
@@ -66,6 +66,7 @@ const defaults = {
   serverForm = ref<Partial<Server> | null>(null),
   ruleForm = ref<any | null>(null),
   ruleSaving = ref(false),
+  globalSaving = ref(false),
   serverOrderPending = ref(false),
   ruleOrderPending = ref(false);
 const {
@@ -221,16 +222,20 @@ function isLegacyFakeIPRule(rule: Rule) {
   );
 }
 async function saveGlobal() {
+  if (globalSaving.value) return;
+  globalSaving.value = true;
   try {
     await request("/api/v1/dns/global", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(global.value),
     });
-    show("全局设置已保存");
+    show("DNS 设置已保存，重新生成并应用配置后生效");
     await load();
   } catch (e: any) {
     show(`保存失败: ${e.message}`, "error");
+  } finally {
+    globalSaving.value = false;
   }
 }
 function newServer() {
@@ -494,12 +499,14 @@ onMounted(load);
           v-model="global"
           :servers="servers"
           :strategies="strategies"
+          :busy="globalSaving"
           @save="saveGlobal"
         />
-        <DNSFakeIPCard
+        <DNSModeCard
           v-model="global"
           :rules="rules"
           :servers="servers"
+          :busy="globalSaving"
           @save="saveGlobal"
           @changed="load"
           @notify="show"
@@ -668,7 +675,7 @@ onMounted(load);
                 <td data-label="Detour">-</td>
                 <td data-label="状态">
                   <span class="text-xs text-[var(--color-success)]"
-                    >强制启用</span
+                    >按模式启用</span
                   >
                 </td>
                 <td
@@ -800,7 +807,7 @@ onMounted(load);
                 <td data-label="禁用缓存">否</td>
                 <td data-label="状态">
                   <span class="text-xs text-[var(--color-success)]"
-                    >强制启用</span
+                    >按模式启用</span
                   >
                 </td>
                 <td

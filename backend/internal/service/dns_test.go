@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -134,7 +135,7 @@ func TestEnablingFirstDNSServerSeedsDefaultLocalRealIPRule(t *testing.T) {
 	}
 }
 
-func TestDNSGlobalSettingsFakeIPFollowsTUNMode(t *testing.T) {
+func TestDNSGlobalSettingsModeIsIndependentOfInbound(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -150,34 +151,91 @@ func TestDNSGlobalSettingsFakeIPFollowsTUNMode(t *testing.T) {
 		t.Fatal("default TUN + Mixed mode must enable FakeIP")
 	}
 
+	for _, fakeIP := range []bool{false, true} {
+		for _, inbound := range []string{"tun", "mixed", "tun_mixed"} {
+			if err := db.SetInboundMode(inbound); err != nil {
+				t.Fatal(err)
+			}
+			settings.FakeIPEnabled = fakeIP
+			settings.ReverseMapping = false
+			if err := svc.SetDNSGlobalSettings(settings); err != nil {
+				t.Fatal(err)
+			}
+			for _, read := range []func() (*model.DNSGlobalSettings, error){db.GetDNSGlobalSettings, svc.GetDNSGlobalSettings} {
+				stored, err := read()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if stored.FakeIPEnabled != fakeIP || (!fakeIP && !stored.ReverseMapping) {
+					t.Fatalf("inbound=%s fakeIP=%t: stored settings = %+v", inbound, fakeIP, stored)
+				}
+			}
+		}
+	}
+	// Changing only the inbound must not change the selected DNS mode.
 	if err := db.SetInboundMode("mixed"); err != nil {
 		t.Fatal(err)
 	}
-	settings.FakeIPEnabled = true
-	if err := svc.SetDNSGlobalSettings(settings); err != nil {
-		t.Fatal(err)
+	if stored, err := svc.GetDNSGlobalSettings(); err != nil || !stored.FakeIPEnabled {
+		t.Fatalf("inbound change reset DNS choice: %+v, %v", stored, err)
 	}
-	stored, err := db.GetDNSGlobalSettings()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stored.FakeIPEnabled {
-		t.Fatal("Mixed mode must persist FakeIP as disabled")
-	}
+}
 
-	if err := db.SetInboundMode("tun"); err != nil {
-		t.Fatal(err)
-	}
-	stored.FakeIPEnabled = false
-	if err := svc.SetDNSGlobalSettings(stored); err != nil {
-		t.Fatal(err)
-	}
-	stored, err = db.GetDNSGlobalSettings()
+func TestDNSModeRejectsInvalidPoolsWithoutSaving(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "ackwrap.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !stored.FakeIPEnabled {
-		t.Fatal("TUN mode must persist FakeIP as enabled")
+	defer db.Close()
+	svc := NewDNSService(db, nil)
+	settings, err := svc.GetDNSGlobalSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pools := range [][2]string{{"invalid", "fc00::/18"}, {"fc00::/18", "fc00::/18"}, {"198.18.0.1/16", "198.18.0.0/16"}} {
+		req := *settings
+		req.FakeIPEnabled = false
+		req.FakeIPInet4Range, req.FakeIPInet6Range = pools[0], pools[1]
+		if err := svc.SetDNSGlobalSettings(&req); err == nil {
+			t.Fatalf("invalid pools accepted: %v", pools)
+		}
+		stored, err := svc.GetDNSGlobalSettings()
+		if err != nil || stored.FakeIPEnabled != settings.FakeIPEnabled || stored.FakeIPInet4Range != settings.FakeIPInet4Range {
+			t.Fatalf("failed save changed DNS mode: %+v, %v", stored, err)
+		}
+	}
+}
+
+func TestRedirHostRetainsDeviceDNSAndRoutePolicies(t *testing.T) {
+	db, generator, devices := devicePolicyFixture(t)
+	setDeviceDirectDomains(t, db, devices[0], "allowed.example")
+	fakeDNS := mustGenerateDNS(t, generator)
+	fakeRoute, err := generator.generateRoute("direct")
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, err := db.GetDNSGlobalSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.FakeIPEnabled = false
+	if err := NewDNSService(db, nil).SetDNSGlobalSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+	realDNS := mustGenerateDNS(t, generator)
+	realRoute, err := generator.generateRoute("direct")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(fakeRoute, realRoute) {
+		t.Fatal("DNS mode switch changed device routing, rule sets, or bypass priority")
+	}
+	if !reflect.DeepEqual(fakeDNS["servers"], realDNS["servers"]) || fakeDNS["final"] != realDNS["final"] {
+		t.Fatal("DNS mode switch changed upstreams or device DNS detours")
+	}
+	fakeRules := fakeDNS["rules"].([]map[string]interface{})
+	if !reflect.DeepEqual(fakeRules[:len(fakeRules)-1], realDNS["rules"]) || realDNS["reverse_mapping"] != true {
+		t.Fatal("redir-host changed device DNS/whitelist rules instead of only removing allocation")
 	}
 }
 

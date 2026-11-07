@@ -6,8 +6,9 @@ import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
 import Modal from "@/components/ui/Modal.vue";
 import { authenticatedFetch } from "@/services/apiAuth";
 
-interface FakeIPSettings {
+interface DNSModeSettings {
   final: string;
+  reverse_mapping: boolean;
   fakeip_enabled: boolean;
   fakeip_inet4_range: string;
   fakeip_inet6_range: string;
@@ -46,8 +47,12 @@ interface ExceptionForm {
   preset: boolean;
 }
 
-const settings = defineModel<FakeIPSettings>({ required: true });
-const props = defineProps<{ rules: DNSRule[]; servers: DNSServer[] }>();
+const settings = defineModel<DNSModeSettings>({ required: true });
+const props = defineProps<{
+  rules: DNSRule[];
+  servers: DNSServer[];
+  busy: boolean;
+}>();
 const emit = defineEmits<{
   save: [];
   changed: [];
@@ -80,6 +85,13 @@ const pendingRuleID = ref<number | null>(null);
 const deleteTarget = ref<ExceptionItem | null>(null);
 const managerClosable = computed(
   () => !saving.value && pendingRuleID.value === null && !deleteTarget.value,
+);
+
+watch(
+  () => settings.value.fakeip_enabled,
+  (enabled) => {
+    if (!enabled) settings.value.reverse_mapping = true;
+  },
 );
 
 watch(
@@ -437,29 +449,74 @@ function conditionLabel(type: ExceptionItem["conditionType"]) {
   <section
     class="rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] p-5"
   >
-    <div class="flex justify-between">
-      <h3>FakeIP</h3>
-      <label class="text-sm text-[var(--text-secondary)]">
-        <input :checked="settings.fakeip_enabled" type="checkbox" disabled />
-        {{ settings.fakeip_enabled ? "已随 TUN 启用" : "已随 TUN 停用" }}
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <h3>DNS 模式</h3>
+      <label
+        class="flex items-center gap-2 whitespace-nowrap text-sm text-[var(--text-secondary)]"
+      >
+        返回模式
+        <select
+          v-model="settings.fakeip_enabled"
+          class="aw-input"
+          :disabled="busy"
+        >
+          <option :value="true">FakeIP</option>
+          <option :value="false">真实 IP（redir-host）</option>
+        </select>
       </label>
     </div>
     <p class="mt-2 text-xs text-[var(--text-tertiary)]">
-      FakeIP 由运行模式自动管理：TUN / TUN + Mixed 启用，Mixed 停用。显式 DNS
-      规则用于国内和局域网等真实 IP 例外；启用时，所有未命中显式规则的 A/AAAA
-      查询使用 FakeIP，其余查询统一经过安全 DNS final。
+      DNS 模式与 TUN / Mixed 入站独立，切换入站不会改变此选择。
+      两种模式均保留显式 DNS 规则、设备固定出口和代理 DNS Final；真实 IP
+      不代表直连。 保存后需重新生成并应用配置才会生效。
     </p>
-    <div
-      class="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]"
+    <p
+      v-if="settings.fakeip_enabled"
+      class="mt-2 text-xs text-[var(--text-secondary)]"
     >
-      <input v-model="settings.fakeip_inet4_range" class="aw-input" />
-      <input v-model="settings.fakeip_inet6_range" class="aw-input" />
-      <Button @click="$emit('save')">保存范围</Button>
+      FakeIP：未命中显式规则的 A/AAAA
+      查询返回虚拟地址，域名关联更明确；其他查询经过 DNS Final。
+    </p>
+    <div v-else class="mt-3 space-y-2 text-xs text-[var(--text-secondary)]">
+      <p>
+        redir-host：查询返回真实地址，自动开启反向映射，并结合连接嗅探匹配
+        GeoSite 等域名规则。 自带加密 DNS、共享 IP
+        或无法嗅探的流量可能影响识别；内核绕过规则仍先于普通嗅探匹配。
+      </p>
+      <p>
+        TUN 下保留旧 FakeIP 映射和地址池保护用于缓存过渡，但不再向新查询分配
+        FakeIP。 若旧映射已丢失，请刷新客户端 DNS
+        缓存；切换时不要同时更换地址池。
+      </p>
+    </div>
+    <div v-if="settings.fakeip_enabled" class="mt-3 grid gap-3 md:grid-cols-2">
+      <label class="text-xs text-[var(--text-secondary)]">
+        IPv4 地址池
+        <input
+          v-model="settings.fakeip_inet4_range"
+          class="aw-input mt-1 w-full"
+          :disabled="busy"
+        />
+      </label>
+      <label class="text-xs text-[var(--text-secondary)]">
+        IPv6 地址池
+        <input
+          v-model="settings.fakeip_inet6_range"
+          class="aw-input mt-1 w-full"
+          :disabled="busy"
+        />
+      </label>
+    </div>
+    <div class="mt-4 flex justify-end">
+      <Button variant="primary" :loading="busy" @click="$emit('save')"
+        >保存 DNS 模式</Button
+      >
     </div>
     <div class="mt-5 border-t border-[var(--border-light)] pt-4">
       <h4 class="text-sm font-medium text-[var(--text-primary)]">其他功能</h4>
       <p class="mt-1 text-xs text-[var(--text-tertiary)]">
-        管理不使用 FakeIP、需要返回真实地址的域名规则。
+        指定域名使用哪个 DNS Server。两种模式下均保留这些规则，FakeIP
+        模式下作为真实 IP 例外。
       </p>
       <Button class="mt-4" variant="primary" @click="openManager">
         <template #icon><ShieldCheck :size="14" /></template>

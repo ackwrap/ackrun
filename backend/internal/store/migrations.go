@@ -411,6 +411,9 @@ func (s *Store) migrate() error {
 		}
 	}
 
+	if err := s.migrateDNSMode(); err != nil {
+		return err
+	}
 	if err := s.migrateSSHSFTPProfilePacketLimit(); err != nil {
 		return err
 	}
@@ -434,6 +437,42 @@ func (s *Store) migrate() error {
 	}
 
 	logging.Info("store", "migrations applied")
+	return nil
+}
+
+// Older releases ignored the saved FakeIP flag and derived it from inbound.mode.
+// Capture that effective mode once; subsequent inbound changes must not affect DNS.
+func (s *Store) migrateDNSMode() error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var initialized bool
+	if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM app_settings WHERE key = 'dns.mode_initialized')`).Scan(&initialized); err != nil {
+		return err
+	}
+	if initialized {
+		return nil
+	}
+	var fakeIP bool
+	if err := tx.QueryRow(`SELECT COALESCE((SELECT value FROM app_settings WHERE key = 'inbound.mode'), 'tun_mixed') != 'mixed'`).Scan(&fakeIP); err != nil {
+		return err
+	}
+	for key, value := range map[string]bool{
+		"dns.fakeip_enabled":        fakeIP,
+		"dns_global.fakeip_enabled": fakeIP,
+		"dns.mode_initialized":      true,
+	} {
+		if _, err := tx.Exec(`INSERT INTO app_settings (key, value, updated_at) VALUES (?, CASE WHEN ? THEN 'true' ELSE 'false' END, unixepoch())
+			ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`, key, value); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	logging.Info("dns.mode.migrate", "已保留升级前的 DNS 模式: FakeIP=%t，后续不再跟随 TUN 切换", fakeIP)
 	return nil
 }
 

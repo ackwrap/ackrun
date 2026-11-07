@@ -128,6 +128,9 @@ func TestDNSGlobalSettingsFallBackToLegacySettingsWhenUnmigrated(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
+	if _, err := s.db.Exec(`DELETE FROM app_settings WHERE key IN ('dns.fakeip_enabled', 'dns_global.fakeip_enabled', 'dns.mode_initialized')`); err != nil {
+		t.Fatal(err)
+	}
 	for key, value := range map[string]string{
 		"dns.enabled":        "false",
 		"dns.final":          "dns_legacy",

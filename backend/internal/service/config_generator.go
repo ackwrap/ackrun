@@ -451,7 +451,7 @@ func (s *ConfigGeneratorService) generateLockedTo(req *model.ConfigGenerateReque
 	experimental["clash_api"] = clashAPI
 	logging.Info("config_generator.experimental", "Clash API 已强制启用: %s:%s, 模式: %s", controllerHost, port, proxyMode)
 
-	if cacheFile := s.cacheFileConfig(expSettings, dnsGlobalSettings != nil && dnsGlobalSettings.FakeIPEnabled); cacheFile != nil {
+	if cacheFile := s.cacheFileConfig(expSettings, retainFakeIPMappings(dnsGlobalSettings, s.store.GetInboundMode())); cacheFile != nil {
 		experimental["cache_file"] = cacheFile
 	}
 
@@ -2125,7 +2125,7 @@ func (s *ConfigGeneratorService) cacheFileConfig(settings *model.ExperimentalSet
 	}
 	storeFakeIP := settings.CacheFileStoreFakeIP || fakeIPEnabled
 	if fakeIPEnabled && (!settings.CacheFileEnabled || !settings.CacheFileStoreFakeIP) {
-		logging.Info("config_generator.experimental", "FakeIP 已启用，强制持久化 FakeIP 映射")
+		logging.Info("config_generator.experimental", "保留 FakeIP 映射持久化，支持 DNS 模式切换后的旧缓存")
 	}
 	cachePath := "cache.db"
 	if s.paths != nil && s.paths.DataDir != "" {
@@ -2160,7 +2160,7 @@ func (s *ConfigGeneratorService) effectiveDNSGlobalSettings() (*model.DNSGlobalS
 	if err != nil {
 		return nil, err
 	}
-	applyTUNManagedFakeIP(settings, s.store.GetInboundMode())
+	applyDNSMode(settings)
 	return settings, nil
 }
 
@@ -2358,7 +2358,7 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string, nodeTarge
 	routeRules = append(routeRules, map[string]interface{}{
 		"action": "sniff",
 	})
-	if (inboundMode == "tun" || inboundMode == "tun_mixed") && dnsEnabled && dnsSettings.FakeIPEnabled {
+	if (inboundMode == "tun" || inboundMode == "tun_mixed") && retainFakeIPMappings(dnsSettings, inboundMode) {
 		// FakeIP turns the original ICMP destination into a domain during pre-match.
 		// Resolve it before any route action so direct/bridge outbounds receive a real address.
 		routeRules = append(routeRules, map[string]interface{}{
@@ -2451,6 +2451,9 @@ func (s *ConfigGeneratorService) generateRoute(defaultOutbound string, nodeTarge
 			}
 		}
 		if len(userBypassRules) > 0 {
+			if dnsEnabled && !dnsSettings.FakeIPEnabled {
+				logging.Info("config_generator.route", "redir-host 模式保留内核绕过优先级；命中绕过的真实 IP 不再进入后续嗅探和域名规则")
+			}
 			orderedRules := make([]map[string]interface{}, 0, len(routeRules)+len(userBypassRules))
 			orderedRules = append(orderedRules, routeRules[:preSniffRuleCount]...)
 			orderedRules = append(orderedRules, userBypassRules...)
@@ -2754,7 +2757,8 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase(routeFinal ...string) (
 		}
 	}
 	servers := []map[string]interface{}{}
-	serverTags := enabledDNSServerTags(dnsServers, globalSettings.FakeIPEnabled)
+	keepFakeIPMappings := retainFakeIPMappings(globalSettings, s.store.GetInboundMode())
+	serverTags := enabledDNSServerTags(dnsServers, keepFakeIPMappings)
 	fakeIPServerTags := map[string]bool{"fakeip": true}
 	for _, server := range dnsServers {
 		if server.ServerType == "fakeip" {
@@ -2878,7 +2882,7 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase(routeFinal ...string) (
 		proxyFinalServer = finalServer
 	}
 
-	if globalSettings.FakeIPEnabled {
+	if keepFakeIPMappings {
 		fakeIP := map[string]interface{}{
 			"tag":  "fakeip",
 			"type": "fakeip",
@@ -2901,7 +2905,7 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase(routeFinal ...string) (
 	}
 
 	// 4. 显式规则用于国内、局域网等真实 IP 例外。TUN 客户端未命中的
-	// A/AAAA 查询随后使用 FakeIP；其他查询进入统一 DNS final。
+	// A/AAAA 查询仅在 fake-ip 模式下使用 FakeIP；redir-host 使用真实 DNS final。
 	nodeTargets, err := s.nodeServerBypassTargets()
 	if err != nil {
 		return nil, fmt.Errorf("加载节点服务器 DNS 白名单失败: %w", err)
@@ -2988,7 +2992,7 @@ func (s *ConfigGeneratorService) generateDNSFromDatabase(routeFinal ...string) (
 		dns["client_subnet"] = globalSettings.ClientSubnet
 	}
 
-	logging.Info("config_generator.dns", "生成 DNS 配置: %d servers, %d rules", len(servers), len(rules))
+	logging.Info("config_generator.dns", "生成 DNS 配置: mode=%s, %d servers, %d rules", dnsModeName(globalSettings.FakeIPEnabled), len(servers), len(rules))
 	return dns, nil
 }
 

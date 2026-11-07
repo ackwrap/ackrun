@@ -37,7 +37,7 @@ func validateDNSServerRequest(req *model.DNSServerRequest) error {
 		return fmt.Errorf("DNS Server 请求不能为空")
 	}
 	if req.ServerType == "fakeip" {
-		return fmt.Errorf("FakeIP Server 由 TUN 模式自动管理，不能手动创建或更新")
+		return fmt.Errorf("FakeIP Server 由 DNS 模式自动管理，不能手动创建或更新")
 	}
 	if !store.SupportedDNSServerType(req.ServerType) {
 		return fmt.Errorf("不支持的 DNS Server 类型: %s", req.ServerType)
@@ -318,7 +318,7 @@ func (svc *DNSService) validateDNSRuleRequest(req *model.DNSRuleRequest) error {
 
 func (svc *DNSService) rejectFakeIPServerReference(tag string) error {
 	if tag == "fakeip" {
-		return fmt.Errorf("显式 DNS 配置不能引用 FakeIP Server，FakeIP 由 TUN 模式下的 A/AAAA 兜底规则自动管理")
+		return fmt.Errorf("显式 DNS 配置不能引用 FakeIP Server，请通过 DNS 模式选择是否使用 FakeIP")
 	}
 	servers, err := svc.store.ListDNSServers()
 	if err != nil {
@@ -326,7 +326,7 @@ func (svc *DNSService) rejectFakeIPServerReference(tag string) error {
 	}
 	for _, server := range servers {
 		if server.Tag == tag && server.ServerType == "fakeip" {
-			return fmt.Errorf("显式 DNS 配置不能引用 FakeIP Server，FakeIP 由 TUN 模式下的 A/AAAA 兜底规则自动管理")
+			return fmt.Errorf("显式 DNS 配置不能引用 FakeIP Server，请通过 DNS 模式选择是否使用 FakeIP")
 		}
 	}
 	return nil
@@ -366,7 +366,7 @@ func (svc *DNSService) GetDNSGlobalSettings() (*model.DNSGlobalSettings, error) 
 	if !settings.IndependentCacheSupported {
 		settings.IndependentCache = false
 	}
-	applyTUNManagedFakeIP(settings, svc.store.GetInboundMode())
+	applyDNSMode(settings)
 	return settings, nil
 }
 
@@ -390,9 +390,25 @@ func (svc *DNSService) SetDNSGlobalSettings(req *model.DNSGlobalSettings) error 
 	if !supported {
 		req.IndependentCache = false
 	}
-	applyTUNManagedFakeIP(req, svc.store.GetInboundMode())
-	logging.Info("dns.global.update", "代理 DNS Final=%s, FakeIP 跟随 TUN 模式=%t", req.ProxyFinal, req.FakeIPEnabled)
-	return svc.store.SetDNSGlobalSettingsForCore(req, supported)
+	for _, pool := range []struct {
+		value string
+		ipv4  bool
+	}{{req.FakeIPInet4Range, true}, {req.FakeIPInet6Range, false}} {
+		if pool.value == "" {
+			continue
+		}
+		prefix, err := netip.ParsePrefix(pool.value)
+		if err != nil || prefix.Addr().Is4In6() || prefix.Addr().Is4() != pool.ipv4 {
+			return fmt.Errorf("FakeIP 地址池必须是对应地址族的有效 CIDR")
+		}
+	}
+	applyDNSMode(req)
+	if err := svc.store.SetDNSGlobalSettingsForCore(req, supported); err != nil {
+		logging.Error("dns.global.update", "保存 DNS 模式失败: %v", err)
+		return err
+	}
+	logging.Info("dns.global.update", "DNS 模式=%s, 代理 DNS Final=%s", dnsModeName(req.FakeIPEnabled), req.ProxyFinal)
+	return nil
 }
 
 func (svc *DNSService) validateProxyDNSFinal(tag string) error {
@@ -454,8 +470,22 @@ func (svc *DNSService) coreVersion() string {
 	return ""
 }
 
-func applyTUNManagedFakeIP(settings *model.DNSGlobalSettings, inboundMode string) {
-	if settings != nil {
-		settings.FakeIPEnabled = inboundMode != "mixed"
+func applyDNSMode(settings *model.DNSGlobalSettings) {
+	if settings != nil && !settings.FakeIPEnabled {
+		// Real-IP routing needs domains even for traffic without sniffable payloads.
+		settings.ReverseMapping = true
 	}
+}
+
+func dnsModeName(fakeIP bool) string {
+	if fakeIP {
+		return "fake-ip"
+	}
+	return "redir-host"
+}
+
+func retainFakeIPMappings(settings *model.DNSGlobalSettings, inboundMode string) bool {
+	// A dormant transport restores persisted mappings for clients still holding
+	// old FakeIP answers. Only fake-ip mode adds the DNS allocation rule.
+	return settings != nil && settings.Enabled && (settings.FakeIPEnabled || inboundMode != "mixed")
 }
